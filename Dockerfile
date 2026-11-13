@@ -54,7 +54,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
  && apt-get update \
- && apt-get install -y --no-install-recommends sudo curl jq unzip ripgrep build-essential \
+ && apt-get install -y --no-install-recommends sudo curl jq unzip ripgrep build-essential procps lsof \
       fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
