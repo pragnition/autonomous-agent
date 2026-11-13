@@ -1,8 +1,8 @@
 """What a session starts with (spec v2 §6): the work item payload a runner turns into a Claude Code session.
 
 A short system prompt from config (or the shipped default), the persona for Slack turns only, a capped memory
-briefing, the model and budgets, and the worktree to prepare. Coding sessions also get the pack's test-only
-secrets; nothing else secret ever goes into a payload.
+briefing, the model and budgets, the checkout to prepare and the folder to work in. Sessions with a checkout also
+get the pack's test-only secrets; nothing else secret ever goes into a payload.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import sqlite3
 from pathlib import Path
 
 from agent.core.agent_tools import conversation_scopes
-from agent.gitutil import branch_name
 from agent.memory.briefing import build_briefing
 from agent.memory.store import MemoryStore
 
@@ -43,6 +42,16 @@ class Payloads:
     def _briefing(self, scopes: list[str], text: str, kind: str) -> str:
         return build_briefing(self.memory, scopes, text, self.config.memory_budget.briefing.get(kind, 1000)).text
 
+    def checkout(self, convo) -> dict | None:
+        """The checkout a conversation works on, once it has a branch: the same branch on every turn. A conversation
+        bound without one (track_task) gets no checkout, so an investigation never pays for a setup run."""
+        pack = self.packs.get(convo["project"] or "")
+        if not convo["branch"] or pack is None:
+            return None
+        p = pack.project
+        return {"project": p.name, "default_branch": p.default_branch, "branch": convo["branch"],
+                "setup": list(p.build_setup), "checks": list(p.build_checks)}
+
     def turn(self, convo, text: str, actor: str | None, *, unattended: bool = False) -> dict:
         project = convo["project"]
         scopes = conversation_scopes(convo["channel"], project, actor, self.packs)
@@ -50,14 +59,11 @@ class Payloads:
                              model=convo["model"] or self.config.models.default,
                              system_parts=[self.system_prompt(), self.persona_text,
                                            self._briefing(scopes, text, "session")])
-        payload.update(resume_session_id=convo["session_id"], conversation_id=convo["id"], project=project)
-        pack = self.packs.get(project or "")
-        if pack is not None:
-            p = pack.project
-            title = text.strip().splitlines()[0] if text.strip() else "work"
-            payload["worktree"] = {"project": p.name, "default_branch": p.default_branch,
-                                   "branch_hint": branch_name(self.config.name, convo["task_id"] or convo["id"], title),
-                                   "setup": list(p.build_setup), "checks": list(p.build_checks)}
+        checkout = self.checkout(convo)
+        payload.update(resume_session_id=convo["session_id"], conversation_id=convo["id"], project=project,
+                       worktree=checkout, workdir=convo["workdir"])
+        if checkout is not None:
+            p = self.packs[project].project
             payload["test_secrets"] = {k: self.secrets[k] for k in p.secrets_worker if k in self.secrets}
         return payload
 

@@ -5,6 +5,7 @@ import pytest
 from agent import db, tasks
 from agent.core.conversations import FAILED_REPLY, NOT_AUTHORISED, Conversations
 from agent.core.sessions import AGENT_QUEUE, WorkQueue
+from agent.gitutil import branch_name
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, make_config, make_pack
 
@@ -119,8 +120,24 @@ async def test_dm_and_project_channel_use_one_queue(convos, conn, queue):
     other_row = next(r for r in rows if r["thread_ts"] == "t9")
     sample_row = next(r for r in rows if r["thread_ts"] == "t1")
     assert dm_row["project"] is None and other_row["project"] is None and sample_row["project"] == "sample"
+    assert (dm_row["branch"], dm_row["workdir"]) == (None, "session")
+    assert (other_row["branch"], other_row["workdir"]) == (None, "session")
 
     assert {queue.claim(AGENT_QUEUE).payload["text"] for _ in range(3)} == {"hi", "hello", "do a"}
+
+
+async def test_project_channel_conversation_gets_branch_at_creation(convos, conn):
+    await convos.handle_slack(mention("t30", "fix login"))
+    row = convo(conn, "t30")
+    assert row["branch"] == branch_name(convos.config.name, row["id"], "fix login")
+    assert row["workdir"] == "checkout"
+
+
+async def test_branch_is_named_from_the_first_line_and_kept(convos, conn):
+    await convos.handle_slack(mention("t31", "fix login\n\nIt fails after the password reset."))
+    await convos.handle_slack(reply("t31", "and the signup page too"))
+    row = convo(conn, "t31")
+    assert row["branch"] == branch_name(convos.config.name, row["id"], "fix login")
 
 
 async def test_reply_goes_to_waiting_split_session(convos, conn, queue):
@@ -213,7 +230,9 @@ async def test_linear_issue_is_unattended(convos, fake_linear, queue, slack, con
     assert slack.posts[0]["channel"] == "C-SAMPLE"
     task = tasks.get_task(conn, created[0])
     assert task.slack_thread_ts == slack.posts[0].get("ts", task.slack_thread_ts) and task.status == Status.working
-    assert conn.execute("SELECT task_id FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()[0] == task.id
+    row = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
+    assert row["task_id"] == task.id and row["workdir"] == "checkout"
+    assert row["branch"] == branch_name(convos.config.name, task.id, "Export broken")
 
 
 async def test_on_result_posts_reply_and_session(convos, queue, slack, conn):

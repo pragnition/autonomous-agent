@@ -77,20 +77,23 @@ class SandboxRunner:
             tmp.rename(dest)
         return [dest / "plugins" / "core", *sorted((dest / "plugins" / "packs").glob("*"))]
 
-    async def _workdir(self, convo: str, payload: dict) -> tuple[Path, bool]:
-        wt = payload.get("worktree")
-        if wt and wt.get("branch_hint"):
-            path, created = await asyncio.to_thread(self.worktrees.prepare, convo, wt["project"], wt["branch_hint"],
-                                                    wt["default_branch"])
+    async def _workdir(self, convo: str, payload: dict) -> tuple[Path, Path | None]:
+        """(cwd, checkout). The checkout, when the conversation has one, lives in its session folder at
+        <session>/<project>. The session runs in the checkout only when it was bound to its project up front
+        (workdir "checkout"), otherwise in the session folder: either way the same folder on every turn."""
+        session = self.scratch_root / convo
+        session.mkdir(parents=True, exist_ok=True)
+        wt, checkout = payload.get("worktree"), None
+        if wt and wt.get("branch"):  # an item queued before branches were fixed has none: no checkout
+            checkout, created = await asyncio.to_thread(self.worktrees.prepare, session / wt["project"],
+                                                        wt["project"], wt["branch"], wt["default_branch"])
             if created:
                 for cmd in wt.get("setup") or []:
-                    code, out = await run_shell(cmd, path, SETUP_TIMEOUT_S)
+                    code, out = await run_shell(cmd, checkout, SETUP_TIMEOUT_S)
                     if code:
-                        log.warning("setup %r failed in %s: %s", cmd, path, out[-500:])
-            return path, True
-        scratch = self.scratch_root / convo
-        scratch.mkdir(parents=True, exist_ok=True)
-        return scratch, False
+                        log.warning("setup %r failed in %s: %s", cmd, checkout, out[-500:])
+        cwd = checkout if checkout is not None and payload.get("workdir") == "checkout" else session
+        return cwd, checkout
 
     async def _heartbeat(self, tok: str, item_id: str) -> None:
         while True:
@@ -160,13 +163,15 @@ class SandboxRunner:
     async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> tuple[RunSpec, dict | None]:
         payload, item_id = item["payload"], item["id"]
         plugins = await self._bundle()
-        cwd, is_worktree = await self._workdir(convo, payload)
+        cwd, checkout = await self._workdir(convo, payload)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)
         sink = {} if payload.get("structured") else None
         wt = payload.get("worktree") or {}
-        tools = remote_sdk_tools(manifest, self.link, tok, worktree=cwd, checks=list(wt.get("checks") or []),
-                                 branch=wt.get("branch_hint") if is_worktree else None, worktrees=self.worktrees,
+        # open_pr works in the checkout; post_files reads from it, or from the session folder when there is none
+        tools = remote_sdk_tools(manifest, self.link, tok, worktree=checkout or cwd,
+                                 checks=list(wt.get("checks") or []),
+                                 branch=wt["branch"] if checkout is not None else None, worktrees=self.worktrees,
                                  agent_name=self.agent_name, structured_sink=sink,
                                  structured_schema=payload.get("structured"))
         env = {**self.extra_env, **read_env_files(self.env_files)}

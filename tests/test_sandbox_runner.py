@@ -2,6 +2,8 @@ import asyncio
 import io
 import subprocess
 import tarfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -101,8 +103,8 @@ def item(conversation_id="V-1", **payload_over):
     payload = {"text": "fix the export", "actor": "bob", "unattended": False,
                "model": "claude-opus-5-5", "system_prompt": "SYS", "max_turns": 400, "timeout_s": 5400,
                "resume_session_id": None, "test_secrets": {"SAMPLE_TEST_USER": "tester@example.com"},
-               "project": "sample",
-               "worktree": {"project": "sample", "default_branch": "main", "branch_hint": "agent/T-0001-fix-export",
+               "project": "sample", "workdir": "checkout",
+               "worktree": {"project": "sample", "default_branch": "main", "branch": "agent/T-0001-fix-export",
                             "setup": ["echo ran >> .setup-count"], "checks": ["true"]}}
     payload.update(payload_over)
     return {"id": f"W-{conversation_id}", "conversation_id": conversation_id, "kind": "turn", "payload": payload}
@@ -166,8 +168,37 @@ async def test_setup_runs_once_per_worktree(tmp_path, worktrees):
     runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
     await runner.handle(item(), "tok", [])
     await runner.handle(item(), "tok", [])
-    wt = tmp_path / "var" / "work" / "V-1"
+    wt = tmp_path / "scratch" / "V-1" / "sample"
     assert (wt / ".setup-count").read_text().count("ran") == 1
+
+
+async def test_session_workdir_checkout_lives_inside_session_folder(tmp_path, worktrees):
+    runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
+    cwd, checkout = await runner._workdir("V-1", item(workdir="session")["payload"])
+    assert cwd == tmp_path / "scratch" / "V-1"
+    assert checkout == tmp_path / "scratch" / "V-1" / "sample"
+    assert git(checkout, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
+    assert (checkout / ".setup-count").read_text().count("ran") == 1
+
+
+async def test_checkout_workdir_runs_in_checkout(tmp_path, worktrees):
+    claude = FakeClaude()
+    await make_runner(tmp_path, worktrees, FakeLink(), claude).handle(item(workdir="checkout"), "tok", [])
+    assert claude.specs[0].cwd == tmp_path / "scratch" / "V-1" / "sample"
+
+
+async def test_no_checkout_runs_in_session_folder(tmp_path, worktrees):
+    cwd, checkout = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir(
+        "V-1", item(worktree=None, workdir="session")["payload"])
+    assert (cwd, checkout) == (tmp_path / "scratch" / "V-1", None) and cwd.is_dir()
+
+
+async def test_item_queued_before_fixed_branches_runs_without_a_checkout(tmp_path, worktrees):
+    old = item()["payload"]
+    old.pop("workdir")
+    old["worktree"]["branch_hint"] = old["worktree"].pop("branch")
+    cwd, checkout = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir("V-1", old)
+    assert (cwd, checkout) == (tmp_path / "scratch" / "V-1", None)
 
 
 async def test_cancel_via_heartbeat_interrupts(tmp_path, worktrees):
@@ -193,8 +224,8 @@ async def call(tools, name, args):
 
 
 @pytest.fixture
-def worktree(worktrees):
-    path, _ = worktrees.prepare("V-9", "sample", "agent/T-0009-x", "main")
+def worktree(worktrees, tmp_path):
+    path, _ = worktrees.prepare(tmp_path / "scratch" / "V-9" / "sample", "sample", "agent/T-0009-x", "main")
     return path
 
 
@@ -250,6 +281,24 @@ async def test_open_pr_commits_pushes_and_forwards_sha(worktrees, worktree, serv
     assert args["checks"]["passed"] is True and args["branch"] == "agent/T-0009-x"
     assert args["sha"] == git(server[1], "rev-parse", "refs/heads/agent/T-0009-x")
     assert git(worktree, "log", "-1", "--format=%s") == "Fix export"
+
+
+async def test_session_workdir_open_pr_pushes_the_checkout(tmp_path, worktrees, server):
+    """A session running in its session folder still opens its PR from the checkout inside it, on the
+    conversation's branch."""
+    link, claude = FakeLink(), FakeClaude()
+    original = claude.run
+
+    async def run_and_open_pr(spec):
+        (tmp_path / "scratch" / "V-1" / "sample" / "fix.py").write_text("x = 1\n")
+        await call(spec.sdk_tools, "open_pr", {"title": "Fix export", "body": "b"})
+        return await original(spec)
+
+    claude.run = run_and_open_pr
+    await make_runner(tmp_path, worktrees, link, claude).handle(item(workdir="session"), "tok", MANIFEST)
+    name, args = link.tool_calls[-1]
+    assert name == "open_pr" and args["branch"] == "agent/T-0001-fix-export"
+    assert args["sha"] == git(server[1], "rev-parse", "refs/heads/agent/T-0001-fix-export")
 
 
 async def test_structured_submit_captured(tmp_path, worktrees):
@@ -316,14 +365,32 @@ async def test_runner_exits_when_its_token_is_revoked(tmp_path, worktrees):
 
 
 def test_conversation_gets_its_own_repo_with_shared_objects(worktrees, tmp_path):
-    path, created = worktrees.prepare("V-5", "sample", "agent/T-5-x", "main")
-    assert created and (path / ".git").is_dir()
+    path, created = worktrees.prepare(tmp_path / "scratch" / "V-5" / "sample", "sample", "agent/T-5-x", "main")
+    assert created and path == tmp_path / "scratch" / "V-5" / "sample" and (path / ".git").is_dir()
     assert (path / ".git" / "objects" / "info" / "alternates").exists()
     assert git(path, "remote", "get-url", "origin").endswith("/git/sample.git")
+    assert worktrees.prepare(path, "sample", "agent/T-5-x", "main") == (path, False)
 
 
-def test_scratch_files_are_never_committed(worktrees):
-    path, _ = worktrees.prepare("V-6", "sample", "agent/T-6-x", "main")
+def test_parallel_prepare_same_project(worktrees, tmp_path):
+    """Two conversations on one project prepare their checkouts at the same moment: the shared clone is made
+    once, and each gets its own repo on its own branch."""
+    start = threading.Barrier(2)
+
+    def prepare(convo):
+        start.wait()
+        return worktrees.prepare(tmp_path / "scratch" / convo / "sample", "sample", f"agent/{convo}-x", "main")
+
+    with ThreadPoolExecutor(2) as pool:
+        results = list(pool.map(prepare, ["V-1", "V-2"]))
+    for convo, (path, created) in zip(["V-1", "V-2"], results, strict=True):
+        assert created and path == tmp_path / "scratch" / convo / "sample"
+        assert git(path, "rev-parse", "--abbrev-ref", "HEAD") == f"agent/{convo}-x"
+        assert git(path, "status", "--porcelain") == ""
+
+
+def test_scratch_files_are_never_committed(worktrees, tmp_path):
+    path, _ = worktrees.prepare(tmp_path / "scratch" / "V-6" / "sample", "sample", "agent/T-6-x", "main")
     (path / ".agent-progress.md").write_text("notes")
     (path / ".agent-out").mkdir()
     (path / ".agent-out" / "logs.json").write_text("{}")

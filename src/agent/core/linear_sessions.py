@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 
 from agent import db
-from agent.core.sessions import AGENT_QUEUE
+from agent.core.conversations import create_conversation
 
 log = logging.getLogger(__name__)
 SESSION_KEY = "linear_session:{}"
@@ -32,9 +31,9 @@ class LinearAgentSessions:
                 await self.client.agent_activity(sid, "thought", "On it.")
             except Exception:
                 log.exception("couldn't ack Linear session %s", sid)
-            convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
-            self.conn.execute("INSERT INTO conversations(id, sandbox, is_primary, created_at, last_active_at) "
-                              "VALUES (?, ?, 1, ?, ?)", (convo_id, AGENT_QUEUE, now, now))
+            # no project yet, so no branch to name: the agent picks the project itself
+            convo_id = create_conversation(self.conn, agent_name="", channel=None, thread_ts=None, project=None,
+                                           title="")
             db.set_setting(self.conn, SESSION_KEY.format(sid), convo_id)
         elif body.get("action") != "prompted" or convo_id is None:
             return  # a redelivered `created`, or an event for a session we never saw

@@ -1,8 +1,10 @@
 import pytest
 
 from agent import db
+from agent.core.conversations import create_conversation
 from agent.core.payloads import Payloads
 from agent.core.sessions import AGENT_QUEUE
+from agent.gitutil import branch_name
 from agent.memory.store import MemoryStore, NoteInput
 from agent.tokens import estimate_tokens
 from agent_fixtures import add_conversation, make_config, make_pack
@@ -38,17 +40,38 @@ def row(conn, convo_id):
     return conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
 
 
+def bound(conn, title="fix the export crash") -> str:
+    """A conversation bound to `sample` up front, as a mention in the project's channel makes one."""
+    return create_conversation(conn, agent_name="agent", channel="C-SAMPLE", thread_ts="1.0", project="sample",
+                               title=title)
+
+
 def test_turn_payload_for_a_known_project(payloads, conn):
-    convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE))
-    p = payloads.turn(convo, "fix the export crash", "bob")
+    cid = bound(conn)
+    p = payloads.turn(row(conn, cid), "fix the export crash", "bob")
     assert p["text"] == "fix the export crash" and p["actor"] == "bob"
     assert PERSONA in p["system_prompt"] and "full development environment" in p["system_prompt"]
     assert p["model"] == "claude-opus-5-5" and p["max_turns"] == 400 and p["timeout_s"] == 90 * 60
-    wt = p["worktree"]
-    assert (wt["project"], wt["default_branch"]) == ("sample", "main")
-    assert wt["branch_hint"].startswith("agent/") and "fix-the-export-crash" in wt["branch_hint"]
-    assert wt["setup"] == ["pip install -r requirements.txt"] and wt["checks"] == ["pytest -q"]
+    assert p["worktree"] == {"project": "sample", "default_branch": "main",
+                             "branch": branch_name("agent", cid, "fix the export crash"),
+                             "setup": ["pip install -r requirements.txt"], "checks": ["pytest -q"]}
+    assert p["workdir"] == "checkout"
     assert p["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
+
+
+def test_branch_is_the_same_on_every_turn(payloads, conn):
+    cid = bound(conn)
+    first = payloads.turn(row(conn, cid), "fix the export crash", "bob")
+    second = payloads.turn(row(conn, cid), "also handle empty files\nand add a test", "bob")
+    assert first["worktree"]["branch"] == second["worktree"]["branch"] == branch_name("agent", cid,
+                                                                                         "fix the export crash")
+
+
+def test_track_task_binding_has_no_checkout(payloads, conn):
+    convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE, project="sample"))  # bound, but no branch
+    p = payloads.turn(convo, "why is the export slow?", "bob")
+    assert p["project"] == "sample" and p["worktree"] is None and p["test_secrets"] == {}
+    assert p["workdir"] == "session" and payloads.checkout(convo) is None
 
 
 def test_briefing_within_budget(payloads, conn):
@@ -62,7 +85,7 @@ def test_briefing_within_budget(payloads, conn):
 def test_unbound_conversation_has_no_worktree_or_secrets(payloads, conn):
     convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann"))
     p = payloads.turn(convo, "hi", "ann")
-    assert p["worktree"] is None and p["test_secrets"] == {}
+    assert p["worktree"] is None and p["test_secrets"] == {} and p["workdir"] == "session"
 
 
 def test_use_fable_model(payloads, conn):

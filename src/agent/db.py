@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 CREATE INDEX IF NOT EXISTS llm_usage_at ON llm_usage(at);
 """
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # One row per agent session: a Slack thread, a Linear issue, a hand-over or a split (spec v2 §6, §7)
 CONVERSATIONS = """
@@ -138,15 +138,26 @@ CREATE TABLE IF NOT EXISTS conversations (
     model TEXT,
     created_at TEXT NOT NULL,
     last_active_at TEXT NOT NULL,
-    consolidated_at TEXT
+    consolidated_at TEXT,
+    branch TEXT,
+    workdir TEXT NOT NULL DEFAULT 'session'
 );
 CREATE INDEX IF NOT EXISTS conversations_thread ON conversations(channel, thread_ts);
 """
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
 def _drop_column_if_exists(conn: sqlite3.Connection, table: str, column: str) -> None:
-    if column in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+    if column in _columns(conn, table):
         conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    if column not in _columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def _migrate_v3(conn: sqlite3.Connection) -> None:
@@ -167,12 +178,20 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE conversations SET sandbox = ? WHERE sandbox != ?", (AGENT_QUEUE, AGENT_QUEUE))
 
 
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    """Give conversations a fixed branch and a working-folder mode. Existing ones get no branch and the session
+    folder, so they make no checkout until one is asked for."""
+    _add_column_if_missing(conn, "conversations", "branch", "TEXT")
+    _add_column_if_missing(conn, "conversations", "workdir", "TEXT NOT NULL DEFAULT 'session'")
+
+
 # Keyed by the version each migration upgrades a database to. Every entry must be safe to run on a database
 # that is already at or past its version (checked with PRAGMA table_info / IF EXISTS / IF NOT EXISTS), so a
 # fresh database (already created at SCHEMA's current shape) runs every migration as a no-op.
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migrate_v3,
     4: _migrate_v4,
+    5: _migrate_v5,
 }
 
 

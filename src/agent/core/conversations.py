@@ -15,6 +15,7 @@ import uuid
 from agent import db, tasks
 from agent.core.sessions import AGENT_QUEUE, WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
+from agent.gitutil import branch_name
 from agent.tasks import Status
 
 log = logging.getLogger(__name__)
@@ -23,6 +24,21 @@ FAILED_REPLY = "Something went wrong on my side, so I couldn't finish that. Try 
 FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
+
+
+def create_conversation(conn: sqlite3.Connection, *, agent_name: str, channel: str | None, thread_ts: str | None,
+                        project: str | None, title: str, task_id: str | None = None, is_primary: int = 1) -> str:
+    """A new conversation on the one queue. One bound to its project up front gets its branch now, named from
+    `title`, and works in its checkout; any other works in its session folder. The working folder never changes,
+    so --resume always finds the session, and a branch once set never does either, so every turn and every open_pr
+    use the same one."""
+    convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
+    branch = branch_name(agent_name, task_id or convo_id, title) if project else None
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, task_id, is_primary, branch, "
+                 "workdir, created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (convo_id, channel, thread_ts, AGENT_QUEUE, project, task_id, is_primary, branch,
+                  "checkout" if project else "session", now, now))
+    return convo_id
 
 
 class Conversations:
@@ -51,13 +67,10 @@ class Conversations:
         return self.conn.execute("SELECT 1 FROM conversations WHERE channel = ? AND thread_ts = ? LIMIT 1",
                                  (channel, thread_ts)).fetchone() is not None
 
-    def _new(self, channel: str | None, thread_ts: str | None, sandbox: str, project: str | None,
+    def _new(self, channel: str | None, thread_ts: str | None, project: str | None, title: str,
              task_id: str | None = None) -> str:
-        convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
-        self.conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, task_id, is_primary, "
-                          "created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                          (convo_id, channel, thread_ts, sandbox, project, task_id, now, now))
-        return convo_id
+        return create_conversation(self.conn, agent_name=self.config.name, channel=channel, thread_ts=thread_ts,
+                                   project=project, title=title, task_id=task_id)
 
     async def _project_for_channel(self, channel: str) -> str | None:
         for name, pack in self.packs.items():
@@ -75,7 +88,7 @@ class Conversations:
                 self._channel_names[channel] = ""
         return named.get(self._channel_names[channel])
 
-    async def _route(self, channel: str, thread_ts: str, is_dm: bool) -> sqlite3.Row:
+    async def _route(self, channel: str, thread_ts: str, is_dm: bool, text: str) -> sqlite3.Row:
         waiting = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts = ? AND waiting = 1 "
                                     "ORDER BY last_active_at DESC LIMIT 1", (channel, thread_ts)).fetchone()
         if waiting is not None:
@@ -89,7 +102,8 @@ class Conversations:
         if primary is not None:
             return primary
         project = None if is_dm else await self._project_for_channel(channel)
-        return self._row(self._new(channel, thread_ts, AGENT_QUEUE, project))
+        title = text.strip().splitlines()[0] if text.strip() else ""  # the branch is named from the first line
+        return self._row(self._new(channel, thread_ts, project, title))
 
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, unattended: bool = False,
                       message_ts: str | None = None) -> str:
@@ -118,7 +132,7 @@ class Conversations:
                 await self.slack.chat_postEphemeral(channel=channel, user=user, text=NOT_AUTHORISED)
             return
         text = _MENTION.sub("", event.get("text") or "").strip()
-        convo = await self._route(channel, thread_ts, is_dm)
+        convo = await self._route(channel, thread_ts, is_dm, text)
         if _FABLE.search(text):
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
@@ -151,7 +165,7 @@ class Conversations:
         resp = await self.slack.chat_postMessage(channel=pack.slack_channel,
                                                  text=f"Linear {task.source_ref}: {task.title}")
         task = tasks.set_fields(self.conn, task.id, slack_channel=resp["channel"], slack_thread_ts=resp["ts"])
-        convo = self._row(self._new(resp["channel"], resp["ts"], AGENT_QUEUE, task.project, task.id))
+        convo = self._row(self._new(resp["channel"], resp["ts"], task.project, task.title, task.id))
         task = tasks.transition(self.conn, task.id, Status.working, actor="linear")
         self._enqueue_turn(convo, f"Linear issue {task.source_ref}: {task.title}\n\n{task.description}",
                            task.requester, unattended=True)

@@ -1,12 +1,13 @@
 """Worktrees inside a sandbox (spec v2 §5): one local clone of core's git endpoint per project, and one repo per
-conversation that borrows its objects (`clone --reference`). Each conversation's repo is a real `.git` directory
-its session user owns, so it can commit without touching root-owned files. The sandbox token rides in git's
-environment, never on a command line or in a repo's config."""
+conversation that borrows its objects (`clone --reference`), inside that conversation's session folder. Each
+conversation's repo is a real `.git` directory its session user owns, so it can commit without touching root-owned
+files. The sandbox token rides in git's environment, never on a command line or in a repo's config."""
 
 from __future__ import annotations
 
 import os
 import shutil
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,6 +19,7 @@ SCRATCH = (".agent-progress.md", ".agent-out/")  # session notes and saved tool 
 class Worktrees:
     def __init__(self, root: Path, git_base: str, token_for_git: Callable[[], str]):
         self.root, self.git_base, self.token_for_git = Path(root), git_base.rstrip("/"), token_for_git
+        self._clone_locks: dict[str, threading.Lock] = {}
 
     def env(self) -> dict:
         return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "2",
@@ -29,17 +31,19 @@ class Worktrees:
         return self.root / "clones" / project
 
     def ensure_clone(self, project: str) -> Path:
+        """The project's shared clone, fetched. One at a time per project: conversations preparing their checkouts
+        at once would otherwise clone into, or fetch in, the same directory together."""
         path = self.clone_path(project)
-        if (path / ".git").exists():
-            git(path, "fetch", "-q", "--prune", "origin", env=self.env())
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            git(path.parent, "clone", "-q", f"{self.git_base}/git/{project}.git", str(path), env=self.env())
+        with self._clone_locks.setdefault(project, threading.Lock()):
+            if (path / ".git").exists():
+                git(path, "fetch", "-q", "--prune", "origin", env=self.env())
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                git(path.parent, "clone", "-q", f"{self.git_base}/git/{project}.git", str(path), env=self.env())
         return path
 
-    def prepare(self, conversation_id: str, project: str, branch: str, base: str) -> tuple[Path, bool]:
-        """The conversation's repo on `branch`, created from origin/<base> the first time."""
-        path = self.root / "work" / conversation_id
+    def prepare(self, path: Path, project: str, branch: str, base: str) -> tuple[Path, bool]:
+        """The conversation's repo at `path` on `branch`, created from origin/<base> the first time."""
         if (path / ".git").exists():
             return path, False
         clone = self.ensure_clone(project)

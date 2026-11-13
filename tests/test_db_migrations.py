@@ -177,6 +177,7 @@ def _assert_v3_shape(conn: sqlite3.Connection) -> None:
     assert "priority" not in _columns(conn, "tasks") and "pending_input" not in _columns(conn, "tasks")
     assert "stage" not in _columns(conn, "runs") and "memory_tokens" not in _columns(conn, "runs")
     assert "scope" not in _columns(conn, "conversations")
+    assert {"branch", "workdir"} <= _columns(conn, "conversations")
     assert db.get_setting(conn, "schema_version") == str(db.SCHEMA_VERSION)
 
 
@@ -219,4 +220,40 @@ def test_migration_moves_queue_and_leaves_old_dms(tmp_path):
     convo = conn.execute("SELECT sandbox, thread_ts FROM conversations WHERE id = 'V-1'").fetchone()
     assert item["sandbox"] == db.AGENT_QUEUE
     assert convo["sandbox"] == db.AGENT_QUEUE and convo["thread_ts"] == "5.1"
-    assert db.get_setting(conn, "schema_version") == "4"
+    assert db.get_setting(conn, "schema_version") == str(db.SCHEMA_VERSION)
+
+
+# The v4 conversations table, before a conversation had a fixed branch and a working-folder mode.
+V4_CONVERSATIONS = """
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    channel TEXT,
+    thread_ts TEXT,
+    sandbox TEXT NOT NULL,
+    project TEXT,
+    task_id TEXT,
+    session_id TEXT,
+    is_primary INTEGER NOT NULL DEFAULT 1,
+    waiting INTEGER NOT NULL DEFAULT 0,
+    model TEXT,
+    created_at TEXT NOT NULL,
+    last_active_at TEXT NOT NULL,
+    consolidated_at TEXT
+);
+"""
+
+
+def test_v4_conversations_gain_branch_and_workdir(tmp_path):
+    conn = db.connect(tmp_path / "agent.db")
+    conn.executescript(db.SCHEMA)
+    conn.executescript(V4_CONVERSATIONS)
+    db.set_setting(conn, "schema_version", "4")
+    now = db.utcnow()
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, is_primary, created_at, "
+                 "last_active_at) VALUES ('V-1', 'C1', '5.1', ?, 'sample', 1, ?, ?)", (db.AGENT_QUEUE, now, now))
+
+    db.migrate(conn)
+
+    convo = conn.execute("SELECT * FROM conversations WHERE id = 'V-1'").fetchone()
+    assert (convo["project"], convo["branch"], convo["workdir"]) == ("sample", None, "session")
+    assert db.get_setting(conn, "schema_version") == "5"

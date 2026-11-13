@@ -10,12 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
 from agent import db, events, tasks
+from agent.core.conversations import create_conversation
 from agent.core.sessions import AGENT_QUEUE
 from agent.core.slack_markdown import post_markdown
 from agent.memory.scopes import SessionContext, scopes_for
@@ -290,10 +290,9 @@ class AgentToolRouter:
         brief = args.get("brief", "").strip()
         task = self._create_task(ctx, project, args.get("title", "").strip() or "Untitled", kind, brief)
         task = tasks.transition(self.conn, task.id, Status.working, actor=ctx.actor or "agent")
-        convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
-        self.conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, task_id, is_primary, "
-                          "created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
-                          (convo_id, ctx.channel, ctx.thread_ts, AGENT_QUEUE, project, task.id, now, now))
+        convo_id = create_conversation(self.conn, agent_name=self.config.name, channel=ctx.channel,
+                                       thread_ts=ctx.thread_ts, project=project, title=task.title, task_id=task.id,
+                                       is_primary=0)
         self.queue.enqueue(convo_id, AGENT_QUEUE, "turn",
                            self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended))
         await self.notifier.task_changed(task)
