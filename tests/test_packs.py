@@ -47,7 +47,7 @@ def test_chilliclaw_pack_runs_locally_through_the_meter():
     for name in ("main", "email_summary", "usecase_classifier"):
         deployment = overlay["llm"]["deployments"][name]
         assert deployment["backend"] == "foundry" and deployment["foundry"]["api_key_env"] == "AGENT_LLM_KEY"
-        assert deployment["foundry"]["base_url"] == "http://core:8087/llm/chilliclaw-dev"
+        assert deployment["foundry"]["base_url"] == "http://172.30.0.10:8087/llm/chilliclaw-dev"
     assert overlay["integrations"]["slack"]["enabled"] is False and overlay["projects"]["sharing_enabled"] is False
     assert "AGENT_LLM_KEY=metered" in " ".join(pack.project.build_setup)
     assert "chilliclaw-dev-user-id" in (local / "SKILL.md").read_text()

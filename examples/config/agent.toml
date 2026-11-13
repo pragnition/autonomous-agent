@@ -71,7 +71,7 @@ trusted_peers = ["172.30.0.1"]
 agent_origins = ["agent-core", "agent-sandbox"]   # the account proxy's origins that are the agent; others are people
 
 # Model calls from the apps the agent runs and tests (a project's own LLM features). Apps point their OpenAI-style
-# base URL at http://core:8087/llm/<upstream> with any placeholder key; core adds the real key (core.env), counts
+# base URL at http://172.30.0.10:8087/llm/<upstream> (core's fixed address) with any placeholder key; core adds the real key (core.env), counts
 # each call's tokens at these prices, and refuses calls once the day's or month's cap is spent. The dashboard can
 # change the caps at runtime. Without upstreams, the meter doesn't run.
 [llm_meter]

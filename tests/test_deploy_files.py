@@ -146,6 +146,10 @@ def test_agent_service(compose):
     assert "SANDBOXD_HEALTH" not in (compose["services"]["supervisor"].get("environment") or {})
 
 
+def test_core_has_a_fixed_address_for_the_meter(compose):
+    assert compose["services"]["core"]["networks"]["agentnet"]["ipv4_address"] == "172.30.0.10"
+
+
 def test_agent_docker_daemon(compose):
     # the agent's own dockerd: its API only on the shared namespace's loopback, the work volume at the same path
     docker = compose["services"]["docker"]

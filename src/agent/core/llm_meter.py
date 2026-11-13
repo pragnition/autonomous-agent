@@ -2,7 +2,8 @@
 through core instead of directly. core adds the real key, reads the token usage from each answer, prices it, and
 refuses calls once the day's or the month's cap is spent, so a test loop can't run up a bill.
 
-Apps point their OpenAI-compatible base URL at http://core:<port>/llm/<upstream> with any placeholder key. The caps
+Apps point their OpenAI-compatible base URL at http://172.30.0.10:<port>/llm/<upstream> (core's fixed address on
+the stack network; apps in the agent's own Docker can't resolve `core`) with any placeholder key. The caps
 start from agent.toml's [llm_meter] and can be changed at runtime (the dashboard calls set_caps); days and months
 follow the config's timezone. stop_all pauses these calls too.
 """

@@ -11,7 +11,7 @@ You have your own Docker daemon and a headless Chromium. An app you start is on 
 
 - Use the project's own way to run it: its run-locally skill, CLAUDE.md, justfile or compose file, in that order. Wait for its health check before you open a page.
 - Run `docker ps` first. If another session's stack holds the ports you need, don't stop it: use the project's port settings if it has them, otherwise wait for it or test against that stack if it runs your branch.
-- Apps call their model provider through core's meter; the project's skill says how. An answer with `cost_cap_reached` means the model budget is spent: stop testing model features, say so in the thread, and never route around the meter.
+- Apps call their model provider through core's meter at `http://172.30.0.10:8087/llm/<upstream>`; the project's skill says how. An answer with `cost_cap_reached` means the model budget is spent: stop testing model features, say so in the thread, and never route around the meter.
 
 ## 2. Use it the way a user would
 

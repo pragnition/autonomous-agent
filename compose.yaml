@@ -20,7 +20,10 @@ services:
     build: {context: ., target: core}
     container_name: agent-core
     restart: unless-stopped
-    networks: [agentnet]
+    networks:
+      agentnet:
+        ipv4_address: 172.30.0.10   # fixed: apps in the agent's own Docker reach the model-call meter by address,
+                                    # since they can't resolve the name `core`
     ports:
       - "127.0.0.1:18080:8080"    # the agent API and git endpoint, for sandboxes via host.docker.internal only
       - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port

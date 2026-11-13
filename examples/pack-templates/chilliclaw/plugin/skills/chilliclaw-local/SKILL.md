@@ -39,11 +39,11 @@ playwright-cli -s=$S localstorage-set chilliclaw-dev-user-id <user-id>
 playwright-cli -s=$S goto http://localhost:5173
 ```
 
-Check the snapshot shows the app, not the landing page's sign-in buttons. For API calls without a browser, send the header `x-dev-user-id: <user-id>`.
+Check the snapshot shows the app ("Good afternoon, Agent!"), not the landing page's sign-in buttons. The first sign-in opens the product tour: click its Skip before you take screenshots. For API calls without a browser, send the header `x-dev-user-id: <user-id>`.
 
 ## Model calls
 
-The overlay sends every chat model call to the dev Foundry deployment `chilliclaw-dev-gpt-5.6-terra` through `http://core:8087/llm/chilliclaw-dev`. core adds the key and counts the cost; `curl -s http://core:8087/llm` shows today's spend and the caps. An error with `cost_cap_reached` means the budget is spent: stop testing model features and say so in the thread. Never put a real key in `.env` or call Foundry directly.
+The overlay sends every chat model call to the dev Foundry deployment `chilliclaw-dev-gpt-5.6-terra` through core's meter at `http://172.30.0.10:8087/llm/chilliclaw-dev` (an address, because ChilliClaw's containers can't resolve the name `core`). core adds the key and counts the cost; `curl -s http://172.30.0.10:8087/llm` shows today's spend and the caps. An error with `cost_cap_reached` means the budget is spent: stop testing model features and say so in the thread. Never put a real key in `.env` or call Foundry directly.
 
 ## Logs, tests and stopping
 

@@ -31,7 +31,7 @@ Non-goals
 | B3 | Screenshots live in `.agent-out/screenshots/` and go to the thread with `post_files` while the feature is built | People follow the work where they asked for it. `.agent-out/` is never committed. |
 | B4 | `open_pr` refuses a feature's first PR until a screenshot or video was posted in the conversation, or `no_ui` gives the reason nothing on screen changed | "Mandatory" needs a check outside the model. The reason goes in the PR body for the reviewer. Bugs and PR updates aren't held. |
 | B5 | `post_files` logs every post as a `files_posted` event and says when a conversation has no Slack thread | The evidence check reads the log; the agent is never told files were posted when they weren't. |
-| M1 | Apps call their model provider through core's meter (`http://core:8087/llm/<upstream>`), which adds the key, prices each answer's token usage and refuses calls once the day's or month's cap is spent | Caps that the app can't bypass, without changing the app: it only needs a base URL and a placeholder key. The key stays in core. |
+| M1 | Apps call their model provider through core's meter (`http://172.30.0.10:8087/llm/<upstream>`; core has a fixed address because apps in the agent's Docker can't resolve its name), which adds the key, prices each answer's token usage and refuses calls once the day's or month's cap is spent | Caps that the app can't bypass, without changing the app: it only needs a base URL and a placeholder key. The key stays in core. |
 | M2 | Caps start from `[llm_meter]` in agent.toml and are changed at runtime from the dashboard (`set_caps`, admins only); days and months follow the config's timezone | The team adjusts the budget without editing files or restarting. |
 | M3 | Prices are per million tokens by model, matched by the longest listed name inside the deployment name, with a deliberately high default | Deployment names carry the model name; an unknown model is over-counted, never free. |
 | M4 | Streaming chat completions are asked to report usage in the last chunk; answers without usage are logged as free with a warning | Counting needs the provider's own usage report. |
@@ -39,6 +39,7 @@ Non-goals
 | P1 | ChilliClaw runs in `dev-lite` with an overlay that turns off the integrations needing a real tenant and sends every chat model call through the meter; setup writes a `.env` of local-only values | No real secrets in the agent's environment; the stack boots the same way every time. |
 | P2 | The agent signs in through ChilliClaw's dev impersonation switch as a seeded admin | SSO with MFA can't run headless, and the switch is refused in production builds. |
 | P3 | One ChilliClaw stack at a time; sessions never stop another session's stack, and always bring their own down | Its ports are fixed. |
+| P4 | The local overlay also turns off the NCSgpt extension and the email, meeting-minutes and Excel specialists | They need a real tenant or call a production service, and the gateway refuses to start without them. |
 
 ## Approaches considered
 

@@ -19,11 +19,29 @@ merged = "Done"
 failed = "Todo"
 
 [build]
-# `setup` runs once when a session's worktree is created. The .env holds no real secrets: placeholders are filled
-# with local-only values, and model calls go through the agent's meter, which adds the Foundry key (the
-# chilliclaw-local skill). `checks` run before every PR.
+# `setup` runs once when a session's worktree is created. It writes a .env from .env.example with no real secrets:
+# placeholders get local-only values, and the internal tokens ChilliClaw's env generator makes are left out (a blank
+# one would win over the generated one, because its justfile loads .env). Model calls go through the agent's meter,
+# which adds the Foundry key (the chilliclaw-local skill). `checks` run before every PR.
 setup = [
-  '''test -f .env || { cp .env.example .env && sed -i -E "s/^(CREDENTIAL_ENCRYPTION_KEY)=.*/\1=$(python3 -c 'import secrets; print(secrets.token_hex(32))')/; s/^([A-Z0-9_]+)=REPLACE_ME.*/\1=local-placeholder/" .env && echo AGENT_LLM_KEY=metered >> .env; }''',
+  '''test -f .env || python3 - <<'PY'
+import secrets
+GENERATED = {"DOCUMENT_RENDERER_TOKEN", "OFFICE_EDIT_WORKER_TOKEN", "PII_SANITISATION_TOKEN", "DSL_EXECUTOR_TOKEN",
+             "MILVUS_MINIO_ACCESS_KEY", "MILVUS_MINIO_SECRET_KEY", "KNOWLEDGE_INDEX_REPORTS_AZURITE_KEY"}
+out = []
+for line in open(".env.example").read().splitlines():
+    key, sep, value = line.partition("=")
+    if sep and not key.startswith("#"):
+        if key in GENERATED and not value:
+            continue
+        if key == "CREDENTIAL_ENCRYPTION_KEY":
+            value = secrets.token_hex(32)
+        elif value.startswith("REPLACE_ME"):
+            value = "local-placeholder"
+        line = f"{key}={value}"
+    out.append(line)
+open(".env", "w").write("\n".join(out + ["AGENT_LLM_KEY=metered"]) + "\n")
+PY''',
   "bun install --frozen-lockfile",
 ]
 checks = ["just check"]
