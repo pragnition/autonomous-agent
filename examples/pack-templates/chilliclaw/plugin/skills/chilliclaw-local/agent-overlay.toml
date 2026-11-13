@@ -2,7 +2,8 @@
 # Every chat model call goes to the dev Foundry deployment through the agent's meter: core adds the key and stops
 # calls once the cost cap is spent. AGENT_LLM_KEY is a placeholder in .env; the meter replaces it.
 # Integrations that need a real tenant's credentials (Slack, Teams, Outlook, Microsoft sharing) and the features
-# that would call OpenRouter (audio transcription, image generation) are off, so the stack runs with no secrets.
+# that need their own Foundry deployments (audio transcription, image generation) are off, so the stack runs with
+# no secrets.
 
 [projects]
 sharing_enabled = false
@@ -19,28 +20,28 @@ enabled = false
 [integrations.microsoft.outlook.calendar_triggers]
 enabled = false
 
+# Off (audio stays nominally on: video upload validation depends on it), but the schema still wants a URL and a
+# model; nothing listens on port 9
 [workspace.transcribe_audio]
 enabled = false
+base_url = "http://127.0.0.1:9"
+model = "off-in-local-runs"
 
 [workspace.generate_image]
 enabled = false
+base_url = "http://127.0.0.1:9"
+model = "off-in-local-runs"
+
+[project_files.audio]
+base_url = "http://127.0.0.1:9"
+api_key = "off-in-local-runs"
+model = "off-in-local-runs"
 
 [llm.deployments.main]
 backend = "foundry"
 model = "chilliclaw-dev-gpt-5.6-terra"
 
 [llm.deployments.main.foundry]
-base_url = "http://core:8087/llm/chilliclaw-dev"
-auth_mode = "api_key"
-api_key_env = "AGENT_LLM_KEY"
-key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
-regional_endpoints_env = "AGENT_LLM_NO_REGIONS"
-
-[llm.deployments.vision_subagent]
-backend = "foundry"
-model = "chilliclaw-dev-gpt-5.6-terra"
-
-[llm.deployments.vision_subagent.foundry]
 base_url = "http://core:8087/llm/chilliclaw-dev"
 auth_mode = "api_key"
 api_key_env = "AGENT_LLM_KEY"

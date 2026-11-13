@@ -44,7 +44,7 @@ def test_chilliclaw_pack_runs_locally_through_the_meter():
     assert pack.project.build_checks == ["just check"] and any("bun install" in c for c in pack.project.build_setup)
     local = pack.plugin_dir / "skills" / "chilliclaw-local"
     overlay = tomllib.loads((local / "agent-overlay.toml").read_text())
-    for name in ("main", "vision_subagent", "email_summary", "usecase_classifier"):
+    for name in ("main", "email_summary", "usecase_classifier"):
         deployment = overlay["llm"]["deployments"][name]
         assert deployment["backend"] == "foundry" and deployment["foundry"]["api_key_env"] == "AGENT_LLM_KEY"
         assert deployment["foundry"]["base_url"] == "http://core:8087/llm/chilliclaw-dev"
