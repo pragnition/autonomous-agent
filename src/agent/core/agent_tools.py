@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agent import db, events, tasks
-from agent.core.conversations import create_conversation
+from agent.core.conversations import create_conversation, record_message
 from agent.core.sessions import AGENT_QUEUE
 from agent.core.slack_markdown import post_markdown
 from agent.memory.scopes import SessionContext, scopes_for
@@ -147,8 +147,11 @@ class AgentToolRouter:
     async def _post(self, ctx: ToolContext, text: str) -> ToolReply:
         if not ctx.channel:
             return ToolReply("this conversation has no Slack thread")
-        await post_markdown(self.slack, channel=ctx.channel, thread_ts=ctx.thread_ts,
-                            text=scrub(text, self.secret_values))
+        posted = await post_markdown(self.slack, channel=ctx.channel, thread_ts=ctx.thread_ts,
+                                     text=scrub(text, self.secret_values))
+        if ctx.conversation_id:
+            for ts in posted:
+                record_message(self.conn, ctx.channel, ts, ctx.conversation_id)
         return ToolReply("posted")
 
     def _tasks_today(self) -> int:

@@ -1,8 +1,11 @@
 """Conversations (spec v2 §6, §8): Slack and Linear messages become work items for the right sandbox.
 
 Code only routes. A Slack thread, a DM or a Linear issue is a conversation mapped to one agent session; each new
-message is the next turn of that session (the work queue never runs two turns of one conversation at once). A
-reply goes to a session that asked a question in the thread, otherwise to the thread's primary conversation.
+message is the next turn of that session (the work queue never runs two turns of one conversation at once). A DM
+is one rolling chat: its top-level messages continue the latest conversation until it has been quiet for DM_IDLE.
+A reply in a thread goes to a session that asked a question there, otherwise to the thread's primary conversation,
+otherwise to the conversation of the message the thread hangs off (every message core receives or posts is
+recorded in slack_messages).
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ import logging
 import re
 import sqlite3
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from agent import db, events, tasks
 from agent.core.sessions import AGENT_QUEUE, WorkItem, WorkQueue
@@ -24,6 +28,13 @@ FAILED_REPLY = "Something went wrong on my side, so I couldn't finish that. Try 
 FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
+DM_IDLE = timedelta(hours=12)  # a DM quiet this long starts a fresh conversation on its next top-level message
+
+
+def record_message(conn: sqlite3.Connection, channel: str, ts: str, conversation_id: str) -> None:
+    """Remember which conversation a Slack message belongs to, so a thread started under it finds its way back."""
+    conn.execute("INSERT OR IGNORE INTO slack_messages(channel, ts, conversation_id) VALUES (?, ?, ?)",
+                 (channel, ts, conversation_id))
 
 
 def create_conversation(conn: sqlite3.Connection, *, agent_name: str, channel: str | None, thread_ts: str | None,
@@ -87,8 +98,9 @@ class Conversations:
         return self.conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
 
     def _known_thread(self, channel: str, thread_ts: str) -> bool:
-        return self.conn.execute("SELECT 1 FROM conversations WHERE channel = ? AND thread_ts = ? LIMIT 1",
-                                 (channel, thread_ts)).fetchone() is not None
+        return self.conn.execute("SELECT 1 FROM conversations WHERE channel = ? AND thread_ts IS ? UNION ALL "
+                                 "SELECT 1 FROM slack_messages WHERE channel = ? AND ts = ? LIMIT 1",
+                                 (channel, thread_ts, channel, thread_ts)).fetchone() is not None
 
     def _new(self, channel: str | None, thread_ts: str | None, project: str | None, title: str,
              task_id: str | None = None) -> str:
@@ -111,22 +123,37 @@ class Conversations:
                 self._channel_names[channel] = ""
         return named.get(self._channel_names[channel])
 
-    async def _route(self, channel: str, thread_ts: str, is_dm: bool, text: str) -> sqlite3.Row:
-        waiting = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts = ? AND waiting = 1 "
-                                    "ORDER BY last_active_at DESC LIMIT 1", (channel, thread_ts)).fetchone()
-        if waiting is not None:
-            self.conn.execute("UPDATE conversations SET waiting = 0 WHERE id = ?", (waiting["id"],))
-            task = tasks.get_task(self.conn, waiting["task_id"]) if waiting["task_id"] else None
+    def _rolling_dm(self, channel: str) -> sqlite3.Row | None:
+        """The DM's current chat: its newest top-level conversation, unless that has been quiet for DM_IDLE. DM
+        conversations from before the rolling chat have a thread_ts, so they're never picked."""
+        since = (datetime.now(UTC) - DM_IDLE).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS NULL AND "
+                                 "is_primary = 1 AND last_active_at >= ? ORDER BY created_at DESC, rowid DESC "
+                                 "LIMIT 1", (channel, since)).fetchone()
+
+    def _in_thread(self, channel: str, thread_ts: str) -> sqlite3.Row | None:
+        """A thread's own primary conversation, otherwise the conversation of the message it hangs off."""
+        return (self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS ? AND "
+                                  "is_primary = 1 ORDER BY created_at LIMIT 1", (channel, thread_ts)).fetchone()
+                or self.conn.execute("SELECT c.* FROM slack_messages m JOIN conversations c ON c.id = "
+                                     "m.conversation_id WHERE m.channel = ? AND m.ts = ?",
+                                     (channel, thread_ts)).fetchone())
+
+    async def _route(self, channel: str, thread_ts: str | None, is_dm: bool, text: str) -> sqlite3.Row:
+        """thread_ts is None for a top-level DM message. A session waiting on an answer there takes it first."""
+        convo = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS ? AND waiting = 1 "
+                                  "ORDER BY last_active_at DESC LIMIT 1", (channel, thread_ts)).fetchone()
+        convo = convo or (self._rolling_dm(channel) if thread_ts is None else self._in_thread(channel, thread_ts))
+        if convo is None:
+            project = None if is_dm else await self._project_for_channel(channel)
+            title = text.strip().splitlines()[0] if text.strip() else ""  # the branch is named from the first line
+            return self._row(self._new(channel, thread_ts, project, title))
+        if convo["waiting"]:  # the message answers its question
+            self.conn.execute("UPDATE conversations SET waiting = 0 WHERE id = ?", (convo["id"],))
+            task = tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
             if task is not None and task.status == Status.needs_input:
                 await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.working, actor="human"))
-            return self._row(waiting["id"])
-        primary = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts = ? AND is_primary = 1 "
-                                    "ORDER BY created_at LIMIT 1", (channel, thread_ts)).fetchone()
-        if primary is not None:
-            return primary
-        project = None if is_dm else await self._project_for_channel(channel)
-        title = text.strip().splitlines()[0] if text.strip() else ""  # the branch is named from the first line
-        return self._row(self._new(channel, thread_ts, project, title))
+        return self._row(convo["id"])
 
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, unattended: bool = False,
                       message_ts: str | None = None) -> str:
@@ -143,7 +170,7 @@ class Conversations:
         if not user or not channel or event.get("bot_id") or event.get("subtype") or user == self.bot_user_id:
             return
         is_dm = event.get("channel_type") == "im"
-        thread_ts = event.get("thread_ts") or event["ts"]
+        thread_ts = event.get("thread_ts") or (None if is_dm else event["ts"])  # a DM's top level is one chat
         mentioned = self._mentioned(event)
         if not (is_dm or mentioned or (event.get("thread_ts") and self._known_thread(channel, thread_ts))):
             return
@@ -156,6 +183,7 @@ class Conversations:
             return
         text = _MENTION.sub("", event.get("text") or "").strip()
         convo = await self._route(channel, thread_ts, is_dm, text)
+        record_message(self.conn, channel, event["ts"], convo["id"])
         if _FABLE.search(text):
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
@@ -208,7 +236,9 @@ class Conversations:
         if failed:
             text = FAILED_REPLY
         if text and convo["channel"]:
-            await post_markdown(self.slack, channel=convo["channel"], thread_ts=convo["thread_ts"], text=text)
+            for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=convo["thread_ts"],
+                                          text=text):
+                record_message(self.conn, convo["channel"], ts, convo["id"])
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
             self.conn.execute("UPDATE conversations SET session_id = NULL, last_active_at = ? WHERE id = ?",
                               (db.utcnow(), convo["id"]))

@@ -86,7 +86,7 @@ async def test_dm_turn_end_to_end(app, api):
     await api.post("/agent/result", json={"result": {"outcome": "done", "text": "Nothing else is running.",
                                                      "session_id": "sess-1", "turns": 2, "cost_usd_est": 0.1}},
                    headers=bearer(session))
-    assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": "5.1", "text": "Nothing else is running.",
+    assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": None, "text": "Nothing else is running.",
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
     run = app.conn.execute("SELECT role, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
     assert tuple(run) == ("turn", 2, "done")
@@ -133,13 +133,13 @@ async def test_work_on_binds_a_dm_through_core(tmp_path):
         await client.close()
 
 
-async def test_on_files_uploads_to_thread(app):
+async def test_on_files_uploads_to_the_conversation(app):
     await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
                                           "ts": "6.1", "text": "show me"})
     item_id = app.conn.execute("SELECT id FROM work_items ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     await app.on_files(item_id, [("a.png", b"png")], "screenshots")
     upload = app.slack.uploads[-1]
-    assert upload["channel"] == "D1" and upload["thread_ts"] == "6.1"
+    assert upload["channel"] == "D1" and upload["thread_ts"] is None  # a DM is one chat: its top level
     assert upload["file_uploads"] == [{"file": b"png", "filename": "a.png"}]
     row = app.conn.execute("SELECT data FROM events WHERE type = 'files_posted'").fetchone()
     assert json.loads(row["data"])["files"] == ["a.png"] and json.loads(row["data"])["slack"] is True

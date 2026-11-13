@@ -22,7 +22,7 @@ async def test_falls_back_to_plain_text_when_slack_rejects_the_block():
         return await original(**kw)
 
     slack.chat_postMessage = picky
-    await post_markdown(slack, channel="C1", thread_ts="1.0", text="**hi**")
+    assert await post_markdown(slack, channel="C1", thread_ts="1.0", text="**hi**") == ["101.0"]
     assert slack.posts == [{"channel": "C1", "thread_ts": "1.0", "text": "**hi**"}]
 
 
@@ -44,6 +44,12 @@ async def test_long_text_goes_out_as_several_messages():
     assert len(slack.posts) > 1
     assert all(len(p["blocks"][0]["text"]) <= MARKDOWN_LIMIT for p in slack.posts)
     assert "".join(p["text"] for p in slack.posts) == text
+
+
+async def test_post_markdown_returns_ts_list():
+    slack = FakeSlack()
+    sent = await post_markdown(slack, channel="C1", thread_ts=None, text="y" * 13_000)
+    assert len(slack.posts) == 2 and sent == ["101.0", "102.0"]
 
 
 def test_short_text_is_one_chunk():

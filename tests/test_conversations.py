@@ -1,11 +1,12 @@
 import itertools
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from agent import db, tasks
-from agent.core.conversations import (FAILED_REPLY, NOT_AUTHORISED, BindRefused, Conversations, bind_project,
-                                      create_conversation)
+from agent.core.conversations import (DM_IDLE, FAILED_REPLY, NOT_AUTHORISED, BindRefused, Conversations,
+                                      bind_project, create_conversation, record_message)
 from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.gitutil import branch_name
 from agent.tasks import Status
@@ -85,6 +86,35 @@ def convo(conn, thread):
 def last_item(queue):
     item_id = queue.conn.execute("SELECT id FROM work_items ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     return queue.get(item_id)
+
+
+def dm_reply(thread, text, user="U1"):
+    """A reply in a DM thread: under one of the person's messages or one of the bot's."""
+    return {**reply(thread, text, user=user, channel="D-1"), "channel_type": "im"}
+
+
+def hours_ago(hours: float) -> str:
+    return (datetime.now(UTC) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sent_ts(slack) -> list[str]:
+    """The ts of every message the bot posts from here on, in order."""
+    sent, original = [], slack.chat_postMessage
+
+    async def post(**kw):
+        resp = await original(**kw)
+        sent.append(resp["ts"])
+        return resp
+
+    slack.chat_postMessage = post
+    return sent
+
+
+async def finish_turn(convos, queue, text):
+    item = queue.claim(AGENT_QUEUE)
+    queue.complete(item.id, {"text": text})
+    await convos.on_result(queue.get(item.id), {"text": text, "outcome": "done"})
+    return item
 
 
 async def test_second_message_waits_for_first(convos, queue):
@@ -288,6 +318,112 @@ async def test_linear_task_is_reattached_after_a_slack_failure(convos, fake_line
     await convos.intake_linear()
     item = queue.claim(AGENT_QUEUE)
     assert item is not None and item.payload["text"].startswith("Linear issue SAM-7")
+
+
+async def test_two_top_level_dms_share_conversation(convos, conn, queue):
+    await convos.handle_slack(dm("login yourself to azure cli"))
+    first = last_item(queue)
+    await convos.handle_slack(dm("done"))
+    assert last_item(queue).conversation_id == first.conversation_id
+    assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?",
+                        (first.conversation_id,)).fetchone()[0] is None
+
+
+async def test_dm_after_idle_starts_new_conversation(convos, conn, queue):
+    assert DM_IDLE == timedelta(hours=12)
+    await convos.handle_slack(dm("first"))
+    first = last_item(queue).conversation_id
+    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(11), first))
+    await convos.handle_slack(dm("still the same chat"))
+    assert last_item(queue).conversation_id == first
+    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), first))
+    await convos.handle_slack(dm("a new day"))
+    second = last_item(queue).conversation_id
+    assert second != first
+    assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (second,)).fetchone()[0] is None
+
+
+async def test_dm_message_during_running_turn_queues_on_same_conversation(convos, queue):
+    await convos.handle_slack(dm("run the tests"))
+    first = queue.claim(AGENT_QUEUE)
+    await convos.handle_slack(dm("and the linter"))
+    assert last_item(queue).conversation_id == first.conversation_id
+    assert queue.claim(AGENT_QUEUE) is None
+    queue.complete(first.id, {"text": "ok"})
+    assert queue.claim(AGENT_QUEUE).payload["text"] == "and the linter"
+
+
+async def test_dm_reply_is_posted_top_level(convos, queue, slack):
+    await convos.handle_slack(dm("hi"))
+    await finish_turn(convos, queue, "hello")
+    assert (slack.posts[-1]["channel"], slack.posts[-1]["thread_ts"], slack.posts[-1]["text"]) == \
+        ("D-1", None, "hello")
+
+
+async def test_thread_reply_under_bot_message_routes_back(convos, conn, queue, slack):
+    sent = sent_ts(slack)
+    await convos.handle_slack(dm("what's failing?"))
+    item = await finish_turn(convos, queue, "the login test")
+    assert conn.execute("SELECT conversation_id FROM slack_messages WHERE channel = 'D-1' AND ts = ?",
+                        (sent[0],)).fetchone()[0] == item.conversation_id
+    await convos.handle_slack(dm_reply(sent[0], "why?"))
+    assert last_item(queue).conversation_id == item.conversation_id
+
+
+async def test_thread_reply_under_person_message_routes_back(convos, queue):
+    event = dm("deploy the branch")
+    await convos.handle_slack(event)
+    first = last_item(queue).conversation_id
+    await convos.handle_slack(dm_reply(event["ts"], "to staging"))
+    assert last_item(queue).conversation_id == first
+
+
+async def test_thread_reply_under_second_chunk_routes_back(convos, queue, slack):
+    sent = sent_ts(slack)
+    await convos.handle_slack(dm("write a long report"))
+    item = await finish_turn(convos, queue, "x" * 13_000)
+    assert len(sent) == 2
+    await convos.handle_slack(dm_reply(sent[1], "about the second part"))
+    assert last_item(queue).conversation_id == item.conversation_id
+
+
+async def test_channel_thread_reply_without_mention_continues(convos, queue, slack):
+    await convos.handle_slack(mention("t40", "fix login"))
+    item = await finish_turn(convos, queue, "on it")
+    assert slack.posts[-1]["thread_ts"] == "t40"
+    await convos.handle_slack(reply("t40", "the signup page too"))
+    assert last_item(queue).conversation_id == item.conversation_id
+
+
+async def test_first_dm_after_upgrade_starts_rolling_chat(convos, conn, queue):
+    old = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-1", thread_ts="5.1")
+    await convos.handle_slack(dm("hello again"))
+    new = last_item(queue).conversation_id
+    assert new != old
+    assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (new,)).fetchone()[0] is None
+    await convos.handle_slack(dm_reply("5.1", "about that old thread"))
+    assert last_item(queue).conversation_id == old
+
+
+async def test_dm_answer_clears_waiting(convos, conn, queue):
+    """A question asked in the DM chat is answered at the top level or in a thread under the question."""
+    await convos.handle_slack(dm("deploy it"))
+    cid = last_item(queue).conversation_id
+    conn.execute("UPDATE conversations SET waiting = 1 WHERE id = ?", (cid,))
+    await convos.handle_slack(dm("staging"))
+    assert last_item(queue).conversation_id == cid
+    assert conn.execute("SELECT waiting FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == 0
+
+    t = tasks.create_task(conn, project="sample", title="t", description="", kind="bug", source="slack",
+                          source_ref=None, requester="ann", owner="ann")
+    tasks.transition(conn, t.id, Status.working, actor="x")
+    tasks.transition(conn, t.id, Status.needs_input, actor="x")
+    conn.execute("UPDATE conversations SET waiting = 1, task_id = ? WHERE id = ?", (t.id, cid))
+    record_message(conn, "D-1", "900.0", cid)  # the bot's question
+    await convos.handle_slack(dm_reply("900.0", "prod, actually"))
+    assert last_item(queue).conversation_id == cid
+    assert conn.execute("SELECT waiting FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == 0
+    assert tasks.get_task(conn, t.id).status == Status.working
 
 
 PACKS = {"sample": make_pack(), "other": make_pack("other", repo="o/other")}

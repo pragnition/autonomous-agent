@@ -121,7 +121,19 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 CREATE INDEX IF NOT EXISTS llm_usage_at ON llm_usage(at);
 """
 
-SCHEMA_VERSION = 5
+# Which conversation each Slack message belongs to, received or posted, so a thread started under any of them
+# finds its way back
+SLACK_MESSAGES = """
+CREATE TABLE IF NOT EXISTS slack_messages (
+    channel TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    PRIMARY KEY(channel, ts)
+);
+"""
+SCHEMA += SLACK_MESSAGES
+
+SCHEMA_VERSION = 6
 
 # One row per agent session: a Slack thread, a Linear issue, a hand-over or a split (spec v2 §6, §7)
 CONVERSATIONS = """
@@ -185,6 +197,12 @@ def _migrate_v5(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "conversations", "workdir", "TEXT NOT NULL DEFAULT 'session'")
 
 
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    """Map Slack messages to their conversations, so a DM can be one chat and a thread under any message (the
+    person's or the bot's) reaches the conversation that message belongs to."""
+    conn.execute(SLACK_MESSAGES)
+
+
 # Keyed by the version each migration upgrades a database to. Every entry must be safe to run on a database
 # that is already at or past its version (checked with PRAGMA table_info / IF EXISTS / IF NOT EXISTS), so a
 # fresh database (already created at SCHEMA's current shape) runs every migration as a no-op.
@@ -192,6 +210,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migrate_v3,
     4: _migrate_v4,
     5: _migrate_v5,
+    6: _migrate_v6,
 }
 
 

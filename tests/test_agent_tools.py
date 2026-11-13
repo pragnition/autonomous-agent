@@ -106,6 +106,12 @@ async def test_ask_without_task_posts_in_thread(router, ctx_member):
     assert router.slack.posts[-1]["text"] == "which repo?" and router.slack.posts[-1]["thread_ts"] == "1.0"
 
 
+async def test_post_update_records_its_message(router, ctx_member, conn):
+    await router.call(ctx_member, "post_update", {"text": "halfway there"})
+    rows = conn.execute("SELECT channel, ts, conversation_id FROM slack_messages").fetchall()
+    assert [tuple(r) for r in rows] == [("C1", "101.0", ctx_member.conversation_id)]
+
+
 async def test_post_update_is_scrubbed(router, ctx_member):
     await router.call(ctx_member, "post_update", {"text": "token SUPERSECRETVALUE here"})
     assert "SUPERSECRETVALUE" not in router.slack.posts[-1]["text"]

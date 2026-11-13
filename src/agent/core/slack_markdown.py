@@ -29,13 +29,17 @@ def markdown_chunks(text: str, limit: int = MARKDOWN_LIMIT) -> list[str]:
     return chunks + [current] if current else chunks
 
 
-async def post_markdown(slack, *, channel: str, thread_ts: str | None, text: str) -> None:
+async def post_markdown(slack, *, channel: str, thread_ts: str | None, text: str) -> list[str]:
+    """Post `text` as one or more messages; returns each posted message's ts, in order."""
+    posted = []
     for chunk in markdown_chunks(text):
         try:
-            await slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=chunk,
-                                         blocks=[{"type": "markdown", "text": chunk}])
+            resp = await slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=chunk,
+                                                blocks=[{"type": "markdown", "text": chunk}])
         except SlackApiError as e:
             if e.response.get("error") not in ("invalid_blocks", "invalid_blocks_format"):
                 raise
             log.warning("Slack rejected the markdown block (%s); posting plain text", e.response.get("error"))
-            await slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=chunk)
+            resp = await slack.chat_postMessage(channel=channel, thread_ts=thread_ts, text=chunk)
+        posted.append(resp["ts"])
+    return posted

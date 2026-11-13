@@ -178,6 +178,7 @@ def _assert_v3_shape(conn: sqlite3.Connection) -> None:
     assert "stage" not in _columns(conn, "runs") and "memory_tokens" not in _columns(conn, "runs")
     assert "scope" not in _columns(conn, "conversations")
     assert {"branch", "workdir"} <= _columns(conn, "conversations")
+    assert "slack_messages" in tables
     assert db.get_setting(conn, "schema_version") == str(db.SCHEMA_VERSION)
 
 
@@ -256,4 +257,20 @@ def test_v4_conversations_gain_branch_and_workdir(tmp_path):
 
     convo = conn.execute("SELECT * FROM conversations WHERE id = 'V-1'").fetchone()
     assert (convo["project"], convo["branch"], convo["workdir"]) == ("sample", None, "session")
-    assert db.get_setting(conn, "schema_version") == "5"
+    assert db.get_setting(conn, "schema_version") == str(db.SCHEMA_VERSION)
+
+
+def test_v5_database_gains_slack_messages(tmp_path):
+    conn = db.connect(tmp_path / "agent.db")
+    conn.executescript(db.SCHEMA)
+    conn.executescript(db.CONVERSATIONS)
+    conn.execute("DROP TABLE IF EXISTS slack_messages")
+    db.set_setting(conn, "schema_version", "5")
+
+    db._MIGRATIONS[6](conn)
+
+    assert {r[1]: r[5] for r in conn.execute("PRAGMA table_info(slack_messages)")} == \
+        {"channel": 1, "ts": 2, "conversation_id": 0}  # primary key (channel, ts)
+    db._MIGRATIONS[6](conn)  # safe to run again
+    db.migrate(conn)
+    assert db.get_setting(conn, "schema_version") == "6"
