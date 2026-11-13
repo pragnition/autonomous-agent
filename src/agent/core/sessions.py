@@ -113,6 +113,17 @@ class WorkQueue:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(_now(now))
 
+    def claimable_kinds(self, sandbox: str) -> set[str]:
+        """The kinds of items in `sandbox` that claim() could hand out right now, without claiming anything: the
+        same eligibility rule as claim() (queued, and its conversation has no item already claimed), minus the
+        reap and the transaction. A runner asks the Gate only about kinds actually worth asking about, so an
+        idle sandbox never has to call it (and, through it, the account proxy) on every poll."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT w.kind FROM work_items w WHERE w.sandbox = ? AND w.status = 'queued' AND "
+            "(w.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM work_items o WHERE "
+            "o.conversation_id = w.conversation_id AND o.status = 'claimed'))", (sandbox,)).fetchall()
+        return {r["kind"] for r in rows}
+
     def claim(self, sandbox: str, now: datetime | None = None, kinds: tuple[str, ...] | None = None) -> WorkItem | None:
         """The oldest eligible queued item for `sandbox`: no other item of its conversation is claimed, and (when
         `kinds` is given) its kind is one of them. A runner asks once per kind it may start right now (the Gate

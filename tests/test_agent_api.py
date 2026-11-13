@@ -216,9 +216,10 @@ class CountingGate(FakeGate):
         return True, ""
 
 
-async def test_pull_asks_the_gate_for_turn_and_chore_even_when_idle(conn, queue, parts):
-    """pull() no longer peeks at the queue before asking the gate (one queue, up to 10 kinds of session at once
-    share it): it asks can_start for every kind it might claim, whether or not anything is actually queued."""
+async def test_idle_pull_never_asks_the_gate(conn, queue, parts):
+    """pull() asks queue.claimable_kinds() first — a plain read, no transaction — and only calls the Gate (and
+    through it the account proxy) about kinds that are actually claimable. An idle sandbox must not pay for an
+    HTTP round trip to the proxy on every 0.5 s poll."""
     gate = CountingGate()
 
     async def noop(*a):
@@ -226,17 +227,36 @@ async def test_pull_asks_the_gate_for_turn_and_chore_even_when_idle(conn, queue,
 
     app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
         tok = mint_token(conn, "sandbox", sandbox="debug-p", work_item_id=None, ttl_s=60)
         assert (await client.post("/agent/pull", json={"sandbox": "debug-p"}, headers=bearer(tok))).status == 204
-        assert set(gate.calls) == {"turn", "chore"}
-        gate.calls.clear()
+        assert gate.calls == []
         queue.enqueue("c1", "debug-p", "chore", {})
         assert (await client.post("/agent/pull", json={"sandbox": "debug-p"}, headers=bearer(tok))).status == 200
-        assert set(gate.calls) == {"turn", "chore"}
+        assert gate.calls == ["chore"]
+    finally:
+        await client.close()
+
+
+async def test_queued_turn_consults_the_gate(conn, queue, parts):
+    gate = CountingGate()
+
+    async def noop(*a):
+        pass
+
+    app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
+                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        queue.enqueue("c1", "code-p", "turn", {})
+        tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
+        assert (await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).status == 200
+        assert gate.calls == ["turn"]
     finally:
         await client.close()
 

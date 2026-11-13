@@ -54,8 +54,11 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
             return web.json_response({"error": "token is for another sandbox"}, status=403)
         deadline = time.monotonic() + pull_wait_s
         while True:
-            kinds = tuple([k for k in ("turn", "chore") if (await gate.can_start(k))[0]])
-            item = queue.claim(sandbox, kinds=kinds) if kinds else None
+            claimable = queue.claimable_kinds(sandbox)
+            item = None
+            if claimable:  # nothing queued (or claimable) means nothing worth asking the Gate about
+                kinds = tuple([k for k in claimable if (await gate.can_start(k))[0]])
+                item = queue.claim(sandbox, kinds=kinds) if kinds else None
             if item is not None:
                 session = mint_token(conn, "session", sandbox=sandbox, work_item_id=item.id, ttl_s=session_ttl_s)
                 ctx = context_for(item.id)

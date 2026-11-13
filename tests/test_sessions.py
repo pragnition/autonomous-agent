@@ -174,3 +174,21 @@ def test_claim_skips_kinds_not_allowed(conn):
     chore = q.enqueue("c2", AGENT_QUEUE, "chore", {})
     item = q.claim(AGENT_QUEUE, kinds=("chore",))
     assert item.id == chore and item.kind == "chore"
+
+
+def test_claimable_kinds(conn):
+    q = WorkQueue(conn)
+    assert q.claimable_kinds("code-p") == set()
+    q.enqueue("c1", "code-p", "turn", {})
+    q.enqueue("c2", "code-p", "chore", {})
+    assert q.claimable_kinds("code-p") == {"turn", "chore"}
+    q.claim("code-p", kinds=("turn",))
+    assert q.claimable_kinds("code-p") == {"chore"}      # the turn is claimed; c2's chore is untouched
+
+
+def test_claimable_kinds_excludes_a_conversations_second_turn(conn):
+    q = WorkQueue(conn)
+    q.enqueue("c1", "code-p", "turn", {})
+    q.enqueue("c1", "code-p", "turn", {})
+    q.claim("code-p")
+    assert q.claimable_kinds("code-p") == set()           # c1 already has a claimed item
