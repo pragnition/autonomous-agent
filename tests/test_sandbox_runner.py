@@ -41,7 +41,8 @@ def worktrees(tmp_path, server):
 def bundle_bytes() -> bytes:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w:gz") as tar:
-        for name in ("system.md", "plugins/core/.claude-plugin/plugin.json", "plugins/pack/.claude-plugin/plugin.json"):
+        for name in ("system.md", "plugins/core/.claude-plugin/plugin.json", "plugins/effortless/.claude-plugin/plugin.json",
+                     "plugins/pack/.claude-plugin/plugin.json"):
             data = b"{}"
             info = tarfile.TarInfo(name)
             info.size = len(data)
@@ -119,7 +120,8 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
     assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
     assert spec.env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert git(spec.cwd, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
-    assert [p.name for p in spec.plugins] == ["core", "pack"] and spec.system_prompt == "SYS"
+    assert spec.env["CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"] == "1"
+    assert [p.name for p in spec.plugins] == ["core", "effortless", "pack"] and spec.system_prompt == "SYS"
     assert link.results[-1]["text"] == "all done" and link.results[-1]["session_id"] == "sess-1"
     assert link.results[-1]["outcome"] == "done" and link.results[-1]["cost_usd_est"] == 0.5
 

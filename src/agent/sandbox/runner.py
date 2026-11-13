@@ -110,7 +110,7 @@ class SandboxRunner:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
                 tar.extractall(tmp, filter="data")
             tmp.rename(dest)
-        return [p for p in (dest / "plugins" / "core", dest / "plugins" / "pack") if p.is_dir()]
+        return [dest / "plugins" / name for name in ("core", "effortless", "pack") if (dest / "plugins" / name).is_dir()]
 
     async def _workdir(self, convo: str, payload: dict, user: str) -> tuple[Path, bool]:
         wt = payload.get("worktree")
@@ -222,7 +222,9 @@ class SandboxRunner:
         spec = RunSpec(run_id=item_id, role=self.profile, prompt=payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
-                       env={"CLAUDE_CONFIG_DIR": str(sessions), **env, **(payload.get("test_secrets") or {})},
+                       # Function hooks load the effortless mod's code (plugins/effortless/hooks)
+                       env={"CLAUDE_CONFIG_DIR": str(sessions), "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", **env,
+                            **(payload.get("test_secrets") or {})},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, resume_session_id=payload.get("resume_session_id"),
                        os_user=user if self.run_as_root else None, permission_mode="bypass",

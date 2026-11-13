@@ -31,6 +31,7 @@ def test_general_bundle_has_no_pack_plugin(config_dir):
     _, data = build_bundle(config_dir, "general", None)
     files = names(data)
     assert "system.md" in files and "plugins/core/skills/fix-bug/SKILL.md" in files
+    assert "plugins/effortless/hooks/register.tsx" in files
     assert not any(f.startswith("plugins/pack") for f in files)
 
 
@@ -38,6 +39,7 @@ def test_code_bundle_has_both_plugins(config_dir):
     _, data = build_bundle(config_dir, "code", "sample")
     files = names(data)
     assert "plugins/core/.claude-plugin/plugin.json" in files
+    assert "plugins/effortless/.claude-plugin/plugin.json" in files
     assert "plugins/pack/skills/sample-debugging/SKILL.md" in files
 
 

@@ -1,5 +1,6 @@
-"""Config bundles for sandbox runners (spec v2 §5): the system prompt, the core plugin's skills and, for project
-sandboxes, the pack's plugin. Deterministic, so the version (a hash of the contents) changes only when they do."""
+"""Config bundles for sandbox runners (spec v2 §5): the system prompt, the core plugin's skills, the effortless mod
+(picks each prompt's reasoning effort) and, for project sandboxes, the pack's plugin. Deterministic, so the version (a
+hash of the contents) changes only when they do."""
 
 from __future__ import annotations
 
@@ -12,13 +13,15 @@ from pathlib import Path
 from agent.core.payloads import DEFAULT_SYSTEM
 
 CORE_PLUGIN = Path(__file__).parent.parent / "plugins" / "core"
+EFFORTLESS_PLUGIN = Path(__file__).parent.parent / "plugins" / "effortless"
 PACK_PROFILES = ("code", "debug")
 
 
 def _files(config_dir: Path, profile: str, project: str | None) -> list[tuple[str, Path]]:
     custom = config_dir / "agent" / "system.md"
     files = [("system.md", custom if custom.is_file() else DEFAULT_SYSTEM)]
-    files += [(f"plugins/core/{p.relative_to(CORE_PLUGIN)}", p) for p in sorted(CORE_PLUGIN.rglob("*")) if p.is_file()]
+    for name, root in (("core", CORE_PLUGIN), ("effortless", EFFORTLESS_PLUGIN)):
+        files += [(f"plugins/{name}/{p.relative_to(root)}", p) for p in sorted(root.rglob("*")) if p.is_file()]
     pack_plugin = config_dir / "packs" / (project or "") / "plugin"
     if profile in PACK_PROFILES and project and pack_plugin.is_dir():
         files += [(f"plugins/pack/{p.relative_to(pack_plugin)}", p) for p in sorted(pack_plugin.rglob("*"))
