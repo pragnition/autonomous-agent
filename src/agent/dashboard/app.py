@@ -91,7 +91,8 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
     async def me(request: web.Request) -> web.Response:
         v = viewer(request)
         return web.json_response({"login": v.login, "name": v.name, "person": v.person.key if v.person else None,
-                                  "role": v.person.role if v.person else None, "can_resume": v.can_resume})
+                                  "role": v.person.role if v.person else None, "can_resume": v.can_resume,
+                                  "agent": config.name})
 
     async def overview(request: web.Request) -> web.Response:
         running, _ = list_sessions(conn, SessionFilter(state="running", limit=MAX_ROWS))

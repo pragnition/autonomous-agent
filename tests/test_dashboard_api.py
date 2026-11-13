@@ -101,12 +101,14 @@ async def test_missing_identity_403(api):
 
 async def test_me_matches_person(api):
     body = await (await api.get("/api/me", headers=ANN)).json()
-    assert body == {"login": "ann@x.com", "name": "Ann A", "person": "ann", "role": "admin", "can_resume": True}
+    assert body == {"login": "ann@x.com", "name": "Ann A", "person": "ann", "role": "admin", "can_resume": True,
+                    "agent": "agent"}
 
 
 async def test_me_unknown_login_member_view(api):
     body = await (await api.get("/api/me", headers=EVE)).json()
-    assert body == {"login": "eve@x.com", "name": "eve@x.com", "person": None, "role": None, "can_resume": False}
+    assert body == {"login": "eve@x.com", "name": "eve@x.com", "person": None, "role": None, "can_resume": False,
+                    "agent": "agent"}
 
 
 async def test_post_without_header_403(api, conn):

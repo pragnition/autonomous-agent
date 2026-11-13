@@ -40,6 +40,20 @@ resume:
 smoke:
     docker compose exec core python /app/scripts/smoke.py
 
+# Put the dashboard on the tailnet only (https://<node>.<tailnet>.ts.net:9443); never Funnel. Run on the laptop.
+dashboard-serve:
+    tailscale serve --bg --https=9443 http://127.0.0.1:18086
+    tailscale serve status
+
+# Work on the dashboard locally against a running core, e.g. after `ssh -L 18086:127.0.0.1:18086 <host>`:
+# DASHBOARD_DEV_LOGIN=<your tailscale login> just dashboard-dev
+dashboard-dev:
+    cd dashboard && npm install && npm run dev
+
+# The dashboard's own tests and production build
+dashboard-test:
+    cd dashboard && npm ci && npx vitest run && npm run build
+
 # Install the Claude account proxy as a systemd user service (run by a person, once)
 proxy-install:
     mkdir -p ~/.config/systemd/user

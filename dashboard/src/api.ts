@@ -1,0 +1,235 @@
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+
+// Shapes of core's dashboard API (docs/superpowers/plans/2026-11-13-dashboard.md, "API contract").
+
+export type Tokens = { in: number; out: number; cache_read: number; cache_write: number }
+export type SessionState = "queued" | "running" | "done" | "failed" | "cancelled"
+export type Source = "slack" | "linear" | "handover" | "chore" | "other"
+
+export type SessionRow = {
+  id: string
+  kind: string
+  state: SessionState
+  sandbox: string
+  project: string | null
+  conversation_id: string | null
+  task_id: string | null
+  title: string
+  source: Source
+  requester: string | null
+  created_at: string
+  started_at: string | null
+  ended_at: string | null
+  account: string | null
+  turns: number | null
+  tokens: Tokens | null
+  cost_usd: number | null
+  outcome: string | null
+  error: string | null
+  live: boolean
+  links: { slack: string | null; linear: string | null; pr: string | null }
+}
+
+export type Entry = {
+  id: string
+  ts: string | null
+  kind: "text" | "tool_call" | "tool_result" | "result" | "rate_limit" | "raw"
+  role?: "assistant" | "user"
+  text?: string
+  tool?: string
+  tool_use_id?: string
+  summary?: string
+  input?: Record<string, unknown>
+  is_error?: boolean
+  content?: string
+  turns?: number | null
+  cost_usd?: number | null
+  usage?: Tokens
+  subtype?: string | null
+}
+
+export type Me = { login: string; name: string; person: string | null; role: string | null; can_resume: boolean;
+  agent: string }
+
+export type Overview = {
+  paused: boolean
+  paused_by: { actor: string | null; at: string | null } | null
+  running: (SessionRow & { recent: Entry[] })[]
+  queued: SessionRow[]
+  counts: { running: number; queued: number; done_today: number; failed_today: number }
+}
+
+export type SessionDetail = SessionRow & { entries: Entry[]; offset: number }
+
+export type Pace = "ahead" | "on" | "behind"
+
+export type Account = {
+  code: string
+  status: string
+  rank: number | null
+  verified: boolean
+  active: number
+  util_5h: number | null
+  reset_5h: number | null
+  util_7d: number | null
+  reset_7d: number | null
+  pace: Pace | null
+  target_7d: number | null
+  pace_delta: number | null
+  cap_5h: number | null
+  tokens_60m: Tokens
+  agent_60m: Tokens
+  people_60m: Tokens
+  by_origin: Record<string, Tokens>
+  errors_60m: { "429": number; limit: number; "5xx": number; upstream_error: number }
+  latency_60m: { requests: number; ttft_p50: number | null; ttft_p90: number | null; tok_s: number | null }
+}
+
+export type AccountsView = {
+  available: boolean
+  error: string | null
+  agent_origins: string[]
+  pool: {
+    used_7d: number | null
+    target_7d: number | null
+    delta: number | null
+    state: Pace | null
+    counts: { ahead: number; on: number; behind: number }
+    unknown: number
+    tokens_60m: Tokens
+    burn: { today: Tokens; week: Tokens; since: number | null }
+    hourly: [number, number | null][]
+    session_burn: number | null
+  } | null
+  accounts: Account[]
+  origins: { name: string; is_agent: boolean; active: number; tokens_60m: Tokens; requests_60m: number }[]
+}
+
+export type HistoryBucket = {
+  t: number
+  by_account: Record<string, Tokens>
+  by_origin: Record<string, Tokens>
+  agent: Tokens
+  people: Tokens
+  requests: number
+  errors: number
+}
+
+export type History = {
+  hours: number
+  bucket_s: number
+  accounts: string[]
+  origins: string[]
+  buckets: HistoryBucket[]
+  error?: string
+}
+
+export type Stat = { n: number; median_s: number | null; p90_s: number | null }
+
+export type KpiView = {
+  kpis: {
+    since: string; until: string; project: string | null
+    pickup: Stat; to_pr: Stat; to_merge: Stat; queue_wait: Stat
+    tasks: number; prs: number; merged: number; closed: number; reverted: number; failed: number; cancelled: number
+    cost_usd: number; cost_per_task: number | null; cost_per_merged: number | null; merge_rate: number | null
+  }
+  daily: { date: string; tasks: number; prs: number; merged: number; cost_usd: number }[]
+  cost_by_project: { project: string; cost_usd: number; tasks: number }[]
+}
+
+export type EventRow = { id: number; ts: string; type: string; actor: string | null; task_id: string | null;
+  data: unknown }
+export type Events = { rows: EventRow[]; types: string[] }
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(path, init)
+  const body = resp.headers.get("content-type")?.includes("json") ? await resp.json() : await resp.text()
+  if (!resp.ok) throw new ApiError(resp.status, (body as { error?: string })?.error ?? String(body))
+  return body as T
+}
+
+export const api = {
+  get: <T,>(path: string) => request<T>(path),
+  post: <T,>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Dashboard": "1" },
+      body: JSON.stringify(body ?? {}),
+    }),
+}
+
+const LIVE = 5_000
+const SLOW = 60_000
+const live = { refetchInterval: LIVE, refetchIntervalInBackground: false } as const
+
+export function query(params: Record<string, string | number | null | undefined>): string {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v != null && v !== "") q.set(k, String(v))
+  const s = q.toString()
+  return s ? `?${s}` : ""
+}
+
+export const useMe = () => useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/me"), staleTime: SLOW })
+
+export const useOverview = () =>
+  useQuery({ queryKey: ["overview"], queryFn: () => api.get<Overview>("/api/overview"), ...live })
+
+export type SessionFilter = { state?: string; project?: string; source?: string; account?: string; q?: string;
+  limit?: number; offset?: number }
+
+export const useSessions = (f: SessionFilter) =>
+  useQuery({
+    queryKey: ["sessions", f],
+    queryFn: () => api.get<{ rows: SessionRow[]; total: number }>(`/api/sessions${query(f)}`),
+    placeholderData: keepPreviousData,
+    ...live,
+  })
+
+export const useSession = (id: string) =>
+  useQuery({ queryKey: ["session", id], queryFn: () => api.get<SessionDetail>(`/api/sessions/${id}`), ...live })
+
+export const useAccounts = () =>
+  useQuery({ queryKey: ["accounts"], queryFn: () => api.get<AccountsView>("/api/accounts"), ...live })
+
+export const useHistory = (hours: number) =>
+  useQuery({
+    queryKey: ["history", hours],
+    queryFn: () => api.get<History>(`/api/accounts/history?hours=${hours}`),
+    placeholderData: keepPreviousData,
+    refetchInterval: SLOW,
+    refetchIntervalInBackground: false,
+  })
+
+export const useKpis = (days: number, project?: string) =>
+  useQuery({
+    queryKey: ["kpis", days, project ?? ""],
+    queryFn: () => api.get<KpiView>(`/api/kpis${query({ days, project })}`),
+    placeholderData: keepPreviousData,
+    refetchInterval: SLOW,
+    refetchIntervalInBackground: false,
+  })
+
+export const useEvents = (type?: string, before?: number) =>
+  useQuery({
+    queryKey: ["events", type ?? "", before ?? null],
+    queryFn: () => api.get<Events>(`/api/events${query({ type, before, limit: 100 })}`),
+    placeholderData: keepPreviousData,
+    ...live,
+  })
+
+/** Stop, resume and cancel: on success, everything that shows state refreshes at once. */
+export function useAction<T = unknown>(path: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<T>(path),
+    onSettled: () => {
+      for (const key of ["overview", "sessions", "session", "events"]) client.invalidateQueries({ queryKey: [key] })
+    },
+  })
+}

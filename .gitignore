@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 /data/
 .superpowers/
+dashboard/node_modules/
+dashboard/dist/

@@ -19,8 +19,17 @@ COPY src /app/src
 COPY scripts /app/scripts
 ENV PYTHONPATH=/app/src
 
+# The dashboard's web app, built once; core serves dist/ from /app/web
+FROM node:22-bookworm-slim AS dashboard
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY dashboard/ ./
+RUN npm run build
+
 # core runs `az` for debug sessions (spec v2 §7); its login lives in /data/cli, never in a sandbox
 FROM app AS core
+COPY --from=dashboard /dashboard/dist /app/web
 RUN python -m venv /opt/az \
  && /opt/az/bin/pip install --no-cache-dir azure-cli \
  && ln -s /opt/az/bin/az /usr/local/bin/az
