@@ -167,12 +167,17 @@ class AgentToolRouter:
             return f"daily task limit reached ({self.config.limits.max_tasks_per_day}); try again tomorrow"
         return None
 
-    def _create_task(self, ctx: ToolContext, project: str, title: str, kind: str, description: str):
+    def _create_task(self, ctx: ToolContext, project: str, title: str, kind: str, description: str, *,
+                     thread_ts: str | None = ...):
+        """thread_ts overrides ctx.thread_ts: start_task's DM case gives the task the child's own thread before
+        the task exists, so the status notifier never has to guess one."""
+        if thread_ts is ...:
+            thread_ts = ctx.thread_ts
         return tasks.create_task(self.conn, project=project, title=title, description=description, kind=kind,
                                  source="linear" if ctx.unattended else "slack",
-                                 source_ref=f"{ctx.channel}/{ctx.thread_ts}" if ctx.channel else None,
+                                 source_ref=f"{ctx.channel}/{thread_ts}" if ctx.channel else None,
                                  requester=ctx.actor, owner=self.packs[project].project.owner,
-                                 slack_channel=ctx.channel, slack_thread_ts=ctx.thread_ts)
+                                 slack_channel=ctx.channel, slack_thread_ts=thread_ts)
 
     def ensure_task(self, ctx: ToolContext, title: str, kind: str = "feature"):
         """The conversation's task, created (and linked) when the agent didn't call track_task first."""
@@ -308,13 +313,16 @@ class AgentToolRouter:
         if problem := self._new_task_problem(project, kind):
             return ToolReply(problem)
         brief = args.get("brief", "").strip()
-        task = self._create_task(ctx, project, args.get("title", "").strip() or "Untitled", kind, brief)
-        task = tasks.transition(self.conn, task.id, Status.working, actor=ctx.actor or "agent")
-        if ctx.channel and ctx.thread_ts is None:  # a DM has no thread of its own; give the child one
-            posted = await self.slack.chat_postMessage(channel=ctx.channel, text=f"Working on {task.title}")
+        title = args.get("title", "").strip() or "Untitled"
+        # a DM has no thread of its own: post the child's thread-opening line before anything is created, so a
+        # failed post (caught by the router and reported as a tool error) leaves no task, conversation or work item
+        if ctx.channel and ctx.thread_ts is None:
+            posted = await self.slack.chat_postMessage(channel=ctx.channel, text=f"Working on {title}")
             thread_ts, is_primary = posted["ts"], 1
         else:
             thread_ts, is_primary = ctx.thread_ts, 0
+        task = self._create_task(ctx, project, title, kind, brief, thread_ts=thread_ts)
+        task = tasks.transition(self.conn, task.id, Status.working, actor=ctx.actor or "agent")
         convo_id = create_conversation(self.conn, agent_name=self.config.name, channel=ctx.channel,
                                        thread_ts=thread_ts, project=project, title=task.title, task_id=task.id,
                                        is_primary=is_primary)

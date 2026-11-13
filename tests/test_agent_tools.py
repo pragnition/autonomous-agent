@@ -3,6 +3,7 @@ import pytest
 from agent import db, tasks
 from agent.core.agent_tools import AgentToolRouter, ToolReply, ToolSpec
 from agent.core.conversations import Conversations, record_message
+from agent.core.notifier import SlackNotifier
 from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.gitutil import branch_name
 from agent.memory.store import MemoryStore
@@ -213,6 +214,46 @@ async def test_reply_in_child_thread_reaches_child(router, conn, tmp_path):
     await convos.handle_slack(reply(thread_ts, "more work", channel="D-ann"))
     assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == before + 1
     assert latest_item(router).conversation_id == child
+
+
+async def test_start_task_from_dm_status_stays_in_its_thread(router, conn):
+    """With the real SlackNotifier: the task's status message threads under the child's own opening line, never
+    a second top-level DM message."""
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    router.notifier = SlackNotifier(router.slack, conn)
+    await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
+
+    child = conn.execute("SELECT * FROM conversations WHERE id = ?", (latest_item(router).conversation_id,)).fetchone()
+    task_id = conn.execute("SELECT id FROM tasks ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+    assert tasks.get_task(conn, task_id).slack_thread_ts == child["thread_ts"]
+
+    posts = router.slack.posts
+    top_level = [p for p in posts if not p.get("thread_ts")]
+    threaded = [p for p in posts if p.get("thread_ts")]
+    assert top_level == [{"channel": "D-ann", "text": "Working on fix x"}]
+    assert threaded and all(p["thread_ts"] == child["thread_ts"] for p in threaded)
+    assert any(task_id in p["text"] for p in threaded)
+
+
+async def test_start_task_failed_post_creates_nothing(router, conn):
+    """A chat_postMessage that raises (posting the thread-opening line) leaves no task, conversation or work item,
+    and the router reports the failure instead of crashing."""
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+
+    async def boom(**kw):
+        raise RuntimeError("slack is down")
+    router.slack.chat_postMessage = boom
+
+    before = {name: conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+             for name in ("tasks", "conversations", "work_items")}
+    result = await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
+
+    assert "failed" in result.text.lower()
+    after = {name: conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+            for name in ("tasks", "conversations", "work_items")}
+    assert after == before
 
 
 async def test_daily_task_limit(router, ctx_general, conn):
