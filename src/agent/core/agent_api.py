@@ -7,7 +7,6 @@ running session does). Finishing, cancelling or losing an item revokes its sessi
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import logging
 import sqlite3
@@ -39,10 +38,8 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    bundles: Callable[[str, str | None], tuple[str, bytes]],
                    on_result: Callable[[WorkItem, dict], Awaitable[None]],
                    on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[bool | None]],
-                   pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60, sandboxd_token: str = "",
-                   runs_dir: Path | None = None, pulls: dict[str, float] | None = None) -> web.Application:
-    pulls = pulls if pulls is not None else {}
-
+                   pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
+                   runs_dir: Path | None = None) -> web.Application:
     def resolved(request: web.Request, kind: str) -> TokenInfo:
         tok = _token(request)
         info = resolve_token(conn, tok) if tok else None
@@ -57,7 +54,6 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
             return web.json_response({"error": "token is for another sandbox"}, status=403)
         deadline = time.monotonic() + pull_wait_s
         while True:
-            pulls[sandbox] = time.time()
             kind = queue.peek(sandbox)
             ok = kind is not None and (await gate.can_start(kind))[0]
             item = queue.claim(sandbox) if ok else None
@@ -131,17 +127,10 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         version, data = bundles(request.query.get("profile", ""), request.query.get("project") or None)
         return web.Response(body=data, content_type="application/gzip", headers={"X-Bundle-Version": version})
 
-    async def activity(request: web.Request) -> web.Response:
-        if not sandboxd_token or not hmac.compare_digest(_token(request) or "", sandboxd_token):
-            return web.json_response({"error": "unauthorized"}, status=401)
-        rows = conn.execute("SELECT DISTINCT sandbox FROM work_items WHERE status = 'claimed' ORDER BY sandbox")
-        return web.json_response({"busy": [r["sandbox"] for r in rows]})
-
     app = web.Application(client_max_size=MAX_FILES * MAX_FILE_BYTES + 1024 * 1024)
     app[CONN_KEY] = conn
     app.add_routes([web.post("/agent/pull", pull), web.post("/agent/heartbeat", heartbeat),
                     web.post("/agent/events", events), web.post("/agent/tool", tool),
                     web.post("/agent/files", files), web.post("/agent/result", result),
-                    web.get("/agent/bundle", bundle), web.get("/agent/activity", activity),
-                    web.get("/health", health)])
+                    web.get("/agent/bundle", bundle), web.get("/health", health)])
     return app

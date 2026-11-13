@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         return SandboxRunner(CoreLink(args.core, token), Worktrees(root, args.core, lambda: token), users, claude,
                              sandbox=queue, profile=profile_for(queue), bundles_dir=root / "bundles",
                              sessions_root=root / "sessions", scratch_root=root / "scratch",
-                             agent_name=args.agent_name, run_as_root=False, extra_env=env,
+                             agent_name=args.agent_name, extra_env=env,
                              env_files=[Path(args.tokens).parent / "linear.env"])
 
     async def run() -> None:

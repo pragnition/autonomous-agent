@@ -127,5 +127,6 @@ def test_tokens_are_bound_to_their_project():
     tokens = {"a": SimpleNamespace(sandbox="code-p"), "b": SimpleNamespace(sandbox="debug-p"),
               "c": SimpleNamespace(sandbox="code-other"), "g": SimpleNamespace(sandbox="general")}
     check = tokens_auth(tokens.get)
-    assert check("a", "p") and check("b", "p")
-    assert not check("c", "p") and not check("g", "p") and not check("zzz", "p") and not check(None, "p")
+    assert check("a", "p")
+    assert not check("b", "p") and not check("c", "p") and not check("g", "p") and not check("zzz", "p") \
+        and not check(None, "p")

@@ -11,18 +11,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 PERSON_ROLES = ("member", "admin")
-PROFILES = ("code", "debug", "general")
-ISOLATION = ("open", "sandboxes")
 _HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
-NETWORKS = ("open", "read")
 
-DEFAULT_RESOURCES = {"code": (4, 8, 30), "debug": (2, 2, 10), "general": (2, 2, 10)}
 DEFAULT_BRIEFING = {"session": 2000}
 DEFAULT_LOOKUPS = {"session": 6000}
 
 # The stack's own credentials: never available to a pack, whatever the pack declares
 RESERVED_SECRETS = {"GITHUB_WRITE_TOKEN", "GITHUB_READ_TOKEN", "INTERNAL_TOKEN", "SLACK_BOT_TOKEN",
-                    "SLACK_APP_TOKEN", "SLACK_ALERT_WEBHOOK", "LINEAR_API_KEY", "SANDBOXD_TOKEN"}
+                    "SLACK_APP_TOKEN", "SLACK_ALERT_WEBHOOK", "LINEAR_API_KEY"}
 
 
 class ConfigError(Exception):
@@ -41,21 +37,8 @@ class Person:
     tailscale: str = ""  # the person's Tailscale login, for the dashboard
 
 
-@dataclass(frozen=True)
-class SandboxResources:
-    cpus: int
-    memory_gb: int
-    disk_gb: int
-
-
 @dataclass
 class SandboxSettings:
-    resources: dict[str, SandboxResources] = field(
-        default_factory=lambda: {k: SandboxResources(*v) for k, v in DEFAULT_RESOURCES.items()})
-    host_memory_budget: float = 0.75
-    idle_stop_minutes: int = 30
-    rebuild_every_days: int = 7
-    isolation: str = "open"        # "open": one agent container (spec v3); "sandboxes": Docker Sandboxes (spec v2)
     agent_uid: int = 1001          # the agent container's user, which owns what core shares with it
 
 
@@ -169,12 +152,6 @@ class AgentConfig:
         return next((p for p in self.people.values() if p.linear.lower() == email.lower()), None)
 
 
-@dataclass(frozen=True)
-class InjectRule:
-    header: str
-    secret: str
-
-
 @dataclass
 class ProjectConfig:
     name: str
@@ -187,13 +164,6 @@ class ProjectConfig:
     build_setup: list[str]
     build_checks: list[str]
     secrets_worker: list[str]
-    network: str = "open"
-    egress_allow: list[str] = field(default_factory=list)
-    egress_inject: dict[str, InjectRule] = field(default_factory=dict)
-    scrub_patterns: list[str] = field(default_factory=list)
-    sandbox_setup: dict[str, list[str]] = field(default_factory=dict)
-    sandbox_resources: dict[str, SandboxResources] = field(default_factory=dict)
-    sandbox_template: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -235,20 +205,6 @@ def _int(data: dict, key: str, default: int, where: str, problems: list[str]) ->
         problems.append(f"{where}: '{key}' must be a non-negative integer")
         return default
     return value
-
-
-def _hosts(data: dict, key: str, where: str, problems: list[str]) -> list[str]:
-    hosts = _str_list(data, key, where, problems)
-    for host in hosts:
-        if "*" in host or "?" in host:
-            problems.append(f"{where}: '{host}' is a wildcard; no wildcards, list exact hosts")
-    return hosts
-
-
-def _resources(data: dict, default: SandboxResources, where: str, problems: list[str]) -> SandboxResources:
-    return SandboxResources(_int(data, "cpus", default.cpus, where, problems),
-                            _int(data, "memory_gb", default.memory_gb, where, problems),
-                            _int(data, "disk_gb", default.disk_gb, where, problems))
 
 
 def _cmd(data: dict, key: str, where: str, problems: list[str]) -> list[str] | None:
@@ -378,21 +334,6 @@ def load_agent_config(path: Path) -> AgentConfig:
     sb = data.get("sandbox") or {}
     sw = f"{where} [sandbox]"
     sandbox = SandboxSettings()
-    for profile, res in (sb.get("resources") or {}).items():
-        if profile not in PROFILES:
-            problems.append(f"{sw}: unknown profile '{profile}' (use {', '.join(PROFILES)})")
-            continue
-        sandbox.resources[profile] = _resources(res, sandbox.resources[profile], f"{sw}.resources.{profile}", problems)
-    budget_frac = sb.get("host_memory_budget", 0.75)
-    if not isinstance(budget_frac, (int, float)) or not 0 < budget_frac <= 1:
-        problems.append(f"{sw}: 'host_memory_budget' must be a fraction between 0 and 1")
-    else:
-        sandbox.host_memory_budget = float(budget_frac)
-    sandbox.idle_stop_minutes = _int(sb, "idle_stop_minutes", 30, sw, problems)
-    sandbox.rebuild_every_days = _int(sb, "rebuild_every_days", 7, sw, problems)
-    sandbox.isolation = sb.get("isolation", "open")
-    if sandbox.isolation not in ISOLATION:
-        problems.append(f"{sw}: 'isolation' must be one of {', '.join(ISOLATION)}, got {sandbox.isolation!r}")
     uid = sb.get("agent_uid", 1001)
     if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
         problems.append(f"{sw}: 'agent_uid' must be a positive integer (the agent container's uid)")
@@ -445,37 +386,6 @@ def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
     pw = f"{where} [project]"
     build = data.get("build") or {}
     secrets = data.get("secrets") or {}
-    egress = data.get("egress") or {}
-
-    network = proj.get("network", "open")
-    if network not in NETWORKS:
-        problems.append(f"{pw}: 'network' must be one of {', '.join(NETWORKS)} (got {network!r})")
-    inject: dict[str, InjectRule] = {}
-    for host, rule in (egress.get("inject") or {}).items():
-        iw = f"{where} [egress.inject.\"{host}\"]"
-        if "*" in host or "?" in host:
-            problems.append(f"{iw}: '{host}' is a wildcard; no wildcards, list exact hosts")
-        inject[host] = InjectRule(_str(rule, "header", iw, problems), _str(rule, "secret", iw, problems))
-    patterns = _str_list(data.get("scrub") or {}, "patterns", f"{where} [scrub]", problems)
-    for pattern in patterns:
-        try:
-            re.compile(pattern)
-        except re.error as e:
-            problems.append(f"{where} [scrub]: pattern {pattern!r} does not compile ({e})")
-    setup: dict[str, list[str]] = {}
-    resources: dict[str, SandboxResources] = {}
-    templates: dict[str, str] = {}
-    for profile, sdata in (data.get("sandbox") or {}).items():
-        sw = f"{where} [sandbox.{profile}]"
-        if profile not in PROFILES:
-            problems.append(f"{sw}: unknown profile '{profile}' (use {', '.join(PROFILES)})")
-            continue
-        if "setup" in sdata:
-            setup[profile] = _str_list(sdata, "setup", sw, problems)
-        if any(k in sdata for k in ("cpus", "memory_gb", "disk_gb")):
-            resources[profile] = _resources(sdata, agent.sandbox.resources[profile], sw, problems)
-        if "template" in sdata:
-            templates[profile] = _str(sdata, "template", sw, problems)
 
     project = ProjectConfig(
         name=_str(proj, "name", pw, problems),
@@ -488,15 +398,8 @@ def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
         build_setup=_str_list(build, "setup", f"{where} [build]", problems),
         build_checks=_str_list(build, "checks", f"{where} [build]", problems),
         secrets_worker=_str_list(secrets, "worker", f"{where} [secrets]", problems),
-        network=network if network in NETWORKS else "open",
-        egress_allow=_hosts(egress, "allow", f"{where} [egress]", problems),
-        egress_inject=inject,
-        scrub_patterns=patterns,
-        sandbox_setup=setup,
-        sandbox_resources=resources,
-        sandbox_template=templates,
     )
-    reserved = RESERVED_SECRETS & {*project.secrets_worker, *(r.secret for r in inject.values())}
+    reserved = RESERVED_SECRETS & set(project.secrets_worker)
     for name in sorted(reserved):
         problems.append(f"{where} [secrets]: {name} is the stack's own credential and cannot be given to a pack")
     if project.owner and project.owner not in agent.people:

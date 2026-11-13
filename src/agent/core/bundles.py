@@ -9,16 +9,12 @@ import io
 import tarfile
 from pathlib import Path
 
-from agent.core.payloads import DEFAULT_SYSTEM
-
 CORE_PLUGIN = Path(__file__).parent.parent / "plugins" / "core"
 PACK_PROFILES = ("code", "debug")
 
 
 def _files(config_dir: Path, profile: str, project: str | None) -> list[tuple[str, Path]]:
-    custom = config_dir / "agent" / "system.md"
-    files = [("system.md", custom if custom.is_file() else DEFAULT_SYSTEM)]
-    files += [(f"plugins/core/{p.relative_to(CORE_PLUGIN)}", p) for p in sorted(CORE_PLUGIN.rglob("*")) if p.is_file()]
+    files = [(f"plugins/core/{p.relative_to(CORE_PLUGIN)}", p) for p in sorted(CORE_PLUGIN.rglob("*")) if p.is_file()]
     pack_plugin = config_dir / "packs" / (project or "") / "plugin"
     if profile in PACK_PROFILES and project and pack_plugin.is_dir():
         files += [(f"plugins/pack/{p.relative_to(pack_plugin)}", p) for p in sorted(pack_plugin.rglob("*"))

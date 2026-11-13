@@ -17,15 +17,20 @@ def compose():
     return yaml.safe_load((ROOT / "compose.yaml").read_text())
 
 
+def test_compose_has_no_sandbox_leftovers():
+    text = (ROOT / "compose.yaml").read_text()
+    for leftover in ("18080:8080", "SANDBOXD_URL", "28100"):
+        assert leftover not in text
+
+
 def test_relay_binds_only_gateway_ip(compose):
     relay = compose["services"]["relay"]
     assert relay["network_mode"] == "host"
     command = " ".join(relay["command"]) if isinstance(relay["command"], list) else relay["command"]
     listens = re.findall(r"TCP-LISTEN:[^\s]+", command)
-    assert len(listens) == 3 and all("bind=172.30.0.1" in l for l in listens)
+    assert len(listens) == 2 and all("bind=172.30.0.1" in l for l in listens)
     assert "TCP-LISTEN:28090" in command and "127.0.0.1:18090" in command
     assert "TCP-LISTEN:28091" in command and "127.0.0.1:18091" in command
-    assert "TCP-LISTEN:28100" in command and "127.0.0.1:18100" in command
 
 
 def volumes(compose, name):
@@ -42,8 +47,7 @@ def test_core_gets_only_its_own_secrets(compose):
 def test_no_worker_and_core_published_on_loopback_only(compose):
     assert set(compose["services"]) == {"core", "supervisor", "relay", "agent", "docker"}
     assert "ports" not in compose["services"]["agent"] and "ports" not in compose["services"]["docker"]
-    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18080:8080", "127.0.0.1:18085:8085",
-                                                    "127.0.0.1:18086:8086"]
+    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18085:8085", "127.0.0.1:18086:8086"]
     assert "ports" not in compose["services"]["supervisor"]
 
 
@@ -71,7 +75,6 @@ def test_subnet_and_gateway(compose):
     [ipam] = compose["networks"]["agentnet"]["ipam"]["config"]
     assert (ipam["subnet"], ipam["gateway"]) == ("172.30.0.0/24", "172.30.0.1")
     assert compose["services"]["core"]["environment"]["PROXY_URL"] == "http://172.30.0.1:28090"
-    assert compose["services"]["core"]["environment"]["SANDBOXD_URL"] == "http://172.30.0.1:28100"
 
 
 def test_proxy_unit_directives():
@@ -144,7 +147,6 @@ def test_agent_service(compose):
                  "--tokens /run/agent/runner-tokens.json"):
         assert part in command, part
     assert "${AGENT_DATA:-./data}/runner:/data/runner" in volumes(compose, "core")
-    assert "SANDBOXD_HEALTH" not in (compose["services"]["supervisor"].get("environment") or {})
 
 
 def test_core_has_a_fixed_address_for_the_meter(compose):

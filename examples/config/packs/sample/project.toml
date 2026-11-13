@@ -1,4 +1,4 @@
-# The bundled sample pack: a tiny repo used by `just smoke` and as the template for `just new-pack`.
+# The bundled sample pack: a tiny repo used by `just smoke`.
 [project]
 name = "sample"
 repo = "example-org/agent-sample"
@@ -6,7 +6,6 @@ default_branch = "main"
 owner = "parthib"
 slack_channel = "#chilli"
 linear_team = "SAM"
-network = "open"                 # coding sandbox internet: "open" (default) or "read" (GET-only registries, GitHub, docs)
 
 [linear.status]
 working = "In Progress"

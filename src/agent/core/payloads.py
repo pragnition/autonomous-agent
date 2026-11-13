@@ -15,8 +15,7 @@ from agent.gitutil import branch_name
 from agent.memory.briefing import build_briefing
 from agent.memory.store import MemoryStore
 
-DEFAULT_SYSTEM = Path(__file__).parent.parent / "defaults" / "system.md"
-DEFAULT_SYSTEM_OPEN = Path(__file__).parent.parent / "defaults" / "system-open.md"
+DEFAULT_SYSTEM = Path(__file__).parent.parent / "defaults" / "system-open.md"
 MEMORY_PROMPT = Path(__file__).parent.parent / "prompts" / "memory.md"
 
 
@@ -28,8 +27,7 @@ class Payloads:
 
     def system_prompt(self) -> str:
         custom = self.config_dir / "agent" / "system.md"
-        default = DEFAULT_SYSTEM_OPEN if self.config.sandbox.isolation == "open" else DEFAULT_SYSTEM
-        text = (custom if custom.is_file() else default).read_text()
+        text = (custom if custom.is_file() else DEFAULT_SYSTEM).read_text()
         return text.replace("{name}", self.config.name).strip()
 
     def _base(self, *, text: str, actor: str | None, unattended: bool, profile: str, model: str,

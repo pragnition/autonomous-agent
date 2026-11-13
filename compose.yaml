@@ -3,10 +3,8 @@
 #   runner/ (core's runner tokens for the agent container)
 #   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
 #   secrets/projects/<project>.env   (a project's app .env; core hands it to the agent as runner/projects/)
-# Claude never runs in core. With [sandbox] isolation = "open" (spec v3) sessions run in the `agent` service below;
-# with "sandboxes" (spec v2) they run in Docker Sandboxes managed by sandboxd on the host, which reach core on
-# 127.0.0.1:18080 (then set SANDBOXD_HEALTH for the supervisor). The Claude account proxy runs on the host; the
-# relay lets core read its usage, lets the agent container reach it, and lets core reach sandboxd.
+# Claude never runs in core: Claude Code sessions run in the `agent` service below, a container of its own. The
+# Claude account proxy runs on the host; the relay lets core read its usage and lets the agent container reach it.
 name: autonomous-agent
 
 networks:
@@ -26,12 +24,10 @@ services:
         ipv4_address: 172.30.0.10   # fixed: apps in the agent's own Docker reach the model-call meter by address,
                                     # since they can't resolve the name `core`
     ports:
-      - "127.0.0.1:18080:8080"    # the agent API and git endpoint, for sandboxes via host.docker.internal only
       - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port
       - "127.0.0.1:18086:8086"    # the dashboard; `just dashboard-serve` puts it on the tailnet only, never Funnel
     environment:
       PROXY_URL: http://172.30.0.1:28090
-      SANDBOXD_URL: http://172.30.0.1:28100
     volumes:
       - ${AGENT_DATA:-./data}/config:/data/config
       - ${AGENT_DATA:-./data}/db:/data/db
@@ -62,9 +58,9 @@ services:
       - agentdocker:/var/lib/docker
       - agentwork:/var/agent
 
-  # isolation = "open": Claude Code sessions with a full development environment (spec v3). It pulls work from
-  # core, reads its runner tokens from data/runner and shares core's Azure login in data/cli/azure. It runs in the
-  # docker service's network namespace: same stack network, and the apps it starts are on its localhost.
+  # Claude Code sessions with a full development environment (spec v3). It pulls work from core, reads its runner
+  # tokens from data/runner and shares core's Azure login in data/cli/azure. It runs in the docker service's network
+  # namespace: same stack network, and the apps it starts are on its localhost.
   agent:
     build: {context: ., target: agent}
     container_name: agent-runner
@@ -99,14 +95,13 @@ services:
     container_name: agent-relay
     restart: unless-stopped
     network_mode: host
-    # Listens only on the stack's own gateway address, never on the LAN: nobody else can reach the accounts or sandboxd.
+    # Listens only on the stack's own gateway address, never on the LAN: nobody else can reach the accounts.
     command:
       - sh
       - -c
       - >-
         socat TCP-LISTEN:28090,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18090 &
         socat TCP-LISTEN:28091,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18091 &
-        socat TCP-LISTEN:28100,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18100 &
         wait
 
 volumes:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.config import (ConfigError, InjectRule, SandboxResources, load_agent_config, load_pack, load_packs)
+from agent.config import ConfigError, load_agent_config, load_pack, load_packs
 
 EXAMPLES = Path(__file__).parent.parent / "examples" / "config"
 
@@ -51,18 +51,8 @@ def write_agent(tmp_path, extra: str) -> Path:
     return write(tmp_path / "agent.toml", MIN_AGENT + "\n" + extra)
 
 
-def write_pack(tmp_path, extra: str) -> Path:
-    return make_pack(tmp_path, PROJECT + "\n" + extra)
-
-
 def agent(tmp_path, text=MIN_AGENT):
     return load_agent_config(write(tmp_path / "agent.toml", text))
-
-
-def agent_cfg():
-    import tempfile
-    d = Path(tempfile.mkdtemp())
-    return load_agent_config(write(d / "agent.toml", MIN_AGENT))
 
 
 def problems_of(fn):
@@ -77,11 +67,7 @@ def test_defaults(tmp_path):
     assert cfg.limits.max_tasks_per_day == 20 and cfg.limits.max_turns == 400
     assert cfg.models.default == "claude-opus-5-5" and cfg.models.hard == "claude-fable-5-1"
     assert cfg.models.chores == "claude-sonnet-5"
-    assert cfg.sandbox.resources["code"] == SandboxResources(4, 8, 30)
-    assert cfg.sandbox.resources["debug"] == SandboxResources(2, 2, 10)
-    assert cfg.sandbox.resources["general"] == SandboxResources(2, 2, 10)
-    assert cfg.sandbox.host_memory_budget == 0.75
-    assert (cfg.sandbox.idle_stop_minutes, cfg.sandbox.rebuild_every_days) == (30, 7)
+    assert cfg.sandbox.agent_uid == 1001
     assert set(cfg.memory_budget.briefing) >= {"session"}
     assert cfg.cli == {}
 
@@ -103,17 +89,6 @@ def test_example_config_loads():
 def test_cli_rules_keep_only_login_fields():
     cfg = load_agent_config(EXAMPLES / "agent.toml")
     assert set(vars(cfg.cli["azure"])) == {"command", "env", "login", "login_check"}
-
-
-def test_sandbox_resource_override(tmp_path):
-    cfg = load_agent_config(write_agent(tmp_path, '[sandbox.resources.code]\ncpus = 6\nmemory_gb = 12\ndisk_gb = 40'))
-    assert cfg.sandbox.resources["code"] == SandboxResources(6, 12, 40)
-    assert cfg.sandbox.resources["debug"] == SandboxResources(2, 2, 10)
-
-
-def test_unknown_sandbox_profile(tmp_path):
-    with pytest.raises(ConfigError, match="profile"):
-        load_agent_config(write_agent(tmp_path, '[sandbox.resources.gpu]\ncpus = 1\nmemory_gb = 1\ndisk_gb = 1'))
 
 
 def test_people_lookups(tmp_path):
@@ -143,7 +118,6 @@ def test_sample_pack_loads():
 def test_valid_custom_pack_loads(tmp_path):
     p = load_pack(make_pack(tmp_path), agent(tmp_path)).project
     assert p.secrets_worker == ["DEMO_TEST_USER"]
-    assert p.network == "open" and p.egress_allow == [] and p.scrub_patterns == []
 
 
 def test_pack_owner_must_be_a_person(tmp_path):
@@ -156,58 +130,16 @@ def test_pack_rejects_reserved_secret_names(tmp_path):
     assert any("GITHUB_WRITE_TOKEN" in p for p in problems_of(lambda: load_pack(d, agent(tmp_path))))
 
 
-def test_pack_rejects_wildcard_egress(tmp_path):
-    with pytest.raises(ConfigError, match="wildcard"):
-        load_pack(write_pack(tmp_path, '[egress]\nallow = ["*.github.io"]'), agent_cfg())
-
-
-def test_pack_network_values(tmp_path):
-    assert load_pack(write_pack(tmp_path, ""), agent_cfg()).project.network == "open"
-    read = make_pack(tmp_path, PROJECT.replace('linear_team = "DEM"', 'linear_team = "DEM"\nnetwork = "read"'))
-    assert load_pack(read, agent_cfg()).project.network == "read"
-    with pytest.raises(ConfigError, match="network"):
-        load_pack(make_pack(tmp_path, PROJECT.replace('linear_team = "DEM"', 'linear_team = "DEM"\nnetwork = "closed"')),
-                  agent_cfg())
-
-
-def test_pack_inject_and_setup(tmp_path):
-    p = load_pack(write_pack(tmp_path, '[egress.inject."x.example.com"]\nheader = "api-key"\nsecret = "X_KEY"\n'
-                                       '[sandbox.code]\nsetup = ["apt-get install -y jq"]'), agent_cfg()).project
-    assert p.egress_inject["x.example.com"] == InjectRule("api-key", "X_KEY")
-    assert p.sandbox_setup["code"] == ["apt-get install -y jq"]
-
-
-def test_pack_sandbox_resources_and_template(tmp_path):
-    p = load_pack(write_pack(tmp_path, '[sandbox.code]\ncpus = 8\nmemory_gb = 16\ndisk_gb = 60\ntemplate = "my/img:1"'),
-                  agent_cfg()).project
-    assert p.sandbox_resources["code"] == SandboxResources(8, 16, 60)
-    assert p.sandbox_template["code"] == "my/img:1"
-
-
-def test_pack_unknown_sandbox_profile(tmp_path):
-    with pytest.raises(ConfigError, match="profile"):
-        load_pack(write_pack(tmp_path, '[sandbox.gpu]\nsetup = ["x"]'), agent_cfg())
-
-
-def test_pack_scrub_patterns_must_compile(tmp_path):
-    with pytest.raises(ConfigError, match="scrub"):
-        load_pack(write_pack(tmp_path, '[scrub]\npatterns = ["C-(\\\\d"]'), agent_cfg())
-
-
-def test_isolation_defaults_to_open(tmp_path):
-    cfg = agent(tmp_path)
-    assert cfg.sandbox.isolation == "open" and cfg.sandbox.agent_uid == 1001
-
-
-def test_isolation_rejects_unknown(tmp_path):
-    probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, '[sandbox]\nisolation = "vm"')))
-    assert any("open" in p and "sandboxes" in p for p in probs)
-
-
 @pytest.mark.parametrize("value", ["0", '"x"'])
 def test_agent_uid_must_be_positive_int(tmp_path, value):
     probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, f"[sandbox]\nagent_uid = {value}")))
     assert any("agent_uid" in p for p in probs)
+
+
+def test_old_sandbox_keys_still_load(tmp_path):
+    cfg = load_agent_config(write_agent(tmp_path, '[sandbox]\nisolation = "open"\n[sandbox.resources.code]\n'
+                                                   'cpus = 4\nmemory_gb = 8\ndisk_gb = 30\n'))
+    assert cfg.sandbox.agent_uid == 1001
 
 
 def test_observability_settings(tmp_path):
@@ -218,9 +150,7 @@ def test_observability_settings(tmp_path):
     assert any("HH:MM" in p for p in probs)
 
 
-def test_example_config_is_open():
-    cfg = load_agent_config(EXAMPLES / "agent.toml")
-    assert cfg.sandbox.isolation == "open"
+def test_example_config_has_observability_section():
     assert "observability" in tomllib.loads((EXAMPLES / "agent.toml").read_text())
 
 

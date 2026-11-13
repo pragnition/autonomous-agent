@@ -20,7 +20,7 @@ linear = "alice@example.com"
 role = "member"
 
 [limits]
-max_concurrent_sessions = 3      # Claude sessions running at once, across all sandboxes
+max_concurrent_sessions = 3      # Claude sessions running at once, across every queue
 max_tasks_per_day = 20
 task_minutes = 90                # wall-time budget per work item
 max_turns = 400
@@ -31,27 +31,7 @@ hard = "claude-fable-5-1"        # when someone says "use fable" in a conversati
 chores = "claude-sonnet-5"       # memory consolidation
 
 [sandbox]
-isolation = "open"               # "open": one agent container (spec v3); "sandboxes": Docker Sandboxes via sandboxd (spec v2)
 agent_uid = 1001                 # the agent container's user; core hands it the Azure login and runner tokens
-# The rest of this table applies to isolation = "sandboxes".
-host_memory_budget = 0.75        # never let running sandboxes use more than this share of host RAM
-idle_stop_minutes = 30
-rebuild_every_days = 7
-
-[sandbox.resources.code]         # code-<project>: builds, tests, the app in Docker, a browser
-cpus = 4
-memory_gb = 8
-disk_gb = 30
-
-[sandbox.resources.debug]        # debug-<project>: production logs, locked down
-cpus = 2
-memory_gb = 2
-disk_gb = 10
-
-[sandbox.resources.general]      # DMs and memory chores
-cpus = 2
-memory_gb = 2
-disk_gb = 10
 
 [linear]
 public_url = ""                  # e.g. "https://jensen.<tailnet>.ts.net": Linear's webhook and OAuth callback, via Tailscale Funnel

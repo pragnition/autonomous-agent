@@ -84,7 +84,7 @@ def test_cli_help_lists_commands():
     out = subprocess.run([sys.executable, "-m", "agent", "--help"], capture_output=True, text=True,
                          env={"PYTHONPATH": str(Path(__file__).parent.parent / "src"), "PATH": "/usr/bin:/bin"})
     assert out.returncode == 0
-    for command in ("core", "runner", "supervisor", "doctor", "stop", "resume"):
+    for command in ("core", "supervisor", "doctor", "stop", "resume"):
         assert command in out.stdout
 
 
@@ -98,11 +98,8 @@ def test_open_mode_requirements(tmp_path):
 
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
-    open_cfg = load_agent_config(config / "agent.toml")
-    assert "SANDBOXD_TOKEN" not in required_core(open_cfg) and "SLACK_BOT_TOKEN" in required_core(open_cfg)
-    toml = config / "agent.toml"
-    toml.write_text(toml.read_text().replace('isolation = "open"', 'isolation = "sandboxes"'))
-    assert "SANDBOXD_TOKEN" in required_core(load_agent_config(toml))
+    cfg = load_agent_config(config / "agent.toml")
+    assert "SLACK_BOT_TOKEN" in required_core(cfg)
 
     conn = db.connect(tmp_path / "agent.db")
     db.migrate(conn)

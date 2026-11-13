@@ -1,6 +1,5 @@
-"""The runner inside each sandbox (spec v2 §6): pull work from core, prepare the worktree, run a Claude Code
-session with full permissions as the conversation's OS user, and report the result. Limits are enforced outside
-the agent: the VM, its network policy, and core's tools."""
+"""The runner inside the agent container (spec v3 §6): pull work from core, prepare the worktree, run a Claude
+Code session with full permissions, and report the result. Limits are enforced by core's tools, not the OS."""
 
 from __future__ import annotations
 
@@ -10,8 +9,6 @@ import dataclasses
 import io
 import json
 import logging
-import os
-import pwd
 import re
 import shutil
 import tarfile
@@ -44,14 +41,6 @@ class SessionUsers:
 
     def release(self, conversation_id: str) -> None:
         self.taken.pop(conversation_id, None)
-
-
-def chown_tree(path: Path, user: str) -> None:
-    pw = pwd.getpwnam(user)
-    for root, dirs, files in os.walk(path):
-        for name in [root, *(os.path.join(root, d) for d in dirs), *(os.path.join(root, f) for f in files)]:
-            with contextlib.suppress(FileNotFoundError):
-                os.lchown(name, pw.pw_uid, pw.pw_gid)
 
 
 _VAR = re.compile(r"\$\{(\w+)\}")
@@ -87,18 +76,14 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
 class SandboxRunner:
     def __init__(self, link, worktrees, users: SessionUsers, claude, *, sandbox: str, profile: str,
                  bundles_dir: Path, sessions_root: Path, scratch_root: Path, agent_name: str = "agent",
-                 heartbeat_s: float = 15, max_parallel: int = 3, run_as_root: bool = True,
+                 heartbeat_s: float = 15, max_parallel: int = 3,
                  extra_env: dict[str, str] | None = None, env_files: list[Path] = ()):
         self.link, self.worktrees, self.users, self.claude = link, worktrees, users, claude
         self.sandbox, self.profile, self.agent_name = sandbox, profile, agent_name
         self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
-        self.heartbeat_s, self.max_parallel, self.run_as_root = heartbeat_s, max_parallel, run_as_root
-        self.extra_env = dict(extra_env or {})  # open mode: agent.env and a git identity for every session
+        self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel
+        self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
         self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
-
-    def _own(self, path: Path, user: str) -> None:
-        if self.run_as_root:
-            chown_tree(path, user)
 
     async def _bundle(self, project: str | None) -> list[Path]:
         version, data = await self.link.bundle(self.profile, project)
@@ -112,26 +97,19 @@ class SandboxRunner:
             tmp.rename(dest)
         return [p for p in (dest / "plugins" / "core", dest / "plugins" / "pack") if p.is_dir()]
 
-    async def _workdir(self, convo: str, payload: dict, user: str) -> tuple[Path, bool]:
+    async def _workdir(self, convo: str, payload: dict) -> tuple[Path, bool]:
         wt = payload.get("worktree")
         if self.profile == "code" and wt and wt.get("branch_hint"):
             path, created = await asyncio.to_thread(self.worktrees.prepare, convo, wt["project"], wt["branch_hint"],
                                                     wt["default_branch"])
             if created:
-                self._own(path, user)
                 for cmd in wt.get("setup") or []:
-                    code, out = await run_shell(cmd, path, user if self.run_as_root else None, SETUP_TIMEOUT_S)
+                    code, out = await run_shell(cmd, path, SETUP_TIMEOUT_S)
                     if code:
                         log.warning("setup %r failed in %s: %s", cmd, path, out[-500:])
             return path, True
         scratch = self.scratch_root / convo
         scratch.mkdir(parents=True, exist_ok=True)
-        if wt and wt.get("read_only"):
-            repo = await asyncio.to_thread(self.worktrees.prepare_read_only, wt["project"], wt["default_branch"])
-            link = scratch / "repo"
-            if not link.exists():
-                link.symlink_to(repo, target_is_directory=True)
-        self._own(scratch, user)
         return scratch, False
 
     async def _heartbeat(self, tok: str, item_id: str) -> None:
@@ -174,10 +152,10 @@ class SandboxRunner:
     async def handle(self, item: dict, tok: str, manifest: list[dict]) -> None:
         payload, item_id = item["payload"], item["id"]
         convo = item.get("conversation_id") or item_id
-        user = self.users.acquire(convo)
+        self.users.acquire(convo)
         try:
             try:
-                spec, sink = await self._prepare(item, tok, manifest, convo, user)
+                spec, sink = await self._prepare(item, tok, manifest, convo)
             except Exception as e:
                 log.exception("preparing %s failed", item_id)
                 with contextlib.suppress(SessionRevoked):
@@ -203,18 +181,15 @@ class SandboxRunner:
         finally:
             self.users.release(convo)
 
-    async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str, user: str
-                       ) -> tuple[RunSpec, dict | None]:
+    async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> tuple[RunSpec, dict | None]:
         payload, item_id = item["payload"], item["id"]
         plugins = await self._bundle(payload.get("project"))
-        cwd, is_worktree = await self._workdir(convo, payload, user)
+        cwd, is_worktree = await self._workdir(convo, payload)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)
-        self._own(sessions, user)
         sink = {} if payload.get("structured") else None
         wt = payload.get("worktree") or {}
-        tools = remote_sdk_tools(manifest, self.link, tok, worktree=cwd, user=user if self.run_as_root else None,
-                                 checks=list(wt.get("checks") or []),
+        tools = remote_sdk_tools(manifest, self.link, tok, worktree=cwd, checks=list(wt.get("checks") or []),
                                  branch=wt.get("branch_hint") if is_worktree else None, worktrees=self.worktrees,
                                  agent_name=self.agent_name, structured_sink=sink,
                                  structured_schema=payload.get("structured"))
@@ -225,8 +200,7 @@ class SandboxRunner:
                        env={"CLAUDE_CONFIG_DIR": str(sessions), **env, **(payload.get("test_secrets") or {})},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, resume_session_id=payload.get("resume_session_id"),
-                       os_user=user if self.run_as_root else None, permission_mode="bypass",
-                       on_message=self._forwarder(tok))
+                       permission_mode="bypass", on_message=self._forwarder(tok))
         return spec, sink
 
     async def run_forever(self) -> None:
@@ -240,7 +214,8 @@ class SandboxRunner:
                 got = await self.link.pull(self.sandbox)
                 backoff = 1.0
             except SessionRevoked:
-                # Our sandbox token expired or was replaced: exit, and the next ensure starts a runner with a new one
+                # Our sandbox token expired or was replaced: exit, and the next reconcile starts a runner with the
+                # new one
                 log.error("core no longer accepts this sandbox's token; exiting")
                 if running:
                     await asyncio.wait(running)
@@ -255,32 +230,3 @@ class SandboxRunner:
             task = asyncio.create_task(self.handle(got["work_item"], got["session_token"], got.get("tools") or []))
             running.add(task)
             task.add_done_callback(running.discard)
-
-
-def main(argv: list[str] | None = None) -> int:
-    import argparse
-
-    from agent.proxy import ProxyClient
-    from agent.runner.claude import ClaudeRunner
-    from agent.sandbox.link import CoreLink
-    from agent.sandbox.worktrees import Worktrees
-
-    parser = argparse.ArgumentParser(prog="agent runner", description="Pull work from core and run sessions")
-    parser.add_argument("--sandbox", required=True)
-    parser.add_argument("--profile", required=True, choices=("code", "debug", "general"))
-    parser.add_argument("--core", default="http://host.docker.internal:18080")
-    parser.add_argument("--proxy", default="http://host.docker.internal:18091")
-    parser.add_argument("--token-file", default="/etc/agent/sandbox.token")
-    parser.add_argument("--root", default="/var/agent")
-    parser.add_argument("--agent-name", default="agent")
-    args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    token = Path(args.token_file).read_text().strip()
-    root = Path(args.root)
-    link = CoreLink(args.core, token)
-    claude = ClaudeRunner(ProxyClient(args.proxy), args.proxy, root / "transcripts", submit_tool_factory=None)
-    runner = SandboxRunner(link, Worktrees(root, args.core, lambda: token), SessionUsers(), claude,
-                           sandbox=args.sandbox, profile=args.profile, bundles_dir=root / "bundles",
-                           sessions_root=root / "sessions", scratch_root=root / "scratch", agent_name=args.agent_name)
-    asyncio.run(runner.run_forever())
-    return 0

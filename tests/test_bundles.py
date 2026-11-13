@@ -30,7 +30,7 @@ def names(data: bytes) -> set[str]:
 def test_general_bundle_has_no_pack_plugin(config_dir):
     _, data = build_bundle(config_dir, "general", None)
     files = names(data)
-    assert "system.md" in files and "plugins/core/skills/debugging/SKILL.md" in files
+    assert "plugins/core/skills/debugging/SKILL.md" in files
     assert not any(f.startswith("plugins/pack") for f in files)
 
 
@@ -41,12 +41,12 @@ def test_code_bundle_has_both_plugins(config_dir):
     assert "plugins/pack/skills/sample-debugging/SKILL.md" in files
 
 
-def test_version_stable_and_changes_with_system_md(config_dir):
+def test_version_stable_and_changes_with_pack_content(config_dir):
     v1, d1 = build_bundle(config_dir, "code", "sample")
     v2, d2 = build_bundle(config_dir, "code", "sample")
     assert v1 == v2 and d1 == d2
-    (config_dir / "agent").mkdir()
-    (config_dir / "agent" / "system.md").write_text("custom")
+    (config_dir / "packs" / "sample" / "plugin" / "skills" / "sample-debugging" / "SKILL.md").write_text(
+        "---\nname: sample-debugging\n---\nchanged\n")
     assert build_bundle(config_dir, "code", "sample")[0] != v1
 
 

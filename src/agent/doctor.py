@@ -10,14 +10,11 @@ from pathlib import Path
 from agent.config import ConfigError, load_agent_config, load_packs
 from agent.proxy import ProxyUnavailable
 
-REQUIRED_CORE = ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "LINEAR_API_KEY", "GITHUB_READ_TOKEN", "GITHUB_WRITE_TOKEN",
-                 "SANDBOXD_TOKEN")
+REQUIRED_CORE = ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "LINEAR_API_KEY", "GITHUB_READ_TOKEN", "GITHUB_WRITE_TOKEN")
 
 
 def required_core(config) -> tuple[str, ...]:
-    """SANDBOXD_TOKEN only matters when sandboxd runs the sandboxes."""
-    required = REQUIRED_CORE if config.sandbox.isolation == "sandboxes" else \
-        tuple(n for n in REQUIRED_CORE if n != "SANDBOXD_TOKEN")
+    required = REQUIRED_CORE
     if config.linear.public_url:  # the Linear agent app (spec v3 §8)
         required += ("LINEAR_CLIENT_ID", "LINEAR_CLIENT_SECRET", "LINEAR_WEBHOOK_SECRET")
     return required
@@ -57,7 +54,7 @@ async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, g
         packs = {}
         checks.append(Check("packs", False, "; ".join(e.problems)))
 
-    names = list(required if required is not None else required_core(config)) + sorted({r.secret for p in packs.values() for r in p.project.egress_inject.values()})
+    names = list(required if required is not None else required_core(config))
     names += sorted(up.key for up in config.llm_meter.upstreams.values())  # keys the model-call meter adds
     for name in dict.fromkeys(names):
         checks.append(Check(f"secret:{name}", bool(secrets.get(name)), "set" if secrets.get(name) else "missing"))
@@ -109,7 +106,7 @@ def main() -> int:
         github=GitHubReader(secrets["GITHUB_READ_TOKEN"]) if secrets.get("GITHUB_READ_TOKEN") else None,
         linear=LinearClient(secrets["LINEAR_API_KEY"]) if secrets.get("LINEAR_API_KEY") else None))
     config = _config_or_none(paths.CONFIG_DIR)
-    if config is not None and config.sandbox.isolation == "open":
+    if config is not None:
         from agent import db
         from agent.core.runner_tokens import queue_names
 

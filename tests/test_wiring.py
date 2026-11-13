@@ -8,7 +8,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from agent.core.agent_tools import ToolContext
-from agent.core.app import CoreApp, _sandboxd_for
+from agent.core.app import CoreApp
 from agent.core.sessions import mint_token, resolve_token
 from agent.proxy import AccountUsage, Usage
 from agent_fixtures import FakeSlack
@@ -22,29 +22,16 @@ class Proxy:
         return Usage({"maple": AccountUsage("maple", "allowed", 1, True, 0.1, 0.1, 1)}, "on")
 
 
-class Sandboxd:
-    def __init__(self, states=None):
-        self.states, self.ensured = states or {}, []
-
-    async def status(self):
-        return self.states
-
-    async def ensure(self, name, profile, project, sandbox_token, inject):
-        self.ensured.append((name, profile, project, sandbox_token, inject))
-
-
 class Writer:
     async def find_open_pr(self, repo, branch):
         return None
 
 
-def make_app(tmp_path, isolation="open"):
+def make_app(tmp_path):
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
-    toml = config / "agent.toml"
-    toml.write_text(toml.read_text().replace('isolation = "open"', f'isolation = "{isolation}"'))
-    return CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={"SANDBOXD_TOKEN": "sbxd"},
-                   slack=FakeSlack(), proxy=Proxy(), sandboxd=Sandboxd(), github_writer=Writer(), bot_user_id="UBOT")
+    return CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={},
+                   slack=FakeSlack(), proxy=Proxy(), github_writer=Writer(), bot_user_id="UBOT")
 
 
 def test_pr_stats_knows_the_agent_by_its_github_login(tmp_path):
@@ -101,24 +88,6 @@ async def test_dm_turn_end_to_end(app, api):
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
     run = app.conn.execute("SELECT role, stage, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
     assert tuple(run) == ("general", "turn", 2, "done")
-
-
-async def test_sandboxes_mode_keeps_v2_tools(tmp_path):
-    app = make_app(tmp_path, "sandboxes")
-    code, debug = manifest_names(app, "code-sample"), manifest_names(app, "debug-sample")
-    assert {"open_pr", "track_task", "az_login", "rebuild_sandbox", "sandbox_exec"} <= code
-    assert "az_login" in debug and not ({"open_pr", "track_task"} & debug)
-
-
-async def test_ensure_sandboxes_mints_tokens_for_waiting_work(app):
-    app.queue.enqueue("V-1", "code-sample", "turn", {})
-    app.queue.enqueue(None, "general", "chore", {})
-    app.sandboxd.states = {"general": {"state": "running"}}
-    await app.ensure_sandboxes()
-    [(name, profile, project, token, inject)] = app.sandboxd.ensured
-    assert (name, profile, project, inject) == ("code-sample", "code", "sample", {})
-    info = resolve_token(app.conn, token)
-    assert (info.kind, info.sandbox) == ("sandbox", "code-sample")
 
 
 async def test_on_files_uploads_to_thread(app):
@@ -178,22 +147,6 @@ async def test_session_token_ttl_follows_task_minutes(tmp_path):
         await client.close()
 
 
-async def test_ensure_is_not_repeated_while_booting_but_silent_runners_are_reensured(app):
-    app.queue.enqueue("V-1", "code-sample", "turn", {})
-    await app.ensure_sandboxes()
-    await app.ensure_sandboxes()
-    assert len(app.sandboxd.ensured) == 1
-    app.sandboxd.states = {"code-sample": {"state": "running"}}
-    app._ensured["code-sample"] -= 1000
-    app.pulls["code-sample"] = __import__("time").time() - 1000          # its runner went quiet long ago
-    await app.ensure_sandboxes()
-    assert len(app.sandboxd.ensured) == 2
-    app.pulls["code-sample"] = __import__("time").time()
-    app._ensured["code-sample"] -= 1000
-    await app.ensure_sandboxes()
-    assert len(app.sandboxd.ensured) == 2
-
-
 async def test_open_mode_tools(app):
     member = manifest_names(app, "code-sample", tier="act")
     assert {"open_pr", "post_update", "track_task"} <= member
@@ -206,12 +159,6 @@ async def test_open_mode_writes_runner_tokens(app):
     assert json.loads(app.runner_tokens_path.read_text()) == tokens
     assert sorted(tokens) == ["code-sample", "general"]
     assert all(resolve_token(app.conn, tok).sandbox == name for name, tok in tokens.items())
-    assert _sandboxd_for(app.config, {}) is None
-    assert _sandboxd_for(make_app(tmp_path_factory_dir(app), "sandboxes").config, {"SANDBOXD_TOKEN": "t"}) is not None
-
-
-def tmp_path_factory_dir(app):
-    return app.data_dir.parent / "other"
 
 
 def test_prepare_agent_dirs_hands_them_to_the_agent(app, monkeypatch):

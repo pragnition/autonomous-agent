@@ -38,11 +38,10 @@ def row(conn, convo_id):
 
 
 def test_turn_payload_for_code(payloads, conn):
-    payloads.config.sandbox.isolation = "sandboxes"
     convo = row(conn, add_conversation(conn, sandbox="code-sample"))
     p = payloads.turn(convo, "fix the export crash", "bob")
     assert p["text"] == "fix the export crash" and p["actor"] == "bob" and p["profile"] == "code"
-    assert PERSONA in p["system_prompt"] and "act on the world only through" in p["system_prompt"]
+    assert PERSONA in p["system_prompt"] and "full development environment" in p["system_prompt"]
     assert p["model"] == "claude-opus-5-5" and p["max_turns"] == 400 and p["timeout_s"] == 90 * 60
     wt = p["worktree"]
     assert (wt["project"], wt["default_branch"]) == ("sample", "main")
@@ -90,12 +89,8 @@ def test_open_mode_system_prompt(payloads, tmp_path):
     for phrase in ("gh", "az", "open_pr", "fork", "free port"):
         assert phrase in text
     assert "never hold credentials" not in text
-    payloads.config.sandbox.isolation = "sandboxes"
-    assert "never hold credentials" in payloads.system_prompt()
     (tmp_path / "config" / "agent").mkdir(parents=True)
     (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM")
-    assert payloads.system_prompt() == "CUSTOM"
-    payloads.config.sandbox.isolation = "open"
     assert payloads.system_prompt() == "CUSTOM"
 
 

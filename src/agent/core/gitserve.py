@@ -123,10 +123,10 @@ class GitHost:
 
 
 def tokens_auth(resolve: Callable[[str], object]) -> Callable[[str | None, str], bool]:
-    """A live token from that project's own sandboxes only (resolve returns None for unknown, expired or revoked
-    tokens); `general` and other projects' sandboxes never see a project's code."""
+    """A live token from that project's own coding sandbox only (resolve returns None for unknown, expired or
+    revoked tokens); `general`, debug sandboxes and other projects' sandboxes never see a project's code."""
     def check(token: str | None, project: str) -> bool:
         info = resolve(token) if token else None
-        return info is not None and info.sandbox in (f"code-{project}", f"debug-{project}")
+        return info is not None and info.sandbox == f"code-{project}"
     return check
 

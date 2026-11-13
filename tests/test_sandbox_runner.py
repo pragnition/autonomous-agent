@@ -110,7 +110,7 @@ def item(profile="code", conversation_id="V-1", **payload_over):
 def make_runner(tmp_path, worktrees, link, claude, profile="code"):
     return SandboxRunner(link, worktrees, SessionUsers(), claude, sandbox=f"{profile}-sample", profile=profile,
                          bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
-                         scratch_root=tmp_path / "scratch", heartbeat_s=0.05, run_as_root=False)
+                         scratch_root=tmp_path / "scratch", heartbeat_s=0.05)
 
 
 async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
@@ -132,14 +132,6 @@ async def test_setup_runs_once_per_worktree(tmp_path, worktrees):
     await runner.handle(item(), "tok", [])
     wt = tmp_path / "var" / "work" / "V-1"
     assert (wt / ".setup-count").read_text().count("ran") == 1
-
-
-async def test_debug_gets_scratch_dir_with_read_only_repo(tmp_path, worktrees):
-    claude = FakeClaude()
-    payload = {"worktree": {"project": "sample", "default_branch": "main", "read_only": True}, "test_secrets": {}}
-    await make_runner(tmp_path, worktrees, FakeLink(), claude, profile="debug").handle(item("debug", **payload), "t", [])
-    cwd = claude.specs[0].cwd
-    assert cwd == tmp_path / "scratch" / "V-1" and (cwd / "repo" / "app.py").exists()
 
 
 async def test_cancel_via_heartbeat_interrupts(tmp_path, worktrees):
@@ -180,7 +172,7 @@ def worktree(worktrees):
 
 
 def tools_for(link, worktrees, worktree, checks=("true",)):
-    return remote_sdk_tools(MANIFEST, link, "tok", worktree=worktree, user=None, checks=list(checks),
+    return remote_sdk_tools(MANIFEST, link, "tok", worktree=worktree, checks=list(checks),
                             branch="agent/T-0009-x", worktrees=worktrees)
 
 
@@ -314,11 +306,11 @@ def test_scratch_files_are_never_committed(worktrees):
 async def test_commit_step_never_sees_the_sandbox_token(worktrees, worktree):
     seen = []
 
-    async def shell(cmd, cwd, user, timeout_s=0, env=None):
+    async def shell(cmd, cwd, timeout_s=0, env=None):
         seen.append((cmd, env))
         return 0, ""
 
-    tools = remote_sdk_tools(MANIFEST, FakeLink(), "tok", worktree=worktree, user=None, checks=[],
+    tools = remote_sdk_tools(MANIFEST, FakeLink(), "tok", worktree=worktree, checks=[],
                              branch="agent/T-0009-x", worktrees=worktrees, shell=shell)
     await call(tools, "open_pr", {"title": "t", "body": "b"})
     commit_env = seen[0][1]
@@ -347,8 +339,7 @@ LINEAR_MCP = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
 def env_runner(tmp_path, worktrees, claude, env_file):
     return SandboxRunner(FakeLink(), worktrees, SessionUsers(), claude, sandbox="general", profile="general",
                          bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
-                         scratch_root=tmp_path / "scratch", heartbeat_s=0.05, run_as_root=False,
-                         env_files=[env_file])
+                         scratch_root=tmp_path / "scratch", heartbeat_s=0.05, env_files=[env_file])
 
 
 async def test_mcp_headers_use_current_linear_token(tmp_path, worktrees):

@@ -21,9 +21,8 @@ def _text(value: str) -> dict:
     return {"content": [{"type": "text", "text": value}]}
 
 
-async def run_shell(cmd: str, cwd: Path, user: str | None, timeout_s: int = CHECK_TIMEOUT_S,
-                    env: dict | None = None) -> tuple[int, str]:
-    proc = await asyncio.create_subprocess_exec("bash", "-lc", cmd, cwd=str(cwd), user=user, env=env,
+async def run_shell(cmd: str, cwd: Path, timeout_s: int = CHECK_TIMEOUT_S, env: dict | None = None) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec("bash", "-lc", cmd, cwd=str(cwd), env=env,
                                                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.STDOUT)
     try:
@@ -42,7 +41,7 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
-def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | None, user: str | None,
+def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | None,
                      checks: list[str], branch: str | None, worktrees=None, agent_name: str = "agent",
                      structured_sink: dict | None = None, structured_schema: dict | None = None,
                      shell=run_shell) -> list:
@@ -62,10 +61,10 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
                  "GIT_COMMITTER_EMAIL": f"{agent_name}@users.noreply.github.com"}
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **ident}  # no token: the session user runs this
         await shell(f"git add -A && (git diff --cached --quiet || git commit -q -m {shlex.quote(title)})",
-                    worktree, user, 120, env)
+                    worktree, 120, env)
         log, passed = [], True
         for cmd in checks:
-            code, out = await shell(cmd, worktree, user, CHECK_TIMEOUT_S, None)
+            code, out = await shell(cmd, worktree, CHECK_TIMEOUT_S, None)
             log.append(f"$ {cmd}\n{out}")
             if code != 0:
                 passed = False

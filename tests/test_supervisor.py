@@ -64,10 +64,3 @@ async def test_brief_blip_never_alerts(wd):
     health["core"] = False
     await tick(w, 2)
     assert alerts == []
-
-
-def test_supervisor_skips_unset_sandboxd():
-    from agent.supervisor import health_targets
-    assert set(health_targets({})) == {"core"}
-    assert set(health_targets({"SANDBOXD_HEALTH": ""})) == {"core"}
-    assert health_targets({"SANDBOXD_HEALTH": "http://x/health"})["sandboxd"] == "http://x/health"

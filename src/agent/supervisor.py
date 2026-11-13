@@ -1,4 +1,4 @@
-"""The supervisor's watchdog (spec §6.12): health-checks core and worker and speaks up, independently of core."""
+"""The supervisor's watchdog (spec §6.12): health-checks core and speaks up, independently of core."""
 
 from __future__ import annotations
 
@@ -55,11 +55,8 @@ def webhook_alert(url: str) -> Callable[[str], Awaitable[None]]:
 
 
 def health_targets(environ) -> dict[str, str]:
-    """core always; sandboxd only when it's in use (isolation = "sandboxes" sets SANDBOXD_HEALTH)."""
-    targets = {"core": environ.get("CORE_HEALTH", "http://core:8080/health")}
-    if environ.get("SANDBOXD_HEALTH"):
-        targets["sandboxd"] = environ["SANDBOXD_HEALTH"]
-    return targets
+    """The one thing to watch: core."""
+    return {"core": environ.get("CORE_HEALTH", "http://core:8080/health")}
 
 
 def main() -> int:
@@ -70,7 +67,7 @@ def main() -> int:
     from agent.secrets import load_secrets
 
     secrets = load_secrets(paths.SECRETS_FILE)
-    containers = {"core": os.environ.get("CORE_CONTAINER", "agent-core")}  # sandboxd runs on the host: alert only
+    containers = {"core": os.environ.get("CORE_CONTAINER", "agent-core")}  # the only container the watchdog restarts
     targets = health_targets(os.environ)
 
     async def print_alert(text: str) -> None:

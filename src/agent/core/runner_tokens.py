@@ -1,9 +1,8 @@
-"""The open agent container's runner tokens (spec v3 O8).
+"""The agent container's runner tokens (spec v3 O8).
 
-In open mode there is no sandboxd to hand each sandbox its token, so core keeps one sandbox token per queue in a
-file the agent container reads: `{queue: token}`. A token stays while it is valid for at least another week, so
-the agent's runners keep theirs across core restarts; a revoked, expired or soon-expiring one is replaced, and
-the agent's runners pick the new one up from the file.
+core keeps one sandbox token per queue in a file the agent container reads: `{queue: token}`. A token stays
+while it is valid for at least another week, so the agent's runners keep theirs across core restarts; a revoked,
+expired or soon-expiring one is replaced, and the agent's runners pick the new one up from the file.
 """
 
 from __future__ import annotations

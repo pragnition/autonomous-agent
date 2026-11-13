@@ -61,7 +61,7 @@ async def _client(conn, queue, parts, gate_ok=True):
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(gate_ok), tools=parts.router,
                          context_for=lambda item_id: {"work_item_id": item_id},
                          bundles=lambda profile, project: ("v1", f"{profile}:{project}".encode()),
-                         on_result=on_result, on_files=on_files, pull_wait_s=0.2, sandboxd_token="sbx-d",
+                         on_result=on_result, on_files=on_files, pull_wait_s=0.2,
                          runs_dir=parts.runs)
     client = TestClient(TestServer(app))
     await client.start_server()
@@ -199,13 +199,6 @@ async def test_bundle_needs_sandbox_token(api, conn):
     assert (await api.get("/agent/bundle?profile=code&project=p", headers=bearer(stok))).status == 401
 
 
-async def test_activity_needs_sandboxd_token(api, queue):
-    await pull_one(api, "code-p")
-    assert (await api.get("/agent/activity")).status == 401
-    body = await (await api.get("/agent/activity", headers=bearer("sbx-d"))).json()
-    assert body == {"busy": ["code-p"]}
-
-
 async def test_health_is_open(api):
     assert (await api.get("/health")).status == 200
 
@@ -258,24 +251,6 @@ async def test_result_survives_a_failing_callback(conn, queue, parts):
         session = (await (await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).json())
         r = await client.post("/agent/result", json={"result": {"text": "x"}}, headers=bearer(session["session_token"]))
         assert r.status == 200
-    finally:
-        await client.close()
-
-
-async def test_pulls_are_recorded(conn, queue, parts):
-    pulls = {}
-
-    async def noop(*a):
-        pass
-
-    app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=parts.router, context_for=lambda i: {},
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1, pulls=pulls)
-    client = TestClient(TestServer(app))
-    await client.start_server()
-    try:
-        tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
-        await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))
-        assert "code-p" in pulls
     finally:
         await client.close()
 

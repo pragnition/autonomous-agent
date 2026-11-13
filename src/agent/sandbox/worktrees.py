@@ -55,16 +55,6 @@ class Worktrees:
             f.write("".join(f"{name}\n" for name in SCRATCH))
         return path, True
 
-    def prepare_read_only(self, project: str, base: str) -> Path:
-        clone = self.ensure_clone(project)
-        path = self.root / "ro" / project
-        if (path / ".git").exists():
-            git(path, "checkout", "-q", "--detach", f"origin/{base}", env=self.env())
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            git(clone, "worktree", "add", "-q", "--detach", str(path), f"origin/{base}", env=self.env())
-        return path
-
     def push(self, worktree: Path, branch: str) -> str:
         git(worktree, "push", "-q", "origin", f"HEAD:refs/heads/{branch}", env=self.env())
         return git(worktree, "rev-parse", "HEAD", env=self.env()).strip()

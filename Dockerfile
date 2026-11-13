@@ -27,7 +27,7 @@ RUN npm ci --no-audit --no-fund
 COPY dashboard/ ./
 RUN npm run build
 
-# core runs `az` for debug sessions (spec v2 §7); its login lives in /data/cli, never in a sandbox
+# azure-cli: core runs az_login with the admin's device code.
 FROM app AS core
 COPY --from=dashboard /dashboard/dist /app/web
 RUN python -m venv /opt/az \
