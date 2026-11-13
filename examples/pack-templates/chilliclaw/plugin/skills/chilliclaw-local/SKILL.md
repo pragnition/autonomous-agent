@@ -39,7 +39,7 @@ playwright-cli -s=$S localstorage-set chilliclaw-dev-user-id <user-id>
 playwright-cli -s=$S goto http://localhost:5173
 ```
 
-Check the snapshot shows the app ("Good afternoon, Agent!"), not the landing page's sign-in buttons. The first sign-in opens the product tour: click its Skip before you take screenshots. For API calls without a browser, send the header `x-dev-user-id: <user-id>`.
+Check the snapshot shows the app ("Good afternoon, Agent!"), not the landing page's sign-in buttons. A new user first sees the product tour (click Skip) and, after the first message, a Terms of Use dialog (click Close); clear them before you take screenshots. For API calls without a browser, send the header `x-dev-user-id: <user-id>`.
 
 ## Model calls
 
