@@ -30,7 +30,7 @@ def names(data: bytes) -> set[str]:
 def test_general_bundle_has_no_pack_plugin(config_dir):
     _, data = build_bundle(config_dir, "general", None)
     files = names(data)
-    assert "system.md" in files and "plugins/core/skills/fix-bug/SKILL.md" in files
+    assert "system.md" in files and "plugins/core/skills/debugging/SKILL.md" in files
     assert not any(f.startswith("plugins/pack") for f in files)
 
 
@@ -66,4 +66,5 @@ def test_every_skill_has_name_and_description(skill):
 
 def test_core_skills_present():
     assert {p.parent.name for p in SKILL_DIRS[0].glob("*/SKILL.md")} == {
-        "fix-bug", "build-feature", "verify-in-app", "review-before-pr", "pr-description"}
+        "debugging", "build-feature", "browser-testing", "find-features", "playwright-cli", "review-before-pr",
+        "pr-description"}
