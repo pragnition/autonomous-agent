@@ -5,11 +5,9 @@
 
 ## 1. Approach
 
-We roll the agent out in two phases:
-- **This phase** gives the agent a full development environment in one container, scoped to a fork and to
-  staging, and measures what it delivers.
-- **The next phase** adds the isolation layers from v2 one at a time, and the KPIs show what each layer costs
-  or gains.
+This phase gives the agent a full development environment in one container, scoped to a fork and to staging,
+and measures what it delivers. The isolation switch and the v2 code were removed in the one-queue phase: open
+mode is the only mode, and the KPIs keep showing what the agent's access costs or gains.
 
 Measuring first gives us the baseline for that comparison. It also shows which access the agent actually needs
 before we restrict it. Observability is the principle throughout.
@@ -19,7 +17,7 @@ before we restrict it. Observability is the principle throughout.
 | # | Decision | Detail |
 |---|---|---|
 | O1 | Goal | Prove the productivity gain, and measure it continuously (§4). |
-| O2 | Isolation switch | `[sandbox] isolation = "open"` (the default) or `"sandboxes"` (v2). Open mode changes only what `core` registers and how runners start. All v2 code stays. |
+| O2 | Isolation switch | The `[sandbox] isolation` switch and the v2 code were removed in the one-queue phase. Open mode — which changes only what `core` registers and how runners start — is the only mode. |
 | O3 | One agent container | The compose service `agent` is built from the Dockerfile target `agent`. It runs as user `agent` (uid 1001, the `[sandbox] agent_uid` setting) with passwordless sudo. Bash is the login shell and `/bin/sh` (models are biased toward bash). It has open internet, plus git, gh, az, Node 22, Python 3.12 and build tools. Claude Code sessions run with full permissions as that user. |
 | O4 | Credentials in the agent | `secrets/agent.env` holds `GH_TOKEN` (for `gh`) and any dev or test keys a project needs, as plain environment variables. The Azure login lives in `data/cli/azure`, which `core` and `agent` share. |
 | O5 | Azure | The agent uses the user's own login. An admin runs `az_login` from Slack, which DMs the device code as before. `core` runs the login as the agent's uid, so the agent can use and refresh it. The agent runs `az` itself. Open mode does not register `core`'s `az` tool and confirmations, `ask_production` or the debug queues. |
