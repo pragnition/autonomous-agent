@@ -15,7 +15,7 @@ export default defineConfig({
     proxy: {
       "/api": {
         target,
-        changeOrigin: true,
+        changeOrigin: false, // keep the browser's Host: core checks Origin against it
         headers: login ? { "Tailscale-User-Login": login } : {},
       },
     },
