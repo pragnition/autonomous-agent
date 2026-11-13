@@ -1,5 +1,6 @@
 import asyncio
 import io
+import stat
 import subprocess
 import tarfile
 import threading
@@ -9,11 +10,17 @@ from pathlib import Path
 import httpx
 import pytest
 
+from agent import db
+from agent.core.conversations import bind_project, create_conversation
+from agent.core.payloads import Payloads
+from agent.gitutil import GitError, branch_name
+from agent.memory.store import MemoryStore
 from agent.runner.base import RunResult
 from agent.sandbox.link import CoreLink, SessionRevoked
-from agent.sandbox.remote_tools import remote_sdk_tools
+from agent.sandbox.remote_tools import Checkout, remote_sdk_tools
 from agent.sandbox.runner import SandboxRunner
-from agent.sandbox.worktrees import Worktrees
+from agent.sandbox.worktrees import CheckoutRefused, Worktrees
+from agent_fixtures import make_config, make_pack
 
 
 def git(cwd, *args):
@@ -52,11 +59,24 @@ def bundle_bytes() -> bytes:
     return raw.getvalue()
 
 
+BOUND_BRANCH = "agent/V-9-run-sample"
+
+
 class FakeLink:
     def __init__(self, cancel=False, revoked=False):
         self.cancel, self.revoked = cancel, revoked
-        self.tool_calls, self.files_sent, self.results, self.events = [], [], [], []
+        self.tool_calls, self.files_sent, self.results, self.events, self.binds = [], [], [], [], []
         self.posted = True
+        # what core's bind answers for `sample` (Payloads.checkout plus the pack's test keys)
+        self.bound = {"project": "sample", "default_branch": "main", "branch": BOUND_BRANCH,
+                      "setup": ["echo ran >> .setup-count"], "checks": ["true"],
+                      "test_secrets": {"SAMPLE_TEST_USER": "tester@example.com"}}
+
+    async def bind(self, tok, project, title):
+        self.binds.append((project, title))
+        if project != "sample":
+            return {"error": f"unknown project '{project}' (known: sample)"}
+        return dict(self.bound)
 
     async def heartbeat(self, tok):
         if self.revoked:
@@ -214,6 +234,7 @@ async def test_revoked_token_interrupts(tmp_path, worktrees):
 
 
 MANIFEST = [{"name": "open_pr", "description": "d", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "work_on", "description": "d", "input_schema": {"type": "object", "properties": {}}},
             {"name": "post_files", "description": "d", "input_schema": {"type": "object", "properties": {}}},
             {"name": "status", "description": "d", "input_schema": {"type": "object", "properties": {}}}]
 
@@ -230,8 +251,173 @@ def worktree(worktrees, tmp_path):
 
 
 def tools_for(link, worktrees, worktree, checks=("true",)):
-    return remote_sdk_tools(MANIFEST, link, "tok", worktree=worktree, checks=list(checks),
-                            branch="agent/T-0009-x", worktrees=worktrees)
+    return remote_sdk_tools(MANIFEST, link, "tok", session_dir=worktree.parent,
+                            checkout=Checkout(worktree, "agent/T-0009-x", list(checks)), worktrees=worktrees)
+
+
+@pytest.fixture
+def session(tmp_path):
+    """A DM conversation's session folder, with no checkout yet."""
+    path = tmp_path / "scratch" / "V-9"
+    path.mkdir(parents=True)
+    return path
+
+
+def unbound_tools(link, worktrees, session, **kw):
+    checkout = Checkout(None, None, [])
+    return remote_sdk_tools(MANIFEST, link, "tok", session_dir=session, checkout=checkout, worktrees=worktrees,
+                            **kw), checkout
+
+
+async def test_work_on_makes_checkout_runs_setup_writes_keys(worktrees, session, tmp_path):
+    app_envs = tmp_path / "run" / "projects"
+    app_envs.mkdir(parents=True)
+    (app_envs / "sample.env").write_text("APP_KEY=x\n")
+    link = FakeLink()
+    tools, checkout = unbound_tools(link, worktrees, session, app_env_dir=app_envs)
+    reply = await call(tools, "work_on", {"project": "sample", "title": "run sample"})
+    path, keys = session / "sample", session / ".test-keys-sample.env"
+    assert link.binds == [("sample", "run sample")]
+    assert git(path, "rev-parse", "--abbrev-ref", "HEAD") == BOUND_BRANCH
+    assert (path / ".setup-count").read_text().count("ran") == 1
+    assert keys.read_text() == "SAMPLE_TEST_USER=tester@example.com\n"
+    assert stat.S_IMODE(keys.stat().st_mode) == 0o600
+    assert checkout == Checkout(path, BOUND_BRANCH, ["true"])
+    for part in (str(path), BOUND_BRANCH, "setup passed", str(keys), str(app_envs / "sample.env")):
+        assert part in reply
+    again = await call(tools, "work_on", {"project": "sample"})
+    assert str(path) in again and (path / ".setup-count").read_text().count("ran") == 1
+
+
+async def test_work_on_without_an_app_env_file_says_nothing_about_one(worktrees, session, tmp_path):
+    tools, _ = unbound_tools(FakeLink(), worktrees, session, app_env_dir=tmp_path / "run" / "projects")
+    assert "app env" not in await call(tools, "work_on", {"project": "sample"})
+
+
+async def test_work_on_refused_by_core_changes_nothing(worktrees, session):
+    tools, checkout = unbound_tools(FakeLink(), worktrees, session)
+    assert await call(tools, "work_on", {"project": "nope"}) == "unknown project 'nope' (known: sample)"
+    assert checkout == Checkout(None, None, []) and list(session.iterdir()) == []
+
+
+async def test_work_on_reruns_failed_setup(worktrees, session, tmp_path):
+    fixed = tmp_path / "fixed"
+    link = FakeLink()
+    link.bound["setup"] = [f"if [ -e {fixed} ]; then echo installed; else touch {fixed}; "
+                           "echo 'missing dependency'; exit 1; fi"]
+    tools, _ = unbound_tools(link, worktrees, session)
+    first = await call(tools, "work_on", {"project": "sample"})
+    assert "setup failed" in first and "missing dependency" in first
+    assert (session / ".setup-failed-sample").exists()
+    second = await call(tools, "work_on", {"project": "sample"})
+    assert "setup passed" in second and not (session / ".setup-failed-sample").exists()
+    third = await call(tools, "work_on", {"project": "sample"})
+    assert "setup passed" not in third and "setup failed" not in third
+
+
+async def test_open_pr_after_work_on_uses_new_checkout(worktrees, session, server):
+    link = FakeLink()
+    tools, _ = unbound_tools(link, worktrees, session)
+    assert await call(tools, "open_pr", {"title": "t", "body": "b"}) == "call work_on(<project>) first"
+    await call(tools, "work_on", {"project": "sample"})
+    (session / "sample" / "fix.py").write_text("x = 1\n")
+    await call(tools, "open_pr", {"title": "Fix export", "body": "b"})
+    name, args = link.tool_calls[-1]
+    assert name == "open_pr" and args["branch"] == BOUND_BRANCH and args["checks"]["passed"] is True
+    assert args["sha"] == git(server[1], "rev-parse", f"refs/heads/{BOUND_BRANCH}")
+    (session / "sample" / "shot.png").write_bytes(b"png")
+    (session / "notes.txt").write_text("n")
+    assert await call(tools, "post_files", {"paths": [str(session / "sample" / "shot.png"), "notes.txt"],
+                                            "text": "after"}) == "posted 2 file(s)"
+    assert link.files_sent[-1] == ([("shot.png", b"png"), ("notes.txt", b"n")], "after")
+
+
+async def test_next_turn_after_work_on_resumes_in_session_folder(tmp_path, worktrees):
+    """A DM conversation calls work_on in its first turn. Its next turn is bound: it gets the checkout and the test
+    keys, and it runs in the same session folder as the first turn, so --resume finds the session."""
+    conn = db.connect(tmp_path / "agent.db")
+    db.migrate(conn)
+    packs = {"sample": make_pack(build_setup=["echo ran >> .setup-count"], build_checks=["true"])}
+    payloads = Payloads(conn, config=make_config(tmp_path), packs=packs, memory=MemoryStore(tmp_path / "memory.db"),
+                        persona_text="", config_dir=tmp_path / "config",
+                        secrets={"SAMPLE_TEST_USER": "tester@example.com", "SLACK_BOT_TOKEN": "xoxb-nope"})
+    cid = create_conversation(conn, agent_name="agent", channel="D-ann", thread_ts="5.1", project=None, title="hi")
+
+    def convo():
+        return conn.execute("SELECT * FROM conversations WHERE id = ?", (cid,)).fetchone()
+
+    class CoreBindLink(FakeLink):
+        async def bind(self, tok, project, title):  # what core's /agent/bind does
+            row = bind_project(conn, cid, project, packs=packs, agent_name="agent", title=title)
+            return {**payloads.checkout(row), "test_secrets": payloads.test_secrets(project)}
+
+    class WorkOnClaude(FakeClaude):
+        async def run(self, spec):
+            if not self.specs:
+                await call(spec.sdk_tools, "work_on", {"project": "sample", "title": "run sample locally"})
+            return await super().run(spec)
+
+    claude = WorkOnClaude()
+    runner = make_runner(tmp_path, worktrees, CoreBindLink(), claude)
+    session, sent = tmp_path / "scratch" / cid, []
+    for text in ("run sample locally", "now add a test"):
+        sent.append(payloads.turn(convo(), text, "ann"))
+        await runner.handle({"id": f"W-{len(sent)}", "conversation_id": cid, "kind": "turn", "payload": sent[-1]},
+                            "tok", MANIFEST)
+    first, second = sent
+    assert first["worktree"] is None and first["test_secrets"] == {}
+    assert convo()["branch"] == branch_name("agent", cid, "run sample locally") and convo()["workdir"] == "session"
+    assert second["worktree"]["branch"] == convo()["branch"] and second["workdir"] == "session"
+    assert second["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
+    cwd, checkout = await runner._workdir(cid, second)
+    assert (cwd, checkout) == (session, session / "sample")
+    assert [s.cwd for s in claude.specs] == [session, session]
+    assert claude.specs[1].env["SAMPLE_TEST_USER"] == "tester@example.com"
+    assert (checkout / ".setup-count").read_text().count("ran") == 1
+
+
+def test_prepare_refuses_a_foreign_repo_and_leaves_it(worktrees, tmp_path):
+    path = tmp_path / "scratch" / "V-7" / "sample"
+    path.mkdir(parents=True)
+    git(path, "init", "-q", "-b", "agent/T-7-x")
+    git(path, "remote", "add", "origin", "https://example.com/someone-else.git")
+    (path / "mine.txt").write_text("keep me")
+    with pytest.raises(CheckoutRefused, match="someone-else"):
+        worktrees.prepare(path, "sample", "agent/T-7-x", "main")
+    assert (path / "mine.txt").read_text() == "keep me"
+    assert git(path, "remote", "get-url", "origin") == "https://example.com/someone-else.git"
+
+
+def test_prepare_refuses_a_checkout_on_another_branch(worktrees, tmp_path):
+    path, _ = worktrees.prepare(tmp_path / "scratch" / "V-7" / "sample", "sample", "agent/T-7-x", "main")
+    git(path, "checkout", "-q", "-b", "experiment")
+    with pytest.raises(CheckoutRefused, match="experiment"):
+        worktrees.prepare(path, "sample", "agent/T-7-x", "main")
+    assert git(path, "rev-parse", "--abbrev-ref", "HEAD") == "experiment"
+
+
+def test_prepare_refuses_a_folder_that_isnt_a_repo(worktrees, tmp_path):
+    path = tmp_path / "scratch" / "V-7" / "sample"
+    path.mkdir(parents=True)
+    (path / "notes.md").write_text("the agent's notes")
+    with pytest.raises(CheckoutRefused, match="isn't a git checkout"):
+        worktrees.prepare(path, "sample", "agent/T-7-x", "main")
+    assert [p.name for p in path.iterdir()] == ["notes.md"] and (path / "notes.md").read_text() == "the agent's notes"
+
+
+def test_prepare_uses_an_empty_folder(worktrees, tmp_path):
+    path = tmp_path / "scratch" / "V-7" / "sample"
+    path.mkdir(parents=True)
+    assert worktrees.prepare(path, "sample", "agent/T-7-x", "main") == (path, True)
+    assert git(path, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-7-x"
+
+
+def test_failed_clone_leaves_nothing_behind(worktrees, tmp_path):
+    session = tmp_path / "scratch" / "V-7"
+    session.mkdir(parents=True)
+    with pytest.raises(GitError, match="no-such-branch"):
+        worktrees.prepare(session / "sample", "sample", "agent/T-7-x", "no-such-branch")
+    assert list(session.iterdir()) == []
 
 
 async def test_generic_tool_forwards(worktrees, worktree):
@@ -331,6 +517,21 @@ async def test_link_maps_401_and_204():
         await link.heartbeat("tok")
 
 
+async def test_link_bind_returns_cores_refusal():
+    def handler(request):
+        if request.headers["Authorization"] != "Bearer tok":
+            return httpx.Response(401, json={"error": "unauthorized"})
+        if b'"nope"' in request.content:
+            return httpx.Response(409, json={"error": "unknown project 'nope' (known: sample)"})
+        return httpx.Response(200, json={"project": "sample", "test_secrets": {"K": "v"}})
+
+    link = CoreLink("http://core.test", "sbx-token", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert await link.bind("tok", "sample", "t") == {"project": "sample", "test_secrets": {"K": "v"}}
+    assert await link.bind("tok", "nope", "t") == {"error": "unknown project 'nope' (known: sample)"}
+    with pytest.raises(SessionRevoked):
+        await link.bind("gone", "sample", "t")
+
+
 class ResumeFailsClaude(FakeClaude):
     async def run(self, spec):
         self.specs.append(spec)
@@ -405,8 +606,8 @@ async def test_open_pr_commit_uses_configured_email(worktrees, worktree, monkeyp
         seen.append((cmd, env))
         return 0, ""
 
-    tools = remote_sdk_tools(MANIFEST, FakeLink(), "tok", worktree=worktree, checks=[],
-                             branch="agent/T-0009-x", worktrees=worktrees, shell=shell)
+    tools = remote_sdk_tools(MANIFEST, FakeLink(), "tok", session_dir=worktree.parent,
+                             checkout=Checkout(worktree, "agent/T-0009-x", []), worktrees=worktrees, shell=shell)
     await call(tools, "open_pr", {"title": "t", "body": "b"})
     commit_env = seen[0][1]
     assert commit_env["GIT_AUTHOR_EMAIL"] == "bot@example.com"
@@ -419,8 +620,8 @@ async def test_commit_step_never_sees_the_sandbox_token(worktrees, worktree):
         seen.append((cmd, env))
         return 0, ""
 
-    tools = remote_sdk_tools(MANIFEST, FakeLink(), "tok", worktree=worktree, checks=[],
-                             branch="agent/T-0009-x", worktrees=worktrees, shell=shell)
+    tools = remote_sdk_tools(MANIFEST, FakeLink(), "tok", session_dir=worktree.parent,
+                             checkout=Checkout(worktree, "agent/T-0009-x", []), worktrees=worktrees, shell=shell)
     await call(tools, "open_pr", {"title": "t", "body": "b"})
     commit_env = seen[0][1]
     assert "commit" in seen[0][0] and not any("sandbox-token" in str(v) for v in commit_env.values())

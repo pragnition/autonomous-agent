@@ -101,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
                              sandbox=queue, bundles_dir=root / "bundles",
                              sessions_root=root / "sessions", scratch_root=root / "scratch",
                              agent_name=args.agent_name, extra_env=env,
-                             env_files=[Path(args.tokens).parent / "linear.env"])
+                             env_files=[Path(args.tokens).parent / "linear.env"],
+                             app_env_dir=Path(args.tokens).parent / "projects")
 
     async def run() -> None:
         runners = RunnerSet(make_runner)

@@ -1,9 +1,11 @@
 import itertools
+import json
 
 import pytest
 
 from agent import db, tasks
-from agent.core.conversations import FAILED_REPLY, NOT_AUTHORISED, Conversations
+from agent.core.conversations import (FAILED_REPLY, NOT_AUTHORISED, BindRefused, Conversations, bind_project,
+                                      create_conversation)
 from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.gitutil import branch_name
 from agent.tasks import Status
@@ -286,3 +288,41 @@ async def test_linear_task_is_reattached_after_a_slack_failure(convos, fake_line
     await convos.intake_linear()
     item = queue.claim(AGENT_QUEUE)
     assert item is not None and item.payload["text"].startswith("Linear issue SAM-7")
+
+
+PACKS = {"sample": make_pack(), "other": make_pack("other", repo="o/other")}
+
+
+def unbound(conn) -> str:
+    """A DM's conversation: no project, so the session picks one with work_on."""
+    return create_conversation(conn, agent_name="agent", channel="D-1", thread_ts="5.1", project=None, title="hi")
+
+
+def test_bind_sets_project_and_branch_once(conn):
+    cid = unbound(conn)
+    row = bind_project(conn, cid, "sample", packs=PACKS, agent_name="agent", title="run sample locally")
+    assert row["project"] == "sample" and row["branch"] == branch_name("agent", cid, "run sample locally")
+    assert row["workdir"] == "session"   # the working folder is fixed by the first turn
+    again = bind_project(conn, cid, "sample", packs=PACKS, agent_name="agent", title="something else")
+    assert (again["project"], again["branch"], again["workdir"]) == ("sample", row["branch"], "session")
+    logged = conn.execute("SELECT data FROM events WHERE type = 'project_bound'").fetchall()
+    assert [json.loads(r["data"]) for r in logged] == [{"conversation_id": cid, "project": "sample",
+                                                         "branch": row["branch"]}]
+    tracked = add_conversation(conn, sandbox=AGENT_QUEUE, project="sample")  # track_task's binding: no branch yet
+    assert bind_project(conn, tracked, "sample", packs=PACKS, agent_name="agent", title="t")["branch"] == \
+        branch_name("agent", tracked, "t")
+    upfront = create_conversation(conn, agent_name="agent", channel="C-SAMPLE", thread_ts="9.1", project="sample",
+                                  title="fix login")
+    kept = bind_project(conn, upfront, "sample", packs=PACKS, agent_name="agent", title="other title")
+    assert (kept["branch"], kept["workdir"]) == (branch_name("agent", upfront, "fix login"), "checkout")
+
+
+def test_bind_refuses_unknown_and_second_project(conn):
+    cid = unbound(conn)
+    with pytest.raises(BindRefused, match=r"unknown project 'nope' \(known: other, sample\)"):
+        bind_project(conn, cid, "nope", packs=PACKS, agent_name="agent", title="t")
+    assert conn.execute("SELECT project, branch FROM conversations WHERE id = ?", (cid,)).fetchone()[:] == (None, None)
+    bind_project(conn, cid, "sample", packs=PACKS, agent_name="agent", title="t")
+    with pytest.raises(BindRefused, match="bound to sample"):
+        bind_project(conn, cid, "other", packs=PACKS, agent_name="agent", title="t")
+    assert conn.execute("SELECT project FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == "sample"

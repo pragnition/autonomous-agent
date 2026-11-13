@@ -100,6 +100,11 @@ class AgentToolRouter:
     def _allowed(self, spec: ToolSpec, ctx: ToolContext) -> bool:
         return TIER_ORDER[spec.tier] <= TIER_ORDER[ctx.tier]
 
+    def offers(self, ctx: ToolContext, name: str) -> bool:
+        """Whether this session is offered the tool: for work_on, whose binding core serves on its own route."""
+        entry = self._tools.get(name)
+        return entry is not None and self._allowed(entry[0], ctx)
+
     def manifest(self, ctx: ToolContext) -> list[dict]:
         return [{"name": s.name, "description": s.description, "input_schema": s.input_schema}
                 for s, _ in self._tools.values() if self._allowed(s, ctx)]
@@ -196,9 +201,15 @@ class AgentToolRouter:
             self._ask)
         reg(ToolSpec("react", "Add an emoji reaction to the message you are answering.", s({"emoji": "string"}),
                      "act"), self._react)
-        reg(ToolSpec("post_files", "Post files from your worktree (screenshots, videos, reports) to this "
-                                   "conversation's Slack thread, with one line of text.",
+        reg(ToolSpec("post_files", "Post files from your session folder or checkout (screenshots, videos, reports) "
+                                   "to this conversation's Slack thread, with one line of text.",
                      s({"paths": "array", "text": "string"}), "act"), self._post_files)
+        projects = ", ".join(f"{name} ({pack.project.repo})" for name, pack in sorted(self.packs.items()))
+        reg(ToolSpec("work_on", "Work on a project's code: binds this conversation to the project and gives you a "
+                                "checkout of it on your own branch, set up and ready, with its test keys. One "
+                                "project per conversation; calling it again returns the same checkout. title "
+                                f"(optional) names the branch. Projects: {projects or 'none'}.",
+                     s({"project": "string"}, {"title": "string"}), "act"), self._work_on)
         reg(ToolSpec("track_task", "Record that this conversation is now a piece of work (for status, Linear and "
                                    "metrics). kind: feature, bug or chore.",
                      s({"project": "string", "title": "string", "kind": "string"}), "act"), self._track_task)
@@ -228,7 +239,11 @@ class AgentToolRouter:
                      s({"text": "string"}, {"about": "string"}), "act"), self._remember)
 
     async def _post_files(self, ctx, args) -> ToolReply:
-        return ToolReply("post_files is handled by the sandbox runner, which reads the files from your worktree")
+        return ToolReply("post_files is handled by the sandbox runner, which reads the files from your session "
+                         "folder")
+
+    async def _work_on(self, ctx, args) -> ToolReply:
+        return ToolReply("work_on is handled by the runner")
 
     async def _post_update(self, ctx, args) -> ToolReply:
         return await self._post(ctx, args.get("text", ""))
@@ -258,6 +273,8 @@ class AgentToolRouter:
         if ctx.task_id:
             return ToolReply(f"Already tracking {ctx.task_id}.")
         project, kind = args.get("project", ""), args.get("kind", "")
+        if ctx.project and ctx.project != project:
+            return ToolReply(f"this conversation is bound to {ctx.project}")
         if problem := self._new_task_problem(project, kind):
             return ToolReply(problem)
         task = self._create_task(ctx, project, args.get("title", "").strip() or "Untitled", kind,

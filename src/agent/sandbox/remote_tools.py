@@ -1,12 +1,14 @@
 """core's tools as in-process SDK tools (spec v2 §6). The tool code runs in the runner's process, so the session
-token never reaches the session's OS user. Two tools do local work first: open_pr runs the checks and pushes
-the branch, and post_files reads files from the worktree."""
+token never reaches the session's OS user. Three tools do local work: work_on binds the conversation's project
+and makes its checkout, open_pr runs the checks and pushes the branch, and post_files reads files from the
+session folder."""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 
 from claude_agent_sdk import tool
@@ -14,7 +16,18 @@ from claude_agent_sdk import tool
 from agent.sandbox.link import SessionRevoked
 
 CHECK_TIMEOUT_S = 1800
+SETUP_TIMEOUT_S = 1800
 LOG_TAIL = 3000
+SETUP_TAIL = 1500
+
+
+@dataclass
+class Checkout:
+    """The session's checkout as it is now: set at session start when the conversation already has one, and by
+    work_on partway through, so open_pr and post_files always use the current one."""
+    path: Path | None
+    branch: str | None
+    checks: list[str]
 
 
 def _text(value: str) -> dict:
@@ -41,10 +54,17 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
-def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | None,
-                     checks: list[str], branch: str | None, worktrees=None, agent_name: str = "agent",
-                     structured_sink: dict | None = None, structured_schema: dict | None = None,
-                     shell=run_shell) -> list:
+def _write_private(path: Path, text: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.chmod(path, 0o600)  # an older file keeps its mode through O_CREAT
+
+
+def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path, checkout: Checkout, worktrees,
+                     agent_name: str = "agent", structured_sink: dict | None = None,
+                     structured_schema: dict | None = None, shell=run_shell,
+                     app_env_dir: Path | None = None) -> list:
     async def forward(name: str, args: dict) -> str:
         try:
             reply = await link.tool(tok, name, args)
@@ -52,9 +72,51 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
             return "This session was stopped."
         return reply.get("text", "")
 
+    async def setup(commands: list[str], path: Path, marker: Path) -> str:
+        """Run the project's setup in its checkout. A failure leaves a marker in the session folder, outside the
+        checkout, so the next work_on runs setup again."""
+        log = []
+        for cmd in commands:
+            code, out = await shell(cmd, path, SETUP_TIMEOUT_S, None)
+            log.append(f"$ {cmd}\n{out}")
+            if code != 0:
+                marker.write_text(f"{cmd}\n")
+                return f"setup failed (`{cmd}` exited {code}):\n" + "\n".join(log)[-SETUP_TAIL:]
+        marker.unlink(missing_ok=True)
+        return "setup passed"
+
+    async def work_on(args: dict) -> str:
+        try:
+            details = await link.bind(tok, str(args.get("project") or ""), str(args.get("title") or ""))
+        except SessionRevoked:
+            return "This session was stopped."
+        if "error" in details:
+            return details["error"]
+        project, branch = details["project"], details["branch"]
+        try:
+            path, created = await asyncio.to_thread(worktrees.prepare, session_dir / project, project, branch,
+                                                    details["default_branch"])
+        except Exception as e:
+            return f"this conversation is now bound to {project}, but its checkout couldn't be made: {e}"
+        marker = session_dir / f".setup-failed-{project}"
+        if created or marker.exists():
+            done = await setup(list(details.get("setup") or []), path, marker)
+        else:
+            done = "setup not run again (it ran when this checkout was made)"
+        keys = session_dir / f".test-keys-{project}.env"
+        _write_private(keys, "".join(f"{k}={v}\n" for k, v in sorted((details.get("test_secrets") or {}).items())))
+        checkout.path, checkout.branch, checkout.checks = path, branch, list(details.get("checks") or [])
+        lines = [f"checkout: {path} (branch {branch})", done,
+                 f"test keys: {keys} (KEY=value lines; later turns get them as environment variables)"]
+        app_env = app_env_dir / f"{project}.env" if app_env_dir is not None else None
+        if app_env is not None and app_env.is_file():
+            lines.append(f"app env: {app_env} (the app's own .env for running it locally)")
+        return "\n".join(lines)
+
     async def open_pr(args: dict) -> str:
-        if worktree is None or not branch or worktrees is None:
-            return "open_pr needs a coding worktree; this session doesn't have one."
+        worktree, branch = checkout.path, checkout.branch
+        if worktree is None or not branch:
+            return "call work_on(<project>) first"
         title = args.get("title") or "Agent changes"
         default_email = f"{agent_name}@users.noreply.github.com"
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # no token: the session user runs this
@@ -64,7 +126,7 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
         await shell(f"git add -A && (git diff --cached --quiet || git commit -q -m {shlex.quote(title)})",
                     worktree, 120, env)
         log, passed = [], True
-        for cmd in checks:
+        for cmd in checkout.checks:
             code, out = await shell(cmd, worktree, CHECK_TIMEOUT_S, None)
             log.append(f"$ {cmd}\n{out}")
             if code != 0:
@@ -78,14 +140,19 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
         return await forward("open_pr", {**args, "branch": branch, "sha": sha,
                                          "checks": {"passed": passed, "log_tail": "\n".join(log)[-LOG_TAIL:]}})
 
+    def resolve(raw: str) -> Path:
+        """A relative path is relative to the session's working folder: its checkout, or the session folder."""
+        if Path(raw).is_absolute():
+            return Path(raw)
+        bases = [b for b in (checkout.path, session_dir) if b is not None]
+        return next((b / raw for b in bases if (b / raw).is_file()), bases[0] / raw)
+
     async def post_files(args: dict) -> str:
-        if worktree is None:
-            return "post_files needs a worktree; this session doesn't have one."
         items = []
         for raw in args.get("paths") or []:
-            path = Path(raw) if Path(raw).is_absolute() else worktree / raw
-            if not _inside(path, worktree):
-                return f"refused: {raw} is outside your worktree"
+            path = resolve(raw)
+            if not _inside(path, session_dir):
+                return f"refused: {raw} is outside your session folder"
             if not path.is_file():
                 return f"no such file: {raw}"
             items.append((path.name, path.read_bytes()))
@@ -98,7 +165,7 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
                     "saw them. Attach them where the request came from (e.g. the Linear issue) if they matter.")
         return f"posted {len(items)} file(s)"
 
-    local = {"open_pr": open_pr, "post_files": post_files}
+    local = {"work_on": work_on, "open_pr": open_pr, "post_files": post_files}
     tools = []
     for entry in manifest:
         name = entry["name"]

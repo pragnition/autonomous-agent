@@ -12,7 +12,7 @@ import re
 import sqlite3
 import uuid
 
-from agent import db, tasks
+from agent import db, events, tasks
 from agent.core.sessions import AGENT_QUEUE, WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
 from agent.gitutil import branch_name
@@ -39,6 +39,29 @@ def create_conversation(conn: sqlite3.Connection, *, agent_name: str, channel: s
                  (convo_id, channel, thread_ts, AGENT_QUEUE, project, task_id, is_primary, branch,
                   "checkout" if project else "session", now, now))
     return convo_id
+
+
+class BindRefused(Exception):
+    pass
+
+
+def bind_project(conn: sqlite3.Connection, convo_id: str, project: str, *, packs: dict, agent_name: str,
+                 title: str) -> sqlite3.Row:
+    """work_on's binding: the conversation's project, and its branch the first time it needs one (named from
+    `title`). One project per conversation; binding the same one again changes nothing. The working folder stays
+    as the first turn fixed it."""
+    if project not in packs:
+        raise BindRefused(f"unknown project '{project}' (known: {', '.join(sorted(packs)) or 'none'})")
+    row = conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
+    if row["project"] and row["project"] != project:
+        raise BindRefused(f"this conversation is bound to {row['project']}; use start_task for work on {project}")
+    if row["project"] == project and row["branch"]:
+        return row
+    branch = row["branch"] or branch_name(agent_name, row["task_id"] or convo_id, title)
+    conn.execute("UPDATE conversations SET project = ?, branch = ? WHERE id = ?", (project, branch, convo_id))
+    events.append(conn, "project_bound", task_id=row["task_id"], actor=None,
+                  data={"conversation_id": convo_id, "project": project, "branch": branch})
+    return conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
 
 
 class Conversations:

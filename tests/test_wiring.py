@@ -10,6 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from agent.core.agent_tools import ToolContext
 from agent.core.app import CoreApp
 from agent.core.sessions import AGENT_QUEUE, mint_token, resolve_token
+from agent.gitutil import branch_name
 from agent.proxy import AccountUsage, Usage
 from agent_fixtures import FakeSlack
 
@@ -89,6 +90,47 @@ async def test_dm_turn_end_to_end(app, api):
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
     run = app.conn.execute("SELECT role, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
     assert tuple(run) == ("turn", 2, "done")
+
+
+async def test_work_on_binds_a_dm_through_core(tmp_path):
+    """A DM session's work_on: core binds its conversation, names the branch from the message's first line, and
+    hands the runner the real test keys, which a tool reply would have scrubbed."""
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    project = config / "packs" / "sample" / "project.toml"
+    project.write_text(project.read_text().replace("worker = []", 'worker = ["SAMPLE_TEST_USER"]'))
+    app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={"SAMPLE_TEST_USER": "tester@example.com"},
+                  slack=FakeSlack(), proxy=Proxy())
+    client = TestClient(TestServer(app.agent_app))
+    await client.start_server()
+    try:
+        await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1",
+                                              "user": "U00000001", "ts": "5.1",
+                                              "text": "run sample locally\nand show me the home page"})
+        stranger = app.queue.enqueue(None, AGENT_QUEUE, "chore", {"text": "x", "actor": "stranger"})
+        tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
+        pulled = [await (await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json()
+                  for _ in range(2)]
+        dm = next(b for b in pulled if b["work_item"]["id"] != stranger)
+        assert "work_on" in {t["name"] for t in dm["tools"]}
+        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(dm["session_token"]))
+        assert r.status == 200
+        convo = app.conn.execute("SELECT * FROM conversations WHERE id = ?",
+                                 (dm["work_item"]["conversation_id"],)).fetchone()
+        assert await r.json() == {"project": "sample", "default_branch": "main",
+                                  "branch": branch_name(app.config.name, convo["id"], "run sample locally"),
+                                  "setup": ["python -m pip install -q -r requirements.txt"],
+                                  "checks": ["python -m pytest -q"],
+                                  "test_secrets": {"SAMPLE_TEST_USER": "tester@example.com"}}
+        assert (convo["project"], convo["workdir"]) == ("sample", "session")
+        assert app.router.context_for(dm["work_item"]["id"]).project == "sample"
+        r = await client.post("/agent/bind", json={"project": "nope"}, headers=bearer(dm["session_token"]))
+        assert r.status == 409 and (await r.json())["error"] == "unknown project 'nope' (known: sample)"
+        chore = next(b for b in pulled if b["work_item"]["id"] == stranger)
+        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(chore["session_token"]))
+        assert r.status == 409 and (await r.json())["error"] == "not available here"
+    finally:
+        await client.close()
 
 
 async def test_on_files_uploads_to_thread(app):

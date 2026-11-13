@@ -67,6 +67,11 @@ def test_branch_is_the_same_on_every_turn(payloads, conn):
                                                                                          "fix the export crash")
 
 
+def test_test_secrets_are_the_packs_worker_keys(payloads):
+    assert payloads.test_secrets("sample") == {"SAMPLE_TEST_USER": "tester@example.com"}
+    assert payloads.test_secrets("nope") == {}
+
+
 def test_track_task_binding_has_no_checkout(payloads, conn):
     convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE, project="sample"))  # bound, but no branch
     p = payloads.turn(convo, "why is the export slow?", "bob")

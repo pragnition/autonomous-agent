@@ -52,6 +52,12 @@ class Payloads:
         return {"project": p.name, "default_branch": p.default_branch, "branch": convo["branch"],
                 "setup": list(p.build_setup), "checks": list(p.build_checks)}
 
+    def test_secrets(self, project: str) -> dict[str, str]:
+        """The project's test-only keys (its pack's [secrets] worker list), for a session with its checkout."""
+        pack = self.packs.get(project)
+        names = pack.project.secrets_worker if pack is not None else []
+        return {k: self.secrets[k] for k in names if k in self.secrets}
+
     def turn(self, convo, text: str, actor: str | None, *, unattended: bool = False) -> dict:
         project = convo["project"]
         scopes = conversation_scopes(convo["channel"], project, actor, self.packs)
@@ -63,8 +69,7 @@ class Payloads:
         payload.update(resume_session_id=convo["session_id"], conversation_id=convo["id"], project=project,
                        worktree=checkout, workdir=convo["workdir"])
         if checkout is not None:
-            p = self.packs[project].project
-            payload["test_secrets"] = {k: self.secrets[k] for k in p.secrets_worker if k in self.secrets}
+            payload["test_secrets"] = self.test_secrets(project)
         return payload
 
     def chore(self, prompt: str, schema: dict) -> dict:

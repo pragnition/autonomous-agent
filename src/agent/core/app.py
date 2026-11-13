@@ -20,11 +20,11 @@ from agent import db, events
 from agent.config import load_agent_config, load_packs
 from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
-from agent.core.agent_tools import AgentToolRouter
+from agent.core.agent_tools import NOT_AVAILABLE, AgentToolRouter
 from agent.core.bundles import build_bundle
 from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
 from agent.core.consolidation import ConsolidationService
-from agent.core.conversations import Conversations
+from agent.core.conversations import BindRefused, Conversations, bind_project
 from agent.core.gitserve import GitHost, tokens_auth
 from agent.core.kpis import compute_kpis, format_kpis, register_kpi_tools
 from agent.core.linear_app import INSTALL_DM_KEY, LinearAppAuth, register_linear_tools
@@ -159,7 +159,7 @@ class CoreApp:
             conn=self.conn, queue=self.queue, gate=Gate(self.conn, self.config, proxy), tools=self.router,
             context_for=self.router.context_for,
             bundles=lambda: build_bundle(self.config_dir),
-            on_result=self.on_result, on_files=self.on_files,
+            on_result=self.on_result, on_files=self.on_files, bind=self.bind,
             runs_dir=self.data_dir / "runs",
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         self.agent_app.router.add_route("*", "/git/{project}.git/{tail:.*}", self.githost.aiohttp_handler)
@@ -219,6 +219,21 @@ class CoreApp:
     def _turn_payload(self, conversation_id: str, text: str, actor: str | None, unattended: bool) -> dict:
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
         return self.payloads.turn(convo, text, actor, unattended=unattended)
+
+    def bind(self, work_item_id: str, project: str, title: str) -> dict:
+        """work_on, core's half: bind the session's conversation to the project and hand the runner what its
+        checkout needs, the test keys included. The branch is named from `title`, or else from the first line of
+        the message the session is answering."""
+        ctx = self.router.context_for(work_item_id)
+        if not self.router.offers(ctx, "work_on"):
+            raise BindRefused(NOT_AVAILABLE)
+        if ctx.conversation_id is None:
+            raise BindRefused("this session has no conversation to bind")
+        text = (self.queue.get(work_item_id).payload.get("text") or "").strip()
+        title = title.strip() or (text.splitlines()[0] if text else "")
+        row = bind_project(self.conn, ctx.conversation_id, project, packs=self.packs, agent_name=self.config.name,
+                           title=title)
+        return {**self.payloads.checkout(row), "test_secrets": self.payloads.test_secrets(project)}
 
     def mirror(self, project: str | None) -> Path | None:
         path = self.data_dir / "mirrors" / project if project else None

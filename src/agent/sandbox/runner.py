@@ -16,10 +16,9 @@ from pathlib import Path
 
 from agent.runner.base import RunResult, RunSpec
 from agent.sandbox.link import SessionRevoked
-from agent.sandbox.remote_tools import remote_sdk_tools, run_shell
+from agent.sandbox.remote_tools import SETUP_TIMEOUT_S, Checkout, remote_sdk_tools, run_shell
 
 log = logging.getLogger(__name__)
-SETUP_TIMEOUT_S = 1800
 FRESH_NOTE = ("(Your earlier session in this conversation couldn't be resumed. Call read_thread to catch up on "
               "the conversation so far before you answer.)\n\n")
 
@@ -57,13 +56,15 @@ class SandboxRunner:
     def __init__(self, link, worktrees, claude, *, sandbox: str,
                  bundles_dir: Path, sessions_root: Path, scratch_root: Path, agent_name: str = "agent",
                  heartbeat_s: float = 15, max_parallel: int = 32,
-                 extra_env: dict[str, str] | None = None, env_files: list[Path] = ()):
+                 extra_env: dict[str, str] | None = None, env_files: list[Path] = (),
+                 app_env_dir: Path | None = None):
         self.link, self.worktrees, self.claude = link, worktrees, claude
         self.sandbox, self.agent_name = sandbox, agent_name
         self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
         self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel  # core's Gate is the real limit; this is a safety bound
         self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
         self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
+        self.app_env_dir = app_env_dir  # each project's app .env, shared by core (work_on points the agent at it)
 
     async def _bundle(self) -> list[Path]:
         version, data = await self.link.bundle()
@@ -163,17 +164,17 @@ class SandboxRunner:
     async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> tuple[RunSpec, dict | None]:
         payload, item_id = item["payload"], item["id"]
         plugins = await self._bundle()
-        cwd, checkout = await self._workdir(convo, payload)
+        cwd, path = await self._workdir(convo, payload)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)
         sink = {} if payload.get("structured") else None
         wt = payload.get("worktree") or {}
-        # open_pr works in the checkout; post_files reads from it, or from the session folder when there is none
-        tools = remote_sdk_tools(manifest, self.link, tok, worktree=checkout or cwd,
-                                 checks=list(wt.get("checks") or []),
-                                 branch=wt["branch"] if checkout is not None else None, worktrees=self.worktrees,
-                                 agent_name=self.agent_name, structured_sink=sink,
-                                 structured_schema=payload.get("structured"))
+        # open_pr works in the checkout, which work_on can make partway through; post_files reads from the session
+        # folder, the checkout included
+        checkout = Checkout(path, wt["branch"] if path is not None else None, list(wt.get("checks") or []))
+        tools = remote_sdk_tools(manifest, self.link, tok, session_dir=self.scratch_root / convo, checkout=checkout,
+                                 worktrees=self.worktrees, agent_name=self.agent_name, structured_sink=sink,
+                                 structured_schema=payload.get("structured"), app_env_dir=self.app_env_dir)
         env = {**self.extra_env, **read_env_files(self.env_files)}
         spec = RunSpec(run_id=item_id, prompt=payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],

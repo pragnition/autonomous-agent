@@ -129,9 +129,34 @@ async def test_track_task_creates_working_task_once(router, ctx_member, conn):
                                                                   "kind": "bug"})).text.lower()
 
 
-async def test_track_task_unknown_project(router, ctx_member):
-    assert "unknown project" in (await router.call(ctx_member, "track_task", {"project": "nope", "title": "t",
-                                                                              "kind": "bug"})).text
+async def test_track_task_refuses_other_project(router, ctx_member, conn):
+    """A conversation bound to one project (up front or by work_on) can't be rebound to another by track_task."""
+    router.packs["other"] = make_pack("other", repo="o/other")
+    reply = await router.call(ctx_member, "track_task", {"project": "other", "title": "t", "kind": "bug"})
+    assert reply.text == "this conversation is bound to sample"
+    row = conn.execute("SELECT project, task_id FROM conversations WHERE id = ?",
+                       (ctx_member.conversation_id,)).fetchone()
+    assert tuple(row) == ("sample", None) and tasks.list_tasks(conn) == []
+
+
+async def test_work_on_lists_the_packs_and_is_handled_by_the_runner(conn, tmp_path):
+    router = AgentToolRouter(conn, config=make_config(tmp_path), queue=WorkQueue(conn),
+                             packs={"sample": make_pack(), "other": make_pack("other", repo="o/other")},
+                             memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                             secret_values=[])
+    ctx = ctx_for(router, actor="bob")
+    spec = next(t for t in router.manifest(ctx) if t["name"] == "work_on")
+    assert "sample (o/r)" in spec["description"] and "other (o/other)" in spec["description"]
+    assert spec["input_schema"]["required"] == ["project"] and "title" in spec["input_schema"]["properties"]
+    assert (await router.call(ctx, "work_on", {"project": "sample"})).text == "work_on is handled by the runner"
+    assert "work_on" not in {t["name"] for t in router.manifest(ctx_for(router, actor="stranger"))}
+
+
+async def test_track_task_unknown_project(router):
+    ctx = router.context_for(add_item(router.queue, add_conversation(router.conn, sandbox=AGENT_QUEUE, project=None),
+                                      AGENT_QUEUE, actor="bob"))
+    assert "unknown project" in (await router.call(ctx, "track_task", {"project": "nope", "title": "t",
+                                                                       "kind": "bug"})).text
 
 
 async def test_finish_task(router, ctx_with_task, conn):
