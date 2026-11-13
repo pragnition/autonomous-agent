@@ -192,3 +192,14 @@ def test_claimable_kinds_excludes_a_conversations_second_turn(conn):
     q.enqueue("c1", "code-p", "turn", {})
     q.claim("code-p")
     assert q.claimable_kinds("code-p") == set()           # c1 already has a claimed item
+
+
+def test_claimable_kinds_includes_an_expired_claim(conn):
+    """An expired claim must not make its conversation invisible forever — only a still-live claim blocks —
+    otherwise nothing would ever call claim() (whose own reap requeues it) to free the conversation up again."""
+    q = WorkQueue(conn)
+    q.enqueue("c1", "code-p", "turn", {})
+    q.claim("code-p", now=T0)
+    q.enqueue("c1", "code-p", "turn", {})          # the follow-up, queued behind the still-live claim
+    assert q.claimable_kinds("code-p", now=T0 + timedelta(seconds=10)) == set()        # lease (90s) still live
+    assert q.claimable_kinds("code-p", now=T0 + timedelta(seconds=100)) == {"turn"}    # lease has expired

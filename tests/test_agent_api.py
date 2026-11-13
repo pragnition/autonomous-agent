@@ -392,3 +392,34 @@ async def test_second_turn_of_running_conversation_waits(conn, parts):
         assert second.status == 204
     finally:
         await client.close()
+
+
+async def test_pull_reaps_an_expired_claim_blocking_its_conversation(conn, parts):
+    """A dead runner's stale claim must not leave its conversation invisible to pull() forever: once its lease
+    is in the past, claimable_kinds() surfaces the conversation again, so claim() gets the chance to reap it (or
+    the follow-up queued behind it) and hand something out — the agent container restarting mid-session, and
+    the person replying "hello?", must not stall there until unrelated work arrives."""
+    queue = WorkQueue(conn)
+    gate = Gate(conn, cfg(10), AlwaysCapacity())
+
+    async def noop(*a):
+        return None
+
+    app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
+                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        stale = queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "first"})
+        queue.claim(AGENT_QUEUE)                   # a runner claimed it, then died before finishing or heartbeating
+        conn.execute("UPDATE work_items SET lease_until = '2000-01-01T00:00:00Z' WHERE id = ?", (stale,))
+        followup = queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "hello?"})
+
+        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
+        r = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+        assert r.status == 200
+        item = (await r.json())["work_item"]
+        assert item["id"] in (stale, followup) and item["conversation_id"] == "c1"
+    finally:
+        await client.close()

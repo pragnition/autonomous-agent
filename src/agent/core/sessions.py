@@ -113,15 +113,21 @@ class WorkQueue:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(_now(now))
 
-    def claimable_kinds(self, sandbox: str) -> set[str]:
-        """The kinds of items in `sandbox` that claim() could hand out right now, without claiming anything: the
-        same eligibility rule as claim() (queued, and its conversation has no item already claimed), minus the
-        reap and the transaction. A runner asks the Gate only about kinds actually worth asking about, so an
-        idle sandbox never has to call it (and, through it, the account proxy) on every poll."""
+    def claimable_kinds(self, sandbox: str, now: datetime | None = None) -> set[str]:
+        """The kinds of items in `sandbox` that claim() could hand out right now, without claiming or reaping
+        anything: queued items, plus claimed items whose lease has already expired (claim()'s own reap will
+        requeue those), as long as their conversation holds no *unexpired* claim. A dead runner's stale claim
+        must never make its conversation invisible to this check forever — only a still-live claim blocks —
+        otherwise a conversation stuck behind one would need unrelated work to arrive before anything reaps it.
+        A runner asks the Gate only about kinds actually worth asking about, so an idle sandbox never has to
+        call it (and, through it, the account proxy) on every poll."""
+        now_s = _iso(_now(now))
         rows = self.conn.execute(
-            "SELECT DISTINCT w.kind FROM work_items w WHERE w.sandbox = ? AND w.status = 'queued' AND "
+            "SELECT DISTINCT w.kind FROM work_items w WHERE w.sandbox = ? AND "
+            "(w.status = 'queued' OR (w.status = 'claimed' AND w.lease_until < ?)) AND "
             "(w.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM work_items o WHERE "
-            "o.conversation_id = w.conversation_id AND o.status = 'claimed'))", (sandbox,)).fetchall()
+            "o.conversation_id = w.conversation_id AND o.status = 'claimed' AND o.lease_until >= ?))",
+            (sandbox, now_s, now_s)).fetchall()
         return {r["kind"] for r in rows}
 
     def claim(self, sandbox: str, now: datetime | None = None, kinds: tuple[str, ...] | None = None) -> WorkItem | None:
