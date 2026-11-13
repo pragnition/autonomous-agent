@@ -1,3 +1,4 @@
+import asyncio
 import itertools
 import json
 from datetime import UTC, datetime, timedelta
@@ -108,6 +109,16 @@ def sent_ts(slack) -> list[str]:
 
     slack.chat_postMessage = post
     return sent
+
+
+def task_waiting_on(conn, cid) -> str:
+    """Give the conversation a task that asked a question, and mark it waiting."""
+    t = tasks.create_task(conn, project="sample", title="t", description="", kind="bug", source="slack",
+                          source_ref=None, requester="ann", owner="ann")
+    tasks.transition(conn, t.id, Status.working, actor="x")
+    tasks.transition(conn, t.id, Status.needs_input, actor="x")
+    conn.execute("UPDATE conversations SET waiting = 1, task_id = ? WHERE id = ?", (t.id, cid))
+    return t.id
 
 
 async def finish_turn(convos, queue, text):
@@ -393,6 +404,7 @@ async def test_channel_thread_reply_without_mention_continues(convos, queue, sla
     assert slack.posts[-1]["thread_ts"] == "t40"
     await convos.handle_slack(reply("t40", "the signup page too"))
     assert last_item(queue).conversation_id == item.conversation_id
+    assert "reply_thread_ts" not in last_item(queue).payload  # its own thread: answered there anyway
 
 
 async def test_first_dm_after_upgrade_starts_rolling_chat(convos, conn, queue):
@@ -414,16 +426,79 @@ async def test_dm_answer_clears_waiting(convos, conn, queue):
     assert last_item(queue).conversation_id == cid
     assert conn.execute("SELECT waiting FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == 0
 
-    t = tasks.create_task(conn, project="sample", title="t", description="", kind="bug", source="slack",
-                          source_ref=None, requester="ann", owner="ann")
-    tasks.transition(conn, t.id, Status.working, actor="x")
-    tasks.transition(conn, t.id, Status.needs_input, actor="x")
-    conn.execute("UPDATE conversations SET waiting = 1, task_id = ? WHERE id = ?", (t.id, cid))
+    task_id = task_waiting_on(conn, cid)
     record_message(conn, "D-1", "900.0", cid)  # the bot's question
     await convos.handle_slack(dm_reply("900.0", "prod, actually"))
     assert last_item(queue).conversation_id == cid
     assert conn.execute("SELECT waiting FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == 0
-    assert tasks.get_task(conn, t.id).status == Status.working
+    assert tasks.get_task(conn, task_id).status == Status.working
+
+
+async def test_waiting_dm_chat_expires_after_idle(convos, conn, queue):
+    """A chat that ended on an unanswered question still expires: a new top-level DM after DM_IDLE starts a new
+    conversation and leaves the old question open."""
+    await convos.handle_slack(dm("deploy it"))
+    old = last_item(queue).conversation_id
+    task_id = task_waiting_on(conn, old)
+    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), old))
+    await convos.handle_slack(dm("something new"))
+    assert last_item(queue).conversation_id != old
+    assert conn.execute("SELECT waiting FROM conversations WHERE id = ?", (old,)).fetchone()[0] == 1
+    assert tasks.get_task(conn, task_id).status == Status.needs_input
+
+
+async def test_waiting_split_session_does_not_take_top_level_dms(convos, conn, queue):
+    await convos.handle_slack(dm("fix two bugs"))
+    chat = last_item(queue).conversation_id
+    child = add_conversation(conn, sandbox=AGENT_QUEUE, project="sample", channel="D-1", thread_ts=None,
+                             is_primary=0)
+    conn.execute("UPDATE conversations SET waiting = 1 WHERE id = ?", (child,))
+    await convos.handle_slack(dm("and a third"))
+    assert last_item(queue).conversation_id == chat
+
+
+class SlowNotifier(FakeNotifier):
+    """Holds task_changed until released, so another message can arrive meanwhile."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered, self.release = asyncio.Event(), asyncio.Event()
+
+    async def task_changed(self, task):
+        self.entered.set()
+        await self.release.wait()
+        await super().task_changed(task)
+
+
+async def test_messages_during_the_notifier_call_stay_together(convos, conn, queue):
+    """Routing settles before the notifier is awaited: a top-level DM that arrives while a thread answer to an
+    idle chat is still being handled lands where it would have landed a moment later."""
+    await convos.handle_slack(dm("deploy it"))
+    old = last_item(queue).conversation_id
+    task_waiting_on(conn, old)
+    record_message(conn, "D-1", "900.0", old)  # the bot's question
+    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), old))
+    convos.notifier = SlowNotifier()
+    answer = asyncio.create_task(convos.handle_slack(dm_reply("900.0", "staging")))
+    await convos.notifier.entered.wait()
+    await convos.handle_slack(dm("and run the smoke tests"))
+    convos.notifier.release.set()
+    await answer
+    items = conn.execute("SELECT conversation_id FROM work_items ORDER BY rowid").fetchall()
+    assert [r[0] for r in items] == [old, old, old]
+
+
+async def test_thread_reply_to_an_old_dm_chat_is_answered_in_its_thread(convos, conn, queue, slack):
+    sent = sent_ts(slack)
+    await convos.handle_slack(dm("first chat"))
+    old = (await finish_turn(convos, queue, "answer one")).conversation_id
+    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), old))
+    await convos.handle_slack(dm_reply(sent[0], "one more thing about that"))
+    item = last_item(queue)
+    assert item.conversation_id == old and item.payload["reply_thread_ts"] == sent[0]
+    await finish_turn(convos, queue, "answer two")
+    assert (slack.posts[-1]["channel"], slack.posts[-1]["thread_ts"]) == ("D-1", sent[0])
+    assert conn.execute("SELECT conversation_id FROM slack_messages WHERE ts = ?", (sent[1],)).fetchone()[0] == old
 
 
 PACKS = {"sample": make_pack(), "other": make_pack("other", repo="o/other")}

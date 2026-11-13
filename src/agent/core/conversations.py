@@ -140,26 +140,34 @@ class Conversations:
                                      (channel, thread_ts)).fetchone())
 
     async def _route(self, channel: str, thread_ts: str | None, is_dm: bool, text: str) -> sqlite3.Row:
-        """thread_ts is None for a top-level DM message. A session waiting on an answer there takes it first."""
-        convo = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS ? AND waiting = 1 "
-                                  "ORDER BY last_active_at DESC LIMIT 1", (channel, thread_ts)).fetchone()
-        convo = convo or (self._rolling_dm(channel) if thread_ts is None else self._in_thread(channel, thread_ts))
+        """thread_ts is None for a top-level DM message, which goes to the DM's current chat. In a thread, a session
+        waiting on an answer there takes it first. The conversation is settled (and marked active) before the
+        notifier is awaited, so a message arriving meanwhile routes as it would a moment later."""
+        if thread_ts is None:
+            convo = self._rolling_dm(channel)
+        else:
+            convo = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS ? AND "
+                                      "waiting = 1 ORDER BY last_active_at DESC LIMIT 1",
+                                      (channel, thread_ts)).fetchone() or self._in_thread(channel, thread_ts)
         if convo is None:
             project = None if is_dm else await self._project_for_channel(channel)
             title = text.strip().splitlines()[0] if text.strip() else ""  # the branch is named from the first line
             return self._row(self._new(channel, thread_ts, project, title))
+        self.conn.execute("UPDATE conversations SET waiting = 0, last_active_at = ? WHERE id = ?",
+                          (db.utcnow(), convo["id"]))
         if convo["waiting"]:  # the message answers its question
-            self.conn.execute("UPDATE conversations SET waiting = 0 WHERE id = ?", (convo["id"],))
             task = tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
             if task is not None and task.status == Status.needs_input:
                 await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.working, actor="human"))
         return self._row(convo["id"])
 
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, unattended: bool = False,
-                      message_ts: str | None = None) -> str:
+                      message_ts: str | None = None, reply_thread_ts: str | None = None) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
         if message_ts:
             payload["message_ts"] = message_ts
+        if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
+            payload["reply_thread_ts"] = reply_thread_ts
         self.conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (db.utcnow(), convo["id"]))
         return self.queue.enqueue(convo["id"], convo["sandbox"], "turn", payload)
 
@@ -187,7 +195,9 @@ class Conversations:
         if _FABLE.search(text):
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
-        self._enqueue_turn(convo, text, person.key, message_ts=event["ts"])
+        came_from = event.get("thread_ts")
+        self._enqueue_turn(convo, text, person.key, message_ts=event["ts"],
+                           reply_thread_ts=came_from if came_from != convo["thread_ts"] else None)
         try:  # the acknowledgement: the person sees it landed long before the session replies
             await self.slack.reactions_add(channel=channel, timestamp=event["ts"], name="eyes")
         except Exception:
@@ -235,9 +245,9 @@ class Conversations:
         failed = outcome in FAILED_OUTCOMES
         if failed:
             text = FAILED_REPLY
-        if text and convo["channel"]:
-            for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=convo["thread_ts"],
-                                          text=text):
+        if text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
+            reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
+            for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
                 record_message(self.conn, convo["channel"], ts, convo["id"])
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
             self.conn.execute("UPDATE conversations SET session_id = NULL, last_active_at = ? WHERE id = ?",
