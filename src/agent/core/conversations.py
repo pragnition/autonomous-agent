@@ -20,7 +20,7 @@ from agent.tasks import Status
 log = logging.getLogger(__name__)
 NOT_AUTHORISED = "Sorry, I only work with people on this team's list."
 FAILED_REPLY = "Something went wrong on my side, so I couldn't finish that. Try again in a moment."
-FAILED_OUTCOMES = {"error", "timeout", "max_turns", "max_budget", "interrupted", "blocked"}
+FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
 

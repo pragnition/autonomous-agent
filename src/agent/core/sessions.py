@@ -158,13 +158,6 @@ class WorkQueue:
             self.cancel(item_id)
         return ids
 
-    def cancel_all(self) -> list[str]:
-        ids = [r["id"] for r in self.conn.execute(
-            "SELECT id FROM work_items WHERE status IN ('queued', 'claimed') ORDER BY created_at, rowid")]
-        for item_id in ids:
-            self.cancel(item_id)
-        return ids
-
     def claimed_count(self, kind: str | None = None) -> int:
         sql, args = "SELECT COUNT(*) FROM work_items WHERE status = 'claimed'", []
         if kind:

@@ -7,13 +7,12 @@ from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, Protocol
 
-RunOutcome = Literal["done", "needs_input", "blocked", "error", "max_turns", "max_budget", "interrupted", "timeout"]
+RunOutcome = Literal["done", "error", "max_turns", "interrupted", "timeout"]
 
 
 @dataclass
 class RunSpec:
     run_id: str
-    role: str
     prompt: str
     cwd: Path
     model: str
@@ -21,8 +20,6 @@ class RunSpec:
     max_turns: int
     timeout_s: int
     effort: str | None = None
-    read_paths: list[Path] = field(default_factory=list)
-    write_paths: list[Path] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     mcp_servers: dict[str, Any] = field(default_factory=dict)
     plugins: list[Path] = field(default_factory=list)
@@ -42,8 +39,6 @@ class RunResult:
     session_id: str | None
     outcome: RunOutcome
     summary: str = ""
-    question: str | None = None
-    findings: list[dict] = field(default_factory=list)
     turns: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -53,7 +48,6 @@ class RunResult:
     account_code: str | None = None
     forks: int = 0
     error: str | None = None
-    transcript_path: Path | None = None
 
 
 class Runner(Protocol):

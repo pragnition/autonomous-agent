@@ -18,36 +18,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, create_sdk_mcp_server, tool
+from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, create_sdk_mcp_server
 
 from agent.proxy import PLACEHOLDER_TOKEN, ProxyClient, ProxyUnavailable
 from agent.runner.base import RunResult, RunSpec
 from agent.runner.outcome import ACCOUNT_TROUBLE, FORK_STATUSES, map_result, usage_tokens
-from agent.runner.policy import make_can_use_tool
 
 # The SDK hands the parent's whole environment to the CLI, so anything secret-looking is overridden with "".
 SECRETISH = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_KEY|_KEY)$|^(GH|GITHUB|SLACK|LINEAR|AWS)_", re.I)
 PROXY_VARS = {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
-SUBMIT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "status": {"type": "string", "enum": ["done", "needs_input", "blocked"]},
-        "summary": {"type": "string"},
-        "question": {"type": "string"},
-        "findings": {"type": "array", "items": {"type": "object"}},
-    },
-    "required": ["status", "summary"],
-}
-
-
-def submit_result_tool(sink: dict):
-    @tool("submit_result", "Report how the work ended: done, needs_input (with a question for the requester) or "
-                           "blocked. Call it once, last.", SUBMIT_SCHEMA)
-    async def submit_result(args):
-        sink.update({k: args[k] for k in ("status", "summary", "question", "findings") if k in args})
-        return {"content": [{"type": "text", "text": "recorded"}]}
-
-    return submit_result
 
 
 @dataclass
@@ -59,21 +38,19 @@ class _Attempt:
 class ClaudeRunner:
     def __init__(self, proxy: ProxyClient, base_url: str, transcripts_dir: Path, *,
                  client_factory: Callable | None = None, watchdog_s: float = 60,
-                 uuid_factory: Callable[[], str] | None = None, submit_tool_factory=submit_result_tool,
-                 max_forks: int = 2, redact_env: tuple[str, ...] = ()):
+                 uuid_factory: Callable[[], str] | None = None, submit_tool_factory=None,
+                 max_forks: int = 2):
         self.proxy, self.base_url = proxy, base_url
         self.transcripts_dir = Path(transcripts_dir)
         self.client_factory = client_factory or (lambda options: ClaudeSDKClient(options=options))
         self.watchdog_s, self.max_forks = watchdog_s, max_forks
         self.uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
         self.submit_tool_factory = submit_tool_factory
-        self.redact_env = redact_env
         self._active: dict[str, tuple[object, dict]] = {}
         self._stopped: set[str] = set()
 
     def _env(self, spec: RunSpec) -> dict[str, str]:
         redacted = {k: "" for k in os.environ if SECRETISH.search(k) and k not in PROXY_VARS}
-        redacted.update({k: "" for k in self.redact_env})
         return {**redacted, **spec.env, "ANTHROPIC_BASE_URL": self.base_url,
                 "CLAUDE_CODE_OAUTH_TOKEN": PLACEHOLDER_TOKEN}
 
@@ -83,13 +60,11 @@ class ClaudeRunner:
         if self.submit_tool_factory is not None:
             tools.append(self.submit_tool_factory({} if sink is None else sink))
         servers = {**spec.mcp_servers, **({"agent": create_sdk_mcp_server("agent", tools=tools)} if tools else {})}
-        bypass = spec.permission_mode == "bypass"
         return ClaudeAgentOptions(
             model=spec.model, effort=spec.effort, max_turns=spec.max_turns, cwd=str(spec.cwd),
             system_prompt=spec.system_prompt, max_budget_usd=spec.max_budget_usd, env=self._env(spec),
             setting_sources=["project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
-            mcp_servers=servers, can_use_tool=None if bypass else make_can_use_tool(spec),
-            permission_mode="bypassPermissions" if bypass else "default",
+            mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
             user=spec.os_user, tools=spec.tools, session_id=session_id, resume=resume, fork_session=fork,
             strict_mcp_config=True)
 
@@ -182,9 +157,7 @@ class ClaudeRunner:
             self._active.pop(spec.run_id, None)
 
         result = RunResult(run_id=spec.run_id, session_id=state["sid"], outcome="error",
-                           summary=sink.get("summary", ""), question=sink.get("question"),
-                           findings=list(sink.get("findings") or []), account_code=state["account"],
-                           transcript_path=transcript if transcript.exists() else None)
+                           summary=sink.get("summary", ""), account_code=state["account"])
         fork_wanted = False
         if final is not None:
             result.turns = final.num_turns
@@ -202,7 +175,7 @@ class ClaudeRunner:
         elif final is None:
             result.error = "the session ended without a result"
         else:
-            result.outcome, result.error = map_result(final, sink)
+            result.outcome, result.error = map_result(final)
             if result.outcome == "error":
                 if final.api_error_status in FORK_STATUSES:
                     fork_wanted = True

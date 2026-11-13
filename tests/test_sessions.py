@@ -93,14 +93,14 @@ def test_lost_lease_revokes_the_session_token(conn):
     assert resolve_token(conn, tok) is None
 
 
-def test_complete_cancel_and_cancel_all(conn):
+def test_complete_and_cancel(conn):
     q = WorkQueue(conn)
     a = q.enqueue("c1", "code-p", "turn", {})
     b = q.enqueue("c2", "code-p", "turn", {})
     q.claim("code-p")
     q.complete(a, {"text": "done"})
     assert q.get(a).status == "done" and q.get(a).result == {"text": "done"}
-    assert q.cancel_all() == [b]
+    q.cancel(b)
     assert status_of(conn, b) == "cancelled"
     q.cancel(a)
     assert status_of(conn, a) == "done"                                      # finished items stay finished

@@ -194,7 +194,7 @@ class SandboxRunner:
                                  agent_name=self.agent_name, structured_sink=sink,
                                  structured_schema=payload.get("structured"))
         env = {**self.extra_env, **read_env_files(self.env_files)}
-        spec = RunSpec(run_id=item_id, role=self.profile, prompt=payload["text"], cwd=cwd, model=payload["model"],
+        spec = RunSpec(run_id=item_id, prompt=payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        env={"CLAUDE_CONFIG_DIR": str(sessions), **env, **(payload.get("test_secrets") or {})},

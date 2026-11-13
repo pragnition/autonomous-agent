@@ -174,12 +174,6 @@ def lines_before(path: Path, offset: int) -> int:
         return 0
 
 
-def read_entries(path: Path, offset: int = 0, scrub: Scrub = str) -> tuple[list[dict], int]:
-    """read_from without a line number: it counts the lines before `offset`, so entry ids match a full read."""
-    entries, end, _ = read_from(path, offset, lines_before(path, offset), scrub)
-    return entries, end
-
-
 @dataclass
 class LiveStats:
     session_id: str | None = None
@@ -219,27 +213,6 @@ class _Totals:
             for key, value in usage.items():
                 tokens[key] += value
         return LiveStats(self.session_id, tokens, len(self.by_message))
-
-
-def _records(data: bytes):
-    for raw_line in data.splitlines():
-        try:
-            record = json.loads(raw_line)
-        except ValueError:
-            continue
-        if isinstance(record, dict):
-            yield record
-
-
-def live_stats(path: Path) -> LiveStats:
-    totals = _Totals()
-    try:
-        data = Path(path).read_bytes()
-    except OSError:
-        return totals.stats()
-    for record in _records(data[:data.rfind(b"\n") + 1]):
-        totals.feed(record)
-    return totals.stats()
 
 
 @dataclass

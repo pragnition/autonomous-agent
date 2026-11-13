@@ -50,7 +50,6 @@ class Task:
     requester: str | None
     owner: str | None
     status: Status
-    priority: int
     branch: str | None
     pr_number: int | None
     pr_url: str | None
@@ -58,7 +57,6 @@ class Task:
     slack_channel: str | None
     slack_thread_ts: str | None
     status_message_ts: str | None
-    pending_input: str | None
     created_at: str
     updated_at: str
 
@@ -80,17 +78,17 @@ def next_task_id(conn: sqlite3.Connection) -> str:
 def create_task(conn: sqlite3.Connection, *, project: str, title: str, description: str, kind: str,
                 source: str, source_ref: str | None, requester: str | None, owner: str | None,
                 slack_channel: str | None = None, slack_thread_ts: str | None = None,
-                linear_issue_id: str | None = None, priority: int = 0) -> Task:
+                linear_issue_id: str | None = None) -> Task:
     now = utcnow()
     with conn:
         conn.execute("BEGIN IMMEDIATE")
         task_id = next_task_id(conn)
         conn.execute(
             "INSERT INTO tasks(id, project, title, description, kind, source, source_ref, requester, owner, "
-            "status, priority, linear_issue_id, slack_channel, slack_thread_ts, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status, linear_issue_id, slack_channel, slack_thread_ts, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (task_id, project, title, description, kind, source, source_ref, requester, owner,
-             Status.queued.value, priority, linear_issue_id, slack_channel, slack_thread_ts, now, now))
+             Status.queued.value, linear_issue_id, slack_channel, slack_thread_ts, now, now))
         events.append(conn, "task_created", task_id=task_id, actor=requester,
                       data={"project": project, "kind": kind, "source": source})
     return get_task(conn, task_id)
@@ -140,10 +138,3 @@ def list_tasks(conn: sqlite3.Connection, *, status: Status | None = None, projec
     if project is not None:
         sql, args = sql + " AND project = ?", [*args, project]
     return [_row_to_task(r) for r in conn.execute(sql + " ORDER BY id", args)]
-
-
-def open_task_for_linear(conn: sqlite3.Connection, linear_issue_id: str) -> Task | None:
-    placeholders = ",".join("?" * len(TERMINAL))
-    row = conn.execute(f"SELECT * FROM tasks WHERE linear_issue_id = ? AND status NOT IN ({placeholders}) "
-                       "ORDER BY id DESC LIMIT 1", (linear_issue_id, *[s.value for s in TERMINAL])).fetchone()
-    return _row_to_task(row) if row else None

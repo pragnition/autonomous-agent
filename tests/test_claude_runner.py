@@ -3,11 +3,11 @@ import json
 from pathlib import Path
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, tool
 
 from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, Usage
 from agent.runner.base import RunSpec
-from agent.runner.claude import ClaudeRunner, submit_result_tool
+from agent.runner.claude import ClaudeRunner
 
 HANG = "HANG"
 
@@ -88,7 +88,13 @@ def make_runner(tmp_path, attempts, proxy=None, watchdog_s=60):
 
     def tool_factory(sink):
         sinks.append(sink)
-        return submit_result_tool(sink)
+
+        @tool("submit_result", "Report a summary.", {"type": "object", "properties": {"summary": {"type": "string"}}})
+        async def submit_result(args):
+            sink.update(args)
+            return {"content": [{"type": "text", "text": "recorded"}]}
+
+        return submit_result
 
     runner = ClaudeRunner(proxy or FakeProxy(), "http://172.30.0.1:28091", tmp_path, client_factory=factory,
                           watchdog_s=watchdog_s, uuid_factory=sids().__next__, submit_tool_factory=tool_factory)
@@ -96,7 +102,7 @@ def make_runner(tmp_path, attempts, proxy=None, watchdog_s=60):
 
 
 def spec(tmp_path, **kw):
-    args = dict(run_id="R1", role="builder", prompt="build it", cwd=tmp_path, model="claude-opus-5-5",
+    args = dict(run_id="R1", prompt="build it", cwd=tmp_path, model="claude-opus-5-5",
                 system_prompt="sys", max_turns=10, timeout_s=5, effort="high", env={"TZ": "Asia/Singapore"},
                 os_user="agent", tools=["Read", "Bash"])
     args.update(kw)
@@ -122,11 +128,10 @@ async def test_options_env_and_settings(tmp_path, monkeypatch):
     assert o.session_id == "00000000-0000-4000-8000-000000000001" and o.resume is None
 
 
-async def test_result_mapping_success_and_submit_result_needs_input(tmp_path):
-    runner, _ = make_runner(tmp_path, [[submit(status="needs_input", summary="stuck", question="Which API?"),
-                                         result()]])
+async def test_result_mapping_success_and_summary_override(tmp_path):
+    runner, _ = make_runner(tmp_path, [[submit(summary="stuck"), result()]])
     r = await runner.run(spec(tmp_path))
-    assert (r.outcome, r.summary, r.question) == ("needs_input", "stuck", "Which API?")
+    assert (r.outcome, r.summary) == ("done", "stuck")
     runner2, _ = make_runner(tmp_path, [[result()]])
     r2 = await runner2.run(spec(tmp_path))
     assert (r2.outcome, r2.summary) == ("done", "final text")
@@ -147,9 +152,9 @@ async def test_tokens_and_cost_copied(tmp_path):
 
 async def test_transcript_written(tmp_path):
     runner, _ = make_runner(tmp_path, [[assistant, result()]])
-    r = await runner.run(spec(tmp_path))
-    lines = r.transcript_path.read_text().splitlines()
-    assert r.transcript_path == tmp_path / "R1.jsonl" and len(lines) == 2
+    await runner.run(spec(tmp_path))
+    lines = (tmp_path / "R1.jsonl").read_text().splitlines()
+    assert len(lines) == 2
     assert json.loads(lines[0])["type"] == "AssistantMessage"
 
 
@@ -216,14 +221,6 @@ async def test_external_interrupt(tmp_path):
     await asyncio.sleep(0.01)
     await runner.interrupt("R1")
     assert (await task).outcome == "interrupted"
-
-
-async def test_submit_result_tool_records():
-    sink = {}
-    t = submit_result_tool(sink)
-    out = await t.handler({"status": "blocked", "summary": "no access", "findings": [{"x": 1}]})
-    assert sink == {"status": "blocked", "summary": "no access", "findings": [{"x": 1}]}
-    assert out["content"][0]["text"] == "recorded"
 
 
 async def test_strict_mcp_config_so_plugin_servers_are_not_auto_loaded(tmp_path):

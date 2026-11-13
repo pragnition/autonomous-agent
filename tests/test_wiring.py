@@ -86,8 +86,8 @@ async def test_dm_turn_end_to_end(app, api):
                    headers=bearer(session))
     assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": "5.1", "text": "Nothing else is running.",
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
-    run = app.conn.execute("SELECT role, stage, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
-    assert tuple(run) == ("general", "turn", 2, "done")
+    run = app.conn.execute("SELECT role, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
+    assert tuple(run) == ("general", 2, "done")
 
 
 async def test_on_files_uploads_to_thread(app):

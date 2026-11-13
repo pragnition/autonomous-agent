@@ -1,4 +1,4 @@
-"""The worker's GitHub client: draft PRs and assignees. It holds the only write token in the stack."""
+"""The agent's GitHub client: draft PRs and assignees. It holds the only write token in the stack."""
 
 from __future__ import annotations
 

@@ -86,13 +86,6 @@ def test_list_tasks_filters(conn):
     assert len(tasks.list_tasks(conn)) == 2
 
 
-def test_open_task_for_linear(conn):
-    t = mk(conn, source="linear", linear_issue_id="iss-1")
-    assert tasks.open_task_for_linear(conn, "iss-1").id == t.id
-    tasks.transition(conn, t.id, Status.cancelled, actor="x")
-    assert tasks.open_task_for_linear(conn, "iss-1") is None
-
-
 def test_connection_sets_wal_and_busy_timeout(conn):
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
@@ -106,8 +99,8 @@ def test_settings_roundtrip(conn):
 
 def test_set_fields_updates_and_rejects_protected(conn):
     t = mk(conn)
-    t2 = tasks.set_fields(conn, t.id, pr_number=7, branch="chilli/T-0001-x", pending_input="answer")
-    assert (t2.pr_number, t2.branch, t2.pending_input) == (7, "chilli/T-0001-x", "answer")
+    t2 = tasks.set_fields(conn, t.id, pr_number=7, branch="chilli/T-0001-x")
+    assert (t2.pr_number, t2.branch) == (7, "chilli/T-0001-x")
     for bad in ({"status": "merged"}, {"id": "T-9"}, {"nope": 1}):
         with pytest.raises(ValueError):
             tasks.set_fields(conn, t.id, **bad)

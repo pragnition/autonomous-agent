@@ -61,6 +61,3 @@ class Worktrees:
 
     def head(self, worktree: Path) -> str:
         return git(worktree, "rev-parse", "HEAD", env=self.env()).strip()
-
-    def remove(self, conversation_id: str, project: str) -> None:
-        shutil.rmtree(self.root / "work" / conversation_id, ignore_errors=True)

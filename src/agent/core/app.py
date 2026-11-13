@@ -231,10 +231,10 @@ class CoreApp:
                                   (item.conversation_id,)).fetchone() if item.conversation_id else None
         now = db.utcnow()
         self.conn.execute(
-            "INSERT OR REPLACE INTO runs(id, task_id, role, stage, status, session_id, account_code, forks, outcome, "
+            "INSERT OR REPLACE INTO runs(id, task_id, role, status, session_id, account_code, forks, outcome, "
             "turns, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_est, transcript_path, "
-            "error, started_at, ended_at) VALUES (?, ?, ?, ?, 'finished', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (item.id, convo["task_id"] if convo else None, profile_of(item.sandbox), item.kind,
+            "error, started_at, ended_at) VALUES (?, ?, ?, 'finished', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (item.id, convo["task_id"] if convo else None, profile_of(item.sandbox),
              result.get("session_id"), result.get("account_code"), int(result.get("forks") or 0), result.get("outcome"),
              int(result.get("turns") or 0), int(result.get("input_tokens") or 0), int(result.get("output_tokens") or 0),
              int(result.get("cache_read_tokens") or 0), int(result.get("cache_write_tokens") or 0),

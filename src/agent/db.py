@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +19,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     requester TEXT,
     owner TEXT,
     status TEXT NOT NULL,
-    priority INTEGER NOT NULL DEFAULT 0,
     branch TEXT,
     pr_number INTEGER,
     pr_url TEXT,
@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     slack_channel TEXT,
     slack_thread_ts TEXT,
     status_message_ts TEXT,
-    pending_input TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -35,7 +34,6 @@ CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     task_id TEXT REFERENCES tasks(id),
     role TEXT NOT NULL,
-    stage TEXT,
     status TEXT NOT NULL DEFAULT 'running',
     session_id TEXT,
     account_code TEXT,
@@ -47,7 +45,6 @@ CREATE TABLE IF NOT EXISTS runs (
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     cache_write_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd_est REAL NOT NULL DEFAULT 0,
-    memory_tokens INTEGER NOT NULL DEFAULT 0,
     transcript_path TEXT,
     error TEXT,
     started_at TEXT NOT NULL,
@@ -77,16 +74,6 @@ CREATE TABLE IF NOT EXISTS pr_stats (
     reverted_at TEXT,
     revert_ref TEXT,
     updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS outbox (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    next_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    done_at TEXT,
-    error TEXT
 );
 CREATE TABLE IF NOT EXISTS slack_events (
     key TEXT PRIMARY KEY,
@@ -118,15 +105,6 @@ CREATE TABLE IF NOT EXISTS tokens (
     expires_at TEXT NOT NULL,
     revoked INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS proposals (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT,
-    kind TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS llm_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL,
@@ -141,7 +119,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 CREATE INDEX IF NOT EXISTS llm_usage_at ON llm_usage(at);
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # One row per agent session: a Slack thread, a Linear issue, a hand-over or a split (spec v2 §6, §7)
 CONVERSATIONS = """
@@ -153,7 +131,6 @@ CREATE TABLE IF NOT EXISTS conversations (
     project TEXT,
     task_id TEXT,
     session_id TEXT,
-    scope TEXT,
     is_primary INTEGER NOT NULL DEFAULT 1,
     waiting INTEGER NOT NULL DEFAULT 0,
     model TEXT,
@@ -164,7 +141,27 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS conversations_thread ON conversations(channel, thread_ts);
 """
 
-_V1_WORKING = ("building", "investigating", "specifying", "testing")
+
+def _drop_column_if_exists(conn: sqlite3.Connection, table: str, column: str) -> None:
+    if column in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    """Drop the dead outbox and proposals tables, and the five dead columns, where they exist."""
+    conn.execute("DROP TABLE IF EXISTS outbox")
+    conn.execute("DROP TABLE IF EXISTS proposals")
+    for table, column in (("tasks", "priority"), ("tasks", "pending_input"), ("runs", "memory_tokens"),
+                          ("runs", "stage"), ("conversations", "scope")):
+        _drop_column_if_exists(conn, table, column)
+
+
+# Keyed by the version each migration upgrades a database to. Every entry must be safe to run on a database
+# that is already at or past its version (checked with PRAGMA table_info / IF EXISTS / IF NOT EXISTS), so a
+# fresh database (already created at SCHEMA's current shape) runs every migration as a no-op.
+_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    3: _migrate_v3,
+}
 
 
 def utcnow() -> str:
@@ -181,16 +178,13 @@ def connect(path: Path | str) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """Create the schema, or upgrade a Phase 1 (v1) database to v2. Safe to run on every start."""
+    """Create the schema, then run every migration newer than this database's schema_version. Safe to run on
+    every start: a fresh database already has SCHEMA's shape, so every migration finds nothing to do."""
     conn.executescript(SCHEMA)
-    if get_setting(conn, "schema_version") == str(SCHEMA_VERSION):
-        return
-    old = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-    if old and "id" not in old:  # v1 keyed conversations by (channel, thread_ts); keep them aside for reference
-        conn.execute("ALTER TABLE conversations RENAME TO conversations_v1")
     conn.executescript(CONVERSATIONS)
-    marks = ",".join("?" * len(_V1_WORKING))
-    conn.execute(f"UPDATE tasks SET status = 'working' WHERE status IN ({marks})", _V1_WORKING)
+    current = int(get_setting(conn, "schema_version", "0"))
+    for version in sorted(v for v in _MIGRATIONS if v > current):
+        _MIGRATIONS[version](conn)
     set_setting(conn, "schema_version", str(SCHEMA_VERSION))
 
 

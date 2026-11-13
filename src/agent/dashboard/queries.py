@@ -18,7 +18,6 @@ from agent.core.kpis import FMT, compute_kpis
 
 STATES = {"queued": "queued", "running": "claimed", "done": "done", "failed": "failed", "cancelled": "cancelled"}
 TERMINAL = {"done", "failed", "cancelled"}
-SOURCES = ("slack", "linear", "handover", "chore", "other")
 TITLE_CHARS = 120
 LINEAR_PREFIX = "Linear agent session event:"
 

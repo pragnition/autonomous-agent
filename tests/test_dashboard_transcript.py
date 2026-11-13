@@ -1,6 +1,6 @@
 import json
 
-from agent.dashboard.transcript import live_stats, make_scrubber, parse_record, read_entries, read_from
+from agent.dashboard.transcript import make_scrubber, parse_record, read_from
 
 USAGE = {"input_tokens": 4, "cache_creation_input_tokens": 421, "cache_read_input_tokens": 17592, "output_tokens": 24}
 INIT = {"type": "SystemMessage", "subtype": "init", "data": {"type": "system", "subtype": "init", "session_id": "s-1"}}
@@ -120,62 +120,39 @@ def write_lines(path, records, tail=""):
     path.write_text("".join(json.dumps(r) + "\n" for r in records) + tail)
 
 
-def test_read_entries_from_offset(tmp_path):
+def test_read_from_tracks_offset(tmp_path):
     f = tmp_path / "W-1.jsonl"
     write_lines(f, [INIT, assistant([{"text": "one"}])])
-    entries, offset = read_entries(f)
+    entries, offset, line = read_from(f, 0, 0)
     assert [e["text"] for e in entries] == ["one"] and offset == f.stat().st_size
     with f.open("a") as fh:
         fh.write(json.dumps(assistant([{"text": "two"}])) + "\n")
-    more, offset2 = read_entries(f, offset)
+    more, offset2, _ = read_from(f, offset, line)
     assert [e["text"] for e in more] == ["two"] and offset2 == f.stat().st_size
     assert more[0]["id"].startswith("2:")
 
 
-def test_read_entries_leaves_partial_last_line(tmp_path):
+def test_read_from_leaves_partial_last_line(tmp_path):
     f = tmp_path / "W-1.jsonl"
     partial = json.dumps(assistant([{"text": "later"}]))
     write_lines(f, [assistant([{"text": "now"}])], tail=partial[:20])
-    entries, offset = read_entries(f)
+    entries, offset, line = read_from(f, 0, 0)
     assert [e["text"] for e in entries] == ["now"]
     with f.open("a") as fh:
         fh.write(partial[20:] + "\n")
-    more, _ = read_entries(f, offset)
+    more, _, _ = read_from(f, offset, line)
     assert [e["text"] for e in more] == ["later"]
 
 
-def test_read_entries_bad_json_line_is_raw(tmp_path):
+def test_read_from_bad_json_line_is_raw(tmp_path):
     f = tmp_path / "W-1.jsonl"
     f.write_text("{not json\n")
-    [e], _ = read_entries(f)
+    [e], _, _ = read_from(f, 0, 0)
     assert e["kind"] == "raw"
 
 
-def test_read_entries_missing_file(tmp_path):
-    assert read_entries(tmp_path / "nope.jsonl") == ([], 0)
-
-
-def test_live_stats_dedupes_message_ids(tmp_path):
-    f = tmp_path / "W-1.jsonl"
-    write_lines(f, [INIT, assistant([{"thinking": ""}], "msg_1"), assistant([{"text": "a"}], "msg_1"),
-                    assistant([{"text": "b"}], "msg_2")])
-    s = live_stats(f)
-    assert s.session_id == "s-1" and s.done is False and s.cost_usd is None
-    assert s.tokens == {"in": 8, "out": 48, "cache_read": 2 * 17592, "cache_write": 2 * 421}
-    assert s.turns == 2
-
-
-def test_live_stats_result_wins(tmp_path):
-    f = tmp_path / "W-1.jsonl"
-    write_lines(f, [INIT, assistant([{"text": "a"}], "msg_1"), RESULT])
-    s = live_stats(f)
-    assert s.done is True and s.turns == 5 and s.cost_usd == 0.0762
-    assert s.tokens == {"in": 10, "out": 384, "cache_read": 65109, "cache_write": 6934}
-
-
-def test_live_stats_missing_file(tmp_path):
-    s = live_stats(tmp_path / "nope.jsonl")
-    assert s.session_id is None and s.tokens == {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
+def test_read_from_missing_file(tmp_path):
+    assert read_from(tmp_path / "nope.jsonl", 0, 0) == ([], 0, 0)
 
 
 def test_secret_straddling_the_cut_never_leaks():
@@ -190,10 +167,10 @@ def test_secret_straddling_the_cut_never_leaks():
         assert "SECRET-TO" not in text and "SECRET" not in text
 
 
-def test_read_entries_with_line_cursor_skips_the_head(tmp_path):
+def test_read_from_with_line_cursor_skips_the_head(tmp_path):
     f = tmp_path / "W-1.jsonl"
     write_lines(f, [INIT, assistant([{"text": "one"}])])
-    _, offset = read_entries(f)
+    _, offset, _ = read_from(f, 0, 0)
     with f.open("a") as fh:
         fh.write(json.dumps(assistant([{"text": "two"}])) + "\n")
     # damage the head so that counting its newlines would give the wrong line number
@@ -209,7 +186,8 @@ def test_transcript_cache_follows_incrementally(tmp_path):
     write_lines(f, [INIT] + [assistant([{"text": f"step {i}"}], f"m{i}") for i in range(7)])
     cache = TranscriptCache(recent=5)
     stats, recent = cache.follow(f)
-    assert stats.session_id == "s-1" and stats.turns == 7 and stats.tokens == live_stats(f).tokens
+    assert stats.session_id == "s-1" and stats.turns == 7
+    assert stats.tokens == {"in": 4 * 7, "out": 24 * 7, "cache_read": 17592 * 7, "cache_write": 421 * 7}
     assert [e["text"] for e in recent] == [f"step {i}" for i in range(2, 7)]
     partial = json.dumps(assistant([{"text": "step 7"}], "m7"))
     with f.open("a") as fh:
@@ -228,3 +206,4 @@ def test_transcript_cache_missing_file(tmp_path):
     from agent.dashboard.transcript import TranscriptCache
     stats, recent = TranscriptCache().follow(tmp_path / "nope.jsonl")
     assert stats.session_id is None and recent == []
+    assert stats.tokens == {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
