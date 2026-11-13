@@ -16,11 +16,15 @@ from pathlib import Path
 
 from agent.runner.base import RunResult, RunSpec
 from agent.sandbox.link import SessionRevoked
-from agent.sandbox.remote_tools import SETUP_TIMEOUT_S, Checkout, remote_sdk_tools, run_shell
+from agent.sandbox.remote_tools import Checkout, remote_sdk_tools, run_setup, setup_marker
+from agent.sandbox.worktrees import CheckoutRefused
 
 log = logging.getLogger(__name__)
 FRESH_NOTE = ("(Your earlier session in this conversation couldn't be resumed. Call read_thread to catch up on "
               "the conversation so far before you answer.)\n\n")
+REFUSED_NOTE = ("(Your checkout of {project} couldn't be used, so this session has none and runs in your session "
+                "folder: {reason}. Move that folder out of the way and call work_on({project}) to get your checkout "
+                "back on your branch.)\n\n")
 
 _VAR = re.compile(r"\$\{(\w+)\}")
 
@@ -78,23 +82,29 @@ class SandboxRunner:
             tmp.rename(dest)
         return [dest / "plugins" / "core", *sorted((dest / "plugins" / "packs").glob("*"))]
 
-    async def _workdir(self, convo: str, payload: dict) -> tuple[Path, Path | None]:
-        """(cwd, checkout). The checkout, when the conversation has one, lives in its session folder at
+    async def _workdir(self, convo: str, payload: dict) -> tuple[Path, Path | None, str]:
+        """(cwd, checkout, note). The checkout, when the conversation has one, lives in its session folder at
         <session>/<project>. The session runs in the checkout only when it was bound to its project up front
-        (workdir "checkout"), otherwise in the session folder: either way the same folder on every turn."""
+        (workdir "checkout"), otherwise in the session folder: either way the same folder on every turn. When what
+        is at the checkout's path wasn't made by prepare, it is left alone and the turn still runs, in the session
+        folder with no checkout; `note` tells the agent why, for the top of its prompt."""
         session = self.scratch_root / convo
         session.mkdir(parents=True, exist_ok=True)
         wt, checkout = payload.get("worktree"), None
         if wt and wt.get("branch"):  # an item queued before branches were fixed has none: no checkout
-            checkout, created = await asyncio.to_thread(self.worktrees.prepare, session / wt["project"],
-                                                        wt["project"], wt["branch"], wt["default_branch"])
+            project = wt["project"]
+            try:
+                checkout, created = await asyncio.to_thread(self.worktrees.prepare, session / project, project,
+                                                            wt["branch"], wt["default_branch"])
+            except CheckoutRefused as e:
+                log.warning("not using the checkout for %s: %s", convo, e)
+                return session, None, REFUSED_NOTE.format(project=project, reason=e)
             if created:
-                for cmd in wt.get("setup") or []:
-                    code, out = await run_shell(cmd, checkout, SETUP_TIMEOUT_S)
-                    if code:
-                        log.warning("setup %r failed in %s: %s", cmd, checkout, out[-500:])
+                passed, tail = await run_setup(list(wt.get("setup") or []), checkout, setup_marker(session, project))
+                if not passed:
+                    log.warning("setup failed in %s: %s", checkout, tail[-500:])
         cwd = checkout if checkout is not None and payload.get("workdir") == "checkout" else session
-        return cwd, checkout
+        return cwd, checkout, ""
 
     async def _heartbeat(self, tok: str, item_id: str) -> None:
         while True:
@@ -164,7 +174,7 @@ class SandboxRunner:
     async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> tuple[RunSpec, dict | None]:
         payload, item_id = item["payload"], item["id"]
         plugins = await self._bundle()
-        cwd, path = await self._workdir(convo, payload)
+        cwd, path, note = await self._workdir(convo, payload)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)
         sink = {} if payload.get("structured") else None
@@ -176,7 +186,7 @@ class SandboxRunner:
                                  worktrees=self.worktrees, agent_name=self.agent_name, structured_sink=sink,
                                  structured_schema=payload.get("structured"), app_env_dir=self.app_env_dir)
         env = {**self.extra_env, **read_env_files(self.env_files)}
-        spec = RunSpec(run_id=item_id, prompt=payload["text"], cwd=cwd, model=payload["model"],
+        spec = RunSpec(run_id=item_id, prompt=note + payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        env={"CLAUDE_CONFIG_DIR": str(sessions), **env, **(payload.get("test_secrets") or {})},

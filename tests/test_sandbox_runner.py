@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import stat
 import subprocess
 import tarfile
@@ -194,8 +195,8 @@ async def test_setup_runs_once_per_worktree(tmp_path, worktrees):
 
 async def test_session_workdir_checkout_lives_inside_session_folder(tmp_path, worktrees):
     runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
-    cwd, checkout = await runner._workdir("V-1", item(workdir="session")["payload"])
-    assert cwd == tmp_path / "scratch" / "V-1"
+    cwd, checkout, note = await runner._workdir("V-1", item(workdir="session")["payload"])
+    assert cwd == tmp_path / "scratch" / "V-1" and note == ""
     assert checkout == tmp_path / "scratch" / "V-1" / "sample"
     assert git(checkout, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
     assert (checkout / ".setup-count").read_text().count("ran") == 1
@@ -208,17 +209,84 @@ async def test_checkout_workdir_runs_in_checkout(tmp_path, worktrees):
 
 
 async def test_no_checkout_runs_in_session_folder(tmp_path, worktrees):
-    cwd, checkout = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir(
+    cwd, checkout, note = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir(
         "V-1", item(worktree=None, workdir="session")["payload"])
-    assert (cwd, checkout) == (tmp_path / "scratch" / "V-1", None) and cwd.is_dir()
+    assert (cwd, checkout, note) == (tmp_path / "scratch" / "V-1", None, "") and cwd.is_dir()
 
 
 async def test_item_queued_before_fixed_branches_runs_without_a_checkout(tmp_path, worktrees):
     old = item()["payload"]
     old.pop("workdir")
     old["worktree"]["branch_hint"] = old["worktree"].pop("branch")
-    cwd, checkout = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir("V-1", old)
-    assert (cwd, checkout) == (tmp_path / "scratch" / "V-1", None)
+    cwd, checkout, note = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir("V-1", old)
+    assert (cwd, checkout, note) == (tmp_path / "scratch" / "V-1", None, "")
+
+
+async def test_switched_branch_checkout_is_reused_next_turn(tmp_path, worktrees):
+    """The checkout is the agent's to work in: a branch it switched to doesn't stop the next turn using it."""
+    claude = FakeClaude()
+    runner = make_runner(tmp_path, worktrees, FakeLink(), claude)
+    await runner.handle(item(workdir="checkout"), "tok", [])
+    checkout = tmp_path / "scratch" / "V-1" / "sample"
+    git(checkout, "checkout", "-q", "-b", "other")
+    await runner.handle(item(workdir="checkout"), "tok", [])
+    assert [s.cwd for s in claude.specs] == [checkout, checkout]
+    assert claude.specs[1].prompt == "fix the export"
+    assert git(checkout, "rev-parse", "--abbrev-ref", "HEAD") == "other"
+    assert (checkout / ".setup-count").read_text().count("ran") == 1
+
+
+async def test_foreign_clone_is_refused_and_the_turn_runs_without_it(tmp_path, worktrees, server):
+    """A repo at the checkout's path that prepare didn't make is left alone, even a clone of the right repo on the
+    right branch. The turn still runs, in the session folder, and the prompt says why there is no checkout."""
+    session = tmp_path / "scratch" / "V-1"
+    path = session / "sample"
+    path.parent.mkdir(parents=True)
+    git(tmp_path, "clone", "-q", "-b", "main", f"{server[0]}/git/sample.git", str(path))
+    git(path, "checkout", "-q", "-b", "agent/T-0001-fix-export")
+    (path / "mine.txt").write_text("keep me")
+    link, claude = FakeLink(), FakeClaude()
+    original = claude.run
+
+    async def run_and_open_pr(spec):
+        claude.open_pr = await call(spec.sdk_tools, "open_pr", {"title": "t", "body": "b"})
+        link.bound["branch"] = "agent/T-0001-fix-export"
+        claude.work_on = await call(spec.sdk_tools, "work_on", {"project": "sample"})
+        return await original(spec)
+
+    claude.run = run_and_open_pr
+    await make_runner(tmp_path, worktrees, link, claude).handle(item(workdir="checkout"), "tok", MANIFEST)
+    spec = claude.specs[0]
+    assert link.results[-1]["outcome"] == "done" and spec.cwd == session
+    note, text = spec.prompt.split("\n\n", 1)
+    assert str(path) in note and "work_on(sample)" in note and text == "fix the export"
+    assert claude.open_pr == "call work_on(<project>) first"
+    assert "couldn't be made" in claude.work_on and "didn't make" in claude.work_on
+    assert (path / "mine.txt").read_text() == "keep me" and not (path / ".setup-count").exists()
+    assert git(path, "status", "--porcelain") == "?? mine.txt"
+
+
+async def test_failed_upfront_setup_is_rerun_by_work_on(tmp_path, worktrees):
+    """Setup that fails before the first turn of a conversation bound up front leaves the same marker work_on
+    leaves, so the agent's work_on runs setup again."""
+    fixed, marker = tmp_path / "fixed", tmp_path / "scratch" / "V-1" / ".setup-failed-sample"
+    setup = [f"if [ -e {fixed} ]; then echo ran >> .setup-count; else touch {fixed}; echo broken; exit 1; fi"]
+    link = FakeLink()
+    link.bound.update(branch="agent/T-0001-fix-export", setup=setup)
+    seen = {}
+
+    class WorkOnClaude(FakeClaude):
+        async def run(self, spec):
+            seen["marker before work_on"] = marker.exists()
+            seen["reply"] = await call(spec.sdk_tools, "work_on", {"project": "sample"})
+            return await super().run(spec)
+
+    up_front = item()
+    up_front["payload"]["worktree"]["setup"] = setup
+    await make_runner(tmp_path, worktrees, link, WorkOnClaude()).handle(up_front, "tok", MANIFEST)
+    assert seen["marker before work_on"] is True
+    assert "setup passed" in seen["reply"] and not marker.exists()
+    assert (tmp_path / "scratch" / "V-1" / "sample" / ".setup-count").read_text().count("ran") == 1
 
 
 async def test_cancel_via_heartbeat_interrupts(tmp_path, worktrees):
@@ -369,30 +437,33 @@ async def test_next_turn_after_work_on_resumes_in_session_folder(tmp_path, workt
     assert convo()["branch"] == branch_name("agent", cid, "run sample locally") and convo()["workdir"] == "session"
     assert second["worktree"]["branch"] == convo()["branch"] and second["workdir"] == "session"
     assert second["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
-    cwd, checkout = await runner._workdir(cid, second)
-    assert (cwd, checkout) == (session, session / "sample")
+    cwd, checkout, note = await runner._workdir(cid, second)
+    assert (cwd, checkout, note) == (session, session / "sample", "")
     assert [s.cwd for s in claude.specs] == [session, session]
     assert claude.specs[1].env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert (checkout / ".setup-count").read_text().count("ran") == 1
 
 
-def test_prepare_refuses_a_foreign_repo_and_leaves_it(worktrees, tmp_path):
+def test_prepare_refuses_a_foreign_repo_and_leaves_it(worktrees, tmp_path, server):
+    """Only a repo prepare made is trusted, so even a clone of core's repo on the conversation's branch is refused."""
     path = tmp_path / "scratch" / "V-7" / "sample"
-    path.mkdir(parents=True)
-    git(path, "init", "-q", "-b", "agent/T-7-x")
-    git(path, "remote", "add", "origin", "https://example.com/someone-else.git")
+    path.parent.mkdir(parents=True)
+    git(tmp_path, "clone", "-q", f"{server[0]}/git/sample.git", str(path))
+    git(path, "checkout", "-q", "-b", "agent/T-7-x")
     (path / "mine.txt").write_text("keep me")
-    with pytest.raises(CheckoutRefused, match="someone-else"):
+    with pytest.raises(CheckoutRefused, match="didn't make"):
         worktrees.prepare(path, "sample", "agent/T-7-x", "main")
     assert (path / "mine.txt").read_text() == "keep me"
-    assert git(path, "remote", "get-url", "origin") == "https://example.com/someone-else.git"
+    assert git(path, "status", "--porcelain") == "?? mine.txt"
+    assert not (path / ".git" / "agent-checkout").exists()
 
 
-def test_prepare_refuses_a_checkout_on_another_branch(worktrees, tmp_path):
+def test_prepare_trusts_its_checkout_after_a_branch_switch_or_a_new_core_url(worktrees, tmp_path, server):
     path, _ = worktrees.prepare(tmp_path / "scratch" / "V-7" / "sample", "sample", "agent/T-7-x", "main")
     git(path, "checkout", "-q", "-b", "experiment")
-    with pytest.raises(CheckoutRefused, match="experiment"):
-        worktrees.prepare(path, "sample", "agent/T-7-x", "main")
+    assert worktrees.prepare(path, "sample", "agent/T-7-x", "main") == (path, False)
+    moved = Worktrees(tmp_path / "var", "http://core.elsewhere:8080", token_for_git=lambda: "sandbox-token")
+    assert moved.prepare(path, "sample", "agent/T-7-x", "main") == (path, False)
     assert git(path, "rev-parse", "--abbrev-ref", "HEAD") == "experiment"
 
 
@@ -400,7 +471,7 @@ def test_prepare_refuses_a_folder_that_isnt_a_repo(worktrees, tmp_path):
     path = tmp_path / "scratch" / "V-7" / "sample"
     path.mkdir(parents=True)
     (path / "notes.md").write_text("the agent's notes")
-    with pytest.raises(CheckoutRefused, match="isn't a git checkout"):
+    with pytest.raises(CheckoutRefused, match="isn't a checkout"):
         worktrees.prepare(path, "sample", "agent/T-7-x", "main")
     assert [p.name for p in path.iterdir()] == ["notes.md"] and (path / "notes.md").read_text() == "the agent's notes"
 
@@ -570,6 +641,8 @@ def test_conversation_gets_its_own_repo_with_shared_objects(worktrees, tmp_path)
     assert created and path == tmp_path / "scratch" / "V-5" / "sample" and (path / ".git").is_dir()
     assert (path / ".git" / "objects" / "info" / "alternates").exists()
     assert git(path, "remote", "get-url", "origin").endswith("/git/sample.git")
+    assert json.loads((path / ".git" / "agent-checkout").read_text()) == {"project": "sample",
+                                                                           "branch": "agent/T-5-x"}
     assert worktrees.prepare(path, "sample", "agent/T-5-x", "main") == (path, False)
 
 

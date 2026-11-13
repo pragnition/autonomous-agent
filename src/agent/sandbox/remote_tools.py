@@ -54,6 +54,26 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
+def setup_marker(session_dir: Path, project: str) -> Path:
+    """Left in the session folder, outside the checkout, when a project's setup failed: the next work_on runs it
+    again."""
+    return session_dir / f".setup-failed-{project}"
+
+
+async def run_setup(commands: list[str], checkout: Path, marker: Path, shell=run_shell) -> tuple[bool, str]:
+    """Run a project's setup in its checkout, stopping at the first failure, which leaves `marker`; a pass removes
+    it. Returns whether setup passed and, when it didn't, the tail of its output."""
+    log = []
+    for cmd in commands:
+        code, out = await shell(cmd, checkout, SETUP_TIMEOUT_S, None)
+        log.append(f"$ {cmd}\n{out}")
+        if code != 0:
+            marker.write_text(f"{cmd}\n")
+            return False, f"`{cmd}` exited {code}:\n" + "\n".join(log)[-SETUP_TAIL:]
+    marker.unlink(missing_ok=True)
+    return True, ""
+
+
 def _write_private(path: Path, text: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -72,19 +92,6 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path,
             return "This session was stopped."
         return reply.get("text", "")
 
-    async def setup(commands: list[str], path: Path, marker: Path) -> str:
-        """Run the project's setup in its checkout. A failure leaves a marker in the session folder, outside the
-        checkout, so the next work_on runs setup again."""
-        log = []
-        for cmd in commands:
-            code, out = await shell(cmd, path, SETUP_TIMEOUT_S, None)
-            log.append(f"$ {cmd}\n{out}")
-            if code != 0:
-                marker.write_text(f"{cmd}\n")
-                return f"setup failed (`{cmd}` exited {code}):\n" + "\n".join(log)[-SETUP_TAIL:]
-        marker.unlink(missing_ok=True)
-        return "setup passed"
-
     async def work_on(args: dict) -> str:
         try:
             details = await link.bind(tok, str(args.get("project") or ""), str(args.get("title") or ""))
@@ -98,9 +105,10 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path,
                                                     details["default_branch"])
         except Exception as e:
             return f"this conversation is now bound to {project}, but its checkout couldn't be made: {e}"
-        marker = session_dir / f".setup-failed-{project}"
+        marker = setup_marker(session_dir, project)
         if created or marker.exists():
-            done = await setup(list(details.get("setup") or []), path, marker)
+            passed, tail = await run_setup(list(details.get("setup") or []), path, marker, shell)
+            done = "setup passed" if passed else f"setup failed: {tail}"
         else:
             done = "setup not run again (it ran when this checkout was made)"
         keys = session_dir / f".test-keys-{project}.env"

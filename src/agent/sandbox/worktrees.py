@@ -5,6 +5,7 @@ files. The sandbox token rides in git's environment, never on a command line or 
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import threading
@@ -12,13 +13,14 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from agent.gitutil import GitError, git
+from agent.gitutil import git
 
 SCRATCH = (".agent-progress.md", ".agent-out/")  # session notes and saved tool output, never committed
+MADE_BY_PREPARE = "agent-checkout"  # in a checkout's .git: prepare made it, so a later prepare may use it
 
 
 class CheckoutRefused(Exception):
-    """What is already at a checkout's path isn't this conversation's checkout; it is left as it is."""
+    """What is already at a checkout's path wasn't made by prepare; it is left as it is."""
 
 
 class Worktrees:
@@ -49,46 +51,31 @@ class Worktrees:
 
     def prepare(self, path: Path, project: str, branch: str, base: str) -> tuple[Path, bool]:
         """The conversation's repo at `path` on `branch`, created from origin/<base> the first time. The session
-        folder is the agent's to write in, so what is already at `path` is used only when it is this checkout (core's
-        repo for the project, on the conversation's branch), and is otherwise refused and left alone. A new repo is
-        made beside `path` and moved into place once it is complete, so a failure leaves nothing behind."""
-        url = f"{self.git_base}/git/{project}.git"
+        folder is the agent's to write in, so a repo already at `path` is used only when prepare made it (marked in
+        its .git), whatever branch the agent has switched it to since. Anything else there is refused and left
+        alone. A new repo is made beside `path` and moved into place once it is complete, so a failure leaves
+        nothing behind."""
         if (path / ".git").exists():
-            self._check_reusable(path, url, branch)
+            if not (path / ".git" / MADE_BY_PREPARE).is_file():
+                raise CheckoutRefused(f"{path} is a git repo this runner didn't make, so it was left as it is")
             return path, False
         if path.is_symlink() or (path.exists() and (not path.is_dir() or any(path.iterdir()))):
-            raise CheckoutRefused(f"{path} already exists and isn't a git checkout; move it out of the way to get "
-                                  f"a checkout of {project} there")
+            raise CheckoutRefused(f"{path} already exists and isn't a checkout, so it was left as it is")
         clone = self.ensure_clone(project)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.parent / f".{path.name}.preparing-{uuid.uuid4().hex[:8]}"
         try:
-            git(path.parent, "clone", "-q", "--no-checkout", "--reference", str(clone), url, str(tmp),
-                env=self.env())
+            git(path.parent, "clone", "-q", "--no-checkout", "--reference", str(clone),
+                f"{self.git_base}/git/{project}.git", str(tmp), env=self.env())
             git(tmp, "checkout", "-q", "-B", branch, f"origin/{base}", env=self.env())
             with (tmp / ".git" / "info" / "exclude").open("a") as f:
                 f.write("".join(f"{name}\n" for name in SCRATCH))
+            (tmp / ".git" / MADE_BY_PREPARE).write_text(json.dumps({"project": project, "branch": branch}) + "\n")
             os.rename(tmp, path)  # replaces only a missing or empty folder
         except Exception:
             shutil.rmtree(tmp, ignore_errors=True)  # only what this call made
             raise
         return path, True
-
-    def _check_reusable(self, path: Path, url: str, branch: str) -> None:
-        try:
-            origin = git(path, "remote", "get-url", "origin", env=self.env()).strip()
-        except GitError:
-            origin = ""
-        if origin != url:
-            raise CheckoutRefused(f"{path} is a git repo whose origin is {origin or 'not set'}, not {url}; it was "
-                                  "left as it is")
-        try:
-            head = git(path, "symbolic-ref", "-q", "--short", "HEAD", env=self.env()).strip()
-        except GitError:
-            head = "a detached HEAD"
-        if head != branch:
-            raise CheckoutRefused(f"{path} is on {head}, not this conversation's branch {branch}; switch back with "
-                                  f"`git -C {path} checkout {branch}`")
 
     def push(self, worktree: Path, branch: str) -> str:
         git(worktree, "push", "-q", "origin", f"HEAD:refs/heads/{branch}", env=self.env())
