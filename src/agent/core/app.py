@@ -158,7 +158,7 @@ class CoreApp:
         self.agent_app = make_agent_app(
             conn=self.conn, queue=self.queue, gate=Gate(self.conn, self.config, proxy), tools=self.router,
             context_for=self.router.context_for,
-            bundles=lambda profile, project: build_bundle(self.config_dir, profile, project),
+            bundles=lambda: build_bundle(self.config_dir),
             on_result=self.on_result, on_files=self.on_files,
             runs_dir=self.data_dir / "runs",
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)

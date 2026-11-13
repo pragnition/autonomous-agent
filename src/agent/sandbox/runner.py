@@ -23,26 +23,6 @@ SETUP_TIMEOUT_S = 1800
 FRESH_NOTE = ("(Your earlier session in this conversation couldn't be resumed. Call read_thread to catch up on "
               "the conversation so far before you answer.)\n\n")
 
-
-class SessionUsers:
-    """One OS user per running conversation (s1..s8), sticky while it runs, so sessions can't read each other."""
-
-    def __init__(self, names: tuple[str, ...] = tuple(f"s{i}" for i in range(1, 9))):
-        self.names, self.taken = names, {}
-
-    def acquire(self, conversation_id: str) -> str:
-        if conversation_id in self.taken:
-            return self.taken[conversation_id]
-        free = [n for n in self.names if n not in self.taken.values()]
-        if not free:
-            raise RuntimeError("no free session user")
-        self.taken[conversation_id] = free[0]
-        return free[0]
-
-    def release(self, conversation_id: str) -> None:
-        self.taken.pop(conversation_id, None)
-
-
 _VAR = re.compile(r"\$\{(\w+)\}")
 
 
@@ -74,19 +54,19 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
 
 
 class SandboxRunner:
-    def __init__(self, link, worktrees, users: SessionUsers, claude, *, sandbox: str, profile: str,
+    def __init__(self, link, worktrees, claude, *, sandbox: str,
                  bundles_dir: Path, sessions_root: Path, scratch_root: Path, agent_name: str = "agent",
-                 heartbeat_s: float = 15, max_parallel: int = 3,
+                 heartbeat_s: float = 15, max_parallel: int = 32,
                  extra_env: dict[str, str] | None = None, env_files: list[Path] = ()):
-        self.link, self.worktrees, self.users, self.claude = link, worktrees, users, claude
-        self.sandbox, self.profile, self.agent_name = sandbox, profile, agent_name
+        self.link, self.worktrees, self.claude = link, worktrees, claude
+        self.sandbox, self.agent_name = sandbox, agent_name
         self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
-        self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel
+        self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel  # core's Gate is the real limit; this is a safety bound
         self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
         self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
 
-    async def _bundle(self, project: str | None) -> list[Path]:
-        version, data = await self.link.bundle(self.profile, project)
+    async def _bundle(self) -> list[Path]:
+        version, data = await self.link.bundle()
         dest = self.bundles_dir / version
         if not dest.exists():
             tmp = self.bundles_dir / f".{version}.tmp"
@@ -95,11 +75,11 @@ class SandboxRunner:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
                 tar.extractall(tmp, filter="data")
             tmp.rename(dest)
-        return [p for p in (dest / "plugins" / "core", dest / "plugins" / "pack") if p.is_dir()]
+        return [dest / "plugins" / "core", *sorted((dest / "plugins" / "packs").glob("*"))]
 
     async def _workdir(self, convo: str, payload: dict) -> tuple[Path, bool]:
         wt = payload.get("worktree")
-        if self.profile == "code" and wt and wt.get("branch_hint"):
+        if wt and wt.get("branch_hint"):
             path, created = await asyncio.to_thread(self.worktrees.prepare, convo, wt["project"], wt["branch_hint"],
                                                     wt["default_branch"])
             if created:
@@ -152,38 +132,34 @@ class SandboxRunner:
     async def handle(self, item: dict, tok: str, manifest: list[dict]) -> None:
         payload, item_id = item["payload"], item["id"]
         convo = item.get("conversation_id") or item_id
-        self.users.acquire(convo)
         try:
-            try:
-                spec, sink = await self._prepare(item, tok, manifest, convo)
-            except Exception as e:
-                log.exception("preparing %s failed", item_id)
-                with contextlib.suppress(SessionRevoked):
-                    await self.link.result(tok, {"outcome": "error", "text": "", "session_id": None, "turns": 0,
-                                                 "error": f"preparing the session failed: {type(e).__name__}: {e}"})
-                return
-            beat = asyncio.create_task(self._heartbeat(tok, item_id))
-            try:
-                result = await self._run_or_start_fresh(spec)
-            finally:
-                beat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await beat
-            out = {"outcome": result.outcome, "text": result.summary, "session_id": result.session_id,
-                   "turns": result.turns, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
-                   "cache_read_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens,
-                   "cost_usd_est": result.cost_usd_est, "account_code": result.account_code, "forks": result.forks,
-                   "error": result.error}
-            if sink is not None:
-                out["structured"] = sink.get("output")
+            spec, sink = await self._prepare(item, tok, manifest, convo)
+        except Exception as e:
+            log.exception("preparing %s failed", item_id)
             with contextlib.suppress(SessionRevoked):
-                await self.link.result(tok, out)
+                await self.link.result(tok, {"outcome": "error", "text": "", "session_id": None, "turns": 0,
+                                             "error": f"preparing the session failed: {type(e).__name__}: {e}"})
+            return
+        beat = asyncio.create_task(self._heartbeat(tok, item_id))
+        try:
+            result = await self._run_or_start_fresh(spec)
         finally:
-            self.users.release(convo)
+            beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await beat
+        out = {"outcome": result.outcome, "text": result.summary, "session_id": result.session_id,
+               "turns": result.turns, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
+               "cache_read_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens,
+               "cost_usd_est": result.cost_usd_est, "account_code": result.account_code, "forks": result.forks,
+               "error": result.error}
+        if sink is not None:
+            out["structured"] = sink.get("output")
+        with contextlib.suppress(SessionRevoked):
+            await self.link.result(tok, out)
 
     async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> tuple[RunSpec, dict | None]:
         payload, item_id = item["payload"], item["id"]
-        plugins = await self._bundle(payload.get("project"))
+        plugins = await self._bundle()
         cwd, is_worktree = await self._workdir(convo, payload)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)

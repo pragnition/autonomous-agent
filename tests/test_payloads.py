@@ -2,6 +2,7 @@ import pytest
 
 from agent import db
 from agent.core.payloads import Payloads
+from agent.core.sessions import AGENT_QUEUE
 from agent.memory.store import MemoryStore, NoteInput
 from agent.tokens import estimate_tokens
 from agent_fixtures import add_conversation, make_config, make_pack
@@ -37,10 +38,10 @@ def row(conn, convo_id):
     return conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
 
 
-def test_turn_payload_for_code(payloads, conn):
-    convo = row(conn, add_conversation(conn, sandbox="code-sample"))
+def test_turn_payload_for_a_known_project(payloads, conn):
+    convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE))
     p = payloads.turn(convo, "fix the export crash", "bob")
-    assert p["text"] == "fix the export crash" and p["actor"] == "bob" and p["profile"] == "code"
+    assert p["text"] == "fix the export crash" and p["actor"] == "bob"
     assert PERSONA in p["system_prompt"] and "full development environment" in p["system_prompt"]
     assert p["model"] == "claude-opus-5-5" and p["max_turns"] == 400 and p["timeout_s"] == 90 * 60
     wt = p["worktree"]
@@ -51,21 +52,21 @@ def test_turn_payload_for_code(payloads, conn):
 
 
 def test_briefing_within_budget(payloads, conn):
-    convo = row(conn, add_conversation(conn, sandbox="code-sample"))
+    convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE))
     p = payloads.turn(convo, "export", "bob")
     briefing = p["system_prompt"].split("Notes from memory", 1)[1]
     assert "export fact" in briefing
     assert estimate_tokens("Notes from memory" + briefing) <= 2000
 
 
-def test_general_has_no_worktree_or_secrets(payloads, conn):
-    convo = row(conn, add_conversation(conn, sandbox="general", project=None, channel="D-ann"))
+def test_unbound_conversation_has_no_worktree_or_secrets(payloads, conn):
+    convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann"))
     p = payloads.turn(convo, "hi", "ann")
-    assert p["worktree"] is None and p["test_secrets"] == {} and p["profile"] == "general"
+    assert p["worktree"] is None and p["test_secrets"] == {}
 
 
 def test_use_fable_model(payloads, conn):
-    cid = add_conversation(conn, sandbox="code-sample")
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE)
     conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9' WHERE id = ?", (cid,))
     p = payloads.turn(row(conn, cid), "x", "bob")
     assert p["model"] == "claude-fable-5-1" and p["resume_session_id"] == "sess-9"
@@ -74,13 +75,13 @@ def test_use_fable_model(payloads, conn):
 def test_chore_payload(payloads):
     p = payloads.chore("consolidate this", {"type": "object"})
     assert p["model"] == "claude-sonnet-5" and p["structured"] == {"type": "object"}
-    assert PERSONA not in p["system_prompt"] and p["profile"] == "general" and p["worktree"] is None
+    assert PERSONA not in p["system_prompt"] and p["worktree"] is None
 
 
 def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
     (tmp_path / "config" / "agent").mkdir(parents=True)
     (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM SYSTEM PROMPT")
-    p = payloads.turn(row(conn, add_conversation(conn, sandbox="code-sample")), "x", "bob")
+    p = payloads.turn(row(conn, add_conversation(conn, sandbox=AGENT_QUEUE)), "x", "bob")
     assert p["system_prompt"].startswith("CUSTOM SYSTEM PROMPT")
 
 
@@ -98,6 +99,6 @@ def test_payload_carries_mcp_servers(tmp_path, conn, memory):
     cfg = make_config(tmp_path, '\n[mcp.linear]\ntype = "http"\nurl = "https://mcp.linear.app/mcp"\n'
                                 'headers = { Authorization = "Bearer ${LINEAR_APP_TOKEN}" }\n')
     p = Payloads(conn, config=cfg, packs={}, memory=memory, persona_text="", config_dir=tmp_path / "c", secrets={})
-    convo = row(conn, add_conversation(conn, sandbox="general", project=None))
+    convo = row(conn, add_conversation(conn, sandbox=AGENT_QUEUE, project=None))
     assert p.turn(convo, "hi", "ann")["mcp"] == {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
                                                             "headers": {"Authorization": "Bearer ${LINEAR_APP_TOKEN}"}}}

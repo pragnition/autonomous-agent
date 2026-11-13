@@ -17,18 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from agent.db import AGENT_QUEUE
-
 log = logging.getLogger(__name__)
-
-
-def profile_for(queue: str) -> str:
-    # Open mode has one queue (AGENT_QUEUE); until profiles go too (a later task), its runner gets the "code"
-    # profile, so it keeps today's full tool set and bundle (open_pr included) whether or not a session has a
-    # project.
-    if queue == AGENT_QUEUE:
-        return "code"
-    return "general" if queue == "general" else queue.split("-", 1)[0]
 
 
 def agent_environment(environ, agent_name: str, git_email: str = "") -> dict[str, str]:
@@ -89,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     from agent.proxy import ProxyClient
     from agent.runner.claude import ClaudeRunner
     from agent.sandbox.link import CoreLink
-    from agent.sandbox.runner import SandboxRunner, SessionUsers
+    from agent.sandbox.runner import SandboxRunner
     from agent.sandbox.worktrees import Worktrees
 
     parser = argparse.ArgumentParser(prog="agent runners", description="Run a runner per queue (open mode)")
@@ -106,11 +95,10 @@ def main(argv: list[str] | None = None) -> int:
     env = agent_environment(os.environ, args.agent_name, args.git_email)
     os.environ.update(env)  # the git identity, for setup commands and open_pr's checks in plain shells
     claude = ClaudeRunner(ProxyClient(args.proxy), args.proxy, root / "transcripts")
-    users = SessionUsers()
 
     def make_runner(queue: str, token: str) -> SandboxRunner:
-        return SandboxRunner(CoreLink(args.core, token), Worktrees(root, args.core, lambda: token), users, claude,
-                             sandbox=queue, profile=profile_for(queue), bundles_dir=root / "bundles",
+        return SandboxRunner(CoreLink(args.core, token), Worktrees(root, args.core, lambda: token), claude,
+                             sandbox=queue, bundles_dir=root / "bundles",
                              sessions_root=root / "sessions", scratch_root=root / "scratch",
                              agent_name=args.agent_name, extra_env=env,
                              env_files=[Path(args.tokens).parent / "linear.env"])

@@ -1,8 +1,8 @@
 """core's tools for the general agent (spec v2 §7): where the guarantees live.
 
 Every call arrives with a session token; core resolves it to a ToolContext (conversation, project, sandbox
-profile and the actor whose message started the turn). Tiers come from the actor, never from the model's
-arguments, and a tool is offered only in the profiles it belongs to. Every reply is stripped of secrets.
+and the actor whose message started the turn). Tiers come from the actor, never from the model's arguments,
+and a tool is offered only by tier. Every reply is stripped of secrets.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from agent.tasks import IllegalTransition, Status
 
 log = logging.getLogger(__name__)
 
-ALL_PROFILES = ("code", "debug", "general")
 TIER_ORDER = {"read": 0, "act": 1, "admin": 2}
 KINDS = ("feature", "bug", "chore")
 NOT_AVAILABLE = "not available here"
@@ -37,7 +36,6 @@ class ToolContext:
     work_item_id: str
     conversation_id: str | None
     sandbox: str
-    profile: Literal["code", "debug", "general"]
     project: str | None
     actor: str | None
     tier: Literal["read", "act", "admin"]
@@ -58,7 +56,6 @@ class ToolSpec:
     description: str
     input_schema: dict
     tier: str
-    profiles: tuple[str, ...] = ALL_PROFILES
 
 
 Handler = Callable[[ToolContext, dict], Awaitable[ToolReply]]
@@ -82,14 +79,6 @@ def conversation_scopes(channel: str | None, project: str | None, actor: str | N
     return scopes_for(sctx)
 
 
-def profile_of(sandbox: str) -> str:
-    # Open mode has one queue (AGENT_QUEUE); until profiles go too (a later task), every session on it gets the
-    # "code" profile, so it keeps today's full tool set (open_pr included) whether or not it has a project.
-    if sandbox == AGENT_QUEUE:
-        return "code"
-    return "general" if sandbox == "general" else sandbox.split("-", 1)[0]
-
-
 class AgentToolRouter:
     def __init__(self, conn: sqlite3.Connection, *, config, packs: dict, queue, memory: MemoryStore, slack, notifier,
                  secret_values: list[str],
@@ -109,7 +98,7 @@ class AgentToolRouter:
         self._tools[spec.name] = (spec, handler)
 
     def _allowed(self, spec: ToolSpec, ctx: ToolContext) -> bool:
-        return ctx.profile in spec.profiles and TIER_ORDER[spec.tier] <= TIER_ORDER[ctx.tier]
+        return TIER_ORDER[spec.tier] <= TIER_ORDER[ctx.tier]
 
     def manifest(self, ctx: ToolContext) -> list[dict]:
         return [{"name": s.name, "description": s.description, "input_schema": s.input_schema}
@@ -138,7 +127,6 @@ class AgentToolRouter:
         else:
             tier = "act" if unattended and actor is None else "read"
         return ToolContext(work_item_id=work_item_id, conversation_id=row["conversation_id"], sandbox=row["sandbox"],
-                           profile=profile_of(row["sandbox"]),
                            project=(convo["project"] if convo else None) or payload.get("project"),
                            actor=actor, tier=tier, unattended=unattended,
                            task_id=convo["task_id"] if convo else payload.get("task_id"),
@@ -201,29 +189,26 @@ class AgentToolRouter:
 
     def _register_builtins(self) -> None:
         reg, s = self.register, schema
-        code_general = ("code", "general")
-        # Debug sessions never talk to Slack
         reg(ToolSpec("post_update", "Post a short progress update in this conversation's Slack thread.",
-                     s({"text": "string"}), "act", code_general), self._post_update)
+                     s({"text": "string"}), "act"), self._post_update)
         reg(ToolSpec("ask", "Ask the person a question when the request itself is unclear. Their reply arrives as "
-                            "your next message, so end your turn after asking.", s({"question": "string"}), "act",
-                     code_general), self._ask)
+                            "your next message, so end your turn after asking.", s({"question": "string"}), "act"),
+            self._ask)
         reg(ToolSpec("react", "Add an emoji reaction to the message you are answering.", s({"emoji": "string"}),
-                     "act", code_general), self._react)
+                     "act"), self._react)
         reg(ToolSpec("post_files", "Post files from your worktree (screenshots, videos, reports) to this "
                                    "conversation's Slack thread, with one line of text.",
-                     s({"paths": "array", "text": "string"}), "act", code_general), self._post_files)
+                     s({"paths": "array", "text": "string"}), "act"), self._post_files)
         reg(ToolSpec("track_task", "Record that this conversation is now a piece of work (for status, Linear and "
                                    "metrics). kind: feature, bug or chore.",
-                     s({"project": "string", "title": "string", "kind": "string"}), "act", code_general),
-            self._track_task)
+                     s({"project": "string", "title": "string", "kind": "string"}), "act"), self._track_task)
         reg(ToolSpec("finish_task", "Mark this conversation's task done when it ends without a PR.",
-                     s({"outcome": "string"}), "act", code_general), self._finish_task)
+                     s({"outcome": "string"}), "act"), self._finish_task)
         reg(ToolSpec("start_task", "Start a separate session in a project's coding sandbox for a piece of work, "
                                    "with a self-contained brief. Use it to hand work from a DM to a project, or to "
                                    "split one request into parallel tasks.",
-                     s({"project": "string", "title": "string", "kind": "string", "brief": "string"}), "act",
-                     code_general), self._start_task)
+                     s({"project": "string", "title": "string", "kind": "string", "brief": "string"}), "act"),
+            self._start_task)
         reg(ToolSpec("status", "What is running and queued, and whether the agent is paused.", s(), "read"),
             self._status)
         reg(ToolSpec("list_tasks", "List tasks, optionally by status or project.",

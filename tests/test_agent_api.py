@@ -62,7 +62,7 @@ async def _client(conn, queue, parts, gate_ok=True):
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(gate_ok), tools=parts.router,
                          context_for=lambda item_id: SimpleNamespace(work_item_id=item_id, task_id=None, project=None),
-                         bundles=lambda profile, project: ("v1", f"{profile}:{project}".encode()),
+                         bundles=lambda: ("v1", b"bundle-bytes"),
                          on_result=on_result, on_files=on_files, pull_wait_s=0.2,
                          runs_dir=parts.runs)
     client = TestClient(TestServer(app))
@@ -196,10 +196,10 @@ async def test_files_upload_and_limit(api, parts):
 
 async def test_bundle_needs_sandbox_token(api, conn):
     tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=3600)
-    r = await api.get("/agent/bundle?profile=code&project=p", headers=bearer(tok))
-    assert r.status == 200 and r.headers["X-Bundle-Version"] == "v1" and await r.read() == b"code:p"
+    r = await api.get("/agent/bundle", headers=bearer(tok))
+    assert r.status == 200 and r.headers["X-Bundle-Version"] == "v1" and await r.read() == b"bundle-bytes"
     _, stok = await pull_one(api, "code-p")
-    assert (await api.get("/agent/bundle?profile=code&project=p", headers=bearer(stok))).status == 401
+    assert (await api.get("/agent/bundle", headers=bearer(stok))).status == 401
 
 
 async def test_health_is_open(api):
@@ -227,7 +227,7 @@ async def test_idle_pull_never_asks_the_gate(conn, queue, parts):
 
     app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -249,7 +249,7 @@ async def test_queued_turn_consults_the_gate(conn, queue, parts):
 
     app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -270,7 +270,7 @@ async def test_result_survives_a_failing_callback(conn, queue, parts):
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=parts.router,
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=boom, on_files=noop, pull_wait_s=0.2)
+                         bundles=lambda: ("v", b""), on_result=boom, on_files=noop, pull_wait_s=0.2)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -291,7 +291,7 @@ async def test_pull_records_session_started(conn):
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=FakeRouter(),
                          context_for=lambda i: SimpleNamespace(task_id="T-1", project="sample"),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
+                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -317,7 +317,7 @@ async def test_chore_claim_logs_work_started(conn):
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=FakeRouter(),
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
+                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -352,7 +352,7 @@ async def test_ten_conversations_run_at_once_eleventh_waits(conn, parts):
 
     app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -379,7 +379,7 @@ async def test_second_turn_of_running_conversation_waits(conn, parts):
 
     app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
+                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -407,7 +407,7 @@ async def test_pull_reaps_an_expired_claim_blocking_its_conversation(conn, parts
 
     app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
                          context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:

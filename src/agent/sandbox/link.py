@@ -55,8 +55,6 @@ class CoreLink:
     async def result(self, tok: str, result: dict) -> None:
         await self._post("/agent/result", tok, {"result": result})
 
-    async def bundle(self, profile: str, project: str | None) -> tuple[str, bytes]:
-        params = {"profile": profile, **({"project": project} if project else {})}
-        resp = self._check(await self.http.get(f"{self.base}/agent/bundle", headers=self._auth(self.sandbox_token),
-                                               params=params))
+    async def bundle(self) -> tuple[str, bytes]:
+        resp = self._check(await self.http.get(f"{self.base}/agent/bundle", headers=self._auth(self.sandbox_token)))
         return resp.headers["X-Bundle-Version"], resp.content

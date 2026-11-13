@@ -50,8 +50,7 @@ def app(tmp_path):
 
 
 def manifest_names(app, sandbox, tier="admin"):
-    ctx = ToolContext(work_item_id="W", conversation_id=None, sandbox=sandbox,
-                      profile=sandbox.split("-")[0] if sandbox != "general" else "general", project="sample",
+    ctx = ToolContext(work_item_id="W", conversation_id=None, sandbox=sandbox, project="sample",
                       actor="parthib", tier=tier, unattended=False, task_id=None, channel="C", thread_ts="1")
     return {t["name"] for t in app.router.manifest(ctx)}
 
@@ -78,9 +77,9 @@ async def test_dm_turn_end_to_end(app, api):
     tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
     body = await (await api.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json()
     item, session = body["work_item"], body["session_token"]
-    # A DM has no project, but open mode's one queue maps to the "code" profile (today's full tool set,
-    # open_pr included) for every session on it, so it isn't stuck with "general"'s narrower set.
-    assert item["payload"]["profile"] == "code" and "status" in {t["name"] for t in body["tools"]}
+    # A DM has no project, but with profiles gone every session gets the full tool set by tier alone, so it
+    # isn't missing anything a project-bound session would have.
+    assert "status" in {t["name"] for t in body["tools"]}
     r = await api.post("/agent/tool", json={"name": "status", "args": {}}, headers=bearer(session))
     assert "running: 1" in (await r.json())["text"]
     await api.post("/agent/result", json={"result": {"outcome": "done", "text": "Nothing else is running.",

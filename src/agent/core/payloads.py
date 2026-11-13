@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from agent.core.agent_tools import conversation_scopes, profile_of
+from agent.core.agent_tools import conversation_scopes
 from agent.gitutil import branch_name
 from agent.memory.briefing import build_briefing
 from agent.memory.store import MemoryStore
@@ -30,9 +30,9 @@ class Payloads:
         text = (custom if custom.is_file() else DEFAULT_SYSTEM).read_text()
         return text.replace("{name}", self.config.name).strip()
 
-    def _base(self, *, text: str, actor: str | None, unattended: bool, profile: str, model: str,
+    def _base(self, *, text: str, actor: str | None, unattended: bool, model: str,
               system_parts: list[str]) -> dict:
-        return {"text": text, "actor": actor, "unattended": unattended, "profile": profile, "model": model,
+        return {"text": text, "actor": actor, "unattended": unattended, "model": model,
                 "system_prompt": "\n\n".join(p for p in system_parts if p),
                 "max_turns": self.config.limits.max_turns, "timeout_s": self.config.limits.task_minutes * 60,
                 "resume_session_id": None, "worktree": None, "test_secrets": {},
@@ -44,15 +44,15 @@ class Payloads:
         return build_briefing(self.memory, scopes, text, self.config.memory_budget.briefing.get(kind, 1000)).text
 
     def turn(self, convo, text: str, actor: str | None, *, unattended: bool = False) -> dict:
-        profile, project = profile_of(convo["sandbox"]), convo["project"]
+        project = convo["project"]
         scopes = conversation_scopes(convo["channel"], project, actor, self.packs)
-        payload = self._base(text=text, actor=actor, unattended=unattended, profile=profile,
+        payload = self._base(text=text, actor=actor, unattended=unattended,
                              model=convo["model"] or self.config.models.default,
                              system_parts=[self.system_prompt(), self.persona_text,
                                            self._briefing(scopes, text, "session")])
         payload.update(resume_session_id=convo["session_id"], conversation_id=convo["id"], project=project)
         pack = self.packs.get(project or "")
-        if profile == "code" and pack is not None:
+        if pack is not None:
             p = pack.project
             title = text.strip().splitlines()[0] if text.strip() else "work"
             payload["worktree"] = {"project": p.name, "default_branch": p.default_branch,
@@ -62,7 +62,7 @@ class Payloads:
         return payload
 
     def chore(self, prompt: str, schema: dict) -> dict:
-        payload = self._base(text=prompt, actor=None, unattended=True, profile="general",
+        payload = self._base(text=prompt, actor=None, unattended=True,
                              model=self.config.models.chores, system_parts=[MEMORY_PROMPT.read_text().strip()])
         payload.update(max_turns=10, timeout_s=300, structured=schema)
         return payload

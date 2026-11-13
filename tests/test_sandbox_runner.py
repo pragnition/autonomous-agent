@@ -10,7 +10,7 @@ import pytest
 from agent.runner.base import RunResult
 from agent.sandbox.link import CoreLink, SessionRevoked
 from agent.sandbox.remote_tools import remote_sdk_tools
-from agent.sandbox.runner import SandboxRunner, SessionUsers
+from agent.sandbox.runner import SandboxRunner
 from agent.sandbox.worktrees import Worktrees
 
 
@@ -41,7 +41,8 @@ def worktrees(tmp_path, server):
 def bundle_bytes() -> bytes:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w:gz") as tar:
-        for name in ("system.md", "plugins/core/.claude-plugin/plugin.json", "plugins/pack/.claude-plugin/plugin.json"):
+        for name in ("plugins/core/.claude-plugin/plugin.json", "plugins/packs/a/.claude-plugin/plugin.json",
+                     "plugins/packs/b/.claude-plugin/plugin.json"):
             data = b"{}"
             info = tarfile.TarInfo(name)
             info.size = len(data)
@@ -75,7 +76,7 @@ class FakeLink:
     async def result(self, tok, result):
         self.results.append(result)
 
-    async def bundle(self, profile, project):
+    async def bundle(self):
         return "v1", bundle_bytes()
 
 
@@ -96,8 +97,8 @@ class FakeClaude:
         self._stop.set()
 
 
-def item(profile="code", conversation_id="V-1", **payload_over):
-    payload = {"text": "fix the export", "actor": "bob", "unattended": False, "profile": profile,
+def item(conversation_id="V-1", **payload_over):
+    payload = {"text": "fix the export", "actor": "bob", "unattended": False,
                "model": "claude-opus-5-5", "system_prompt": "SYS", "max_turns": 400, "timeout_s": 5400,
                "resume_session_id": None, "test_secrets": {"SAMPLE_TEST_USER": "tester@example.com"},
                "project": "sample",
@@ -107,8 +108,8 @@ def item(profile="code", conversation_id="V-1", **payload_over):
     return {"id": f"W-{conversation_id}", "conversation_id": conversation_id, "kind": "turn", "payload": payload}
 
 
-def make_runner(tmp_path, worktrees, link, claude, profile="code"):
-    return SandboxRunner(link, worktrees, SessionUsers(), claude, sandbox=f"{profile}-sample", profile=profile,
+def make_runner(tmp_path, worktrees, link, claude, sandbox="sample"):
+    return SandboxRunner(link, worktrees, claude, sandbox=sandbox,
                          bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
                          scratch_root=tmp_path / "scratch", heartbeat_s=0.05)
 
@@ -121,9 +122,44 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
     assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
     assert spec.env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert git(spec.cwd, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
-    assert [p.name for p in spec.plugins] == ["core", "pack"] and spec.system_prompt == "SYS"
+    assert [p.name for p in spec.plugins] == ["core", "a", "b"] and spec.system_prompt == "SYS"
     assert link.results[-1]["text"] == "all done" and link.results[-1]["session_id"] == "sess-1"
     assert link.results[-1]["outcome"] == "done" and link.results[-1]["cost_usd_est"] == 0.5
+
+
+async def test_runner_loads_core_and_all_pack_plugins(tmp_path, worktrees):
+    runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
+    plugins = await runner._bundle()
+    assert [p.name for p in plugins] == ["core", "a", "b"]
+
+
+async def test_runner_runs_more_than_eight_conversations(tmp_path, worktrees):
+    """Open mode has no SessionUsers (an OS user per conversation, capped at 8): handle() must let more than 8
+    conversations run their Claude session at once. 10 fake items block inside claude.run() until released, and
+    all 10 must be in flight together — the old SessionUsers(8) would raise on the 9th concurrent acquire()."""
+    n = 10
+    entered: list[str] = []
+    all_in = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingClaude:
+        async def run(self, spec):
+            entered.append(spec.run_id)
+            if len(entered) == n:
+                all_in.set()
+            await release.wait()
+            return RunResult(spec.run_id, "sess", "done", summary="ok")
+
+        async def interrupt(self, run_id):
+            release.set()
+
+    runner = make_runner(tmp_path, worktrees, FakeLink(), BlockingClaude())
+    items = [item(conversation_id=f"V-{i}", worktree=None) for i in range(n)]
+    handles = asyncio.gather(*(runner.handle(it, f"tok-{i}", []) for i, it in enumerate(items)))
+    await asyncio.wait_for(all_in.wait(), 2)
+    assert len(entered) == n
+    release.set()
+    await asyncio.wait_for(handles, 2)
 
 
 async def test_setup_runs_once_per_worktree(tmp_path, worktrees):
@@ -144,15 +180,6 @@ async def test_revoked_token_interrupts(tmp_path, worktrees):
     claude = FakeClaude(hang=True)
     await make_runner(tmp_path, worktrees, FakeLink(revoked=True), claude).handle(item(), "tok", [])
     assert claude.interrupted == ["W-V-1"]
-
-
-def test_session_users_sticky_and_distinct():
-    users = SessionUsers(("s1", "s2"))
-    assert users.acquire("a") == "s1" and users.acquire("a") == "s1" and users.acquire("b") == "s2"
-    with pytest.raises(RuntimeError):
-        users.acquire("c")
-    users.release("a")
-    assert users.acquire("c") == "s1"
 
 
 MANIFEST = [{"name": "open_pr", "description": "d", "input_schema": {"type": "object", "properties": {}}},
@@ -229,7 +256,7 @@ async def test_structured_submit_captured(tmp_path, worktrees):
     claude = FakeClaude()
     payload = {"structured": {"type": "object", "properties": {"episode": {"type": "object"}}}, "worktree": None,
                "test_secrets": {}}
-    runner = make_runner(tmp_path, worktrees, FakeLink(), claude, profile="general")
+    runner = make_runner(tmp_path, worktrees, FakeLink(), claude)
     original = claude.run
 
     async def run_and_submit(spec):
@@ -239,7 +266,7 @@ async def test_structured_submit_captured(tmp_path, worktrees):
 
     claude.run = run_and_submit
     link = runner.link
-    await runner.handle(item("general", **payload), "tok", [])
+    await runner.handle(item(**payload), "tok", [])
     assert link.results[-1]["structured"] == {"episode": {"summary": "s"}}
 
 
@@ -346,7 +373,7 @@ LINEAR_MCP = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
 
 
 def env_runner(tmp_path, worktrees, claude, env_file):
-    return SandboxRunner(FakeLink(), worktrees, SessionUsers(), claude, sandbox="general", profile="general",
+    return SandboxRunner(FakeLink(), worktrees, claude, sandbox="general",
                          bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
                          scratch_root=tmp_path / "scratch", heartbeat_s=0.05, env_files=[env_file])
 
@@ -356,7 +383,7 @@ async def test_mcp_headers_use_current_linear_token(tmp_path, worktrees):
     runner = env_runner(tmp_path, worktrees, claude, env_file)
     for n, token in enumerate(("tok-1", "tok-2")):
         env_file.write_text(f"LINEAR_APP_TOKEN={token}\n")
-        await runner.handle(item("general", conversation_id=f"V-{n}", worktree=None, mcp=LINEAR_MCP), "tok", [])
+        await runner.handle(item(conversation_id=f"V-{n}", worktree=None, mcp=LINEAR_MCP), "tok", [])
     assert [s.mcp_servers["linear"]["headers"]["Authorization"] for s in claude.specs] == \
         ["Bearer tok-1", "Bearer tok-2"]
     assert claude.specs[1].mcp_servers["linear"]["url"] == "https://mcp.linear.app/mcp"
@@ -366,6 +393,6 @@ async def test_mcp_headers_use_current_linear_token(tmp_path, worktrees):
 async def test_unset_variable_drops_the_server(tmp_path, worktrees, caplog):
     claude = FakeClaude()
     await env_runner(tmp_path, worktrees, claude, tmp_path / "missing.env").handle(
-        item("general", worktree=None, mcp=LINEAR_MCP), "tok", [])
+        item(worktree=None, mcp=LINEAR_MCP), "tok", [])
     assert claude.specs[0].mcp_servers == {}
     assert "LINEAR_APP_TOKEN" in caplog.text

@@ -98,4 +98,4 @@ def register_pr_tools(router: AgentToolRouter, *, githost, writer, write_token: 
         "open_pr", "Open (or update) a draft pull request for your work. The project's checks run first on your "
                    "latest commit and must pass; your branch is pushed for you. A new feature needs the screenshots "
                    "of your browser test posted first (post_files), or no_ui: why nothing a user sees changed.",
-        schema({"title": "string", "body": "string"}, {"no_ui": "string"}), "act", ("code",)), open_pr)
+        schema({"title": "string", "body": "string"}, {"no_ui": "string"}), "act"), open_pr)

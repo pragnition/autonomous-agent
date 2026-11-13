@@ -22,7 +22,7 @@ def router(conn, tmp_path):
                            secret_values=["SUPERSECRETVALUE"])
 
 
-def ctx_for(router, *, sandbox="code-sample", actor="ann", task_id=None, unattended=False, channel="C1"):
+def ctx_for(router, *, sandbox=AGENT_QUEUE, actor="ann", task_id=None, unattended=False, channel="C1"):
     cid = add_conversation(router.conn, sandbox=sandbox, task_id=task_id, channel=channel)
     return router.context_for(add_item(router.queue, cid, sandbox, actor=actor, unattended=unattended))
 
@@ -41,13 +41,8 @@ def ctx_member(router):
 
 
 @pytest.fixture
-def ctx_debug(router):
-    return ctx_for(router, sandbox="debug-sample")
-
-
-@pytest.fixture
 def ctx_general(router):
-    return ctx_for(router, sandbox="general", channel="D-ann")
+    return ctx_for(router, channel="D-ann")
 
 
 @pytest.fixture
@@ -75,24 +70,18 @@ async def test_tiers_from_actor(router):
     assert ctx_for(router, actor="stranger").tier == "read"
 
 
-async def test_context_fields(router, ctx_debug):
-    assert (ctx_debug.profile, ctx_debug.project, ctx_debug.sandbox) == ("debug", "sample", "debug-sample")
-    assert (ctx_debug.channel, ctx_debug.thread_ts) == ("C1", "1.0")
+async def test_context_fields(router, ctx_member):
+    assert (ctx_member.project, ctx_member.sandbox) == ("sample", AGENT_QUEUE)
+    assert (ctx_member.channel, ctx_member.thread_ts) == ("C1", "1.0")
 
 
-async def test_agent_queue_gets_the_code_profile(router):
-    """Open mode's one queue (AGENT_QUEUE) maps to the "code" profile, so a session on it keeps today's tool
-    set (a "code"/"general" tool like track_task included), whether or not it has a project. Without this
-    mapping, sandbox "agent" would match neither "code" nor "general" and the tool would disappear."""
-    ctx = ctx_for(router, sandbox=AGENT_QUEUE)
-    assert ctx.profile == "code"
-    assert "track_task" in {t["name"] for t in router.manifest(ctx)}
-
-
-async def test_manifest_filters_by_profile(router, ctx_debug):
-    names = {t["name"] for t in router.manifest(ctx_debug)}
-    assert "track_task" not in names and "status" in names
-    assert all({"name", "description", "input_schema"} <= set(t) for t in router.manifest(ctx_debug))
+async def test_manifest_has_no_sandbox_filtering(router):
+    """Every tool is offered by tier only now (no profiles): an arbitrary sandbox label still gets the full
+    act-tier tool set, track_task included."""
+    ctx = ctx_for(router, sandbox="anything-goes")
+    names = {t["name"] for t in router.manifest(ctx)}
+    assert "track_task" in names
+    assert all({"name", "description", "input_schema"} <= set(t) for t in router.manifest(ctx))
 
 
 async def test_manifest_filters_by_tier(router, ctx_member, ctx_with_task):
@@ -199,12 +188,7 @@ async def test_memory_tools(router, ctx_member):
     assert (await router.call(ctx_member, "read_memory", {"id": "missing"})).text == "not found"
 
 
-async def test_debug_sessions_cannot_post_to_slack(router, ctx_debug):
-    names = {t["name"] for t in router.manifest(ctx_debug)}
-    assert not ({"post_update", "ask", "react", "post_files"} & names)
-
-
-async def test_post_files_is_in_the_manifest_for_code(router, ctx_member):
+async def test_post_files_is_in_the_manifest(router, ctx_member):
     assert "post_files" in {t["name"] for t in router.manifest(ctx_member)}
     assert "runner" in (await router.call(ctx_member, "post_files", {"paths": [], "text": ""})).text
 

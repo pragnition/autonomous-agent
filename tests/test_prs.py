@@ -3,7 +3,7 @@ import pytest
 from agent import db, events, tasks
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.prs import pr_body, register_pr_tools
-from agent.core.sessions import WorkQueue
+from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
@@ -117,11 +117,14 @@ async def test_reuses_open_pr(conn, tmp_path):
     assert writer.drafts == [] and len(githost.pushes) == 1 and "#7" in r.text
 
 
-async def test_open_pr_only_in_code_profile(conn, tmp_path):
+async def test_manifest_includes_open_pr_for_unbound_dm(conn, tmp_path):
+    """Every tool is offered by tier only now: a DM with no project still lists open_pr, start_task and
+    track_task (open_pr itself refuses to run without a project; it just isn't hidden from the manifest)."""
     router, _, _, _ = build(conn, tmp_path)
-    cid = add_conversation(conn, sandbox="debug-sample", thread_ts="3.0")
-    ctx = router.context_for(add_item(router.queue, cid, "debug-sample"))
-    assert (await router.call(ctx, "open_pr", pr_args())).text == "not available here"
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts="3.0")
+    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE, actor="bob"))
+    names = {t["name"] for t in router.manifest(ctx)}
+    assert {"open_pr", "start_task", "track_task"} <= names
 
 
 def test_pr_body_format():

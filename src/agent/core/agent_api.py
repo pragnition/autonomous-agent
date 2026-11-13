@@ -35,7 +35,7 @@ def _token(request: web.Request) -> str | None:
 
 def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    context_for: Callable[[str], object],
-                   bundles: Callable[[str, str | None], tuple[str, bytes]],
+                   bundles: Callable[[], tuple[str, bytes]],
                    on_result: Callable[[WorkItem, dict], Awaitable[None]],
                    on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[bool | None]],
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
@@ -127,7 +127,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
 
     async def bundle(request: web.Request) -> web.Response:
         resolved(request, "sandbox")
-        version, data = bundles(request.query.get("profile", ""), request.query.get("project") or None)
+        version, data = bundles()
         return web.Response(body=data, content_type="application/gzip", headers={"X-Bundle-Version": version})
 
     app = web.Application(client_max_size=MAX_FILES * MAX_FILE_BYTES + 1024 * 1024)

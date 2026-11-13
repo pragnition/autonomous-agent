@@ -114,7 +114,7 @@ INSTALL_DM_KEY = "linear_install_dm"
 
 
 def register_linear_tools(router, auth: LinearAppAuth) -> None:
-    from agent.core.agent_tools import ALL_PROFILES, ToolContext, ToolReply, ToolSpec, schema
+    from agent.core.agent_tools import ToolContext, ToolReply, ToolSpec, schema
 
     async def linear_install(ctx: ToolContext, args: dict) -> ToolReply:
         person = router.config.people.get(ctx.actor or "")
@@ -128,5 +128,5 @@ def register_linear_tools(router, auth: LinearAppAuth) -> None:
         return ToolReply(f"Sent the Linear install link to {person.key} by DM.")
 
     router.register(ToolSpec("linear_install", "Send yourself the link that installs the agent as a Linear app, so "
-                                               "people can delegate issues to it.", schema(), "admin", ALL_PROFILES),
+                                               "people can delegate issues to it.", schema(), "admin"),
                     linear_install)

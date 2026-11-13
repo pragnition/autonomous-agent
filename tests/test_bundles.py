@@ -12,13 +12,17 @@ SKILL_DIRS = [ROOT / "src" / "agent" / "plugins" / "core" / "skills",
               ROOT / "examples" / "pack-templates" / "chilliclaw" / "plugin" / "skills"]
 
 
+def write_pack(tmp_path, name: str, skill: str) -> None:
+    plugin = tmp_path / "packs" / name / "plugin"
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": name}))
+    (plugin / "skills" / skill).mkdir(parents=True)
+    (plugin / "skills" / skill / "SKILL.md").write_text(f"---\nname: {skill}\n---\n")
+
+
 @pytest.fixture
 def config_dir(tmp_path):
-    plugin = tmp_path / "packs" / "sample" / "plugin"
-    (plugin / ".claude-plugin").mkdir(parents=True)
-    (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "sample"}))
-    (plugin / "skills" / "sample-debugging").mkdir(parents=True)
-    (plugin / "skills" / "sample-debugging" / "SKILL.md").write_text("---\nname: sample-debugging\n---\n")
+    write_pack(tmp_path, "sample", "sample-debugging")
     return tmp_path
 
 
@@ -27,31 +31,36 @@ def names(data: bytes) -> set[str]:
         return set(tar.getnames())
 
 
-def test_general_bundle_has_no_pack_plugin(config_dir):
-    _, data = build_bundle(config_dir, "general", None)
-    files = names(data)
-    assert "plugins/core/skills/debugging/SKILL.md" in files
-    assert not any(f.startswith("plugins/pack") for f in files)
-
-
-def test_code_bundle_has_both_plugins(config_dir):
-    _, data = build_bundle(config_dir, "code", "sample")
+def test_bundle_has_core_and_pack_plugins(config_dir):
+    _, data = build_bundle(config_dir)
     files = names(data)
     assert "plugins/core/.claude-plugin/plugin.json" in files
-    assert "plugins/pack/skills/sample-debugging/SKILL.md" in files
+    assert "plugins/core/skills/debugging/SKILL.md" in files
+    assert "plugins/packs/sample/skills/sample-debugging/SKILL.md" in files
+
+
+def test_bundle_has_every_pack_plugin(tmp_path):
+    write_pack(tmp_path, "a", "a-debugging")
+    write_pack(tmp_path, "b", "b-debugging")
+    _, data = build_bundle(tmp_path)
+    files = names(data)
+    assert "plugins/packs/a/skills/a-debugging/SKILL.md" in files
+    assert "plugins/packs/b/skills/b-debugging/SKILL.md" in files
+
+
+def test_no_packs_dir_has_only_core(tmp_path):
+    files = names(build_bundle(tmp_path)[1])
+    assert "plugins/core/skills/debugging/SKILL.md" in files
+    assert not any(f.startswith("plugins/packs") for f in files)
 
 
 def test_version_stable_and_changes_with_pack_content(config_dir):
-    v1, d1 = build_bundle(config_dir, "code", "sample")
-    v2, d2 = build_bundle(config_dir, "code", "sample")
+    v1, d1 = build_bundle(config_dir)
+    v2, d2 = build_bundle(config_dir)
     assert v1 == v2 and d1 == d2
     (config_dir / "packs" / "sample" / "plugin" / "skills" / "sample-debugging" / "SKILL.md").write_text(
         "---\nname: sample-debugging\n---\nchanged\n")
-    assert build_bundle(config_dir, "code", "sample")[0] != v1
-
-
-def test_unknown_project_has_no_pack_plugin(config_dir):
-    assert not any(f.startswith("plugins/pack") for f in names(build_bundle(config_dir, "code", "nope")[1]))
+    assert build_bundle(config_dir)[0] != v1
 
 
 @pytest.mark.parametrize("skill", [p for d in SKILL_DIRS for p in sorted(d.glob("*/SKILL.md"))],

@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import PurePath
 
-from agent.core.agent_tools import ALL_PROFILES, AgentToolRouter, ToolContext, ToolReply, ToolSpec, schema
+from agent.core.agent_tools import AgentToolRouter, ToolContext, ToolReply, ToolSpec, schema
 
 LOGIN_TIMEOUT_S = 15 * 60
 _URL = re.compile(r"https://\S+")
@@ -86,5 +86,5 @@ def register_login_tools(router: AgentToolRouter, login: DeviceCodeLogin) -> Non
             return ToolReply(await login.start(ctx, cli))
 
         router.register(ToolSpec(tool, f"Log {PurePath(rules.command).name} in with a device code; the code goes "
-                                        "to you by DM.", schema(), "admin", ALL_PROFILES), handler)
+                                        "to you by DM.", schema(), "admin"), handler)
 
