@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,14 @@ def test_defaults(tmp_path):
     assert (cfg.sandbox.idle_stop_minutes, cfg.sandbox.rebuild_every_days) == (30, 7)
     assert set(cfg.memory_budget.briefing) >= {"session", "production", "ambient"}
     assert cfg.cli == {}
+
+
+def test_github_login_defaults_to_name(tmp_path):
+    assert agent(tmp_path).github == "chilli"
+
+
+def test_github_login_can_differ_from_name(tmp_path):
+    assert agent(tmp_path, 'github = "chilli-bot"\n' + MIN_AGENT).github == "chilli-bot"
 
 
 def test_example_config_loads():
@@ -196,3 +205,64 @@ def test_pack_unknown_sandbox_profile(tmp_path):
 def test_pack_scrub_patterns_must_compile(tmp_path):
     with pytest.raises(ConfigError, match="scrub"):
         load_pack(write_pack(tmp_path, '[scrub]\npatterns = ["C-(\\\\d"]'), agent_cfg())
+
+
+def test_isolation_defaults_to_open(tmp_path):
+    cfg = agent(tmp_path)
+    assert cfg.sandbox.isolation == "open" and cfg.sandbox.agent_uid == 1001
+
+
+def test_isolation_rejects_unknown(tmp_path):
+    probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, '[sandbox]\nisolation = "vm"')))
+    assert any("open" in p and "sandboxes" in p for p in probs)
+
+
+@pytest.mark.parametrize("value", ["0", '"x"'])
+def test_agent_uid_must_be_positive_int(tmp_path, value):
+    probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, f"[sandbox]\nagent_uid = {value}")))
+    assert any("agent_uid" in p for p in probs)
+
+
+def test_observability_settings(tmp_path):
+    cfg = load_agent_config(write_agent(tmp_path, '[observability]\ndigest_channel = "#agent-ops"\ndigest_time = "08:30"'))
+    assert (cfg.observability.digest_channel, cfg.observability.digest_time) == ("#agent-ops", "08:30")
+    assert agent(tmp_path).observability.digest_time == "09:00"
+    probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, '[observability]\ndigest_time = "8am"')))
+    assert any("HH:MM" in p for p in probs)
+
+
+def test_example_config_is_open():
+    cfg = load_agent_config(EXAMPLES / "agent.toml")
+    assert cfg.sandbox.isolation == "open"
+    assert "observability" in tomllib.loads((EXAMPLES / "agent.toml").read_text())
+
+
+def test_linear_public_url(tmp_path):
+    cfg = load_agent_config(write_agent(tmp_path, '[linear]\npublic_url = "https://jensen.example.ts.net"'))
+    assert cfg.linear.public_url == "https://jensen.example.ts.net"
+    assert agent(tmp_path).linear.public_url == ""
+    probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, '[linear]\npublic_url = "http://x"')))
+    assert any("public_url" in p for p in probs)
+
+
+def test_mcp_servers(tmp_path):
+    cfg = load_agent_config(write_agent(tmp_path, '[mcp.linear]\ntype = "http"\nurl = "https://mcp.linear.app/mcp"\n'
+                                                  'headers = { Authorization = "Bearer ${T}" }'))
+    server = cfg.mcp["linear"]
+    assert (server.type, server.url, server.headers) == ("http", "https://mcp.linear.app/mcp",
+                                                         {"Authorization": "Bearer ${T}"})
+    for bad in ('type = "stdio"\nurl = "https://x"', 'type = "http"\nurl = "http://x"',
+                'type = "http"\nurl = "https://x"\nheaders = { A = 1 }'):
+        probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, f"[mcp.x]\n{bad}")))
+        assert any("mcp.x" in p for p in probs), bad
+
+
+def test_example_config_has_linear_mcp():
+    cfg = load_agent_config(EXAMPLES / "agent.toml")
+    assert cfg.mcp["linear"].headers["Authorization"] == "Bearer ${LINEAR_APP_TOKEN}"
+
+
+def test_person_github_is_optional(tmp_path):
+    path = tmp_path / "agent.toml"
+    path.write_text('name = "agent"\n[people.ann]\nslack = "U1"\nlinear = "ann@example.com"\n')
+    assert load_agent_config(path).people["ann"].github == ""

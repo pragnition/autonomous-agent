@@ -1,6 +1,7 @@
 """Client for the host's Claude account proxy (claude_proxy/), reached through this service's relay.
 
-Only the answered-locally /proxy/ API is used here: usage per account (by code name) and a session's pin.
+Only the answered-locally /proxy/ API is used here: usage per account (by code name), a session's pin, and for the
+dashboard the raw usage reply and the 5-minute perf rows.
 """
 
 from __future__ import annotations
@@ -59,10 +60,18 @@ class ProxyClient:
             raise ProxyUnavailable(f"proxy answered {resp.status_code}")
         return resp
 
-    async def usage(self) -> Usage:
+    async def raw_usage(self) -> dict:
         resp = await self._get("/proxy/usage")
         resp.raise_for_status()
-        data = resp.json()
+        return resp.json()
+
+    async def perf(self, hours: float) -> list[dict]:
+        resp = await self._get("/proxy/perf", params={"hours": f"{hours:g}"})
+        resp.raise_for_status()
+        return resp.json().get("rows") or []
+
+    async def usage(self) -> Usage:
+        data = await self.raw_usage()
         accounts = {
             code: AccountUsage(code=code, status=rec.get("status", ""), rank=rec.get("rank"),
                                verified=bool(rec.get("verified")), util_5h=_util(rec, "5h"),

@@ -1,3 +1,5 @@
+import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -6,7 +8,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from agent.core.agent_tools import ToolContext
-from agent.core.app import CoreApp
+from agent.core.app import CoreApp, _sandboxd_for
 from agent.core.sessions import mint_token, resolve_token
 from agent.proxy import AccountUsage, Usage
 from agent_fixtures import FakeSlack
@@ -36,12 +38,35 @@ class Writer:
         return None
 
 
-@pytest.fixture
-def app(tmp_path):
+def make_app(tmp_path, isolation="open"):
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
+    toml = config / "agent.toml"
+    toml.write_text(toml.read_text().replace('isolation = "open"', f'isolation = "{isolation}"'))
     return CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={"SANDBOXD_TOKEN": "sbxd"},
                    slack=FakeSlack(), proxy=Proxy(), sandboxd=Sandboxd(), github_writer=Writer(), bot_user_id="UBOT")
+
+
+def test_pr_stats_knows_the_agent_by_its_github_login(tmp_path):
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    toml = config / "agent.toml"
+    toml.write_text(toml.read_text().replace('name = "chilli"', 'name = "chilli"\ngithub = "chilli-bot"', 1))
+    app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={}, slack=FakeSlack(), proxy=Proxy(),
+                  github_reader=object())
+    assert app.pr_stats.agent_login == "chilli-bot"
+
+
+@pytest.fixture
+def app(tmp_path):
+    return make_app(tmp_path)
+
+
+def manifest_names(app, sandbox, tier="admin"):
+    ctx = ToolContext(work_item_id="W", conversation_id=None, sandbox=sandbox,
+                      profile=sandbox.split("-")[0] if sandbox != "general" else "general", project="sample",
+                      actor="parthib", tier=tier, unattended=False, task_id=None, channel="C", thread_ts="1")
+    return {t["name"] for t in app.router.manifest(ctx)}
 
 
 @pytest.fixture
@@ -77,14 +102,9 @@ async def test_dm_turn_end_to_end(app, api):
     assert tuple(run) == ("general", "turn", 2, "done")
 
 
-async def test_tools_by_profile(app):
-    def names(sandbox):
-        ctx = ToolContext(work_item_id="W", conversation_id=None, sandbox=sandbox,
-                          profile=sandbox.split("-")[0] if sandbox != "general" else "general", project="sample",
-                          actor="parthib", tier="admin", unattended=False, task_id=None, channel="C", thread_ts="1")
-        return {t["name"] for t in app.router.manifest(ctx)}
-
-    code, debug = names("code-sample"), names("debug-sample")
+async def test_sandboxes_mode_keeps_v2_tools(tmp_path):
+    app = make_app(tmp_path, "sandboxes")
+    code, debug = manifest_names(app, "code-sample"), manifest_names(app, "debug-sample")
     assert {"open_pr", "ask_production", "track_task", "az_login", "rebuild_sandbox", "sandbox_exec"} <= code
     assert "az" not in code
     assert {"az", "az_login"} <= debug and not ({"open_pr", "ask_production"} & debug)
@@ -158,3 +178,97 @@ async def test_ensure_is_not_repeated_while_booting_but_silent_runners_are_reens
     app._ensured["code-sample"] -= 1000
     await app.ensure_sandboxes()
     assert len(app.sandboxd.ensured) == 2
+
+
+async def test_open_mode_tools(app):
+    member = manifest_names(app, "code-sample", tier="act")
+    assert {"open_pr", "post_update", "track_task"} <= member
+    assert not ({"ask_production", "az"} & member)
+    assert "az_login" in manifest_names(app, "code-sample", tier="admin")
+
+
+async def test_open_mode_writes_runner_tokens(app):
+    tokens = app.sync_runners()
+    assert json.loads(app.runner_tokens_path.read_text()) == tokens
+    assert sorted(tokens) == ["code-sample", "general"]
+    assert all(resolve_token(app.conn, tok).sandbox == name for name, tok in tokens.items())
+    assert _sandboxd_for(app.config, {}) is None
+    assert _sandboxd_for(make_app(tmp_path_factory_dir(app), "sandboxes").config, {"SANDBOXD_TOKEN": "t"}) is not None
+
+
+def tmp_path_factory_dir(app):
+    return app.data_dir.parent / "other"
+
+
+def test_prepare_agent_dirs_hands_them_to_the_agent(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: calls.append((str(path), uid)))
+    (app.data_dir / "cli" / "azure").mkdir(parents=True)
+    (app.data_dir / "cli" / "azure" / "msal_token_cache.json").write_text("{}")
+    monkeypatch.setattr("agent.core.app.core_is_root", lambda: False)
+    app.prepare_agent_dirs()
+    app.sync_runners()
+    assert calls == [] and (app.data_dir / "runner").is_dir()
+    monkeypatch.setattr("agent.core.app.core_is_root", lambda: True)
+    app.prepare_agent_dirs()
+    app.sync_runners()
+    owned = {path for path, uid in calls if uid == 1001}
+    assert {str(app.data_dir / "cli"), str(app.data_dir / "cli" / "azure"),
+            str(app.data_dir / "cli" / "azure" / "msal_token_cache.json"), str(app.data_dir / "runner")} <= owned
+    assert any(path.endswith("runner-tokens.json.tmp") for path, _ in calls)
+
+
+async def test_digest_uses_local_time_and_posts_once(app):
+    from datetime import UTC, datetime
+    app.config.observability.digest_channel = "#agent-ops"
+    assert not await app.post_digest(datetime(2026, 11, 13, 0, 30, tzinfo=UTC))       # 08:30 in Singapore
+    assert await app.post_digest(datetime(2026, 11, 13, 1, 10, tzinfo=UTC))
+    [post] = [p for p in app.slack.posts if p["channel"] == "#agent-ops"]
+    assert "last 7 days" in post["text"]
+    assert not await app.post_digest(datetime(2026, 11, 13, 2, 0, tzinfo=UTC))
+    again = CoreApp(config_dir=app.config_dir, data_dir=app.data_dir, secrets={}, slack=FakeSlack(), proxy=Proxy())
+    again.config.observability.digest_channel = "#agent-ops"
+    assert not await again.post_digest(datetime(2026, 11, 13, 3, 0, tzinfo=UTC))
+    assert await again.post_digest(datetime(2026, 11, 14, 1, 5, tzinfo=UTC))
+
+
+async def test_no_channel_no_digest(app):
+    from datetime import UTC, datetime
+    assert not await app.post_digest(datetime(2026, 11, 13, 3, 0, tzinfo=UTC))
+    assert not app.slack.posts
+
+
+
+async def test_linear_app_wiring(tmp_path):
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    toml = config / "agent.toml"
+    toml.write_text(toml.read_text().replace('public_url = ""', 'public_url = "https://jensen.example.ts.net"'))
+    secrets = {"LINEAR_CLIENT_ID": "cid", "LINEAR_CLIENT_SECRET": "cs", "LINEAR_WEBHOOK_SECRET": "wh"}
+    app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets=secrets, slack=FakeSlack(), proxy=Proxy())
+    assert app.public_app is not None
+    assert app.linear_auth.redirect_uri == "https://jensen.example.ts.net/linear/oauth/callback"
+    assert app.linear_auth.token_path == app.data_dir / "runner" / "linear.env"
+    assert "linear_install" in manifest_names(app, "general")
+    assert await app.refresh_linear_token() is None          # not installed yet: nothing to refresh
+    assert make_app(tmp_path / "plain").public_app is None
+
+
+async def test_linear_session_event_becomes_a_turn(tmp_path):
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    toml = config / "agent.toml"
+    toml.write_text(toml.read_text().replace('public_url = ""', 'public_url = "https://jensen.example.ts.net"'))
+    app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={"LINEAR_CLIENT_ID": "cid"},
+                  slack=FakeSlack(), proxy=Proxy())
+    acts = []
+
+    async def activity(session_id, type, body):
+        acts.append((session_id, type))
+    app.linear_sessions.client.agent_activity = activity
+    await app.on_linear_event({"type": "AgentSessionEvent", "action": "created", "promptContext": "fix it",
+                               "agentSession": {"id": "S1", "issue": {"id": "i1", "identifier": "SAM-1",
+                                                                      "team": {"key": "SAM"}}}})
+    assert acts == [("S1", "thought")]
+    row = app.conn.execute("SELECT sandbox, payload FROM work_items WHERE kind = 'turn'").fetchone()
+    assert row["sandbox"] == "general" and "fix it" in json.loads(row["payload"])["text"]

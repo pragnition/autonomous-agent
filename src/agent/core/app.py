@@ -10,14 +10,15 @@ import asyncio
 import logging
 import os
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from aiohttp import web
 
 from agent import db
 from agent.config import load_agent_config, load_packs
-from agent.connectors.linear import LinearPoller
+from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
 from agent.core.agent_tools import AgentToolRouter, profile_of
 from agent.core.bundles import build_bundle
@@ -26,10 +27,15 @@ from agent.core.cli_admin import DeviceCodeLogin, Proposals, register_login_tool
 from agent.core.consolidation import ConsolidationService
 from agent.core.conversations import Conversations
 from agent.core.gitserve import GitHost, tokens_auth
+from agent.core.kpis import compute_kpis, format_kpis, register_kpi_tools
+from agent.core.linear_app import INSTALL_DM_KEY, LinearAppAuth, register_linear_tools
+from agent.core.linear_sessions import LinearAgentSessions
+from agent.core.public_api import make_public_app
 from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
 from agent.core.production import register_production_tools
+from agent.core.runner_tokens import SANDBOX_TOKEN_TTL_S, queue_names, sync_runner_tokens
 from agent.core.prs import register_pr_tools
 from agent.core.sandbox_tools import register_sandbox_tools
 from agent.core.sessions import Gate, WorkItem, WorkQueue, mint_token, resolve_token
@@ -39,8 +45,21 @@ from agent.persona import load_persona, render_persona
 from agent.tasks import Task
 
 log = logging.getLogger("agent.core")
-SANDBOX_TOKEN_TTL_S = 60 * 86400
+
+
+def core_is_root() -> bool:
+    return os.geteuid() == 0
+
+
+def _sandboxd_for(config, secrets: dict):
+    """sandboxd runs the Docker Sandboxes of isolation = "sandboxes"; open mode has none."""
+    if config.sandbox.isolation != "sandboxes":
+        return None
+    from agent.clients import SandboxdClient
+    return SandboxdClient(os.environ.get("SANDBOXD_URL", "http://172.30.0.1:28100"), secrets.get("SANDBOXD_TOKEN", ""))
 ENSURE_GRACE_S = 120    # a sandbox takes a while to boot; don't ask twice
+PUBLIC_PORT = 8085                   # Linear's webhook and OAuth callback (Tailscale Funnel), published on 127.0.0.1:18085
+DIGEST_SETTING = "kpi_digest_date"   # the local date of the last digest, so restarts don't post twice
 RUNNER_SILENT_S = 90    # a runner long-polls every 25 s, so this much silence means it is gone
 
 
@@ -111,14 +130,35 @@ class CoreApp:
                               write_token=secrets.get("GITHUB_WRITE_TOKEN", ""))
         if github_reader is not None or linear_client is not None:
             register_tracker_tools(self.router, reader=github_reader, linear=linear_client)
+        register_kpi_tools(self.router)
+        self.linear_auth, self.public_app, self.linear_sessions = None, None, None
+        if self.config.linear.public_url and secrets.get("LINEAR_CLIENT_ID"):
+            self.linear_auth = LinearAppAuth(
+                self.conn, client_id=secrets["LINEAR_CLIENT_ID"], client_secret=secrets.get("LINEAR_CLIENT_SECRET", ""),
+                redirect_uri=f"{self.config.linear.public_url}/linear/oauth/callback",
+                token_path=self.data_dir / "runner" / "linear.env",
+                owner_uid=self.config.sandbox.agent_uid if core_is_root() else None)
+            register_linear_tools(self.router, self.linear_auth)
+            if linear_client is not None:   # installed, core's own Linear calls show as the agent too
+                linear_client.token = self.linear_auth.token
+            self.linear_sessions = LinearAgentSessions(
+                self.conn, queue=self.queue, payloads=self.payloads,
+                client=linear_client or LinearClient("", token=self.linear_auth.token))
+            self.public_app = make_public_app(webhook_secret=secrets.get("LINEAR_WEBHOOK_SECRET", ""),
+                                              on_event=self.on_linear_event, auth=self.linear_auth,
+                                              on_installed=self.on_linear_installed)
+        self.open = self.config.sandbox.isolation == "open"
+        self.runner_tokens_path = self.data_dir / "runner" / "runner-tokens.json"
         self.cli_runners = {name: CliRunner(rules, secret_values=self.secret_values, exec_fn=cli_exec)
                             for name, rules in self.config.cli.items()}
         self.proposals = Proposals(self.conn, slack, config=self.config, runner_for=self.cli_runners.__getitem__,
                                    queue=self.queue, turn_payload=self._turn_payload)
-        register_cli_tools(self.router, runners=self.cli_runners, propose=self.proposals.propose)
-        self.login = DeviceCodeLogin(slack, config=self.config, rules=self.config.cli, exec_fn=cli_exec)
+        self.login = DeviceCodeLogin(slack, config=self.config, rules=self.config.cli, exec_fn=cli_exec,
+                                     run_as=self.config.sandbox.agent_uid if self.open else None)
         register_login_tools(self.router, self.login)
-        register_production_tools(self.router, production_payload=self.payloads.production)
+        if not self.open:  # open mode: the agent runs az itself and reads production signals directly
+            register_cli_tools(self.router, runners=self.cli_runners, propose=self.proposals.propose)
+            register_production_tools(self.router, production_payload=self.payloads.production)
         if sandboxd is not None:
             register_sandbox_tools(self.router, sandboxd)
 
@@ -127,7 +167,7 @@ class CoreApp:
                                            bot_user_id=bot_user_id, linear_poller=self.linear_poller)
         self.consolidation = ConsolidationService(self.conn, self.memory, self.queue, self.payloads,
                                                   secret_values=self.secret_values, mirror_for=self.mirror)
-        self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.name, packs=self.packs,
+        self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
                                       on_change=self.notifier.task_changed) if github_reader else None
         self.pulls: dict[str, float] = {}      # sandbox -> when its runner last asked for work
         self._started = time.time()            # runners get RUNNER_SILENT_S after a core restart to reconnect
@@ -184,6 +224,27 @@ class CoreApp:
 
     # sandboxes
 
+    def _agent_owner(self) -> int | None:
+        return self.config.sandbox.agent_uid if core_is_root() else None
+
+    def prepare_agent_dirs(self) -> None:
+        """Open mode: the agent container owns what core shares with it (the CLI logins, its runner tokens)."""
+        cli, runner = self.data_dir / "cli", self.data_dir / "runner"
+        for path in (cli, runner):
+            path.mkdir(parents=True, exist_ok=True)
+        owner = self._agent_owner()
+        if owner is None:
+            return
+        os.chown(runner, owner, -1)
+        os.chown(cli, owner, -1)
+        for parent, dirs, files in os.walk(cli):
+            for name in [*dirs, *files]:
+                os.chown(Path(parent) / name, owner, -1)
+
+    def sync_runners(self) -> dict[str, str]:
+        return sync_runner_tokens(self.conn, self.runner_tokens_path, queue_names(self.packs),
+                                  owner_uid=self._agent_owner())
+
     async def ensure_sandboxes(self) -> None:
         """Ask sandboxd, with a fresh sandbox token, for every sandbox that has work waiting and either isn't
         running or has a runner that stopped asking for work. Not again while one is still booting."""
@@ -226,6 +287,41 @@ class CoreApp:
         self.memory.demote_unused(now)
         self.conn.execute("UPDATE proposals SET status = 'expired' WHERE status = 'pending' AND expires_at < ?",
                           (now.strftime("%Y-%m-%dT%H:%M:%SZ"),))
+        if self.open:
+            self.sync_runners()
+
+    # Linear app
+
+    async def on_linear_event(self, body: dict) -> None:
+        log.info("Linear %s/%s event", body.get("type"), body.get("action"))
+        if self.linear_sessions is not None:
+            await self.linear_sessions.on_event(body)
+
+    async def on_linear_installed(self, app_user_id: str) -> None:
+        log.info("the Linear app is installed (app user %s)", app_user_id)
+        dm = db.get_setting(self.conn, INSTALL_DM_KEY)
+        if dm:
+            await self.slack.chat_postMessage(channel=dm, text="I'm installed in Linear: delegate issues to me there.")
+
+    async def refresh_linear_token(self) -> None:
+        """Keep the agent's LINEAR_APP_TOKEN fresh even when core itself makes no Linear calls for a while."""
+        if self.linear_auth is not None:
+            await self.linear_auth.token()
+
+    async def post_digest(self, now: datetime | None = None) -> bool:
+        """The daily KPI digest: once per local day, at or after digest_time, to digest_channel."""
+        ob = self.config.observability
+        if not ob.digest_channel:
+            return False
+        now = now or datetime.now(UTC)
+        local = now.astimezone(ZoneInfo(self.config.timezone))
+        today = local.date().isoformat()
+        if local.strftime("%H:%M") < ob.digest_time or db.get_setting(self.conn, DIGEST_SETTING) == today:
+            return False
+        text = format_kpis(compute_kpis(self.conn, since=now - timedelta(days=7), until=now))
+        await self.slack.chat_postMessage(channel=ob.digest_channel, text=text)
+        db.set_setting(self.conn, DIGEST_SETTING, today)
+        return True
 
     async def _every(self, seconds: float, fn) -> None:
         while True:
@@ -238,12 +334,20 @@ class CoreApp:
     async def serve(self, slack_app, app_token: str, port: int = 8080) -> None:
         from agent.connectors.slack_app import run_socket_mode
 
+        if self.open:
+            self.prepare_agent_dirs()
+            self.sync_runners()
         runner = web.AppRunner(self.agent_app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()
+        if self.public_app is not None:
+            public = web.AppRunner(self.public_app)
+            await public.setup()
+            await web.TCPSite(public, "0.0.0.0", PUBLIC_PORT).start()
         loops = [self._every(300, self.refresh_git), self._every(60, self.conversations.intake_linear),
                  self._every(300, self.sweep_memory), self._every(3600, self.maintenance),
-                 self._every(15, self.ensure_sandboxes)]
+                 self._every(15, self.ensure_sandboxes), self._every(300, self.post_digest),
+                 self._every(600, self.refresh_linear_token)]
         if self.pr_stats:
             loops.append(self._every(300, self.pr_stats.poll_all))
         await asyncio.gather(run_socket_mode(slack_app, app_token), *loops)
@@ -253,10 +357,8 @@ def main() -> int:
     from slack_sdk.web.async_client import AsyncWebClient
 
     from agent import paths
-    from agent.clients import SandboxdClient
     from agent.connectors.github_read import GitHubReader
     from agent.connectors.github_write import GitHubWriter
-    from agent.connectors.linear import LinearClient
     from agent.connectors.slack_app import build_app
     from agent.proxy import ProxyClient
     from agent.secrets import load_secrets
@@ -270,8 +372,7 @@ def main() -> int:
         app = CoreApp(
             config_dir=paths.CONFIG_DIR, data_dir=paths.DATA, secrets=secrets, slack=slack,
             proxy=ProxyClient(os.environ.get("PROXY_URL", "http://172.30.0.1:28090")),
-            sandboxd=SandboxdClient(os.environ.get("SANDBOXD_URL", "http://172.30.0.1:28100"),
-                                    secrets.get("SANDBOXD_TOKEN", "")),
+            sandboxd=_sandboxd_for(load_agent_config(paths.CONFIG_DIR / "agent.toml"), secrets),
             linear_client=LinearClient(secrets["LINEAR_API_KEY"]) if secrets.get("LINEAR_API_KEY") else None,
             github_reader=GitHubReader(secrets["GITHUB_READ_TOKEN"]) if secrets.get("GITHUB_READ_TOKEN") else None,
             github_writer=GitHubWriter(secrets["GITHUB_WRITE_TOKEN"]) if secrets.get("GITHUB_WRITE_TOKEN") else None,

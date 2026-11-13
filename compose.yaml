@@ -1,9 +1,11 @@
-# The autonomous agent's stack (spec v2 §4). Host data lives under ${AGENT_DATA:-./data}:
-#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos sandboxes clone)   mirrors/   cli/
-#   secrets/core.env, secrets/supervisor.env   (mode 0600; each service mounts only its own)
-# Claude never runs here: sessions run in Docker Sandboxes managed by sandboxd on the host (deploy/sandboxd.service),
-# which reach core's agent API on 127.0.0.1:18080. The Claude account proxy also runs on the host; the relay lets
-# core read its usage, and lets core reach sandboxd.
+# The autonomous agent's stack. Host data lives under ${AGENT_DATA:-./data}:
+#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos runners clone)   mirrors/   cli/
+#   runner/ (core's runner tokens for the agent container)
+#   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
+# Claude never runs in core. With [sandbox] isolation = "open" (spec v3) sessions run in the `agent` service below;
+# with "sandboxes" (spec v2) they run in Docker Sandboxes managed by sandboxd on the host, which reach core on
+# 127.0.0.1:18080 (then set SANDBOXD_HEALTH for the supervisor). The Claude account proxy runs on the host; the
+# relay lets core read its usage, lets the agent container reach it, and lets core reach sandboxd.
 name: autonomous-agent
 
 networks:
@@ -21,6 +23,7 @@ services:
     networks: [agentnet]
     ports:
       - "127.0.0.1:18080:8080"    # the agent API and git endpoint, for sandboxes via host.docker.internal only
+      - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port
     environment:
       PROXY_URL: http://172.30.0.1:28090
       SANDBOXD_URL: http://172.30.0.1:28100
@@ -31,7 +34,26 @@ services:
       - ${AGENT_DATA:-./data}/git:/data/git
       - ${AGENT_DATA:-./data}/mirrors:/data/mirrors
       - ${AGENT_DATA:-./data}/cli:/data/cli
+      - ${AGENT_DATA:-./data}/runner:/data/runner
       - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
+
+  # isolation = "open": Claude Code sessions with a full development environment (spec v3). It pulls work from
+  # core, reads its runner tokens from data/runner and shares core's Azure login in data/cli/azure.
+  agent:
+    build: {context: ., target: agent}
+    container_name: agent-runner
+    restart: unless-stopped
+    networks: [agentnet]
+    command: [python, -m, agent, runners, --tokens, /run/agent/runner-tokens.json, --core, "http://core:8080",
+              --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
+              --git-email, "${AGENT_GIT_EMAIL:-}"]
+    # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables (spec v3 O4). Compose reads
+    # the file as the laptop user, so it can stay 0600, and `docker compose exec agent` shells see the keys too.
+    env_file: ["${AGENT_DATA:-./data}/secrets/agent.env"]
+    volumes:
+      - ${AGENT_DATA:-./data}/runner:/run/agent:ro
+      - ${AGENT_DATA:-./data}/cli/azure:/data/cli/azure
+      - agentwork:/var/agent
 
   supervisor:
     build: {context: ., target: supervisor}
@@ -40,7 +62,6 @@ services:
     networks: [agentnet]
     environment:
       CORE_HEALTH: http://core:8080/health
-      SANDBOXD_HEALTH: http://172.30.0.1:28100/health
       CORE_CONTAINER: agent-core
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -57,5 +78,9 @@ services:
       - -c
       - >-
         socat TCP-LISTEN:28090,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18090 &
+        socat TCP-LISTEN:28091,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18091 &
         socat TCP-LISTEN:28100,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18100 &
         wait
+
+volumes:
+  agentwork:     # the agent's clones, sessions and caches; survives rebuilds so sessions can resume

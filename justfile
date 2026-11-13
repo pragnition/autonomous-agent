@@ -19,9 +19,14 @@ down:
 logs *service:
     docker compose logs -f {{service}}
 
-# Check config, secrets, the proxy, GitHub and Linear
+# Check config, secrets, the proxy, GitHub and Linear, and the agent container's own gh and az logins
 doctor:
     docker compose exec core python -m agent doctor
+    docker compose exec agent bash -lc 'gh auth status && az account show -o none && echo "ok    agent: gh and az logged in"'
+
+# KPIs: pickup, PR and merge-queue times, merge rate and cost (e.g. just kpis --days 30 --project sample)
+kpis *args:
+    docker compose exec core python -m agent kpis {{args}}
 
 # Stop everything from the laptop itself (when Slack isn't an option)
 stop:

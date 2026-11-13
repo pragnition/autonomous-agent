@@ -123,6 +123,10 @@ class Conversations:
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
         self._enqueue_turn(convo, text, person.key, message_ts=event["ts"])
+        try:  # the acknowledgement: the person sees it landed long before the session replies
+            await self.slack.reactions_add(channel=channel, timestamp=event["ts"], name="eyes")
+        except Exception:
+            log.warning("couldn't add the eyes reaction to %s:%s", channel, event["ts"], exc_info=True)
 
     async def intake_linear(self) -> list[str]:
         if self.linear_poller is None:

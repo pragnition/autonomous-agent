@@ -122,18 +122,24 @@ def parse_device_code(output: str) -> tuple[str, str] | None:
 class DeviceCodeLogin:
     """`az login --use-device-code`: the URL and code go by DM to the admin who asked, never to a channel."""
 
-    def __init__(self, slack, *, config, rules: dict, exec_fn=asyncio.create_subprocess_exec):
-        self.slack, self.config, self.rules, self.exec_fn = slack, config, rules, exec_fn
+    def __init__(self, slack, *, config, rules: dict, exec_fn=asyncio.create_subprocess_exec,
+                 run_as: int | None = None):
+        """run_as: the uid the login runs as, so the agent container (open mode) owns and can refresh it."""
+        self.slack, self.config, self.rules, self.exec_fn, self.run_as = slack, config, rules, exec_fn, run_as
         self.pending: set[asyncio.Task] = set()
+
+    def _as_user(self) -> dict:
+        return {"user": self.run_as} if self.run_as is not None else {}
 
     async def start(self, ctx: ToolContext, cli: str) -> str:
         rules = self.rules[cli]
         person = self.config.people.get(ctx.actor or "")
         if not rules.login or person is None:
             return "no login is configured for this CLI"
-        env = {**os.environ, **rules.env}
+        as_agent = {"HOME": "/tmp", "USER": "agent", "LOGNAME": "agent"}  # uid run_as has no passwd entry in core
+        env = {**os.environ, **rules.env, **(as_agent if self.run_as is not None else {})}
         proc = await self.exec_fn(*rules.login, env=env, stdin=asyncio.subprocess.DEVNULL,
-                                  stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                                  stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, **self._as_user())
         seen, found = "", None
         async with asyncio.timeout(60):
             while found is None:
@@ -158,7 +164,8 @@ class DeviceCodeLogin:
             async with asyncio.timeout(LOGIN_TIMEOUT_S):
                 await proc.wait()
             check = await self.exec_fn(*(rules.login_check or []), env=env, stdin=asyncio.subprocess.DEVNULL,
-                                       stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                                       stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                       **self._as_user())
             out, _ = await check.communicate()
             info = json.loads(out.decode() or "{}")
             text = f"Logged in as {(info.get('user') or {}).get('name', '?')} ({info.get('name', '?')})."

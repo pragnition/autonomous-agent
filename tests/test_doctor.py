@@ -86,3 +86,46 @@ def test_cli_help_lists_commands():
     assert out.returncode == 0
     for command in ("core", "runner", "supervisor", "doctor", "stop", "resume"):
         assert command in out.stdout
+
+
+def test_open_mode_requirements(tmp_path):
+    import shutil
+
+    from agent import db
+    from agent.config import load_agent_config
+    from agent.core.runner_tokens import sync_runner_tokens
+    from agent.doctor import check_runner_tokens, required_core
+
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    open_cfg = load_agent_config(config / "agent.toml")
+    assert "SANDBOXD_TOKEN" not in required_core(open_cfg) and "SLACK_BOT_TOKEN" in required_core(open_cfg)
+    toml = config / "agent.toml"
+    toml.write_text(toml.read_text().replace('isolation = "open"', 'isolation = "sandboxes"'))
+    assert "SANDBOXD_TOKEN" in required_core(load_agent_config(toml))
+
+    conn = db.connect(tmp_path / "agent.db")
+    db.migrate(conn)
+    path, names = tmp_path / "runner-tokens.json", ["code-sample", "general"]
+    assert not check_runner_tokens(conn, path, names).ok
+    sync_runner_tokens(conn, path, names[:1])
+    assert "general" in check_runner_tokens(conn, path, names).detail
+    sync_runner_tokens(conn, path, names)
+    assert check_runner_tokens(conn, path, names).ok
+    conn.execute("UPDATE tokens SET revoked = 1")
+    assert not check_runner_tokens(conn, path, names).ok
+
+
+def test_linear_app_secrets_required_with_public_url(tmp_path):
+    import shutil
+
+    from agent.config import load_agent_config
+    from agent.doctor import required_core
+
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    toml = config / "agent.toml"
+    linear = ("LINEAR_CLIENT_ID", "LINEAR_CLIENT_SECRET", "LINEAR_WEBHOOK_SECRET")
+    assert not set(linear) & set(required_core(load_agent_config(toml)))
+    toml.write_text(toml.read_text().replace('public_url = ""', 'public_url = "https://jensen.example.ts.net"'))
+    assert set(linear) <= set(required_core(load_agent_config(toml)))

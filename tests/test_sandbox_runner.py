@@ -115,7 +115,7 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
     link, claude = FakeLink(), FakeClaude()
     await make_runner(tmp_path, worktrees, link, claude).handle(item(), "tok", [])
     spec = claude.specs[0]
-    assert spec.permission_mode == "bypass" and spec.os_user == "s1" and spec.model == "claude-opus-5-5"
+    assert spec.permission_mode == "bypass" and spec.model == "claude-opus-5-5"
     assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
     assert spec.env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert git(spec.cwd, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
@@ -327,3 +327,49 @@ async def test_commit_step_never_sees_the_sandbox_token(worktrees, worktree):
     await call(tools, "open_pr", {"title": "t", "body": "b"})
     commit_env = seen[0][1]
     assert "commit" in seen[0][0] and not any("sandbox-token" in str(v) for v in commit_env.values())
+
+
+async def test_open_runner_runs_sessions_as_itself(tmp_path, worktrees):
+    link, claude = FakeLink(), FakeClaude()
+    await make_runner(tmp_path, worktrees, link, claude).handle(item(), "tok", [])
+    assert claude.specs[0].os_user is None
+
+
+async def test_extra_env_reaches_the_session(tmp_path, worktrees):
+    link, claude = FakeLink(), FakeClaude()
+    runner = make_runner(tmp_path, worktrees, link, claude)
+    runner.extra_env = {"GH_TOKEN": "ghp_abc"}
+    await runner.handle(item(), "tok", [])
+    assert claude.specs[0].env["GH_TOKEN"] == "ghp_abc"
+    assert claude.specs[0].env["SAMPLE_TEST_USER"] == "tester@example.com"
+
+
+LINEAR_MCP = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
+                         "headers": {"Authorization": "Bearer ${LINEAR_APP_TOKEN}"}}}
+
+
+def env_runner(tmp_path, worktrees, claude, env_file):
+    return SandboxRunner(FakeLink(), worktrees, SessionUsers(), claude, sandbox="general", profile="general",
+                         bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
+                         scratch_root=tmp_path / "scratch", heartbeat_s=0.05, run_as_root=False,
+                         env_files=[env_file])
+
+
+async def test_mcp_headers_use_current_linear_token(tmp_path, worktrees):
+    claude, env_file = FakeClaude(), tmp_path / "linear.env"
+    runner = env_runner(tmp_path, worktrees, claude, env_file)
+    for n, token in enumerate(("tok-1", "tok-2")):
+        env_file.write_text(f"LINEAR_APP_TOKEN={token}\n")
+        await runner.handle(item("general", conversation_id=f"V-{n}", worktree=None, mcp=LINEAR_MCP), "tok", [])
+    assert [s.mcp_servers["linear"]["headers"]["Authorization"] for s in claude.specs] == \
+        ["Bearer tok-1", "Bearer tok-2"]
+    assert claude.specs[1].mcp_servers["linear"]["url"] == "https://mcp.linear.app/mcp"
+    assert claude.specs[1].env["LINEAR_APP_TOKEN"] == "tok-2"   # for agent activities via the API
+
+
+async def test_unset_variable_drops_the_server(tmp_path, worktrees, caplog):
+    claude = FakeClaude()
+    await env_runner(tmp_path, worktrees, claude, tmp_path / "missing.env").handle(
+        item("general", worktree=None, mcp=LINEAR_MCP), "tok", [])
+    assert claude.specs[0].mcp_servers == {}
+    assert "LINEAR_APP_TOKEN" in caplog.text

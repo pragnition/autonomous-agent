@@ -164,6 +164,29 @@ async def test_message_ts_recorded_for_reactions(convos, queue):
     assert last_item(queue).payload["message_ts"] == "t7"
 
 
+async def test_accepted_message_gets_eyes(convos, slack):
+    await convos.handle_slack(mention("t8", "look at this"))
+    event = reply("t8", "and this")
+    await convos.handle_slack(event)
+    assert [(r["channel"], r["timestamp"], r["name"]) for r in slack.reactions] == [
+        ("C-SAMPLE", "t8", "eyes"), ("C-SAMPLE", event["ts"], "eyes")]
+
+
+async def test_ignored_and_refused_messages_get_no_eyes(convos, slack):
+    await convos.handle_slack(mention("t1", "hi", user="U999"))
+    await convos.handle_slack(reply("t9", "chatter"))
+    assert slack.reactions == []
+
+
+async def test_failed_eyes_still_queues_the_turn(convos, slack, queue):
+    async def down(**kw):
+        raise RuntimeError("missing_scope")
+
+    slack.reactions_add = down
+    await convos.handle_slack(mention("t10", "hi"))
+    assert queue.claim("code-sample").payload["text"] == "hi"
+
+
 async def test_linear_issue_is_unattended(convos, fake_linear, queue, slack, conn):
     fake_linear.new = ["Export broken"]
     created = await convos.intake_linear()

@@ -38,6 +38,7 @@ def row(conn, convo_id):
 
 
 def test_turn_payload_for_code(payloads, conn):
+    payloads.config.sandbox.isolation = "sandboxes"
     convo = row(conn, add_conversation(conn, sandbox="code-sample"))
     p = payloads.turn(convo, "fix the export crash", "bob")
     assert p["text"] == "fix the export crash" and p["actor"] == "bob" and p["profile"] == "code"
@@ -90,3 +91,26 @@ def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
     (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM SYSTEM PROMPT")
     p = payloads.turn(row(conn, add_conversation(conn, sandbox="code-sample")), "x", "bob")
     assert p["system_prompt"].startswith("CUSTOM SYSTEM PROMPT")
+
+
+def test_open_mode_system_prompt(payloads, tmp_path):
+    text = payloads.system_prompt()
+    for phrase in ("gh", "az", "open_pr", "fork", "free port"):
+        assert phrase in text
+    assert "never hold credentials" not in text
+    payloads.config.sandbox.isolation = "sandboxes"
+    assert "never hold credentials" in payloads.system_prompt()
+    (tmp_path / "config" / "agent").mkdir(parents=True)
+    (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM")
+    assert payloads.system_prompt() == "CUSTOM"
+    payloads.config.sandbox.isolation = "open"
+    assert payloads.system_prompt() == "CUSTOM"
+
+
+def test_payload_carries_mcp_servers(tmp_path, conn, memory):
+    cfg = make_config(tmp_path, '\n[mcp.linear]\ntype = "http"\nurl = "https://mcp.linear.app/mcp"\n'
+                                'headers = { Authorization = "Bearer ${LINEAR_APP_TOKEN}" }\n')
+    p = Payloads(conn, config=cfg, packs={}, memory=memory, persona_text="", config_dir=tmp_path / "c", secrets={})
+    convo = row(conn, add_conversation(conn, sandbox="general", project=None))
+    assert p.turn(convo, "hi", "ann")["mcp"] == {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
+                                                            "headers": {"Authorization": "Bearer ${LINEAR_APP_TOKEN}"}}}

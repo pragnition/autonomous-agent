@@ -22,8 +22,9 @@ def test_relay_binds_only_gateway_ip(compose):
     assert relay["network_mode"] == "host"
     command = " ".join(relay["command"]) if isinstance(relay["command"], list) else relay["command"]
     listens = re.findall(r"TCP-LISTEN:[^\s]+", command)
-    assert len(listens) == 2 and all("bind=172.30.0.1" in l for l in listens)
+    assert len(listens) == 3 and all("bind=172.30.0.1" in l for l in listens)
     assert "TCP-LISTEN:28090" in command and "127.0.0.1:18090" in command
+    assert "TCP-LISTEN:28091" in command and "127.0.0.1:18091" in command
     assert "TCP-LISTEN:28100" in command and "127.0.0.1:18100" in command
 
 
@@ -38,14 +39,18 @@ def test_core_gets_only_its_own_secrets(compose):
 
 
 def test_no_worker_and_core_published_on_loopback_only(compose):
-    assert set(compose["services"]) == {"core", "supervisor", "relay"}
-    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18080:8080"]
+    assert set(compose["services"]) == {"core", "supervisor", "relay", "agent"}
+    assert "ports" not in compose["services"]["agent"]
+    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18080:8080", "127.0.0.1:18085:8085"]
     assert "ports" not in compose["services"]["supervisor"]
 
 
 def test_no_env_file_and_no_secrets_in_environment(compose):
     for name, svc in compose["services"].items():
-        assert "env_file" not in svc, name
+        if name == "agent":  # open mode: the agent's own keys are plain environment variables (spec v3 O4)
+            assert svc["env_file"] == ["${AGENT_DATA:-./data}/secrets/agent.env"]
+        else:
+            assert "env_file" not in svc, name
         env = svc.get("environment") or {}
         assert not any(re.search(r"TOKEN|SECRET|KEY|PASSWORD", k) for k in env), name
 
@@ -108,3 +113,38 @@ async def test_ops_stop_and_resume(tmp_path):
 def test_core_image_has_az_and_no_worker_target():
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "AS worker" not in dockerfile and "azure-cli" in dockerfile and "/usr/local/bin/az" in dockerfile
+
+
+def agent_target():
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    return dockerfile.split("FROM app AS agent", 1)[1].split("\nFROM ", 1)[0]
+
+
+def test_agent_image():
+    target = agent_target()
+    for needle in ("--uid 1001", "--shell /bin/bash", "NOPASSWD:ALL", "ln -sf /bin/bash /bin/sh", "USER agent",
+                   "AZURE_CONFIG_DIR=/data/cli/azure", " gh", "azure-cli", "chown agent /var/agent",
+                   '"agent", "runners"', "chmod -R a+rX /app"):
+        assert needle in target, needle
+
+
+def test_agent_service(compose):
+    agent = compose["services"]["agent"]
+    assert agent["build"]["target"] == "agent" and agent["restart"] == "unless-stopped"
+    assert agent["networks"] == ["agentnet"] and not agent.get("privileged")
+    vols = volumes(compose, "agent")
+    assert "${AGENT_DATA:-./data}/runner:/run/agent:ro" in vols
+    assert "${AGENT_DATA:-./data}/cli/azure:/data/cli/azure" in vols
+    assert not any("agent.env" in v for v in vols)        # a 0600 file mounted in would be unreadable to uid 1001
+    assert "agentwork:/var/agent" in vols and "agentwork" in compose["volumes"]
+    command = " ".join(agent["command"])
+    for part in ("agent runners", "--core http://core:8080", "--proxy http://172.30.0.1:28091",
+                 "--tokens /run/agent/runner-tokens.json"):
+        assert part in command, part
+    assert "${AGENT_DATA:-./data}/runner:/data/runner" in volumes(compose, "core")
+    assert "SANDBOXD_HEALTH" not in (compose["services"]["supervisor"].get("environment") or {})
+
+
+def test_core_publishes_public_port(compose):
+    # only the Linear webhook/OAuth listener goes through Tailscale Funnel; both stay on loopback
+    assert "127.0.0.1:18085:8085" in compose["services"]["core"]["ports"]

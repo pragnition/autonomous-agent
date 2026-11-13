@@ -12,6 +12,8 @@ from pathlib import Path
 
 PERSON_ROLES = ("member", "admin")
 PROFILES = ("code", "debug", "general")
+ISOLATION = ("open", "sandboxes")
+_HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 NETWORKS = ("open", "read")
 
 DEFAULT_RESOURCES = {"code": (4, 8, 30), "debug": (2, 2, 10), "general": (2, 2, 10)}
@@ -38,6 +40,7 @@ class Person:
     github: str
     linear: str
     role: str
+    tailscale: str = ""  # the person's Tailscale login, for the dashboard
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,26 @@ class SandboxSettings:
     host_memory_budget: float = 0.75
     idle_stop_minutes: int = 30
     rebuild_every_days: int = 7
+    isolation: str = "open"        # "open": one agent container (spec v3); "sandboxes": Docker Sandboxes (spec v2)
+    agent_uid: int = 1001          # the agent container's user, which owns what core shares with it
+
+
+@dataclass
+class LinearSettings:
+    public_url: str = ""           # Tailscale Funnel base URL for Linear's webhook and OAuth callback (spec v3 §8)
+
+
+@dataclass(frozen=True)
+class McpServer:
+    type: str                      # "http" (streamable HTTP)
+    url: str
+    headers: dict[str, str]        # values may use ${VAR}, filled from the session's environment
+
+
+@dataclass
+class ObservabilitySettings:
+    digest_channel: str = ""       # where the daily KPI digest goes; empty means no digest
+    digest_time: str = "09:00"     # HH:MM in the config's timezone
 
 
 @dataclass
@@ -92,6 +115,13 @@ class CliRules:
     max_output_chars: int = 8000
 
 
+@dataclass(frozen=True)
+class DashboardSettings:
+    port: int = 8086
+    trusted_peers: tuple[str, ...] = ("172.30.0.1",)   # where tailscale serve's requests arrive from: the host gateway
+    agent_origins: tuple[str, ...] = ("agent-core", "agent-sandbox")  # the account proxy's origins that are the agent
+
+
 @dataclass
 class AgentConfig:
     name: str
@@ -103,6 +133,16 @@ class AgentConfig:
     memory_budget: MemoryBudget
     sandbox: SandboxSettings = field(default_factory=SandboxSettings)
     cli: dict[str, CliRules] = field(default_factory=dict)
+    observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
+    linear: LinearSettings = field(default_factory=LinearSettings)
+    mcp: dict[str, McpServer] = field(default_factory=dict)
+    github: str = ""  # the agent's GitHub login
+    dashboard: DashboardSettings = field(default_factory=DashboardSettings)
+
+    def person_by_tailscale(self, login: str | None) -> Person | None:
+        if not login:
+            return None
+        return next((p for p in self.people.values() if p.tailscale and p.tailscale.lower() == login.lower()), None)
 
     def person_by_slack(self, user_id: str) -> Person | None:
         return next((p for p in self.people.values() if p.slack == user_id), None)
@@ -219,6 +259,19 @@ def _cli(name: str, data: dict, where: str, problems: list[str]) -> CliRules:
                     max_output_chars=_int(data, "max_output_chars", 8000, cw, problems))
 
 
+def _mcp(name: str, data: dict, where: str, problems: list[str]) -> McpServer:
+    mw = f"{where} [mcp.{name}]"
+    kind, url, headers = data.get("type", "http"), data.get("url", ""), data.get("headers", {})
+    if kind != "http":
+        problems.append(f"{mw}: 'type' must be \"http\" (streamable HTTP), got {kind!r}")
+    if not (isinstance(url, str) and url.startswith("https://")):
+        problems.append(f"{mw}: 'url' must be an https:// URL")
+    if not (isinstance(headers, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items())):
+        problems.append(f"{mw}: 'headers' must be a table of strings")
+        headers = {}
+    return McpServer(kind, url if isinstance(url, str) else "", dict(headers))
+
+
 def load_agent_config(path: Path) -> AgentConfig:
     problems: list[str] = []
     data = _read_toml(Path(path), problems)
@@ -227,6 +280,7 @@ def load_agent_config(path: Path) -> AgentConfig:
     where = str(path)
 
     name = _str(data, "name", where, problems)
+    github_login = _str(data, "github", where, problems) if "github" in data else name
     timezone = _str(data, "timezone", where, problems, default="Asia/Singapore")
 
     people: dict[str, Person] = {}
@@ -238,8 +292,16 @@ def load_agent_config(path: Path) -> AgentConfig:
         role = p.get("role", "member")
         if role not in PERSON_ROLES:
             problems.append(f"{pw}: 'role' must be one of {', '.join(PERSON_ROLES)}")
-        people[key] = Person(key, _str(p, "slack", pw, problems), _str(p, "github", pw, problems),
-                             _str(p, "linear", pw, problems), role)
+        login = p.get("github", "")  # optional
+        if not isinstance(login, str):
+            problems.append(f"{pw}: 'github' must be a string")
+            login = ""
+        tailscale = p.get("tailscale", "")  # optional
+        if not isinstance(tailscale, str):
+            problems.append(f"{pw}: 'tailscale' must be a string")
+            tailscale = ""
+        people[key] = Person(key, _str(p, "slack", pw, problems), login,
+                             _str(p, "linear", pw, problems), role, tailscale)
     if not people:
         problems.append(f"{where}: at least one [people.<key>] entry is required")
 
@@ -280,12 +342,46 @@ def load_agent_config(path: Path) -> AgentConfig:
         sandbox.host_memory_budget = float(budget_frac)
     sandbox.idle_stop_minutes = _int(sb, "idle_stop_minutes", 30, sw, problems)
     sandbox.rebuild_every_days = _int(sb, "rebuild_every_days", 7, sw, problems)
+    sandbox.isolation = sb.get("isolation", "open")
+    if sandbox.isolation not in ISOLATION:
+        problems.append(f"{sw}: 'isolation' must be one of {', '.join(ISOLATION)}, got {sandbox.isolation!r}")
+    uid = sb.get("agent_uid", 1001)
+    if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
+        problems.append(f"{sw}: 'agent_uid' must be a positive integer (the agent container's uid)")
+    else:
+        sandbox.agent_uid = uid
+
+    ob = data.get("observability") or {}
+    ow = f"{where} [observability]"
+    observability = ObservabilitySettings(digest_channel=ob.get("digest_channel", ""),
+                                          digest_time=ob.get("digest_time", "09:00"))
+    if not isinstance(observability.digest_channel, str):
+        problems.append(f"{ow}: 'digest_channel' must be a string")
+    if not (isinstance(observability.digest_time, str) and _HHMM.match(observability.digest_time)):
+        problems.append(f"{ow}: 'digest_time' must be HH:MM (24-hour), got {observability.digest_time!r}")
 
     cli = {cname: _cli(cname, cdata, where, problems) for cname, cdata in (data.get("cli") or {}).items()}
 
+    lin = data.get("linear") or {}
+    linear = LinearSettings(public_url=lin.get("public_url", ""))
+    if linear.public_url and not (isinstance(linear.public_url, str) and linear.public_url.startswith("https://")):
+        problems.append(f"{where} [linear]: 'public_url' must be an https:// URL")
+    linear.public_url = linear.public_url.rstrip("/") if isinstance(linear.public_url, str) else ""
+    mcp = {mname: _mcp(mname, mdata, where, problems) for mname, mdata in (data.get("mcp") or {}).items()}
+
+    dash = data.get("dashboard") or {}
+    dw = f"{where} [dashboard]"
+    dashboard = DashboardSettings(
+        port=_int(dash, "port", 8086, dw, problems),
+        trusted_peers=tuple(_str_list(dash, "trusted_peers", dw, problems)) if "trusted_peers" in dash
+        else DashboardSettings.trusted_peers,
+        agent_origins=tuple(_str_list(dash, "agent_origins", dw, problems)) if "agent_origins" in dash
+        else DashboardSettings.agent_origins)
+
     if problems:
         raise ConfigError(problems)
-    return AgentConfig(name, timezone, people, channels, limits, models, budget, sandbox, cli)
+    return AgentConfig(name, timezone, people, channels, limits, models, budget, sandbox, cli, observability,
+                       linear, mcp, github_login, dashboard)
 
 
 def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:

@@ -54,6 +54,14 @@ def webhook_alert(url: str) -> Callable[[str], Awaitable[None]]:
     return alert
 
 
+def health_targets(environ) -> dict[str, str]:
+    """core always; sandboxd only when it's in use (isolation = "sandboxes" sets SANDBOXD_HEALTH)."""
+    targets = {"core": environ.get("CORE_HEALTH", "http://core:8080/health")}
+    if environ.get("SANDBOXD_HEALTH"):
+        targets["sandboxd"] = environ["SANDBOXD_HEALTH"]
+    return targets
+
+
 def main() -> int:
     import asyncio
     import os
@@ -63,8 +71,7 @@ def main() -> int:
 
     secrets = load_secrets(paths.SECRETS_FILE)
     containers = {"core": os.environ.get("CORE_CONTAINER", "agent-core")}  # sandboxd runs on the host: alert only
-    targets = {"core": os.environ.get("CORE_HEALTH", "http://core:8080/health"),
-               "sandboxd": os.environ.get("SANDBOXD_HEALTH", "http://172.30.0.1:28100/health")}
+    targets = health_targets(os.environ)
 
     async def print_alert(text: str) -> None:
         print(text, flush=True)

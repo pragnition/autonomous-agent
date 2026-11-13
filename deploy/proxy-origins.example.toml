@@ -1,6 +1,7 @@
 # Add these to ~/.claude/accounts/proxy.toml (the proxy's own config). Both origins belong to the default tenant,
-# so the agent shares the team's account pool. core reads usage through the relay (agent-core); sandboxes reach
-# agent-sandbox as host.docker.internal:18091, allowed by their network policy (spec v2 §4).
+# so the agent shares the team's account pool. core reads usage through the relay (agent-core). Sessions use
+# agent-sandbox: the agent container through the relay on 172.30.0.1:28091 (spec v3), or Docker Sandboxes as
+# host.docker.internal:18091 (spec v2).
 container_placeholders = ["sk-ant-oat01-container-via-host-proxy"]
 
 [origins]

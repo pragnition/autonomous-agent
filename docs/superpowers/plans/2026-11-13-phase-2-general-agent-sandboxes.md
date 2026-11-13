@@ -1,5 +1,7 @@
 # Phase 2: General Agent on Docker Sandboxes, Implementation Plan
 
+> **Status (2026-11-13):** Tasks 2–17, 21 and 22 are done (commits b18739b..0a7b5d7). Tasks 1, 18–20, 23 and 24 are replaced by `2026-11-13-open-agent.md` for the current phase; the sandbox tasks return in the isolation phase.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace Phase 1's roles and stages with one general agent (Claude Code) that runs in Docker Sandboxes with no credentials and acts on the world only through `core`'s tools.

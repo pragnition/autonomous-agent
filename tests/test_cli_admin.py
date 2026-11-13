@@ -189,3 +189,30 @@ async def test_proposal_from_threadless_debug_session_posts_in_callers_thread(se
                                       caller_conversation_id=caller))
     await proposals.propose(ctx, "azure", ["group", "delete", "-n", "g"])
     assert slack.posts[-1]["channel"] == "C7" and slack.posts[-1]["thread_ts"] == "7.0"
+
+
+@pytest.mark.parametrize("run_as", [1001, None])
+async def test_login_runs_as_agent_uid(conn, tmp_path, run_as):
+    cfg = make_config(tmp_path)
+    calls = []
+
+    async def exec_fn(*argv, **kw):
+        calls.append(kw)
+        if argv[:2] == ("az", "login"):
+            return FakeProc(b"", lines=[AZ_TEXT + "\n"])
+        return FakeProc(json.dumps({"user": {"name": "ann@x.com"}, "name": "Dev Sub"}).encode())
+
+    login = DeviceCodeLogin(FakeSlack(), config=cfg, rules=cfg.cli, exec_fn=exec_fn, run_as=run_as)
+    router = AgentToolRouter(conn, config=cfg, packs={"sample": make_pack()}, queue=WorkQueue(conn),
+                             memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                             secret_values=[])
+    cid = add_conversation(conn, sandbox="general", channel="D-ann")
+    await login.start(router.context_for(add_item(router.queue, cid, "general", actor="ann")), "azure")
+    await asyncio.gather(*login.pending)
+    assert len(calls) == 2
+    for kw in calls:
+        if run_as:
+            assert kw["user"] == 1001 and kw["env"]["HOME"] == "/tmp"
+            assert kw["env"]["USER"] == kw["env"]["LOGNAME"] == "agent"
+        else:
+            assert "user" not in kw

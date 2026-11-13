@@ -171,7 +171,15 @@ async def test_events_append_to_transcript(api, parts):
                                  headers=bearer(tok))).json()
     assert body == {"cancel": False}
     lines = (parts.runs / f"{item['id']}.jsonl").read_text().splitlines()
-    assert json.loads(lines[0]) == {"type": "assistant", "n": 1}
+    stored = json.loads(lines[0])
+    assert {k: v for k, v in stored.items() if k != "_ts"} == {"type": "assistant", "n": 1}
+
+
+async def test_events_are_stamped(api, parts):
+    item, tok = await pull_one(api, "code-p")
+    await api.post("/agent/events", json={"event": {"type": "AssistantMessage"}}, headers=bearer(tok))
+    stored = json.loads((parts.runs / f"{item['id']}.jsonl").read_text())
+    assert stored["_ts"].endswith("Z") and stored["type"] == "AssistantMessage"
 
 
 async def test_files_upload_and_limit(api, parts):
@@ -272,5 +280,52 @@ async def test_pulls_are_recorded(conn, queue, parts):
         tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
         await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))
         assert "code-p" in pulls
+    finally:
+        await client.close()
+
+
+async def test_pull_records_session_started(conn):
+    queue = WorkQueue(conn)
+
+    async def noop(*a):
+        return None
+
+    app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=FakeRouter(),
+                         context_for=lambda i: SimpleNamespace(task_id="T-1"),
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        turn = queue.enqueue("c1", "code-p", "turn", {})
+        queue.enqueue(None, "code-p", "chore", {})
+        tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
+        for _ in range(2):
+            assert (await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).status == 200
+        rows = conn.execute("SELECT task_id, data FROM events WHERE type = 'session_started'").fetchall()
+        assert len(rows) == 1 and rows[0]["task_id"] == "T-1"
+        data = json.loads(rows[0]["data"])
+        assert data["work_item"] == turn and data["sandbox"] == "code-p" and data["queued_at"]
+    finally:
+        await client.close()
+
+
+async def test_chore_claim_logs_work_started(conn):
+    queue = WorkQueue(conn)
+
+    async def noop(*a):
+        return None
+
+    app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=FakeRouter(),
+                         context_for=lambda i: SimpleNamespace(task_id=None),
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        chore = queue.enqueue(None, "general", "chore", {})
+        tok = mint_token(conn, "sandbox", sandbox="general", work_item_id=None, ttl_s=60)
+        assert (await client.post("/agent/pull", json={"sandbox": "general"}, headers=bearer(tok))).status == 200
+        rows = conn.execute("SELECT type, data FROM events WHERE type IN ('session_started', 'work_started')").fetchall()
+        assert [r["type"] for r in rows] == ["work_started"]
+        assert json.loads(rows[0]["data"])["work_item"] == chore
     finally:
         await client.close()

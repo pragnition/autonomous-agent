@@ -71,11 +71,13 @@ class WorkItem:
     status: str
     attempts: int
     result: dict | None = None
+    created_at: str | None = None
 
 
 def _item(row: sqlite3.Row) -> WorkItem:
     return WorkItem(row["id"], row["conversation_id"], row["sandbox"], row["kind"], json.loads(row["payload"]),
-                    row["status"], row["attempts"], json.loads(row["result"]) if row["result"] else None)
+                    row["status"], row["attempts"], json.loads(row["result"]) if row["result"] else None,
+                    row["created_at"])
 
 
 class WorkQueue:

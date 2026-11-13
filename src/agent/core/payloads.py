@@ -16,6 +16,7 @@ from agent.memory.briefing import build_briefing
 from agent.memory.store import MemoryStore
 
 DEFAULT_SYSTEM = Path(__file__).parent.parent / "defaults" / "system.md"
+DEFAULT_SYSTEM_OPEN = Path(__file__).parent.parent / "defaults" / "system-open.md"
 MEMORY_PROMPT = Path(__file__).parent.parent / "prompts" / "memory.md"
 PRODUCTION_RULES = (
     "This session answers a question about production from another session, which can't see production itself. "
@@ -33,7 +34,8 @@ class Payloads:
 
     def system_prompt(self) -> str:
         custom = self.config_dir / "agent" / "system.md"
-        text = (custom if custom.is_file() else DEFAULT_SYSTEM).read_text()
+        default = DEFAULT_SYSTEM_OPEN if self.config.sandbox.isolation == "open" else DEFAULT_SYSTEM
+        text = (custom if custom.is_file() else default).read_text()
         return text.replace("{name}", self.config.name).strip()
 
     def _base(self, *, text: str, actor: str | None, unattended: bool, profile: str, model: str,
@@ -41,7 +43,10 @@ class Payloads:
         return {"text": text, "actor": actor, "unattended": unattended, "profile": profile, "model": model,
                 "system_prompt": "\n\n".join(p for p in system_parts if p),
                 "max_turns": self.config.limits.max_turns, "timeout_s": self.config.limits.task_minutes * 60,
-                "resume_session_id": None, "worktree": None, "test_secrets": {}}
+                "resume_session_id": None, "worktree": None, "test_secrets": {},
+                # ${VAR} stays unexpanded: the runner fills it from the session's environment at session start
+                "mcp": {name: {"type": m.type, "url": m.url, "headers": dict(m.headers)}
+                        for name, m in self.config.mcp.items()}}
 
     def _briefing(self, scopes: list[str], text: str, kind: str) -> str:
         return build_briefing(self.memory, scopes, text, self.config.memory_budget.briefing.get(kind, 1000)).text

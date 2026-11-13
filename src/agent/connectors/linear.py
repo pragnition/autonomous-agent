@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -29,6 +30,10 @@ COMMENT_CREATE = """
 mutation CommentCreate($issueId: String!, $body: String!) {
   commentCreate(input: {issueId: $issueId, body: $body}) { success }
 }"""
+AGENT_ACTIVITY = """
+mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
+  agentActivityCreate(input: $input) { success }
+}"""
 ISSUE = """
 query Issue($id: String!) {
   issue(id: $id) { identifier title description url state { name }
@@ -37,13 +42,21 @@ query Issue($id: String!) {
 
 
 class LinearClient:
-    def __init__(self, api_key: str, http: httpx.AsyncClient | None = None, url: str = "https://api.linear.app/graphql"):
-        self.http, self.url = http or httpx.AsyncClient(timeout=30), url
-        self.headers = {"Authorization": api_key, "Content-Type": "application/json"}  # personal keys: no "Bearer"
+    """Core's Linear calls. With the agent's Linear app installed, `token` returns its OAuth token and calls show as
+    the agent; until then (token returns None) they use the personal API key."""
+
+    def __init__(self, api_key: str, http: httpx.AsyncClient | None = None, url: str = "https://api.linear.app/graphql",
+                 token: Callable[[], Awaitable[str | None]] | None = None):
+        self.http, self.url, self.api_key, self.token = http or httpx.AsyncClient(timeout=30), url, api_key, token
         self._states: dict[str, dict[str, str]] = {}
 
+    async def _headers(self) -> dict:
+        app_token = await self.token() if self.token is not None else None
+        auth = f"Bearer {app_token}" if app_token else self.api_key  # personal keys: no "Bearer"
+        return {"Authorization": auth, "Content-Type": "application/json"}
+
     async def _gql(self, operation: str, query: str, variables: dict) -> dict:
-        resp = await self.http.post(self.url, headers=self.headers,
+        resp = await self.http.post(self.url, headers=await self._headers(),
                                     json={"query": query, "variables": variables, "operationName": operation})
         resp.raise_for_status()
         data = resp.json()
@@ -82,6 +95,11 @@ class LinearClient:
 
     async def comment(self, issue_id: str, body: str) -> None:
         await self._gql("CommentCreate", COMMENT_CREATE, {"issueId": issue_id, "body": body})
+
+    async def agent_activity(self, session_id: str, type: str, body: str) -> None:
+        """An activity on an agent session: thought, response, error or elicitation."""
+        await self._gql("AgentActivityCreate", AGENT_ACTIVITY,
+                        {"input": {"agentSessionId": session_id, "content": {"type": type, "body": body}}})
 
 
 class LinearPoller:

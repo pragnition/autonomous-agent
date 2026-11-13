@@ -9,7 +9,7 @@ Nobody should have to tell you where to look. Work through these steps and keep 
 
 1. **Track it.** Call `track_task` (kind `bug`) if the conversation isn't tracking a task yet.
 2. **Gather signals before touching code.**
-   - Production: call `ask_production` with a specific question ("what fails in citation export, since when, how often, with which stack traces?"). Ask follow-ups until you know the failing path. Check the project's debugging skill for where its logs and traces live.
+   - Deployed environments: if you have `az`, query the logs and traces yourself; otherwise call `ask_production` with a specific question ("what fails in citation export, since when, how often, with which stack traces?"). Keep going until you know the failing path. Check the project's debugging skill for where its logs and traces live.
    - The code: recent commits around the failing area (`git log -p --since=...`), the stack trace's files, related tests.
    - The report: the Slack thread (`read_thread`) or the Linear issue (`linear_issue`).
    - Use subagents to read code and logs in parallel when that's faster.

@@ -1,7 +1,7 @@
 # Autonomous Engineering Agent v2: One General Agent on Docker Sandboxes
 
 - **Date:** 2026-11-13
-- **Status:** Draft for review
+- **Status:** Approved 2026-11-13. Its isolation design (G2–G4, G9, §4–§5) is the next phase; `2026-11-13-open-agent-design.md` (v3) covers the current phase.
 - **Author:** Parthib Das Gupta (with Claude)
 - **Supersedes** these parts of the v1 spec (`2026-11-12-autonomous-agent-design.md`): roles and stages (§6.3), the worker (§6.4), the tester pipeline (§6.8), the task lifecycle (§7), the services and credentials (§5.1, §5.2), and the v1 revision-2 additions (CLI tools, sandboxes, `egress`).
 - **Unchanged from v1:** the Claude account proxy (§5.4, except which origin sandboxes use), memory (§6.15), persona (§6.13), ambient mode (§6.14), metrics and the PR stats poller (§6.11), the GitHub identity and PR format (§6.10), and the kill switch (D13).

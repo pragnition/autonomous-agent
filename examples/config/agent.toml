@@ -1,5 +1,6 @@
 # Example install config. Copy to /data/config/agent.toml and edit.
-name = "chilli"                  # the agent's display name, GitHub login and branch prefix
+name = "chilli"                  # the agent's display name and branch prefix
+# github = "chilli-bot"          # the agent's GitHub login, when it differs from name
 timezone = "Asia/Singapore"
 
 [slack]
@@ -10,6 +11,7 @@ slack = "U00000001"
 github = "parthib-example"
 linear = "parthib@example.com"
 role = "admin"
+tailscale = "parthib@example.com"   # Tailscale login: an admin with one can resume the agent from the dashboard
 
 [people.alice]
 slack = "U00000002"
@@ -28,7 +30,10 @@ default = "claude-opus-5-5"      # all real work
 hard = "claude-fable-5-1"        # when someone says "use fable" in a conversation
 chores = "claude-sonnet-5"       # memory consolidation
 
-[sandbox]                        # Docker Sandboxes, managed by sandboxd on the host
+[sandbox]
+isolation = "open"               # "open": one agent container (spec v3); "sandboxes": Docker Sandboxes via sandboxd (spec v2)
+agent_uid = 1001                 # the agent container's user; core hands it the Azure login and runner tokens
+# The rest of this table applies to isolation = "sandboxes".
 host_memory_budget = 0.75        # never let running sandboxes use more than this share of host RAM
 idle_stop_minutes = 30
 rebuild_every_days = 7
@@ -47,6 +52,27 @@ disk_gb = 10
 cpus = 2
 memory_gb = 2
 disk_gb = 10
+
+[linear]
+public_url = ""                  # e.g. "https://jensen.<tailnet>.ts.net": Linear's webhook and OAuth callback, via Tailscale Funnel
+
+# MCP servers every session gets. ${VAR} comes from the session's environment (agent.env, and LINEAR_APP_TOKEN once
+# the Linear app is installed), so the agent searches and edits Linear as itself.
+[mcp.linear]
+type = "http"
+url = "https://mcp.linear.app/mcp"
+headers = { Authorization = "Bearer ${LINEAR_APP_TOKEN}" }
+
+# The dashboard: core serves it on `port`, published on the host as 127.0.0.1:18086; `just dashboard-serve` puts it
+# on the tailnet only. It answers requests only from trusted_peers (where tailscale serve's requests arrive).
+[dashboard]
+port = 8086
+trusted_peers = ["172.30.0.1"]
+agent_origins = ["agent-core", "agent-sandbox"]   # the account proxy's origins that are the agent; others are people
+
+[observability]
+digest_channel = ""              # e.g. "#agent-ops": a daily KPI digest; empty means none
+digest_time = "09:00"            # in `timezone`
 
 # Azure CLI, run by core with an admin's own login (az_login). Only debug sessions get the az tool.
 # Everything not listed in confirm/deny runs on its own; unattended runs may only run `read` commands.

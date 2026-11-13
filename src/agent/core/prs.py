@@ -30,7 +30,7 @@ def register_pr_tools(router: AgentToolRouter, *, githost, writer, write_token: 
 
     def github_login(person_key: str | None) -> str | None:
         person = config.people.get(person_key) if person_key else None
-        return person.github if person else None
+        return (person.github or None) if person else None
 
     async def open_pr(ctx: ToolContext, args: dict) -> ToolReply:
         if ctx.project not in packs:

@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pwd
+import re
 import shutil
 import tarfile
 from pathlib import Path
@@ -53,14 +54,47 @@ def chown_tree(path: Path, user: str) -> None:
                 os.lchown(name, pw.pw_uid, pw.pw_gid)
 
 
+_VAR = re.compile(r"\$\{(\w+)\}")
+
+
+def read_env_files(paths: list[Path]) -> dict[str, str]:
+    env = {}
+    for path in paths:
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            key, sep, value = line.strip().partition("=")
+            if sep and key and not key.startswith("#"):
+                env[key] = value
+    return env
+
+
+def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
+    """MCP servers with ${VAR} in their headers filled from env; a server with an unset variable is left out."""
+    out = {}
+    for name, server in servers.items():
+        missing = {v for h in server.get("headers", {}).values() for v in _VAR.findall(h) if not env.get(v)}
+        if missing:
+            log.warning("leaving out MCP server %s: %s not set yet", name, ", ".join(sorted(missing)))
+            continue
+        out[name] = {**server, "headers": {k: _VAR.sub(lambda m: env[m.group(1)], h)
+                                           for k, h in server.get("headers", {}).items()}}
+    return out
+
+
 class SandboxRunner:
     def __init__(self, link, worktrees, users: SessionUsers, claude, *, sandbox: str, profile: str,
                  bundles_dir: Path, sessions_root: Path, scratch_root: Path, agent_name: str = "agent",
-                 heartbeat_s: float = 15, max_parallel: int = 3, run_as_root: bool = True):
+                 heartbeat_s: float = 15, max_parallel: int = 3, run_as_root: bool = True,
+                 extra_env: dict[str, str] | None = None, env_files: list[Path] = ()):
         self.link, self.worktrees, self.users, self.claude = link, worktrees, users, claude
         self.sandbox, self.profile, self.agent_name = sandbox, profile, agent_name
         self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
         self.heartbeat_s, self.max_parallel, self.run_as_root = heartbeat_s, max_parallel, run_as_root
+        self.extra_env = dict(extra_env or {})  # open mode: agent.env and a git identity for every session
+        self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
 
     def _own(self, path: Path, user: str) -> None:
         if self.run_as_root:
@@ -184,12 +218,15 @@ class SandboxRunner:
                                  branch=wt.get("branch_hint") if is_worktree else None, worktrees=self.worktrees,
                                  agent_name=self.agent_name, structured_sink=sink,
                                  structured_schema=payload.get("structured"))
+        env = {**self.extra_env, **read_env_files(self.env_files)}
         spec = RunSpec(run_id=item_id, role=self.profile, prompt=payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
-                       env={"CLAUDE_CONFIG_DIR": str(sessions), **(payload.get("test_secrets") or {})},
+                       env={"CLAUDE_CONFIG_DIR": str(sessions), **env, **(payload.get("test_secrets") or {})},
+                       mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, resume_session_id=payload.get("resume_session_id"),
-                       os_user=user, permission_mode="bypass", on_message=self._forwarder(tok))
+                       os_user=user if self.run_as_root else None, permission_mode="bypass",
+                       on_message=self._forwarder(tok))
         return spec, sink
 
     async def run_forever(self) -> None:

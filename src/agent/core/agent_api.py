@@ -18,6 +18,8 @@ from pathlib import Path
 
 from aiohttp import web
 
+from agent import db
+from agent import events as event_log
 from agent.core.sessions import TokenInfo, WorkItem, WorkQueue, mint_token, resolve_token
 from agent.httpauth import health
 
@@ -62,11 +64,17 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
             item = queue.claim(sandbox) if ok else None
             if item is not None:
                 session = mint_token(conn, "session", sandbox=sandbox, work_item_id=item.id, ttl_s=session_ttl_s)
+                ctx = context_for(item.id)
+                # A turn's start is where the KPIs' pickup and queue-wait times begin; other kinds are logged apart
+                # so the dashboard knows when every item started without moving the KPIs.
+                event_log.append(conn, "session_started" if item.kind == "turn" else "work_started",
+                                 task_id=getattr(ctx, "task_id", None), actor=None,
+                                 data={"work_item": item.id, "sandbox": sandbox, "queued_at": item.created_at})
                 return web.json_response({
                     "work_item": {"id": item.id, "conversation_id": item.conversation_id, "kind": item.kind,
                                   "payload": item.payload, "attempts": item.attempts},
                     "session_token": session,
-                    "tools": tools.manifest(context_for(item.id))})
+                    "tools": tools.manifest(ctx)})
             if time.monotonic() >= deadline:
                 return web.Response(status=204)
             await asyncio.sleep(0.5)
@@ -78,6 +86,8 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
     async def events(request: web.Request) -> web.Response:
         info = resolved(request, "session")
         event = (await request.json()).get("event") or {}
+        if isinstance(event, dict):
+            event["_ts"] = db.utcnow()  # when it arrived, for the dashboard's timeline
         if runs_dir is not None:
             runs_dir.mkdir(parents=True, exist_ok=True)
             with (runs_dir / f"{info.work_item_id}.jsonl").open("a") as f:
