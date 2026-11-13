@@ -24,6 +24,7 @@ services:
     ports:
       - "127.0.0.1:18080:8080"    # the agent API and git endpoint, for sandboxes via host.docker.internal only
       - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port
+      - "127.0.0.1:18086:8086"    # the dashboard; `just dashboard-serve` puts it on the tailnet only, never Funnel
     environment:
       PROXY_URL: http://172.30.0.1:28090
       SANDBOXD_URL: http://172.30.0.1:28100

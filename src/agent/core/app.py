@@ -40,6 +40,8 @@ from agent.core.prs import register_pr_tools
 from agent.core.sandbox_tools import register_sandbox_tools
 from agent.core.sessions import Gate, WorkItem, WorkQueue, mint_token, resolve_token
 from agent.core.tracker_tools import register_tracker_tools
+from agent.dashboard.app import make_dashboard_app
+from agent.dashboard.transcript import make_scrubber
 from agent.memory.store import MemoryStore
 from agent.persona import load_persona, render_persona
 from agent.tasks import Task
@@ -61,6 +63,7 @@ ENSURE_GRACE_S = 120    # a sandbox takes a while to boot; don't ask twice
 PUBLIC_PORT = 8085                   # Linear's webhook and OAuth callback (Tailscale Funnel), published on 127.0.0.1:18085
 DIGEST_SETTING = "kpi_digest_date"   # the local date of the last digest, so restarts don't post twice
 RUNNER_SILENT_S = 90    # a runner long-polls every 25 s, so this much silence means it is gone
+DASHBOARD_STATIC = Path(os.environ.get("DASHBOARD_STATIC", "/app/web"))  # the built web app in the core image
 
 
 class Notifiers:
@@ -180,6 +183,18 @@ class CoreApp:
             runs_dir=self.data_dir / "runs", pulls=self.pulls,
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         self.agent_app.router.add_route("*", "/git/{project}.git/{tail:.*}", self.githost.aiohttp_handler)
+        self._permalinks: dict[tuple[str, str], str] = {}
+        self.dashboard_app = make_dashboard_app(
+            conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
+            static_dir=DASHBOARD_STATIC if DASHBOARD_STATIC.is_dir() else None, permalink=self.permalink,
+            scrub=make_scrubber(self.secret_values))
+
+    async def permalink(self, channel: str, thread_ts: str) -> str | None:
+        key = (channel, thread_ts)
+        if key not in self._permalinks:
+            resp = await self.slack.chat_getPermalink(channel=channel, message_ts=thread_ts)
+            self._permalinks[key] = resp["permalink"]
+        return self._permalinks[key]
 
     def _turn_payload(self, conversation_id: str, text: str, actor: str | None, unattended: bool) -> dict:
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
@@ -344,6 +359,9 @@ class CoreApp:
             public = web.AppRunner(self.public_app)
             await public.setup()
             await web.TCPSite(public, "0.0.0.0", PUBLIC_PORT).start()
+        dashboard = web.AppRunner(self.dashboard_app)
+        await dashboard.setup()
+        await web.TCPSite(dashboard, "0.0.0.0", self.config.dashboard.port).start()
         loops = [self._every(300, self.refresh_git), self._every(60, self.conversations.intake_linear),
                  self._every(300, self.sweep_memory), self._every(3600, self.maintenance),
                  self._every(15, self.ensure_sandboxes), self._every(300, self.post_digest),

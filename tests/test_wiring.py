@@ -272,3 +272,27 @@ async def test_linear_session_event_becomes_a_turn(tmp_path):
     assert acts == [("S1", "thought")]
     row = app.conn.execute("SELECT sandbox, payload FROM work_items WHERE kind = 'turn'").fetchone()
     assert row["sandbox"] == "general" and "fix it" in json.loads(row["payload"])["text"]
+
+
+async def test_core_serves_the_dashboard_behind_its_access_rules(app):
+    client = TestClient(TestServer(app.dashboard_app))
+    await client.start_server()
+    try:
+        # the example config trusts only the Docker gateway; a test client is 127.0.0.1
+        r = await client.get("/api/me", headers={"Tailscale-User-Login": "parthib@example.com"})
+        assert r.status == 403
+    finally:
+        await client.close()
+
+
+async def test_permalinks_are_cached(app):
+    calls = []
+
+    async def get_permalink(**kw):
+        calls.append(kw)
+        return {"permalink": f"https://x.slack.com/archives/{kw['channel']}/p1"}
+
+    app.slack.chat_getPermalink = get_permalink
+    assert await app.permalink("C1", "1.0") == "https://x.slack.com/archives/C1/p1"
+    assert await app.permalink("C1", "1.0") == "https://x.slack.com/archives/C1/p1"
+    assert calls == [{"channel": "C1", "message_ts": "1.0"}]

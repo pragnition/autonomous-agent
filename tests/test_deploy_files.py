@@ -41,7 +41,8 @@ def test_core_gets_only_its_own_secrets(compose):
 def test_no_worker_and_core_published_on_loopback_only(compose):
     assert set(compose["services"]) == {"core", "supervisor", "relay", "agent"}
     assert "ports" not in compose["services"]["agent"]
-    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18080:8080", "127.0.0.1:18085:8085"]
+    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18080:8080", "127.0.0.1:18085:8085",
+                                                    "127.0.0.1:18086:8086"]
     assert "ports" not in compose["services"]["supervisor"]
 
 
