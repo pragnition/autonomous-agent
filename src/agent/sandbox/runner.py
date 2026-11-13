@@ -25,6 +25,8 @@ FRESH_NOTE = ("(Your earlier session in this conversation couldn't be resumed. C
 REFUSED_NOTE = ("(Your checkout of {project} couldn't be used, so this session has none and runs in your session "
                 "folder: {reason}. Move that folder out of the way and call work_on({project}) to get your checkout "
                 "back on your branch.)\n\n")
+SETUP_FAILED_NOTE = ("(Setup failed in {checkout}, so it may not be ready to build or run. Call work_on({project}) "
+                     "to run it again. The end of its output:\n{tail})\n\n")
 
 _VAR = re.compile(r"\$\{(\w+)\}")
 
@@ -87,10 +89,11 @@ class SandboxRunner:
         <session>/<project>. The session runs in the checkout only when it was bound to its project up front
         (workdir "checkout"), otherwise in the session folder: either way the same folder on every turn. When what
         is at the checkout's path wasn't made by prepare, it is left alone and the turn still runs, in the session
-        folder with no checkout; `note` tells the agent why, for the top of its prompt."""
+        folder with no checkout; `note` tells the agent why, for the top of its prompt. A new checkout's setup that
+        fails leaves the turn in the checkout, with a note saying what failed."""
         session = self.scratch_root / convo
         session.mkdir(parents=True, exist_ok=True)
-        wt, checkout = payload.get("worktree"), None
+        wt, checkout, note = payload.get("worktree"), None, ""
         if wt and wt.get("branch"):  # an item queued before branches were fixed has none: no checkout
             project = wt["project"]
             try:
@@ -103,8 +106,9 @@ class SandboxRunner:
                 passed, tail = await run_setup(list(wt.get("setup") or []), checkout, setup_marker(session, project))
                 if not passed:
                     log.warning("setup failed in %s: %s", checkout, tail[-500:])
+                    note = SETUP_FAILED_NOTE.format(checkout=checkout, project=project, tail=tail)
         cwd = checkout if checkout is not None and payload.get("workdir") == "checkout" else session
-        return cwd, checkout, ""
+        return cwd, checkout, note
 
     async def _heartbeat(self, tok: str, item_id: str) -> None:
         while True:

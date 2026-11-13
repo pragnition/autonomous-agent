@@ -59,8 +59,8 @@ PRIVATE_PREFIXES = (KEYS_PREFIX, MARKER_PREFIX)  # the runner's own files in a s
 
 
 def setup_marker(session_dir: Path, project: str) -> Path:
-    """Left in the session folder, outside the checkout, when a project's setup failed: the next work_on runs it
-    again."""
+    """In the session folder, outside the checkout, while a project's setup hasn't passed (it failed, or the runner
+    stopped partway through it): the next work_on runs it again."""
     return session_dir / f"{MARKER_PREFIX}{project}"
 
 
@@ -70,8 +70,10 @@ def _private(path: Path) -> bool:
 
 
 async def run_setup(commands: list[str], checkout: Path, marker: Path, shell=run_shell) -> tuple[bool, str]:
-    """Run a project's setup in its checkout, stopping at the first failure, which leaves `marker`; a pass removes
-    it. Returns whether setup passed and, when it didn't, the tail of its output."""
+    """Run a project's setup in its checkout, stopping at the first failure. `marker` is written before the first
+    command and removed only once every one has passed, so setup that failed or never finished is run again.
+    Returns whether setup passed and, when it didn't, the tail of its output."""
+    marker.write_text("setup started\n")
     log = []
     for cmd in commands:
         code, out = await shell(cmd, checkout, SETUP_TIMEOUT_S, None)

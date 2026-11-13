@@ -18,7 +18,7 @@ from agent.gitutil import GitError, branch_name
 from agent.memory.store import MemoryStore
 from agent.runner.base import RunResult
 from agent.sandbox.link import CoreLink, SessionRevoked
-from agent.sandbox.remote_tools import Checkout, remote_sdk_tools
+from agent.sandbox.remote_tools import Checkout, remote_sdk_tools, run_setup, setup_marker
 from agent.sandbox.runner import SandboxRunner
 from agent.sandbox.worktrees import CheckoutRefused, Worktrees
 from agent_fixtures import make_config, make_pack
@@ -287,6 +287,49 @@ async def test_failed_upfront_setup_is_rerun_by_work_on(tmp_path, worktrees):
     assert seen["marker before work_on"] is True
     assert "setup passed" in seen["reply"] and not marker.exists()
     assert (tmp_path / "scratch" / "V-1" / "sample" / ".setup-count").read_text().count("ran") == 1
+
+
+async def test_failed_upfront_setup_is_told_at_the_top_of_the_prompt(tmp_path, worktrees):
+    """The session still starts in its checkout, but its prompt opens with what failed and how to run it again."""
+    up_front = item()
+    up_front["payload"]["worktree"]["setup"] = ["echo 'pip: no matching distribution for leftpad'; exit 1"]
+    link, claude = FakeLink(), FakeClaude()
+    await make_runner(tmp_path, worktrees, link, claude).handle(up_front, "tok", [])
+    spec, checkout = claude.specs[0], tmp_path / "scratch" / "V-1" / "sample"
+    assert link.results[-1]["outcome"] == "done" and spec.cwd == checkout
+    assert spec.prompt.startswith(f"(Setup failed in {checkout}")
+    note, text = spec.prompt.rsplit("\n\n", 1)
+    assert "no matching distribution for leftpad" in note and "work_on(sample)" in note and text == "fix the export"
+    assert (tmp_path / "scratch" / "V-1" / ".setup-failed-sample").exists()
+
+
+async def test_setup_marker_is_there_while_setup_runs_and_gone_once_it_passes(tmp_path, worktrees):
+    """A runner that dies partway through setup leaves the marker behind; one that finishes it removes it."""
+    up_front = item()
+    up_front["payload"]["worktree"]["setup"] = ["test -e ../.setup-failed-sample && echo ran >> .setup-count"]
+    claude = FakeClaude()
+    await make_runner(tmp_path, worktrees, FakeLink(), claude).handle(up_front, "tok", [])
+    checkout = tmp_path / "scratch" / "V-1" / "sample"
+    assert (checkout / ".setup-count").read_text() == "ran\n"
+    assert not (tmp_path / "scratch" / "V-1" / ".setup-failed-sample").exists()
+    assert claude.specs[0].prompt == "fix the export"
+
+
+async def test_interrupted_setup_is_rerun_by_work_on(worktrees, session):
+    """Setup that never finished (the runner stopped partway) is run again by the next work_on."""
+    path, _ = worktrees.prepare(session / "sample", "sample", BOUND_BRANCH, "main")
+    marker = setup_marker(session, "sample")
+
+    async def stops(cmd, cwd, timeout_s, env):
+        raise RuntimeError("the runner stopped")
+
+    with pytest.raises(RuntimeError):
+        await run_setup(["echo ran >> .setup-count"], path, marker, shell=stops)
+    assert marker.exists()
+    tools, _ = unbound_tools(FakeLink(), worktrees, session)
+    reply = await call(tools, "work_on", {"project": "sample"})
+    assert "setup passed" in reply and not marker.exists()
+    assert (path / ".setup-count").read_text().count("ran") == 1
 
 
 async def test_cancel_via_heartbeat_interrupts(tmp_path, worktrees):
