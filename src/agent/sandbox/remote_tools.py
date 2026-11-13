@@ -100,9 +100,12 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
                 return f"no such file: {raw}"
             items.append((path.name, path.read_bytes()))
         try:
-            await link.files(tok, items, args.get("text", ""))
+            posted = await link.files(tok, items, args.get("text", ""))
         except SessionRevoked:
             return "This session was stopped."
+        if posted is False:
+            return (f"recorded {len(items)} file(s) as evidence, but this conversation has no Slack thread, so nobody "
+                    "saw them. Attach them where the request came from (e.g. the Linear issue) if they matter.")
         return f"posted {len(items)} file(s)"
 
     local = {"open_pr": open_pr, "post_files": post_files}

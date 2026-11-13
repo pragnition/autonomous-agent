@@ -39,7 +39,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    context_for: Callable[[str], object],
                    bundles: Callable[[str, str | None], tuple[str, bytes]],
                    on_result: Callable[[WorkItem, dict], Awaitable[None]],
-                   on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[None]],
+                   on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[bool | None]],
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60, sandboxd_token: str = "",
                    runs_dir: Path | None = None, pulls: dict[str, float] | None = None) -> web.Application:
     pulls = pulls if pulls is not None else {}
@@ -118,8 +118,8 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
             if len(data) > MAX_FILE_BYTES:
                 return web.json_response({"error": f"{part.filename} is over 25 MB"}, status=413)
             items.append((part.filename or "file", bytes(data)))
-        await on_files(info.work_item_id, items, text)
-        return web.json_response({"ok": True})
+        posted = await on_files(info.work_item_id, items, text)
+        return web.json_response({"ok": True, "posted": posted is not False})
 
     async def result(request: web.Request) -> web.Response:
         info = resolved(request, "session")

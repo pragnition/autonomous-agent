@@ -129,6 +129,20 @@ async def test_on_files_uploads_to_thread(app):
     upload = app.slack.uploads[-1]
     assert upload["channel"] == "D1" and upload["thread_ts"] == "6.1"
     assert upload["file_uploads"] == [{"file": b"png", "filename": "a.png"}]
+    row = app.conn.execute("SELECT data FROM events WHERE type = 'files_posted'").fetchone()
+    assert json.loads(row["data"])["files"] == ["a.png"] and json.loads(row["data"])["slack"] is True
+
+
+async def test_on_files_without_a_thread_is_recorded_not_posted(app):
+    app.conn.execute("INSERT INTO conversations(id, sandbox, is_primary, created_at, last_active_at) "
+                     "VALUES ('V-linear', 'general', 1, 'now', 'now')")
+    item_id = app.queue.enqueue("V-linear", "general", "turn", {"text": "x", "actor": None})
+    uploads = len(app.slack.uploads)
+    assert await app.on_files(item_id, [("a.png", b"png")], "after") is False
+    assert len(app.slack.uploads) == uploads
+    row = app.conn.execute("SELECT data FROM events WHERE type = 'files_posted'").fetchone()
+    assert json.loads(row["data"]) == {"conversation_id": "V-linear", "files": ["a.png"], "text": "after",
+                                       "slack": False}
 
 
 async def test_git_endpoint_needs_a_token(api):

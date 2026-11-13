@@ -53,6 +53,7 @@ class FakeLink:
     def __init__(self, cancel=False, revoked=False, file=None):
         self.cancel, self.revoked, self.file = cancel, revoked, file
         self.tool_calls, self.files_sent, self.results, self.events = [], [], [], []
+        self.posted = True
 
     async def heartbeat(self, tok):
         if self.revoked:
@@ -69,6 +70,7 @@ class FakeLink:
 
     async def files(self, tok, items, text):
         self.files_sent.append((items, text))
+        return self.posted
 
     async def result(self, tok, result):
         self.results.append(result)
@@ -203,6 +205,14 @@ async def test_post_files_sends_worktree_files(worktrees, worktree):
     (worktree / "shot.png").write_bytes(b"png")
     await call(tools_for(link, worktrees, worktree), "post_files", {"paths": ["shot.png"], "text": "after the fix"})
     assert link.files_sent == [([("shot.png", b"png")], "after the fix")]
+
+
+async def test_post_files_says_when_nothing_reached_slack(worktrees, worktree):
+    link = FakeLink()
+    link.posted = False
+    (worktree / "shot.png").write_bytes(b"png")
+    reply = await call(tools_for(link, worktrees, worktree), "post_files", {"paths": ["shot.png"], "text": "t"})
+    assert "no Slack thread" in reply
 
 
 async def test_open_pr_blocks_on_failed_checks(worktrees, worktree, server):
