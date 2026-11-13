@@ -2,9 +2,8 @@ import pytest
 
 from agent import db
 from agent.core.agent_tools import AgentToolRouter
-from agent.core.sandbox_tools import register_sandbox_tools
+from agent.core.sandbox_tools import register_sandbox_tools, scrub_customer
 from agent.core.sessions import WorkQueue
-from agent.memory.scrub import scrub_customer
 from agent.memory.store import MemoryStore
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 
