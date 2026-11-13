@@ -21,13 +21,14 @@ from agent.dashboard.access import access_middleware, viewer
 from agent.dashboard.accounts import HOURS, accounts_view, bucket_seconds, history_view
 from agent.dashboard.queries import (SessionFilter, get_session, kpi_view, list_events, list_sessions,
                                      overview_counts, paused_by)
-from agent.dashboard.transcript import live_stats, read_entries
+from agent.dashboard.transcript import TranscriptCache, lines_before, read_from
 
 log = logging.getLogger(__name__)
 ACTIVE = ("queued", "claimed")
 RECENT = 5
 MAX_ROWS = 200
 PROXY_TIMEOUT_S = 8
+LOOKUP_TIMEOUT_S = 2   # a session's account: worth a short wait, never a slow page
 HISTORY_TTL_S = 60
 PING_S = 15
 NOT_BUILT = "The dashboard's web app isn't built into this image: run `npm run build` in dashboard/ or rebuild core."
@@ -63,6 +64,8 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
     queue = WorkQueue(conn)
     origins = config.dashboard.agent_origins
     history_cache: dict[int, tuple[float, dict]] = {}
+    transcripts = TranscriptCache(scrub, recent=RECENT)
+    pinned: dict[str, str] = {}  # session id -> account; a session never moves to another account
 
     def transcript(item_id: str) -> Path:
         return runs_dir / f"{item_id}.jsonl"
@@ -70,27 +73,34 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
     async def account_of(session_id: str | None) -> str | None:
         if not session_id:
             return None
-        try:
-            return await asyncio.wait_for(proxy.whoami(session_id), PROXY_TIMEOUT_S)
-        except Exception:
-            return None
+        if session_id not in pinned:
+            try:
+                account = await asyncio.wait_for(proxy.whoami(session_id), LOOKUP_TIMEOUT_S)
+            except Exception:
+                return None
+            if account:
+                pinned[session_id] = account
+        return pinned.get(session_id)
 
-    async def fill(row: dict) -> dict:
-        """Add what needs I/O: the Slack permalink and, while it runs, the session's live numbers."""
-        if permalink and row.get("_channel") and row.get("_thread_ts"):
+    async def fill(row: dict, *, links: bool = False, recent: bool = False) -> dict:
+        """Add what needs I/O: the Slack permalink (detail page only), and the numbers a running session has so far
+        (or a finished one that never reported), read incrementally from its transcript."""
+        if links and permalink and row.get("_channel") and row.get("_thread_ts"):
             try:
                 row["links"]["slack"] = await permalink(row["_channel"], row["_thread_ts"])
             except Exception:
                 log.debug("no permalink for %s", row["id"], exc_info=True)
-        if row["state"] == "running":
-            stats = await asyncio.to_thread(live_stats, transcript(row["id"]))
-            row.update(live=True, tokens=stats.tokens, turns=stats.turns, cost_usd=stats.cost_usd,
-                       account=await account_of(stats.session_id))
-        elif row["tokens"] is None and row["state"] != "queued" and transcript(row["id"]).exists():
-            # finished without a run row (cancelled before the runner reported): what the transcript shows
-            stats = await asyncio.to_thread(live_stats, transcript(row["id"]))
+        last: list[dict] = []
+        running = row["state"] == "running"
+        if running or (row["tokens"] is None and row["state"] != "queued" and transcript(row["id"]).exists()):
+            stats, last = await asyncio.to_thread(transcripts.follow, transcript(row["id"]))
             row.update(tokens=stats.tokens, turns=stats.turns, cost_usd=stats.cost_usd)
-        return _public(row)
+            if running:
+                row.update(live=True, account=await account_of(stats.session_id))
+        public = _public(row)
+        if recent:
+            public["recent"] = last
+        return public
 
     async def me(request: web.Request) -> web.Response:
         v = viewer(request)
@@ -101,13 +111,10 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
     async def overview(request: web.Request) -> web.Response:
         running, _ = list_sessions(conn, SessionFilter(state="running", limit=MAX_ROWS))
         queued, _ = list_sessions(conn, SessionFilter(state="queued", limit=MAX_ROWS))
-        rows = []
-        for row in running:
-            entries, _ = await asyncio.to_thread(read_entries, transcript(row["id"]), 0, scrub)
-            rows.append({**await fill(row), "recent": entries[-RECENT:]})
         return web.json_response({
             "paused": db.get_setting(conn, "paused", "0") == "1", "paused_by": paused_by(conn),
-            "running": rows, "queued": [await fill(r) for r in queued],
+            "running": await asyncio.gather(*(fill(r, recent=True) for r in running)),
+            "queued": await asyncio.gather(*(fill(r) for r in queued)),
             "counts": overview_counts(conn, clock(), config.timezone)})
 
     async def sessions(request: web.Request) -> web.Response:
@@ -117,22 +124,25 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
                           limit=min(_int(request, "limit", 50, 1, 100_000), MAX_ROWS),
                           offset=_int(request, "offset", 0, 0, 10**9))
         rows, total = list_sessions(conn, f)
-        return web.json_response({"rows": [await fill(r) for r in rows], "total": total})
+        return web.json_response({"rows": await asyncio.gather(*(fill(r) for r in rows)), "total": total})
 
     async def session(request: web.Request) -> web.Response:
         row = get_session(conn, request.match_info["id"])
         if row is None:
             return web.json_response({"error": "no such session"}, status=404)
         if request.query.get("entries") == "0":  # the page polls the header; the timeline comes from the stream
-            return web.json_response(await fill(row))
-        entries, offset = await asyncio.to_thread(read_entries, transcript(row["id"]), 0, scrub)
-        return web.json_response({**await fill(row), "entries": entries, "offset": offset})
+            return web.json_response(await fill(row, links=True))
+        entries, offset, line = await asyncio.to_thread(read_from, transcript(row["id"]), 0, 0, scrub)
+        return web.json_response({**await fill(row, links=True), "entries": entries, "offset": offset, "line": line})
 
     async def stream(request: web.Request) -> web.StreamResponse:
         item_id = request.match_info["id"]
         if queue.get(item_id) is None:
             return web.json_response({"error": "no such session"}, status=404)
         offset = _int(request, "offset", 0, 0, 10**12)
+        line = _int(request, "line", None, 0, 10**9)
+        if line is None:  # no cursor: count the lines before `offset` once, then follow with the cursor
+            line = await asyncio.to_thread(lines_before, transcript(item_id), offset)
         resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
                                            "X-Accel-Buffering": "no"})
         await resp.prepare(request)
@@ -143,9 +153,9 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
         pinged = time.monotonic()
         try:
             while True:
-                entries, offset = await asyncio.to_thread(read_entries, transcript(item_id), offset, scrub)
+                entries, offset, line = await asyncio.to_thread(read_from, transcript(item_id), offset, line, scrub)
                 if entries:
-                    await send("entries", {"entries": entries, "offset": offset})
+                    await send("entries", {"entries": entries, "offset": offset, "line": line})
                 item = queue.get(item_id)
                 if item is None or item.status not in ACTIVE:
                     if not entries:  # drained: nothing more will be written for it

@@ -296,3 +296,16 @@ async def test_permalinks_are_cached(app):
     assert await app.permalink("C1", "1.0") == "https://x.slack.com/archives/C1/p1"
     assert await app.permalink("C1", "1.0") == "https://x.slack.com/archives/C1/p1"
     assert calls == [{"channel": "C1", "message_ts": "1.0"}]
+
+
+async def test_failed_permalinks_are_not_retried_at_once(app):
+    calls = []
+
+    async def get_permalink(**kw):
+        calls.append(kw)
+        raise RuntimeError("not_in_channel")
+
+    app.slack.chat_getPermalink = get_permalink
+    assert await app.permalink("C9", "1.0") is None
+    assert await app.permalink("C9", "1.0") is None
+    assert len(calls) == 1

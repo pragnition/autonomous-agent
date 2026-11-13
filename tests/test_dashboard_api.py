@@ -417,3 +417,89 @@ async def test_queued_session_has_no_numbers(api, conn):
     item = add_item(WorkQueue(conn), add_conversation(conn, sandbox="general", project=None), "general")
     body = await (await api.get(f"/api/sessions/{item}?entries=0", headers=ANN)).json()
     assert body["tokens"] is None and body["turns"] is None
+
+
+async def test_detail_and_stream_carry_a_line_cursor(tmp_path, conn, proxy):
+    client = await make_client(tmp_path, conn, proxy, poll_s=0.05)
+    try:
+        item = running_item(conn)
+        write_transcript(tmp_path, item, [INIT, say("one")])
+        body = await (await client.get(f"/api/sessions/{item}", headers=ANN)).json()
+        assert body["line"] == 2
+        write_transcript(tmp_path, item, [say("two")])
+        WorkQueue(conn).complete(item, {})
+        resp = await client.get(f"/api/sessions/{item}/stream?offset={body['offset']}&line={body['line']}",
+                                headers=ANN)
+        events = await asyncio.wait_for(read_sse(resp), 5)
+        [(kind, data), _] = events
+        assert kind == "entries" and [e["id"] for e in data["entries"]] == ["2:0"] and data["line"] == 3
+    finally:
+        await client.close()
+
+
+def running_items(conn, n):
+    queue = WorkQueue(conn)
+    items = []
+    for i in range(n):
+        cid = add_conversation(conn, sandbox=f"code-p{i}", project=None)
+        items.append(add_item(queue, cid, f"code-p{i}", text=f"task {i}"))
+        queue.claim(f"code-p{i}")
+    return items
+
+
+class SlowProxy(FakeProxy):
+    def __init__(self, delay):
+        super().__init__()
+        self.delay, self.calls = delay, []
+
+    async def whoami(self, sid):
+        self.calls.append(sid)
+        await asyncio.sleep(self.delay)
+        return "badger"
+
+
+async def test_overview_fills_running_rows_concurrently_and_caches_accounts(tmp_path, conn):
+    proxy = SlowProxy(0.4)
+    client = await make_client(tmp_path, conn, proxy)
+    try:
+        for i, item in enumerate(running_items(conn, 3)):
+            write_transcript(tmp_path, item, [{**INIT, "data": {"session_id": f"sid-{i}"}}])
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        body = await (await client.get("/api/overview", headers=ANN)).json()
+        assert loop.time() - start < 0.9
+        assert [r["account"] for r in body["running"]] == ["badger"] * 3
+        await client.get("/api/overview", headers=ANN)
+        assert sorted(proxy.calls) == ["sid-0", "sid-1", "sid-2"]
+    finally:
+        await client.close()
+
+
+async def test_slow_proxy_lookup_gives_up_quickly(tmp_path, conn):
+    client = await make_client(tmp_path, conn, SlowProxy(30))
+    try:
+        item = running_item(conn)
+        write_transcript(tmp_path, item, [INIT])
+        r = await asyncio.wait_for(client.get("/api/overview", headers=ANN), 4)
+        assert (await r.json())["running"][0]["account"] is None
+    finally:
+        await client.close()
+
+
+async def test_only_the_detail_page_asks_slack_for_permalinks(tmp_path, conn, proxy):
+    asked = []
+
+    async def permalink(channel, thread_ts):
+        asked.append((channel, thread_ts))
+        return "https://x.slack.com/archives/C1/p10"
+
+    client = await make_client(tmp_path, conn, proxy, permalink=permalink)
+    try:
+        item = running_item(conn)
+        for path in ("/api/overview", "/api/sessions"):
+            assert (await client.get(path, headers=ANN)).status == 200
+        assert asked == []
+        body = await (await client.get(f"/api/sessions/{item}?entries=0", headers=ANN)).json()
+        assert body["links"]["slack"] == "https://x.slack.com/archives/C1/p10" and len(asked) == 1
+    finally:
+        await client.close()

@@ -59,7 +59,7 @@ export type Overview = {
   counts: { running: number; queued: number; done_today: number; failed_today: number }
 }
 
-export type SessionDetail = SessionRow & { entries: Entry[]; offset: number }
+export type SessionDetail = SessionRow & { entries: Entry[]; offset: number; line: number }
 
 export type Pace = "ahead" | "on" | "behind"
 

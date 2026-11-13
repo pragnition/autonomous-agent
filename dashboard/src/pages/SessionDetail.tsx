@@ -68,9 +68,13 @@ export function SessionDetail() {
   const row = useSession(id)
   const initial = useSessionEntries(id)
   const active = row.data ? row.data.state === "running" || row.data.state === "queued" : false
-  const stream = useSessionStream(id, initial.data?.offset, active)
-  const items = useMemo(() => pairEntries([...(initial.data?.entries ?? []), ...stream.entries]),
-    [initial.data, stream.entries])
+  const cursor = initial.data ? { offset: initial.data.offset, line: initial.data.line } : undefined
+  const stream = useSessionStream(id, cursor, active)
+  const items = useMemo(() => {
+    const first = initial.data?.entries ?? []
+    const have = new Set(first.map((e) => e.id))
+    return pairEntries([...first, ...stream.entries.filter((e) => !have.has(e.id))])
+  }, [initial.data, stream.entries])
   const bottom = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
 
@@ -141,16 +145,18 @@ export function SessionDetail() {
           <section aria-label="Activity">
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-sm font-medium">Activity</h2>
-              {active && (
+              {active && !stream.ended && (
                 <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span className="size-2 animate-pulse rounded-full bg-good" aria-hidden /> streaming
+                  <span className={stream.broken ? "size-2 rounded-full bg-warning" : "size-2 animate-pulse rounded-full bg-good"}
+                    aria-hidden />
+                  {stream.broken ? "reconnecting…" : "streaming"}
                 </span>
               )}
             </div>
             <Card className="py-2 shadow-none">
               <CardContent className="px-2">
                 <QueryState query={initial} rows={8}>
-                  {() => <ActivityTimeline items={items} live={active} />}
+                  {() => <ActivityTimeline items={items} live={active && !stream.ended} />}
                 </QueryState>
               </CardContent>
             </Card>

@@ -63,6 +63,7 @@ ENSURE_GRACE_S = 120    # a sandbox takes a while to boot; don't ask twice
 PUBLIC_PORT = 8085                   # Linear's webhook and OAuth callback (Tailscale Funnel), published on 127.0.0.1:18085
 DIGEST_SETTING = "kpi_digest_date"   # the local date of the last digest, so restarts don't post twice
 RUNNER_SILENT_S = 90    # a runner long-polls every 25 s, so this much silence means it is gone
+PERMALINK_RETRY_S = 600  # how long a failed Slack permalink lookup is remembered
 DASHBOARD_STATIC = Path(os.environ.get("DASHBOARD_STATIC", "/app/web"))  # the built web app in the core image
 
 
@@ -183,18 +184,26 @@ class CoreApp:
             runs_dir=self.data_dir / "runs", pulls=self.pulls,
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         self.agent_app.router.add_route("*", "/git/{project}.git/{tail:.*}", self.githost.aiohttp_handler)
-        self._permalinks: dict[tuple[str, str], str] = {}
+        self._permalinks: dict[tuple[str, str], tuple[float, str | None]] = {}
         self.dashboard_app = make_dashboard_app(
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
             static_dir=DASHBOARD_STATIC if DASHBOARD_STATIC.is_dir() else None, permalink=self.permalink,
             scrub=make_scrubber(self.secret_values))
 
     async def permalink(self, channel: str, thread_ts: str) -> str | None:
-        key = (channel, thread_ts)
-        if key not in self._permalinks:
-            resp = await self.slack.chat_getPermalink(channel=channel, message_ts=thread_ts)
-            self._permalinks[key] = resp["permalink"]
-        return self._permalinks[key]
+        """A Slack thread's link for the dashboard. A failure (the bot left the channel, a rate limit) is remembered
+        for PERMALINK_RETRY_S, so a page that polls doesn't ask Slack again every few seconds."""
+        key, now = (channel, thread_ts), time.monotonic()
+        cached = self._permalinks.get(key)
+        if cached and (cached[1] is not None or now - cached[0] < PERMALINK_RETRY_S):
+            return cached[1]
+        try:
+            link = (await self.slack.chat_getPermalink(channel=channel, message_ts=thread_ts))["permalink"]
+        except Exception:
+            log.info("no Slack permalink for %s/%s", channel, thread_ts, exc_info=True)
+            link = None
+        self._permalinks[key] = (now, link)
+        return link
 
     def _turn_payload(self, conversation_id: str, text: str, actor: str | None, unattended: bool) -> dict:
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
