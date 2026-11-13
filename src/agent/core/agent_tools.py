@@ -218,9 +218,8 @@ class AgentToolRouter:
                      s({"project": "string", "title": "string", "kind": "string"}), "act"), self._track_task)
         reg(ToolSpec("finish_task", "Mark this conversation's task done when it ends without a PR.",
                      s({"outcome": "string"}), "act"), self._finish_task)
-        reg(ToolSpec("start_task", "Start a separate session in a project's coding sandbox for a piece of work, "
-                                   "with a self-contained brief. Use it to hand work from a DM to a project, or to "
-                                   "split one request into parallel tasks.",
+        reg(ToolSpec("start_task", "Start a separate session for a piece of work, with a self-contained brief, to "
+                                   "split one request into parallel tasks or to work on a second project.",
                      s({"project": "string", "title": "string", "kind": "string", "brief": "string"}), "act"),
             self._start_task)
         reg(ToolSpec("status", "What is running and queued, and whether the agent is paused.", s(), "read"),
@@ -311,9 +310,16 @@ class AgentToolRouter:
         brief = args.get("brief", "").strip()
         task = self._create_task(ctx, project, args.get("title", "").strip() or "Untitled", kind, brief)
         task = tasks.transition(self.conn, task.id, Status.working, actor=ctx.actor or "agent")
+        if ctx.channel and ctx.thread_ts is None:  # a DM has no thread of its own; give the child one
+            posted = await self.slack.chat_postMessage(channel=ctx.channel, text=f"Working on {task.title}")
+            thread_ts, is_primary = posted["ts"], 1
+        else:
+            thread_ts, is_primary = ctx.thread_ts, 0
         convo_id = create_conversation(self.conn, agent_name=self.config.name, channel=ctx.channel,
-                                       thread_ts=ctx.thread_ts, project=project, title=task.title, task_id=task.id,
-                                       is_primary=0)
+                                       thread_ts=thread_ts, project=project, title=task.title, task_id=task.id,
+                                       is_primary=is_primary)
+        if is_primary:
+            record_message(self.conn, ctx.channel, thread_ts, convo_id)
         self.queue.enqueue(convo_id, AGENT_QUEUE, "turn",
                            self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended))
         await self.notifier.task_changed(task)

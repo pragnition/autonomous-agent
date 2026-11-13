@@ -2,12 +2,13 @@ import pytest
 
 from agent import db, tasks
 from agent.core.agent_tools import AgentToolRouter, ToolReply, ToolSpec
-from agent.core.conversations import record_message
+from agent.core.conversations import Conversations, record_message
 from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.gitutil import branch_name
 from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
+from test_conversations import reply
 
 
 @pytest.fixture
@@ -59,6 +60,11 @@ def convo_waiting(conn):
 def latest_item(router):
     item_id = router.conn.execute("SELECT id FROM work_items ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     return router.queue.get(item_id)
+
+
+class _FakePayloads:
+    def turn(self, convo, text, actor, *, unattended=False):
+        return {"text": text, "actor": actor, "unattended": unattended, "model": convo["model"]}
 
 
 async def test_member_cannot_resume_all(router, ctx_member):
@@ -179,6 +185,34 @@ async def test_start_task_queues_code_session(router, ctx_general, conn):
     assert (row["channel"], row["thread_ts"], row["is_primary"]) == ("D-ann", "1.0", 0)
     assert tasks.get_task(conn, row["task_id"]).title == "fix x"
     assert row["branch"] == branch_name("agent", row["task_id"], "fix x") and row["workdir"] == "checkout"
+
+
+async def test_start_task_from_dm_posts_its_own_thread(router, conn):
+    """From a DM (thread_ts is None), start_task posts one top-level line and the child lives in its thread."""
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
+    assert router.slack.posts == [{"channel": "D-ann", "text": "Working on fix x"}]
+    child = conn.execute("SELECT * FROM conversations WHERE id = ?", (latest_item(router).conversation_id,)).fetchone()
+    assert (child["channel"], child["thread_ts"], child["is_primary"]) == ("D-ann", "101.0", 1)
+    assert conn.execute("SELECT conversation_id FROM slack_messages WHERE channel = ? AND ts = ?",
+                        ("D-ann", "101.0")).fetchone()[0] == child["id"]
+
+
+async def test_reply_in_child_thread_reaches_child(router, conn, tmp_path):
+    """Routing finds the child by its own thread_ts, the way any primary conversation's thread does."""
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
+    child = latest_item(router).conversation_id
+    thread_ts = conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (child,)).fetchone()[0]
+
+    convos = Conversations(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=router.queue,
+                           slack=router.slack, payloads=_FakePayloads(), notifier=FakeNotifier(), bot_user_id="UBOT")
+    before = conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+    await convos.handle_slack(reply(thread_ts, "more work", channel="D-ann"))
+    assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == before + 1
+    assert latest_item(router).conversation_id == child
 
 
 async def test_daily_task_limit(router, ctx_general, conn):
