@@ -233,7 +233,8 @@ class AgentToolRouter:
         reg(ToolSpec("stop_all", "Stop everything: pause new work and cancel what is running. Only an admin can "
                                  "resume.", s(), "act"), self._stop_all)
         reg(ToolSpec("resume_all", "Resume after stop_all.", s(), "admin"), self._resume_all)
-        reg(ToolSpec("read_thread", "Read this conversation's Slack thread (oldest first).",
+        reg(ToolSpec("read_thread", "Read this conversation's Slack thread, or in a DM chat its messages so far "
+                                    "(oldest first).",
                      s(optional={"limit": "integer"}), "read"), self._read_thread)
         reg(ToolSpec("recall", "Search your memory; returns ids and one-line summaries.",
                      s({"query": "string"}, {"limit": "integer"}), "read"), self._recall)
@@ -384,12 +385,23 @@ class AgentToolRouter:
         return ToolReply("Resumed.")
 
     async def _read_thread(self, ctx, args) -> ToolReply:
-        if not ctx.channel or not ctx.thread_ts:
+        if not ctx.channel:
             return ToolReply("this conversation has no Slack thread")
-        resp = await self.slack.conversations_replies(channel=ctx.channel, ts=ctx.thread_ts,
-                                                      limit=min(int(args.get("limit") or 50), 200))
+        limit = min(int(args.get("limit") or 50), 200)
+        if ctx.thread_ts:
+            messages = (await self.slack.conversations_replies(channel=ctx.channel, ts=ctx.thread_ts,
+                                                               limit=limit)).get("messages", [])
+        else:  # a DM chat: its top-level messages from the first one recorded for this conversation
+            first = self.conn.execute("SELECT ts FROM slack_messages WHERE channel = ? AND conversation_id = ? "
+                                      "ORDER BY CAST(ts AS REAL) LIMIT 1",
+                                      (ctx.channel, ctx.conversation_id)).fetchone()
+            if first is None:
+                return ToolReply("no Slack messages in this conversation yet")
+            resp = await self.slack.conversations_history(channel=ctx.channel, oldest=first["ts"], inclusive=True,
+                                                          limit=limit)
+            messages = list(reversed(resp.get("messages", [])))  # Slack gives newest first
         lines = []
-        for m in resp.get("messages", []):
+        for m in messages:
             person = self.config.person_by_slack(m.get("user", ""))
             who = person.key if person else ("agent" if m.get("bot_id") else m.get("user", "someone"))
             lines.append(f"{who}: {m.get('text', '')}")

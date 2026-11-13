@@ -92,6 +92,31 @@ async def test_dm_turn_end_to_end(app, api):
     assert tuple(run) == ("turn", 2, "done")
 
 
+async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
+    """track_task in a DM posts the task's status at the DM's top level and asks in that message's thread. A reply
+    there reaches the DM conversation, with its context, and answers the question."""
+    await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
+                                          "ts": "7.1", "text": "the export is broken in sample"})
+    tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
+    body = await (await api.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json()
+    convo_id, session = body["work_item"]["conversation_id"], body["session_token"]
+    for name, args in (("track_task", {"project": "sample", "title": "Fix export", "kind": "bug"}),
+                       ("ask", {"question": "which file?"})):
+        assert (await api.post("/agent/tool", json={"name": name, "args": args}, headers=bearer(session))).status == 200
+    task = app.conn.execute("SELECT id, status_message_ts FROM tasks").fetchone()
+    status, question = app.slack.posts[-2], app.slack.posts[-1]
+    assert status["channel"] == "D1" and "thread_ts" not in status
+    assert question["thread_ts"] == task["status_message_ts"]
+
+    await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
+                                          "ts": "7.5", "thread_ts": task["status_message_ts"], "text": "export.py"})
+
+    last = app.conn.execute("SELECT conversation_id FROM work_items ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+    assert last == convo_id
+    assert app.conn.execute("SELECT waiting FROM conversations WHERE id = ?", (convo_id,)).fetchone()[0] == 0
+    assert app.conn.execute("SELECT status FROM tasks WHERE id = ?", (task["id"],)).fetchone()[0] == "working"
+
+
 async def test_work_on_binds_a_dm_through_core(tmp_path):
     """A DM session's work_on: core binds its conversation, names the branch from the message's first line, and
     hands the runner the real test keys, which a tool reply would have scrubbed."""

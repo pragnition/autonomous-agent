@@ -52,6 +52,7 @@ class FakeSlack:
     def __init__(self):
         self.posts, self.updates, self.reactions, self.ephemerals, self.uploads, self.opened = [], [], [], [], [], []
         self.replies: list[dict] = []
+        self.history: list[dict] = []  # a channel's top-level messages, each with a ts
         self._ts = 100
 
     async def chat_postMessage(self, **kw):
@@ -74,6 +75,13 @@ class FakeSlack:
 
     async def conversations_replies(self, **kw):
         return {"messages": self.replies[: kw.get("limit", 50)]}
+
+    async def conversations_history(self, **kw):
+        """Newest first, like Slack; `oldest` is exclusive unless `inclusive` is set."""
+        oldest = float(kw.get("oldest") or 0)
+        keep = [m for m in self.history
+                if float(m["ts"]) > oldest or (kw.get("inclusive") and float(m["ts"]) == oldest)]
+        return {"messages": sorted(keep, key=lambda m: float(m["ts"]), reverse=True)[: kw.get("limit", 100)]}
 
     async def conversations_open(self, **kw):
         self.opened.append(kw)

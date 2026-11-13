@@ -2,6 +2,7 @@ import pytest
 
 from agent import db, tasks
 from agent.core.agent_tools import AgentToolRouter, ToolReply, ToolSpec
+from agent.core.conversations import record_message
 from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.gitutil import branch_name
 from agent.memory.store import MemoryStore
@@ -213,6 +214,24 @@ async def test_read_thread(router, ctx_member):
     router.slack.replies = [{"user": "U1", "text": "the export crashes"}, {"user": "U2", "text": "since monday"}]
     text = (await router.call(ctx_member, "read_thread", {})).text
     assert "ann: the export crashes" in text and "bob: since monday" in text
+
+
+async def test_read_thread_in_a_dm_reads_the_chat_since_it_started(router, conn):
+    """A DM chat has no thread: read_thread gives its top-level messages from its first recorded one on."""
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    assert (await router.call(ctx, "read_thread", {})).text == "no Slack messages in this conversation yet"
+    for ts in ("10.0", "11.0", "12.0", "13.0"):  # two turns: the person's message and the reply, twice
+        record_message(conn, "D-ann", ts, cid)
+    router.slack.history = [
+        {"ts": "13.0", "user": "UBOT", "bot_id": "B1", "text": "logged in"},
+        {"ts": "9.0", "user": "U1", "text": "from an earlier chat"},
+        {"ts": "11.0", "user": "UBOT", "bot_id": "B1", "text": "here's the device code"},
+        {"ts": "10.0", "user": "U1", "text": "login yourself to azure cli"},
+        {"ts": "12.0", "user": "U1", "text": "done"},
+    ]
+    assert (await router.call(ctx, "read_thread", {})).text == (
+        "ann: login yourself to azure cli\nagent: here's the device code\nann: done\nagent: logged in")
 
 
 async def test_memory_tools(router, ctx_member):
