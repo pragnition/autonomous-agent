@@ -224,12 +224,13 @@ export const useKpis = (days: number, project?: string) =>
     refetchIntervalInBackground: false,
   })
 
+/** One page of the event log: the newest page refreshes itself; older pages (`before` set) don't change. */
 export const useEvents = (type?: string, before?: number) =>
   useQuery({
     queryKey: ["events", type ?? "", before ?? null],
     queryFn: () => api.get<Events>(`/api/events${query({ type, before, limit: 100 })}`),
     placeholderData: keepPreviousData,
-    ...live,
+    ...(before == null ? live : { staleTime: Infinity }),
   })
 
 /** Stop, resume and cancel: on success, everything that shows state refreshes at once. */

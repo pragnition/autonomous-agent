@@ -20,5 +20,7 @@ export default defineConfig({
       },
     },
   },
+  // One bundle (~240 kB gzipped, most of it the chart library the Overview needs anyway) for a tailnet-only page
+  build: { chunkSizeWarningLimit: 1000 },
   test: { environment: "node", include: ["src/**/*.test.ts"] },
 })

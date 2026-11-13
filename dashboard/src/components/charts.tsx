@@ -64,8 +64,9 @@ export function ChartTooltip({ active, payload, label, series, format, labelForm
 
 const axis = { stroke: "var(--chart-axis)", fontSize: 11, tickLine: false, axisLine: false } as const
 
-/** Stacked columns over time: thin bars, 2px surface gaps between segments, rounded data end, one baseline. */
-export function StackedColumns({ data, series, xKey, xFormat, yFormat, labelFormat, height = 240 }: {
+/** Columns over time, stacked (parts of a whole) or grouped (separate counts): thin bars, 2px surface gaps between
+ * segments, a rounded data end, one baseline. */
+export function StackedColumns({ data, series, xKey, xFormat, yFormat, labelFormat, height = 240, stacked = true }: {
   data: Record<string, number>[]
   series: Series[]
   xKey: string
@@ -73,17 +74,18 @@ export function StackedColumns({ data, series, xKey, xFormat, yFormat, labelForm
   yFormat: (v: number) => string
   labelFormat?: (v: string | number) => ReactNode
   height?: number
+  stacked?: boolean
 }) {
   // The 2px surface gap between stacked segments is drawn as a stroke; on dense ranges a bar is narrower than the
   // gap, so the stroke would erase it.
-  const gap = series.length > 1 && data.length <= 60 ? 2 : 0
+  const gap = stacked && series.length > 1 && data.length <= 60 ? 2 : 0
   return (
     <div className="space-y-3">
       <Legend series={series} />
       <div style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
-            barCategoryGap={data.length > 60 ? 0 : "18%"}>
+            barCategoryGap={data.length > 60 ? 0 : "18%"} barGap={2}>
             <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
             <XAxis dataKey={xKey} tickFormatter={xFormat} {...axis} minTickGap={24} />
             <YAxis tickFormatter={yFormat} {...axis} width={52} />
@@ -91,13 +93,14 @@ export function StackedColumns({ data, series, xKey, xFormat, yFormat, labelForm
               cursor={{ fill: "var(--accent)", opacity: 0.6 }}
               content={(p) => (
                 <ChartTooltip active={p.active} payload={p.payload as readonly TooltipItem[]} label={p.label}
-                  series={series} format={yFormat} labelFormat={labelFormat ?? ((v) => xFormat(Number(v)))} />
+                  series={series} format={yFormat} labelFormat={labelFormat ?? ((v) => xFormat(Number(v)))}
+                  total={stacked} />
               )}
             />
             {series.map((s, i) => (
-              <Bar key={s.key} dataKey={s.key} stackId="stack" fill={s.color} maxBarSize={24}
+              <Bar key={s.key} dataKey={s.key} stackId={stacked ? "stack" : undefined} fill={s.color} maxBarSize={24}
                 stroke="var(--card)" strokeWidth={gap}
-                radius={i === series.length - 1 ? [4, 4, 0, 0] : 0} isAnimationActive={false} />
+                radius={!stacked || i === series.length - 1 ? [4, 4, 0, 0] : 0} isAnimationActive={false} />
             ))}
           </BarChart>
         </ResponsiveContainer>
