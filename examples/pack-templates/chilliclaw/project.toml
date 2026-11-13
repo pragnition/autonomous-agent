@@ -1,7 +1,7 @@
 # The ChilliClaw pack. Copy it to /data/config/packs/chilliclaw/ (the data directory's config/packs/chilliclaw).
 # Its local runs call the dev Foundry through the agent's meter, so agent.toml needs the upstream, and core.env the key:
 #   [llm_meter.upstreams.chilliclaw-dev]
-#   base_url = "https://chilliclaw-dev-models-eastus2.openai.azure.com/openai/v1"
+#   base_url = "https://<dev-foundry-resource>.openai.azure.com/openai/v1"
 #   key = "CHILLICLAW_DEV_FOUNDRY_KEY"
 [project]
 name = "chilliclaw"
