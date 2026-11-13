@@ -38,13 +38,32 @@ services:
       - ${AGENT_DATA:-./data}/runner:/data/runner
       - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
 
+  # The agent's own Docker daemon: the apps it runs to test its work start here, never on the laptop's Docker.
+  # Its API listens only on 127.0.0.1 of this container's network, which the agent container shares (below), so an
+  # app published on 127.0.0.1:<port> is the agent's localhost too. The work volume is mounted at the same path as
+  # in the agent container, so a compose file's bind mounts of a worktree resolve.
+  docker:
+    image: docker:29-dind
+    container_name: agent-docker
+    restart: unless-stopped
+    privileged: true
+    networks: [agentnet]
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: [--host=tcp://127.0.0.1:2375, --tls=false, "--default-address-pool=base=10.201.0.0/16,size=24"]
+    volumes:
+      - agentdocker:/var/lib/docker
+      - agentwork:/var/agent
+
   # isolation = "open": Claude Code sessions with a full development environment (spec v3). It pulls work from
-  # core, reads its runner tokens from data/runner and shares core's Azure login in data/cli/azure.
+  # core, reads its runner tokens from data/runner and shares core's Azure login in data/cli/azure. It runs in the
+  # docker service's network namespace: same stack network, and the apps it starts are on its localhost.
   agent:
     build: {context: ., target: agent}
     container_name: agent-runner
     restart: unless-stopped
-    networks: [agentnet]
+    network_mode: service:docker
+    depends_on: [docker]
     command: [python, -m, agent, runners, --tokens, /run/agent/runner-tokens.json, --core, "http://core:8080",
               --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
               --git-email, "${AGENT_GIT_EMAIL:-}"]
@@ -85,3 +104,4 @@ services:
 
 volumes:
   agentwork:     # the agent's clones, sessions and caches; survives rebuilds so sessions can resume
+  agentdocker:   # the agent's Docker images, containers and volumes (the apps it tests)

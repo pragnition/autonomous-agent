@@ -39,8 +39,8 @@ def test_core_gets_only_its_own_secrets(compose):
 
 
 def test_no_worker_and_core_published_on_loopback_only(compose):
-    assert set(compose["services"]) == {"core", "supervisor", "relay", "agent"}
-    assert "ports" not in compose["services"]["agent"]
+    assert set(compose["services"]) == {"core", "supervisor", "relay", "agent", "docker"}
+    assert "ports" not in compose["services"]["agent"] and "ports" not in compose["services"]["docker"]
     assert compose["services"]["core"]["ports"] == ["127.0.0.1:18080:8080", "127.0.0.1:18085:8085",
                                                     "127.0.0.1:18086:8086"]
     assert "ports" not in compose["services"]["supervisor"]
@@ -132,7 +132,7 @@ def test_agent_image():
 def test_agent_service(compose):
     agent = compose["services"]["agent"]
     assert agent["build"]["target"] == "agent" and agent["restart"] == "unless-stopped"
-    assert agent["networks"] == ["agentnet"] and not agent.get("privileged")
+    assert agent["network_mode"] == "service:docker" and "networks" not in agent and not agent.get("privileged")
     vols = volumes(compose, "agent")
     assert "${AGENT_DATA:-./data}/runner:/run/agent:ro" in vols
     assert "${AGENT_DATA:-./data}/cli/azure:/data/cli/azure" in vols
@@ -144,6 +144,24 @@ def test_agent_service(compose):
         assert part in command, part
     assert "${AGENT_DATA:-./data}/runner:/data/runner" in volumes(compose, "core")
     assert "SANDBOXD_HEALTH" not in (compose["services"]["supervisor"].get("environment") or {})
+
+
+def test_agent_docker_daemon(compose):
+    # the agent's own dockerd: its API only on the shared namespace's loopback, the work volume at the same path
+    docker = compose["services"]["docker"]
+    assert docker["image"].endswith("-dind") and docker["privileged"] is True
+    assert docker["networks"] == ["agentnet"] and docker["environment"]["DOCKER_TLS_CERTDIR"] == ""
+    assert "--host=tcp://127.0.0.1:2375" in docker["command"] and not any("0.0.0.0" in c for c in docker["command"])
+    assert "agentwork:/var/agent" in volumes(compose, "docker") and "agentdocker" in compose["volumes"]
+    assert compose["services"]["agent"]["depends_on"] == ["docker"]
+
+
+def test_agent_image_can_run_and_drive_apps():
+    target = agent_target()
+    for needle in ("docker:29-cli", "cli-plugins", "oven/bun:", "rust-just", "@playwright/cli@",
+                   "install-browser chromium --with-deps", "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright",
+                   "DOCKER_HOST=tcp://127.0.0.1:2375", "fonts-noto-color-emoji"):
+        assert needle in target, needle
 
 
 def test_core_publishes_public_port(compose):
