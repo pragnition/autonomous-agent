@@ -89,16 +89,9 @@ default = [5.0, 0.5, 30.0]                 # anything not listed: priced high on
 digest_channel = ""              # e.g. "#agent-ops": a daily KPI digest; empty means none
 digest_time = "09:00"            # in `timezone`
 
-# Azure CLI, run by core with an admin's own login (az_login). Only debug sessions get the az tool.
-# Everything not listed in confirm/deny runs on its own; unattended runs may only run `read` commands.
+# Azure CLI login (az_login): the agent runs az itself
 [cli.azure]
 command = "az"
-profiles = ["debug"]
 env = { AZURE_CONFIG_DIR = "/data/cli/azure", AZURE_CORE_OUTPUT = "json", AZURE_CORE_ONLY_SHOW_ERRORS = "true", AZURE_CORE_COLLECT_TELEMETRY = "false" }
 login = ["az", "login", "--use-device-code"]
 login_check = ["az", "account", "show"]
-relogin_patterns = ["az login", "AADSTS"]
-read = ["* list", "* show", "* query", "* tail", "webapp log *", "monitor *", "account show"]
-confirm = ["* delete", "* purge", "* create", "group *", "deployment *", "network *", "* scale", "* swap", "role *", "ad *", "policy *", "lock *", "account set"]
-deny = ["keyvault secret *", "* keys list", "* list-keys", "* connection-string *", "webapp config appsettings list", "* credential* list", "* show-credentials"]
-egress = ["login.microsoftonline.com", "management.azure.com", "api.loganalytics.io", "api.applicationinsights.io"]

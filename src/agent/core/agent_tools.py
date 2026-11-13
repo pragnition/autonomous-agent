@@ -49,7 +49,6 @@ class ToolContext:
 @dataclass
 class ToolReply:
     text: str
-    file: tuple[str, bytes] | None = None
 
 
 @dataclass(frozen=True)
@@ -120,7 +119,7 @@ class AgentToolRouter:
         except Exception as e:  # a tool failure is the agent's information, never a crash of core
             log.exception("tool %s failed", name)
             reply = ToolReply(f"{name} failed: {type(e).__name__}: {e}")
-        return ToolReply(scrub(reply.text, self.secret_values), reply.file)
+        return ToolReply(scrub(reply.text, self.secret_values))
 
     def context_for(self, work_item_id: str) -> ToolContext:
         row = self.conn.execute("SELECT * FROM work_items WHERE id = ?", (work_item_id,)).fetchone()
@@ -187,10 +186,9 @@ class AgentToolRouter:
 
     def _box(self, ctx: ToolContext) -> MemoryToolbox:
         if ctx.work_item_id not in self._boxes:
-            kind = "production" if ctx.profile == "debug" else "session"
             self._boxes[ctx.work_item_id] = MemoryToolbox(
                 self.memory, conversation_scopes(ctx.channel, ctx.project, ctx.actor, self.packs),
-                self.config.memory_budget.lookups.get(kind, 3000),
+                self.config.memory_budget.lookups.get("session", 6000),
                 run_id=ctx.work_item_id, actor=ctx.actor, secret_values=self.secret_values)
         return self._boxes[ctx.work_item_id]
 
@@ -199,7 +197,7 @@ class AgentToolRouter:
     def _register_builtins(self) -> None:
         reg, s = self.register, schema
         code_general = ("code", "general")
-        # Debug sessions never talk to Slack: their only output is the scrubbed answer ask_production returns
+        # Debug sessions never talk to Slack
         reg(ToolSpec("post_update", "Post a short progress update in this conversation's Slack thread.",
                      s({"text": "string"}), "act", code_general), self._post_update)
         reg(ToolSpec("ask", "Ask the person a question when the request itself is unclear. Their reply arrives as "

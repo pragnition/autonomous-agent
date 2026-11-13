@@ -18,12 +18,6 @@ from agent.memory.store import MemoryStore
 DEFAULT_SYSTEM = Path(__file__).parent.parent / "defaults" / "system.md"
 DEFAULT_SYSTEM_OPEN = Path(__file__).parent.parent / "defaults" / "system-open.md"
 MEMORY_PROMPT = Path(__file__).parent.parent / "prompts" / "memory.md"
-PRODUCTION_RULES = (
-    "This session answers a question about production from another session, which can't see production itself. "
-    "Investigate with your production tools (for Azure, the az tool). Prefer narrow, aggregated queries over a "
-    "time window around the report; use save_to for large output and search the saved file. Answer with what "
-    "fails, since when, how often, the error messages and stack traces, the suspected cause with file references, "
-    "and steps to reproduce. Leave out customer identifiers (emails, names, IDs); they are removed anyway.")
 
 
 class Payloads:
@@ -67,18 +61,6 @@ class Payloads:
                                    "branch_hint": branch_name(self.config.name, convo["task_id"] or convo["id"], title),
                                    "setup": list(p.build_setup), "checks": list(p.build_checks)}
             payload["test_secrets"] = {k: self.secrets[k] for k in p.secrets_worker if k in self.secrets}
-        return payload
-
-    def production(self, project: str, request: str, actor: str | None, unattended: bool,
-                   caller_conversation_id: str | None = None) -> dict:
-        scopes = conversation_scopes(None, project, actor, self.packs)
-        payload = self._base(text=request, actor=actor, unattended=unattended, profile="debug",
-                             model=self.config.models.default,
-                             system_parts=[self.system_prompt(), PRODUCTION_RULES,
-                                           self._briefing(scopes, request, "production")])
-        pack = self.packs[project].project
-        payload.update(project=project, caller_conversation_id=caller_conversation_id,
-                       worktree={"project": project, "default_branch": pack.default_branch, "read_only": True})
         return payload
 
     def chore(self, prompt: str, schema: dict) -> dict:

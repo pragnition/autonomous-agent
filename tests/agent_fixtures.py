@@ -27,11 +27,6 @@ role = "member"
 
 [cli.azure]
 command = "az"
-profiles = ["debug"]
-read = ["* list", "* show", "* query", "monitor *", "account show"]
-confirm = ["* delete", "* create", "group *"]
-deny = ["keyvault secret *"]
-relogin_patterns = ["az login", "AADSTS"]
 login = ["az", "login", "--use-device-code"]
 login_check = ["az", "account", "show"]
 """

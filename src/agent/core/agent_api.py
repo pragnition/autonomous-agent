@@ -7,7 +7,6 @@ running session does). Finishing, cancelling or losing an item revokes its sessi
 from __future__ import annotations
 
 import asyncio
-import base64
 import hmac
 import json
 import logging
@@ -98,11 +97,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         info = resolved(request, "session")
         body = await request.json()
         reply = await tools.call(context_for(info.work_item_id), body.get("name", ""), body.get("args") or {})
-        file = None
-        if reply.file:
-            name, content = reply.file
-            file = {"name": name, "content_b64": base64.b64encode(content).decode()}
-        return web.json_response({"text": reply.text, "file": file})
+        return web.json_response({"text": reply.text})
 
     async def files(request: web.Request) -> web.Response:
         info = resolved(request, "session")

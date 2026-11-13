@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from agent.config import PROFILES
 from agent.core.agent_tools import AgentToolRouter, ToolContext, ToolReply, ToolSpec, schema
-from agent.core.production import scrub_customer
+from agent.memory.scrub import scrub_customer
 
 MAX_OUTPUT = 4000
 

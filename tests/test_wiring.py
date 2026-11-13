@@ -106,9 +106,8 @@ async def test_dm_turn_end_to_end(app, api):
 async def test_sandboxes_mode_keeps_v2_tools(tmp_path):
     app = make_app(tmp_path, "sandboxes")
     code, debug = manifest_names(app, "code-sample"), manifest_names(app, "debug-sample")
-    assert {"open_pr", "ask_production", "track_task", "az_login", "rebuild_sandbox", "sandbox_exec"} <= code
-    assert "az" not in code
-    assert {"az", "az_login"} <= debug and not ({"open_pr", "ask_production"} & debug)
+    assert {"open_pr", "track_task", "az_login", "rebuild_sandbox", "sandbox_exec"} <= code
+    assert "az_login" in debug and not ({"open_pr", "track_task"} & debug)
 
 
 async def test_ensure_sandboxes_mints_tokens_for_waiting_work(app):

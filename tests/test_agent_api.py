@@ -1,4 +1,3 @@
-import base64
 import json
 from types import SimpleNamespace
 
@@ -32,9 +31,7 @@ class FakeRouter:
 
     async def call(self, ctx, name, args):
         self.calls.append((ctx, name, args))
-        if name == "az":
-            return SimpleNamespace(text="preview", file=("logs.json", b"full output"))
-        return SimpleNamespace(text=f"ran {name}", file=None)
+        return SimpleNamespace(text=f"ran {name}")
 
 
 @pytest.fixture
@@ -150,12 +147,11 @@ async def test_pull_respects_gate(api_paused):
     assert (await pull_status(api_paused, "code-p")) == 204
 
 
-async def test_tool_call_resolves_context_and_returns_file(api, parts):
+async def test_tool_call_resolves_context(api, parts):
     item, tok = await pull_one(api, "debug-p")
-    r = await (await api.post("/agent/tool", json={"name": "az", "args": {"args": ["x"]}}, headers=bearer(tok))).json()
-    assert parts.router.calls[-1] == ({"work_item_id": item["id"]}, "az", {"args": ["x"]})
-    assert r["text"] == "preview"
-    assert r["file"]["name"] == "logs.json" and base64.b64decode(r["file"]["content_b64"]) == b"full output"
+    r = await (await api.post("/agent/tool", json={"name": "status", "args": {"x": 1}}, headers=bearer(tok))).json()
+    assert parts.router.calls[-1] == ({"work_item_id": item["id"]}, "status", {"x": 1})
+    assert r == {"text": "ran status"}
 
 
 async def test_result_completes_and_calls_back(api, parts, queue):

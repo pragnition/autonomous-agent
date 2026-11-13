@@ -1,7 +1,7 @@
 import pytest
 
 from agent import db
-from agent.core.payloads import PRODUCTION_RULES, Payloads
+from agent.core.payloads import Payloads
 from agent.memory.store import MemoryStore, NoteInput
 from agent.tokens import estimate_tokens
 from agent_fixtures import add_conversation, make_config, make_pack
@@ -70,14 +70,6 @@ def test_use_fable_model(payloads, conn):
     conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9' WHERE id = ?", (cid,))
     p = payloads.turn(row(conn, cid), "x", "bob")
     assert p["model"] == "claude-fable-5-1" and p["resume_session_id"] == "sess-9"
-
-
-def test_production_payload(payloads):
-    p = payloads.production("sample", "what fails", "bob", False, "V-caller")
-    assert PERSONA not in p["system_prompt"] and PRODUCTION_RULES in p["system_prompt"]
-    assert p["worktree"] == {"project": "sample", "default_branch": "main", "read_only": True}
-    assert p["profile"] == "debug" and p["test_secrets"] == {}
-    assert p["caller_conversation_id"] == "V-caller" and p["project"] == "sample"
 
 
 def test_chore_payload(payloads):

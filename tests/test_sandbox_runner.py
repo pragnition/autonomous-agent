@@ -50,8 +50,8 @@ def bundle_bytes() -> bytes:
 
 
 class FakeLink:
-    def __init__(self, cancel=False, revoked=False, file=None):
-        self.cancel, self.revoked, self.file = cancel, revoked, file
+    def __init__(self, cancel=False, revoked=False):
+        self.cancel, self.revoked = cancel, revoked
         self.tool_calls, self.files_sent, self.results, self.events = [], [], [], []
         self.posted = True
 
@@ -66,7 +66,7 @@ class FakeLink:
 
     async def tool(self, tok, name, args):
         self.tool_calls.append((name, args))
-        return {"text": f"core ran {name}", "file": self.file}
+        return {"text": f"core ran {name}"}
 
     async def files(self, tok, items, text):
         self.files_sent.append((items, text))
@@ -165,7 +165,6 @@ def test_session_users_sticky_and_distinct():
 
 MANIFEST = [{"name": "open_pr", "description": "d", "input_schema": {"type": "object", "properties": {}}},
             {"name": "post_files", "description": "d", "input_schema": {"type": "object", "properties": {}}},
-            {"name": "az", "description": "d", "input_schema": {"type": "object", "properties": {}}},
             {"name": "status", "description": "d", "input_schema": {"type": "object", "properties": {}}}]
 
 
@@ -232,19 +231,6 @@ async def test_open_pr_commits_pushes_and_forwards_sha(worktrees, worktree, serv
     assert args["checks"]["passed"] is True and args["branch"] == "agent/T-0009-x"
     assert args["sha"] == git(server[1], "rev-parse", "refs/heads/agent/T-0009-x")
     assert git(worktree, "log", "-1", "--format=%s") == "Fix export"
-
-
-async def test_saved_file_lands_in_agent_out(worktrees, worktree):
-    link = FakeLink(file={"name": "logs.json", "content_b64": "eyJhIjogMX0="})
-    text = await call(tools_for(link, worktrees, worktree), "az", {"args": ["x"], "save_to": "logs.json"})
-    assert (worktree / ".agent-out" / "logs.json").read_text() == '{"a": 1}'
-    assert "saved to .agent-out/logs.json" in text
-
-
-async def test_saved_file_with_bad_name_refused(worktrees, worktree):
-    link = FakeLink(file={"name": "../../x", "content_b64": "eA=="})
-    text = await call(tools_for(link, worktrees, worktree), "az", {"args": ["x"]})
-    assert "refused" in text and not (worktree.parent / "x").exists()
 
 
 async def test_structured_submit_captured(tmp_path, worktrees):

@@ -93,7 +93,7 @@ def test_slack_manifest_scopes_and_events():
     assert m["settings"]["socket_mode_enabled"] is True
     assert {"app_mentions:read", "channels:history", "groups:history", "im:history", "chat:write",
             "reactions:write", "files:write", "users:read", "im:write"} <= set(m["oauth_config"]["scopes"]["bot"])
-    assert m["settings"]["interactivity"]["is_enabled"] is True
+    assert "interactivity" not in m["settings"]
     assert {"app_mention", "message.channels", "message.groups", "message.im"} <= \
         set(m["settings"]["event_subscriptions"]["bot_events"])
 

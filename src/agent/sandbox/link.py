@@ -3,8 +3,6 @@ work item's session token does everything else. A 401 means the item was finishe
 
 from __future__ import annotations
 
-import base64
-
 import httpx
 
 
@@ -62,7 +60,3 @@ class CoreLink:
         resp = self._check(await self.http.get(f"{self.base}/agent/bundle", headers=self._auth(self.sandbox_token),
                                                params=params))
         return resp.headers["X-Bundle-Version"], resp.content
-
-
-def decode_file(file: dict) -> tuple[str, bytes]:
-    return file["name"], base64.b64decode(file["content_b64"])

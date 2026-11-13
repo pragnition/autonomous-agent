@@ -4,8 +4,29 @@ from agent import db
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.sandbox_tools import register_sandbox_tools
 from agent.core.sessions import WorkQueue
+from agent.memory.scrub import scrub_customer
 from agent.memory.store import MemoryStore
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
+
+
+def test_scrub_keeps_debugging_detail():
+    text = "2026-11-13T10:00:00Z GET /api/citations/42 500 user=jane@x.com ip=10.1.2.3 at export.py:88 (17 times)"
+    out, hits = scrub_customer(text, [])
+    assert "jane@x.com" not in out and "10.1.2.3" not in out and hits == 2
+    assert "2026-11-13T10:00:00Z" in out and "/api/citations/42" in out and "export.py:88" in out and "17 times" in out
+
+
+def test_scrub_tokens_phones_and_ipv6():
+    text = ("auth Bearer abc123def456ghi tok eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig_part phone +65 9123 4567 "
+            "v6 2001:db8:85a3:0:0:8a2e:370:7334 date 2026-11-13 took 1234 ms")
+    out, hits = scrub_customer(text, [])
+    for secret in ("abc123def456ghi", "eyJhbGciOiJIUzI1NiJ9", "9123 4567", "2001:db8"):
+        assert secret not in out
+    assert "2026-11-13" in out and "1234 ms" in out and hits == 4
+
+
+def test_pack_pattern():
+    assert scrub_customer("cust C-12345 failed", [r"C-\d{5}"])[0] == "cust [customer-data] failed"
 
 
 class FakeSandboxd:

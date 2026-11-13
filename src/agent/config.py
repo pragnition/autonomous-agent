@@ -17,10 +17,8 @@ _HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 NETWORKS = ("open", "read")
 
 DEFAULT_RESOURCES = {"code": (4, 8, 30), "debug": (2, 2, 10), "general": (2, 2, 10)}
-DEFAULT_BRIEFING = {"session": 2000, "production": 1000, "ambient": 600}
-DEFAULT_LOOKUPS = {"session": 6000, "production": 3000, "ambient": 0}
-# Always refused for az, whatever the config says: they print or forward the login's token (spec v2 §7)
-AZ_BUILTIN_DENY = ("account get-access-token", "rest")
+DEFAULT_BRIEFING = {"session": 2000}
+DEFAULT_LOOKUPS = {"session": 6000}
 
 # The stack's own credentials: never available to a pack, whatever the pack declares
 RESERVED_SECRETS = {"GITHUB_WRITE_TOKEN", "GITHUB_READ_TOKEN", "INTERNAL_TOKEN", "SLACK_BOT_TOKEN",
@@ -103,16 +101,9 @@ class MemoryBudget:
 @dataclass
 class CliRules:
     command: str
-    profiles: list[str]
     env: dict[str, str] = field(default_factory=dict)
     login: list[str] | None = None
     login_check: list[str] | None = None
-    relogin_patterns: list[str] = field(default_factory=list)
-    read: list[str] = field(default_factory=list)
-    confirm: list[str] = field(default_factory=list)
-    deny: list[str] = field(default_factory=list)
-    egress: list[str] = field(default_factory=list)
-    max_output_chars: int = 8000
 
 
 @dataclass(frozen=True)
@@ -266,22 +257,12 @@ def _cmd(data: dict, key: str, where: str, problems: list[str]) -> list[str] | N
 
 def _cli(name: str, data: dict, where: str, problems: list[str]) -> CliRules:
     cw = f"{where} [cli.{name}]"
-    profiles = _str_list(data, "profiles", cw, problems) or ["debug"]
-    if profiles != ["debug"]:
-        problems.append(f"{cw}: CLI tools run only for the debug profile (profiles = [\"debug\"]), got {profiles}")
     env = data.get("env") or {}
     if not isinstance(env, dict) or not all(isinstance(v, str) for v in env.values()):
         problems.append(f"{cw}: 'env' must be a table of strings")
         env = {}
-    deny = _str_list(data, "deny", cw, problems)
-    if _str(data, "command", cw, problems) == "az":
-        deny = [*deny, *(d for d in AZ_BUILTIN_DENY if d not in deny)]
-    return CliRules(command=data.get("command", ""), profiles=profiles, env=dict(env),
-                    login=_cmd(data, "login", cw, problems), login_check=_cmd(data, "login_check", cw, problems),
-                    relogin_patterns=_str_list(data, "relogin_patterns", cw, problems),
-                    read=_str_list(data, "read", cw, problems), confirm=_str_list(data, "confirm", cw, problems),
-                    deny=deny, egress=_hosts(data, "egress", cw, problems),
-                    max_output_chars=_int(data, "max_output_chars", 8000, cw, problems))
+    return CliRules(command=_str(data, "command", cw, problems), env=dict(env),
+                    login=_cmd(data, "login", cw, problems), login_check=_cmd(data, "login_check", cw, problems))
 
 
 def _mcp(name: str, data: dict, where: str, problems: list[str]) -> McpServer:

@@ -1,6 +1,6 @@
 """core's tools as in-process SDK tools (spec v2 §6). The tool code runs in the runner's process, so the session
-token never reaches the session's OS user. A few tools do local work first: open_pr runs the checks and pushes
-the branch, post_files reads files from the worktree, and a saved output file lands in .agent-out/."""
+token never reaches the session's OS user. Two tools do local work first: open_pr runs the checks and pushes
+the branch, and post_files reads files from the worktree."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from pathlib import Path
 
 from claude_agent_sdk import tool
 
-from agent.core.cli import valid_save_name
-from agent.sandbox.link import SessionRevoked, decode_file
+from agent.sandbox.link import SessionRevoked
 
 CHECK_TIMEOUT_S = 1800
 LOG_TAIL = 3000
@@ -52,16 +51,7 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
             reply = await link.tool(tok, name, args)
         except SessionRevoked:
             return "This session was stopped."
-        text = reply.get("text", "")
-        if reply.get("file"):
-            fname, content = decode_file(reply["file"])
-            if worktree is None or not valid_save_name(fname):
-                return text + "\n[refused to save the output file: no worktree or a bad file name]"
-            out = worktree / ".agent-out"
-            out.mkdir(exist_ok=True)
-            (out / fname).write_bytes(content)
-            text += f"\n[saved to .agent-out/{fname}]"
-        return text
+        return reply.get("text", "")
 
     async def open_pr(args: dict) -> str:
         if worktree is None or not branch or worktrees is None:

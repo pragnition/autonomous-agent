@@ -82,7 +82,7 @@ def test_defaults(tmp_path):
     assert cfg.sandbox.resources["general"] == SandboxResources(2, 2, 10)
     assert cfg.sandbox.host_memory_budget == 0.75
     assert (cfg.sandbox.idle_stop_minutes, cfg.sandbox.rebuild_every_days) == (30, 7)
-    assert set(cfg.memory_budget.briefing) >= {"session", "production", "ambient"}
+    assert set(cfg.memory_budget.briefing) >= {"session"}
     assert cfg.cli == {}
 
 
@@ -98,24 +98,11 @@ def test_example_config_loads():
     cfg = load_agent_config(EXAMPLES / "agent.toml")
     assert cfg.timezone == "Asia/Singapore"
     assert cfg.cli["azure"].command == "az"
-    assert cfg.cli["azure"].profiles == ["debug"]
 
 
-def test_az_builtin_deny_always_present(tmp_path):
-    cfg = load_agent_config(write_agent(tmp_path, '[cli.azure]\ncommand = "az"\nprofiles = ["debug"]\ndeny = []'))
-    assert {"account get-access-token", "rest"} <= set(cfg.cli["azure"].deny)
-    assert cfg.cli["azure"].max_output_chars == 8000
-
-
-def test_cli_only_in_debug_profile(tmp_path):
-    with pytest.raises(ConfigError, match="debug"):
-        load_agent_config(write_agent(tmp_path, '[cli.azure]\ncommand = "az"\nprofiles = ["code"]'))
-
-
-def test_cli_egress_rejects_wildcards(tmp_path):
-    with pytest.raises(ConfigError, match="wildcard"):
-        load_agent_config(write_agent(tmp_path, '[cli.azure]\ncommand = "az"\nprofiles = ["debug"]\n'
-                                                'egress = ["*.azure.com"]'))
+def test_cli_rules_keep_only_login_fields():
+    cfg = load_agent_config(EXAMPLES / "agent.toml")
+    assert set(vars(cfg.cli["azure"])) == {"command", "env", "login", "login_check"}
 
 
 def test_sandbox_resource_override(tmp_path):

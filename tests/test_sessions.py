@@ -60,9 +60,9 @@ def test_other_conversations_are_not_blocked(conn):
 
 def test_claim_is_per_sandbox(conn):
     q = WorkQueue(conn)
-    q.enqueue("c1", "debug-p", "production", {})
+    q.enqueue("c1", "debug-p", "chore", {})
     assert q.claim("code-p") is None
-    assert q.claim("debug-p").kind == "production"
+    assert q.claim("debug-p").kind == "chore"
 
 
 def test_expired_lease_requeues_then_fails(conn):

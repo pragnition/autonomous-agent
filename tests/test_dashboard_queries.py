@@ -261,7 +261,7 @@ def test_event_sources(conn, queue):
         ("stop_all", "local", {"cancelled": []}, None, ("command line", None)),
         ("status_changed", "agent", {}, task.id, ("linear", None)),
         ("consolidated", "memory", {}, None, ("automation", None)),
-        ("cli_command", "ann", {"args": "x"}, None, ("slack", "ann")),
+        ("session_started", "ann", {"args": "x"}, None, ("slack", "ann")),
         ("mystery", None, None, None, ("other", None)),
     ]
     conn.execute("DELETE FROM events")

@@ -22,8 +22,7 @@ from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
 from agent.core.agent_tools import AgentToolRouter, profile_of
 from agent.core.bundles import build_bundle
-from agent.core.cli import CliRunner, register_cli_tools
-from agent.core.cli_admin import DeviceCodeLogin, Proposals, register_login_tools
+from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
 from agent.core.consolidation import ConsolidationService
 from agent.core.conversations import Conversations
 from agent.core.gitserve import GitHost, tokens_auth
@@ -36,7 +35,6 @@ from agent.core.public_api import make_public_app
 from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
-from agent.core.production import register_production_tools
 from agent.core.runner_tokens import SANDBOX_TOKEN_TTL_S, queue_names, sync_runner_tokens
 from agent.core.prs import register_pr_tools
 from agent.core.sandbox_tools import register_sandbox_tools
@@ -156,16 +154,9 @@ class CoreApp:
                                               on_installed=self.on_linear_installed)
         self.open = self.config.sandbox.isolation == "open"
         self.runner_tokens_path = self.data_dir / "runner" / "runner-tokens.json"
-        self.cli_runners = {name: CliRunner(rules, secret_values=self.secret_values, exec_fn=cli_exec)
-                            for name, rules in self.config.cli.items()}
-        self.proposals = Proposals(self.conn, slack, config=self.config, runner_for=self.cli_runners.__getitem__,
-                                   queue=self.queue, turn_payload=self._turn_payload)
         self.login = DeviceCodeLogin(slack, config=self.config, rules=self.config.cli, exec_fn=cli_exec,
                                      run_as=self.config.sandbox.agent_uid if self.open else None)
         register_login_tools(self.router, self.login)
-        if not self.open:  # open mode: the agent runs az itself and reads production signals directly
-            register_cli_tools(self.router, runners=self.cli_runners, propose=self.proposals.propose)
-            register_production_tools(self.router, production_payload=self.payloads.production)
         if sandboxd is not None:
             register_sandbox_tools(self.router, sandboxd)
 
@@ -372,8 +363,6 @@ class CoreApp:
     async def maintenance(self, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)
         self.memory.demote_unused(now)
-        self.conn.execute("UPDATE proposals SET status = 'expired' WHERE status = 'pending' AND expires_at < ?",
-                          (now.strftime("%Y-%m-%dT%H:%M:%SZ"),))
         if self.open:
             self.sync_runners()
 
@@ -472,8 +461,7 @@ def main() -> int:
             github_reader=GitHubReader(secrets["GITHUB_READ_TOKEN"]) if secrets.get("GITHUB_READ_TOKEN") else None,
             github_writer=GitHubWriter(secrets["GITHUB_WRITE_TOKEN"]) if secrets.get("GITHUB_WRITE_TOKEN") else None,
             bot_user_id=bot_user_id)
-        await app.serve(build_app(secrets["SLACK_BOT_TOKEN"], app.conversations, on_action=app.proposals.on_action),
-                        secrets["SLACK_APP_TOKEN"])
+        await app.serve(build_app(secrets["SLACK_BOT_TOKEN"], app.conversations), secrets["SLACK_APP_TOKEN"])
 
     asyncio.run(run())
     return 0
