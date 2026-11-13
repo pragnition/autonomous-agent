@@ -54,10 +54,19 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
+KEYS_PREFIX, MARKER_PREFIX = ".test-keys-", ".setup-failed-"
+PRIVATE_PREFIXES = (KEYS_PREFIX, MARKER_PREFIX)  # the runner's own files in a session folder; post_files refuses them
+
+
 def setup_marker(session_dir: Path, project: str) -> Path:
     """Left in the session folder, outside the checkout, when a project's setup failed: the next work_on runs it
     again."""
-    return session_dir / f".setup-failed-{project}"
+    return session_dir / f"{MARKER_PREFIX}{project}"
+
+
+def _private(path: Path) -> bool:
+    """The test-keys file or a setup marker, by its own name or the name a link to it resolves to."""
+    return path.name.startswith(PRIVATE_PREFIXES) or path.resolve().name.startswith(PRIVATE_PREFIXES)
 
 
 async def run_setup(commands: list[str], checkout: Path, marker: Path, shell=run_shell) -> tuple[bool, str]:
@@ -111,7 +120,7 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path,
             done = "setup passed" if passed else f"setup failed: {tail}"
         else:
             done = "setup not run again (it ran when this checkout was made)"
-        keys = session_dir / f".test-keys-{project}.env"
+        keys = session_dir / f"{KEYS_PREFIX}{project}.env"
         _write_private(keys, "".join(f"{k}={v}\n" for k, v in sorted((details.get("test_secrets") or {}).items())))
         checkout.path, checkout.branch, checkout.checks = path, branch, list(details.get("checks") or [])
         lines = [f"checkout: {path} (branch {branch})", done,
@@ -161,6 +170,8 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path,
             path = resolve(raw)
             if not _inside(path, session_dir):
                 return f"refused: {raw} is outside your session folder"
+            if _private(path):
+                return f"refused: {raw} is the runner's own file (test keys or setup state), which is never posted"
             if not path.is_file():
                 return f"no such file: {raw}"
             items.append((path.name, path.read_bytes()))

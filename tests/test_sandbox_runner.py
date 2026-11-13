@@ -506,6 +506,22 @@ async def test_post_files_outside_worktree_refused(worktrees, worktree):
     assert link.files_sent == []
 
 
+async def test_post_files_refuses_the_runners_own_files(worktrees, session):
+    """The test-keys file work_on writes, and the setup marker, sit in the session folder but never leave it, not
+    even through a link with another name."""
+    link = FakeLink()
+    tools, _ = unbound_tools(link, worktrees, session)
+    await call(tools, "work_on", {"project": "sample"})
+    (session / ".setup-failed-sample").write_text("x\n")
+    (session / "keys.txt").symlink_to(session / ".test-keys-sample.env")
+    (session / "shot.png").write_bytes(b"png")
+    for raw in (".test-keys-sample.env", str(session / ".test-keys-sample.env"), ".setup-failed-sample",
+                "keys.txt"):
+        reply = await call(tools, "post_files", {"paths": ["shot.png", raw], "text": "t"})
+        assert reply.startswith("refused:") and raw in reply
+    assert link.files_sent == []
+
+
 async def test_post_files_sends_worktree_files(worktrees, worktree):
     link = FakeLink()
     (worktree / "shot.png").write_bytes(b"png")
