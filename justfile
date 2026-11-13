@@ -1,0 +1,45 @@
+set shell := ["bash", "-cu"]
+
+dev_image := "autonomous-agent-dev"
+
+# Run the test suite in the Python 3.12 dev image (the host needs only Docker)
+test *args:
+    docker build -q --target dev -t {{dev_image}} . >/dev/null
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/app -w /app {{dev_image}} pytest -q {{args}}
+
+# Build and start the stack
+up:
+    docker compose up -d --build
+
+# Stop and remove the stack (data stays under ./data)
+down:
+    docker compose down
+
+# Follow logs (optionally one service: just logs core)
+logs *service:
+    docker compose logs -f {{service}}
+
+# Check config, secrets, the proxy, GitHub and Linear
+doctor:
+    docker compose exec core python -m agent doctor
+
+# Stop everything from the laptop itself (when Slack isn't an option)
+stop:
+    docker compose exec core python -m agent stop
+
+# Resume after a stop
+resume:
+    docker compose exec core python -m agent resume
+
+# Run one real task against the sample pack (needs the full install)
+smoke:
+    docker compose exec core python /app/scripts/smoke.py
+
+# Install the Claude account proxy as a systemd user service (run by a person, once)
+proxy-install:
+    mkdir -p ~/.config/systemd/user
+    sed "s#@REPO@#{{justfile_directory()}}#g" deploy/claude-fallback-proxy.service > ~/.config/systemd/user/claude-fallback-proxy.service
+    systemctl --user daemon-reload
+    systemctl --user enable claude-fallback-proxy
+    loginctl enable-linger "$USER"
+    @echo "Installed. Add deploy/proxy-origins.example.toml to ~/.claude/accounts/proxy.toml, then: systemctl --user start claude-fallback-proxy"

@@ -1,0 +1,6 @@
+.git
+.superpowers
+.pytest_cache
+data
+claude_proxy
+**/__pycache__

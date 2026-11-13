@@ -1,0 +1,110 @@
+import re
+import tomllib
+from pathlib import Path
+
+import pytest
+import yaml
+
+from agent import db
+from agent.ops import resume, stop
+from agent.proxy import PLACEHOLDER_TOKEN
+
+ROOT = Path(__file__).parent.parent
+
+
+@pytest.fixture(scope="module")
+def compose():
+    return yaml.safe_load((ROOT / "compose.yaml").read_text())
+
+
+def test_relay_binds_only_gateway_ip(compose):
+    relay = compose["services"]["relay"]
+    assert relay["network_mode"] == "host"
+    command = " ".join(relay["command"]) if isinstance(relay["command"], list) else relay["command"]
+    listens = re.findall(r"TCP-LISTEN:[^\s]+", command)
+    assert len(listens) == 2 and all("bind=172.30.0.1" in l for l in listens)
+    assert "TCP-LISTEN:28090" in command and "127.0.0.1:18090" in command
+    assert "TCP-LISTEN:28100" in command and "127.0.0.1:18100" in command
+
+
+def volumes(compose, name):
+    return [str(v) for v in compose["services"][name].get("volumes", [])]
+
+
+def test_core_gets_only_its_own_secrets(compose):
+    vols = volumes(compose, "core")
+    assert any(v.endswith("secrets/core.env:/run/agent/secrets.env:ro") for v in vols)
+    assert not any("supervisor.env" in v for v in vols)
+
+
+def test_no_worker_and_core_published_on_loopback_only(compose):
+    assert set(compose["services"]) == {"core", "supervisor", "relay"}
+    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18080:8080"]
+    assert "ports" not in compose["services"]["supervisor"]
+
+
+def test_no_env_file_and_no_secrets_in_environment(compose):
+    for name, svc in compose["services"].items():
+        assert "env_file" not in svc, name
+        env = svc.get("environment") or {}
+        assert not any(re.search(r"TOKEN|SECRET|KEY|PASSWORD", k) for k in env), name
+
+
+def test_only_supervisor_mounts_docker_socket(compose):
+    for name in compose["services"]:
+        mounted = any("docker.sock" in v for v in volumes(compose, name))
+        assert mounted == (name == "supervisor"), name
+
+
+def test_restart_policies(compose):
+    assert {s["restart"] for s in compose["services"].values()} == {"unless-stopped"}
+
+
+def test_subnet_and_gateway(compose):
+    [ipam] = compose["networks"]["agentnet"]["ipam"]["config"]
+    assert (ipam["subnet"], ipam["gateway"]) == ("172.30.0.0/24", "172.30.0.1")
+    assert compose["services"]["core"]["environment"]["PROXY_URL"] == "http://172.30.0.1:28090"
+    assert compose["services"]["core"]["environment"]["SANDBOXD_URL"] == "http://172.30.0.1:28100"
+
+
+def test_proxy_unit_directives():
+    unit = (ROOT / "deploy" / "claude-fallback-proxy.service").read_text()
+    for line in ("Type=notify", "NotifyAccess=all", "ExitType=cgroup", "ExecReload=", "WantedBy=default.target"):
+        assert line in unit
+    reload = (ROOT / "deploy" / "proxy-reload.sh").read_text()
+    assert "claude-fallback-proxy.next" in reload and "kill -HUP" in reload
+
+
+def test_proxy_origins_example_matches_relay():
+    data = tomllib.loads((ROOT / "deploy" / "proxy-origins.example.toml").read_text())
+    assert data["origins"] == {"agent-core": 18090, "agent-sandbox": 18091}
+    assert PLACEHOLDER_TOKEN in data["container_placeholders"]
+
+
+def test_slack_manifest_scopes_and_events():
+    m = yaml.safe_load((ROOT / "deploy" / "slack-app-manifest.yaml").read_text())
+    assert m["settings"]["socket_mode_enabled"] is True
+    assert {"app_mentions:read", "channels:history", "groups:history", "im:history", "chat:write",
+            "reactions:write", "files:write", "users:read", "im:write"} <= set(m["oauth_config"]["scopes"]["bot"])
+    assert m["settings"]["interactivity"]["is_enabled"] is True
+    assert {"app_mention", "message.channels", "message.groups", "message.im"} <= \
+        set(m["settings"]["event_subscriptions"]["bot_events"])
+
+
+async def test_ops_stop_and_resume(tmp_path):
+    from agent.core.sessions import WorkQueue
+
+    conn = db.connect(tmp_path / "agent.db")
+    db.migrate(conn)
+    queue = WorkQueue(conn)
+    item = queue.enqueue("V-1", "code-sample", "turn", {})
+    queue.claim("code-sample")
+    assert stop(tmp_path / "agent.db") == [item]
+    assert db.get_setting(conn, "paused") == "1" and queue.get(item).status == "cancelled"
+    resume(tmp_path / "agent.db")
+    assert db.get_setting(conn, "paused") == "0"
+
+
+def test_core_image_has_az_and_no_worker_target():
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    assert "AS worker" not in dockerfile and "azure-cli" in dockerfile and "/usr/local/bin/az" in dockerfile

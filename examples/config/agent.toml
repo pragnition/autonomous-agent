@@ -1,0 +1,63 @@
+# Example install config. Copy to /data/config/agent.toml and edit.
+name = "chilli"                  # the agent's display name, GitHub login and branch prefix
+timezone = "Asia/Singapore"
+
+[slack]
+channels = ["#chilli"]           # where it answers mentions (DMs always work for listed people)
+
+[people.parthib]
+slack = "U00000001"
+github = "parthib-example"
+linear = "parthib@example.com"
+role = "admin"
+
+[people.alice]
+slack = "U00000002"
+github = "alice-example"
+linear = "alice@example.com"
+role = "member"
+
+[limits]
+max_concurrent_sessions = 3      # Claude sessions running at once, across all sandboxes
+max_tasks_per_day = 20
+task_minutes = 90                # wall-time budget per work item
+max_turns = 400
+
+[claude.models]
+default = "claude-opus-5-5"      # all real work
+hard = "claude-fable-5-1"        # when someone says "use fable" in a conversation
+chores = "claude-sonnet-5"       # memory consolidation
+
+[sandbox]                        # Docker Sandboxes, managed by sandboxd on the host
+host_memory_budget = 0.75        # never let running sandboxes use more than this share of host RAM
+idle_stop_minutes = 30
+rebuild_every_days = 7
+
+[sandbox.resources.code]         # code-<project>: builds, tests, the app in Docker, a browser
+cpus = 4
+memory_gb = 8
+disk_gb = 30
+
+[sandbox.resources.debug]        # debug-<project>: production logs, locked down
+cpus = 2
+memory_gb = 2
+disk_gb = 10
+
+[sandbox.resources.general]      # DMs and memory chores
+cpus = 2
+memory_gb = 2
+disk_gb = 10
+
+# Azure CLI, run by core with an admin's own login (az_login). Only debug sessions get the az tool.
+# Everything not listed in confirm/deny runs on its own; unattended runs may only run `read` commands.
+[cli.azure]
+command = "az"
+profiles = ["debug"]
+env = { AZURE_CONFIG_DIR = "/data/cli/azure", AZURE_CORE_OUTPUT = "json", AZURE_CORE_ONLY_SHOW_ERRORS = "true", AZURE_CORE_COLLECT_TELEMETRY = "false" }
+login = ["az", "login", "--use-device-code"]
+login_check = ["az", "account", "show"]
+relogin_patterns = ["az login", "AADSTS"]
+read = ["* list", "* show", "* query", "* tail", "webapp log *", "monitor *", "account show"]
+confirm = ["* delete", "* purge", "* create", "group *", "deployment *", "network *", "* scale", "* swap", "role *", "ad *", "policy *", "lock *", "account set"]
+deny = ["keyvault secret *", "* keys list", "* list-keys", "* connection-string *", "webapp config appsettings list", "* credential* list", "* show-credentials"]
+egress = ["login.microsoftonline.com", "management.azure.com", "api.loganalytics.io", "api.applicationinsights.io"]

@@ -1,0 +1,23 @@
+# The bundled sample pack: a tiny repo used by `just smoke` and as the template for `just new-pack`.
+[project]
+name = "sample"
+repo = "example-org/agent-sample"
+default_branch = "main"
+owner = "parthib"
+slack_channel = "#chilli"
+linear_team = "SAM"
+network = "open"                 # coding sandbox internet: "open" (default) or "read" (GET-only registries, GitHub, docs)
+
+[linear.status]
+working = "In Progress"
+ready_for_review = "In Review"
+merged = "Done"
+failed = "Todo"
+
+[build]
+setup = ["python -m pip install -q -r requirements.txt"]
+checks = ["python -m pytest -q"]
+
+
+[secrets]
+worker = []                      # test-only values handed to coding sessions

@@ -1,0 +1,80 @@
+"""Client for the host's Claude account proxy (claude_proxy/), reached through this service's relay.
+
+Only the answered-locally /proxy/ API is used here: usage per account (by code name) and a session's pin.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import httpx
+
+PLACEHOLDER_TOKEN = "sk-ant-oat01-container-via-host-proxy"
+
+
+class ProxyUnavailable(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class AccountUsage:
+    code: str
+    status: str
+    rank: int | None
+    verified: bool
+    util_5h: float
+    util_7d: float
+    active: int
+
+
+@dataclass(frozen=True)
+class Usage:
+    accounts: dict[str, AccountUsage]
+    pool_state: str | None
+
+    def has_capacity(self) -> bool:
+        return any(a.rank is not None for a in self.accounts.values())
+
+    def status_of(self, code: str | None) -> str | None:
+        account = self.accounts.get(code) if code else None
+        return account.status if account else None
+
+
+def _util(rec: dict, window: str) -> float:
+    value = rec.get(window)
+    return float(value[0]) if isinstance(value, list) and value else 0.0
+
+
+class ProxyClient:
+    def __init__(self, base_url: str, http: httpx.AsyncClient | None = None):
+        self.base_url = base_url.rstrip("/")
+        self.http = http or httpx.AsyncClient(timeout=10)
+
+    async def _get(self, path: str, params: dict | None = None) -> httpx.Response:
+        try:
+            resp = await self.http.get(f"{self.base_url}{path}", params=params)
+        except httpx.HTTPError as e:
+            raise ProxyUnavailable(f"proxy unreachable: {e}") from e
+        if resp.status_code >= 500:
+            raise ProxyUnavailable(f"proxy answered {resp.status_code}")
+        return resp
+
+    async def usage(self) -> Usage:
+        resp = await self._get("/proxy/usage")
+        resp.raise_for_status()
+        data = resp.json()
+        accounts = {
+            code: AccountUsage(code=code, status=rec.get("status", ""), rank=rec.get("rank"),
+                               verified=bool(rec.get("verified")), util_5h=_util(rec, "5h"),
+                               util_7d=_util(rec, "7d"), active=int(rec.get("active") or 0))
+            for code, rec in data.items() if code != "_all" and isinstance(rec, dict)
+        }
+        pace = (data.get("_all") or {}).get("pace") or {}
+        return Usage(accounts=accounts, pool_state=pace.get("state"))
+
+    async def whoami(self, sid: str) -> str | None:
+        resp = await self._get("/proxy/whoami", params={"sid": sid})
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json().get("account")

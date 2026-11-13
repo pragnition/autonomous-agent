@@ -1,0 +1,38 @@
+# ChilliClaw pack template. Copy to /data/config/packs/chilliclaw/ once the values marked CONFIRM are filled in;
+# `just doctor` fails on this pack until the repo is real and [build] checks are set.
+[project]
+name = "chilliclaw"
+repo = "CHANGE-ME/chilliclaw"        # CONFIRM: the GitHub owner/name
+default_branch = "main"              # CONFIRM
+owner = "parthib"                    # owns PRs from unmapped requesters
+slack_channel = "#chilliclaw-dev"    # CONFIRM: where its task threads go
+linear_team = "CHI"                  # CONFIRM: the Linear team key
+network = "open"                     # the coding sandbox's internet; "read" limits it to GET-only registries, GitHub, docs
+
+[linear.status]                      # CONFIRM: these must match the team's workflow state names
+working = "In Progress"
+ready_for_review = "In Review"
+merged = "Done"
+failed = "Todo"
+
+[build]
+# CONFIRM: the commands from ChilliClaw's CLAUDE.md. `setup` runs when a session's worktree is created;
+# `checks` run before any PR is opened, so a pack without checks gets PRs nobody verified; doctor flags that.
+setup = []
+checks = []
+
+
+[egress]
+allow = []                           # CONFIRM (only needed with network = "read"): extra exact hosts, e.g. the dev Foundry endpoint
+# [egress.inject."CHANGE-ME-dev.openai.azure.com"]   # CONFIRM: the dev Foundry endpoint the app calls under test
+# header = "api-key"
+# secret = "CHILLICLAW_DEV_FOUNDRY_KEY"            # value lives in core's secrets; the sandbox sees a placeholder
+
+[scrub]
+patterns = []                        # CONFIRM: customer ID formats to strip from production answers, e.g. "C-\\d{5}"
+
+[sandbox.code]
+setup = []                           # CONFIRM: system tools the coding sandbox needs, run as root on create/rebuild
+
+[secrets]
+worker = []                          # CONFIRM: test-only values (test accounts) handed to coding sessions

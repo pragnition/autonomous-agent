@@ -1,0 +1,18 @@
+# The host's Claude account proxy as a systemd user service. Installed by `just proxy-install`, which replaces
+# @REPO@ with this repository's path. Config: ~/.claude/accounts/proxy.toml (add deploy/proxy-origins.example.toml).
+[Unit]
+Description=Claude account proxy (claude_proxy/claude-fallback-proxy.py)
+After=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExitType=cgroup
+ExecStart=/usr/bin/python3 @REPO@/claude_proxy/claude-fallback-proxy.py --config %h/.claude/accounts/proxy.toml
+# The proxy hands its listening sockets to the command in $XDG_RUNTIME_DIR/claude-fallback-proxy.next on SIGHUP
+ExecReload=@REPO@/deploy/proxy-reload.sh $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

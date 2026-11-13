@@ -1,0 +1,61 @@
+# The autonomous agent's stack (spec v2 §4). Host data lives under ${AGENT_DATA:-./data}:
+#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos sandboxes clone)   mirrors/   cli/
+#   secrets/core.env, secrets/supervisor.env   (mode 0600; each service mounts only its own)
+# Claude never runs here: sessions run in Docker Sandboxes managed by sandboxd on the host (deploy/sandboxd.service),
+# which reach core's agent API on 127.0.0.1:18080. The Claude account proxy also runs on the host; the relay lets
+# core read its usage, and lets core reach sandboxd.
+name: autonomous-agent
+
+networks:
+  agentnet:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
+
+services:
+  core:
+    build: {context: ., target: core}
+    container_name: agent-core
+    restart: unless-stopped
+    networks: [agentnet]
+    ports:
+      - "127.0.0.1:18080:8080"    # the agent API and git endpoint, for sandboxes via host.docker.internal only
+    environment:
+      PROXY_URL: http://172.30.0.1:28090
+      SANDBOXD_URL: http://172.30.0.1:28100
+    volumes:
+      - ${AGENT_DATA:-./data}/config:/data/config
+      - ${AGENT_DATA:-./data}/db:/data/db
+      - ${AGENT_DATA:-./data}/runs:/data/runs
+      - ${AGENT_DATA:-./data}/git:/data/git
+      - ${AGENT_DATA:-./data}/mirrors:/data/mirrors
+      - ${AGENT_DATA:-./data}/cli:/data/cli
+      - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
+
+  supervisor:
+    build: {context: ., target: supervisor}
+    container_name: agent-supervisor
+    restart: unless-stopped
+    networks: [agentnet]
+    environment:
+      CORE_HEALTH: http://core:8080/health
+      SANDBOXD_HEALTH: http://172.30.0.1:28100/health
+      CORE_CONTAINER: agent-core
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro
+
+  relay:
+    build: {context: ., target: relay}
+    container_name: agent-relay
+    restart: unless-stopped
+    network_mode: host
+    # Listens only on the stack's own gateway address, never on the LAN: nobody else can reach the accounts or sandboxd.
+    command:
+      - sh
+      - -c
+      - >-
+        socat TCP-LISTEN:28090,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18090 &
+        socat TCP-LISTEN:28100,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18100 &
+        wait
