@@ -2,6 +2,7 @@
 #   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos runners clone)   mirrors/   cli/
 #   runner/ (core's runner tokens for the agent container)
 #   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
+#   secrets/projects/<project>.env   (a project's app .env; core hands it to the agent as runner/projects/)
 # Claude never runs in core. With [sandbox] isolation = "open" (spec v3) sessions run in the `agent` service below;
 # with "sandboxes" (spec v2) they run in Docker Sandboxes managed by sandboxd on the host, which reach core on
 # 127.0.0.1:18080 (then set SANDBOXD_HEALTH for the supervisor). The Claude account proxy runs on the host; the
@@ -40,6 +41,7 @@ services:
       - ${AGENT_DATA:-./data}/cli:/data/cli
       - ${AGENT_DATA:-./data}/runner:/data/runner
       - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
+      - ${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro   # apps' own .env files, passed to the agent
 
   # The agent's own Docker daemon: the apps it runs to test its work start here, never on the laptop's Docker.
   # Its API listens only on 127.0.0.1 of this container's network, which the agent container shares (below), so an

@@ -278,6 +278,25 @@ class CoreApp:
             for name in [*dirs, *files]:
                 os.chown(Path(parent) / name, owner, -1)
 
+    def share_project_envs(self) -> None:
+        """Open mode: each project's app env file (data/secrets/projects/<project>.env, what the app needs to run
+        locally) goes to the agent as runner/projects/<project>.env, readable only by the agent. Read at start, so
+        restart core after changing one."""
+        source, dest = self.data_dir / "secrets" / "projects", self.data_dir / "runner" / "projects"
+        if not source.is_dir():
+            return
+        dest.mkdir(parents=True, exist_ok=True)
+        owner = self._agent_owner()
+        for env in sorted(source.glob("*.env")):
+            tmp = dest / f".{env.name}.tmp"
+            tmp.write_bytes(env.read_bytes())
+            os.chmod(tmp, 0o600)
+            if owner is not None:
+                os.chown(tmp, owner, -1)
+            os.replace(tmp, dest / env.name)
+        if owner is not None:
+            os.chown(dest, owner, -1)
+
     def sync_runners(self) -> dict[str, str]:
         return sync_runner_tokens(self.conn, self.runner_tokens_path, queue_names(self.packs),
                                   owner_uid=self._agent_owner())
@@ -373,6 +392,7 @@ class CoreApp:
 
         if self.open:
             self.prepare_agent_dirs()
+            self.share_project_envs()
             self.sync_runners()
         runner = web.AppRunner(self.agent_app)
         await runner.setup()

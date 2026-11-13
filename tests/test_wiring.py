@@ -232,6 +232,23 @@ def test_prepare_agent_dirs_hands_them_to_the_agent(app, monkeypatch):
     assert any(path.endswith("runner-tokens.json.tmp") for path, _ in calls)
 
 
+def test_project_envs_go_to_the_agent_readable_only_by_it(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: calls.append((str(path), uid)))
+    monkeypatch.setattr("agent.core.app.core_is_root", lambda: True)
+    app.share_project_envs()  # no secrets/projects: nothing to do
+    assert not (app.data_dir / "runner" / "projects").exists()
+    source = app.data_dir / "secrets" / "projects"
+    source.mkdir(parents=True)
+    (source / "sample.env").write_text("A=1\n")
+    (source / "notes.txt").write_text("not an env file")
+    app.share_project_envs()
+    shared = app.data_dir / "runner" / "projects" / "sample.env"
+    assert shared.read_text() == "A=1\n" and oct(shared.stat().st_mode & 0o777) == "0o600"
+    assert sorted(p.name for p in shared.parent.iterdir()) == ["sample.env"]
+    assert {str(shared.parent), str(shared.parent / ".sample.env.tmp")} <= {p for p, uid in calls if uid == 1001}
+
+
 async def test_digest_uses_local_time_and_posts_once(app):
     from datetime import UTC, datetime
     app.config.observability.digest_channel = "#agent-ops"

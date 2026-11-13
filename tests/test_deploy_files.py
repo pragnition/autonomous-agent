@@ -36,6 +36,7 @@ def test_core_gets_only_its_own_secrets(compose):
     vols = volumes(compose, "core")
     assert any(v.endswith("secrets/core.env:/run/agent/secrets.env:ro") for v in vols)
     assert not any("supervisor.env" in v for v in vols)
+    assert "${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro" in vols
 
 
 def test_no_worker_and_core_published_on_loopback_only(compose):

@@ -5,18 +5,20 @@ description: Use when running ChilliClaw locally to build, test, debug or demo a
 
 # Running ChilliClaw locally
 
-ChilliClaw runs in `dev-lite` mode: Postgres, Redis, the gateway, the renderer and office/DSL workers, and the Forge UI on http://localhost:5173. Knowledge search (Milvus) and PII sanitisation are off, so use made-up test data only, and say so when a change needs search to be tested. This skill's directory (shown when it loads) holds `agent-overlay.toml` and `seed-test-user.sql`.
+ChilliClaw runs in `dev-lite` mode: Postgres, Redis, the gateway, the renderer and office/DSL workers, and the Forge UI on http://localhost:5173. Knowledge search (Milvus) and PII sanitisation are off, so use made-up test data only, and say so when a change needs search to be tested. Audio transcription and image generation are off too (no keys for them).
+
+The stack runs with the team's real integration credentials (Slack, Microsoft, Teams), so it acts as the real dev bot. Send test messages only to yourself or a test channel, never to people or team channels, and never to customers. This skill's directory (shown when it loads) holds `agent-overlay.toml` and `seed-test-user.sql`.
 
 ## Start it
 
-Your worktree's setup already wrote `.env` (no real secrets) and ran `bun install`.
+Your worktree's setup already wrote `.env` from the team's own ChilliClaw `.env` and ran `bun install`.
 
 1. **Make sure nobody else's ChilliClaw is up.** Ports are fixed, so only one stack runs at a time:
    ```bash
    docker ps --filter publish=5173 --format '{{.Names}}  {{.Label "com.docker.compose.project.working_dir"}}'
    ```
    If it's another worktree's, don't stop it. Wait and check again every few minutes. If its working directory no longer exists, it's orphaned and you may remove it: `docker compose -p <project> down`.
-2. **Build the config overlay**: local-lite, with model calls through the meter and the integrations that need real credentials (Slack, Teams, Outlook) off.
+2. **Build the config overlay**: local-lite, with model calls through the meter.
    ```bash
    mkdir -p .agent-out
    cat deployments/default/config.local-lite.toml <skill-dir>/agent-overlay.toml > .agent-out/chilliclaw-overlay.toml

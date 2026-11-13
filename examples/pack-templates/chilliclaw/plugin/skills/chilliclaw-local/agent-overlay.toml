@@ -1,42 +1,11 @@
 # Appended to deployments/default/config.local-lite.toml for the agent's local runs (the chilliclaw-local skill).
 # Every chat model call goes to the dev Foundry deployment through the agent's meter at core's fixed address (the
-# app's containers can't resolve the name `core`): core adds the key and stops
-# calls once the cost cap is spent. AGENT_LLM_KEY is a placeholder in .env; the meter replaces it.
-# Integrations that need a real tenant's credentials (Slack, Teams, Outlook, Microsoft sharing) and the features
-# that need their own Foundry deployments (audio transcription, image generation) are off, so the stack runs with
-# no secrets.
+# app's containers can't resolve the name `core`): core adds the key and stops calls once the cost cap is spent.
+# AGENT_LLM_KEY is a placeholder in .env; the meter replaces it. Integrations use the team's own .env as is.
 
-[projects]
-sharing_enabled = false
-
-[integrations.slack]
-enabled = false
-
-[integrations.microsoft.teams]
-enabled = false
-
-# NCSgpt calls a production service and needs a Microsoft tenant: never from the agent's runs
-[extensions.ncsgpt]
-enabled = false
-
-# These specialists work through Outlook, which has no tenant here, and NCSgpt's Excel runner
-[agent.specialists.email]
-enabled = false
-
-[agent.specialists.smart_meeting_minutes]
-enabled = false
-
-[agent.specialists.excel_analyser]
-enabled = false
-
-[integrations.microsoft.outlook.triggers]
-enabled = false
-
-[integrations.microsoft.outlook.calendar_triggers]
-enabled = false
-
-# Off (audio stays nominally on: video upload validation depends on it), but the schema still wants a URL and a
-# model; nothing listens on port 9
+# Audio transcription and image generation need Foundry deployments of their own that the .env has no keys for:
+# off, with a URL and a model only because the schema wants them (nothing listens on port 9). Project-file audio
+# stays nominally on, because video upload validation depends on it.
 [workspace.transcribe_audio]
 enabled = false
 base_url = "http://127.0.0.1:9"

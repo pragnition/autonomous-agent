@@ -36,10 +36,10 @@ Non-goals
 | M3 | Prices are per million tokens by model, matched by the longest listed name inside the deployment name, with a deliberately high default | Deployment names carry the model name; an unknown model is over-counted, never free. |
 | M4 | Streaming chat completions are asked to report usage in the last chunk; answers without usage are logged as free with a warning | Counting needs the provider's own usage report. |
 | M5 | `stop_all` pauses the meter too | The kill switch stops everything the agent started, including its apps' model calls. |
-| P1 | ChilliClaw runs in `dev-lite` with an overlay that turns off the integrations needing a real tenant and sends every chat model call through the meter; setup writes a `.env` of local-only values | No real secrets in the agent's environment; the stack boots the same way every time. |
+| P1 | ChilliClaw runs in `dev-lite` with an overlay that sends every chat model call through the meter; setup writes the worktree's `.env` from the team's own ChilliClaw `.env` (data/secrets/projects, handed to the agent by core) on top of `.env.example` | Features are tested with the integrations the team uses; keys newer than the team's file still exist. |
 | P2 | The agent signs in through ChilliClaw's dev impersonation switch as a seeded admin | SSO with MFA can't run headless, and the switch is refused in production builds. |
 | P3 | One ChilliClaw stack at a time; sessions never stop another session's stack, and always bring their own down | Its ports are fixed. |
-| P4 | The local overlay also turns off the NCSgpt extension and the email, meeting-minutes and Excel specialists | They need a real tenant or call a production service, and the gateway refuses to start without them. |
+| P4 | Without a team `.env`, setup falls back to `.env.example` with local-only values; the gateway then refuses to start until the overlay also turns off Slack, Teams, Outlook, NCSgpt and the email, meeting-minutes and Excel specialists | They need a real tenant. The pack ships with the team file in place, so the overlay doesn't. |
 
 ## Approaches considered
 
