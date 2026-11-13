@@ -129,3 +129,17 @@ def test_linear_app_secrets_required_with_public_url(tmp_path):
     assert not set(linear) & set(required_core(load_agent_config(toml)))
     toml.write_text(toml.read_text().replace('public_url = ""', 'public_url = "https://jensen.example.ts.net"'))
     assert set(linear) <= set(required_core(load_agent_config(toml)))
+
+
+async def test_meter_upstream_keys_are_required_secrets(tmp_path):
+    import shutil
+
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    toml = config / "agent.toml"
+    toml.write_text(toml.read_text().replace(
+        "# [llm_meter.upstreams.<project>-dev]\n# base_url = \"https://<resource>.openai.azure.com/openai/v1\"\n"
+        "# key = \"<PROJECT>_DEV_FOUNDRY_KEY\"",
+        "[llm_meter.upstreams.sample-dev]\nbase_url = \"https://x.openai.azure.com/openai/v1\"\nkey = \"SAMPLE_DEV_KEY\""))
+    checks = by_name(await run_checks(config_dir=config, secrets=ALL_SECRETS))
+    assert not checks["secret:SAMPLE_DEV_KEY"].ok

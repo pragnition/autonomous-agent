@@ -16,7 +16,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from agent import db
+from agent import db, events
 from agent.config import load_agent_config, load_packs
 from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
@@ -30,6 +30,7 @@ from agent.core.gitserve import GitHost, tokens_auth
 from agent.core.kpis import compute_kpis, format_kpis, register_kpi_tools
 from agent.core.linear_app import INSTALL_DM_KEY, LinearAppAuth, register_linear_tools
 from agent.core.linear_sessions import LinearAgentSessions
+from agent.core.llm_meter import make_meter_app
 from agent.core.public_api import make_public_app
 from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
@@ -189,6 +190,9 @@ class CoreApp:
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
             static_dir=DASHBOARD_STATIC if DASHBOARD_STATIC.is_dir() else None, permalink=self.permalink,
             scrub=make_scrubber(self.secret_values))
+        # Model calls from the apps the agent runs and tests, metered against caps; only the stack's network reaches it
+        self.meter_app = make_meter_app(self.conn, self.config.llm_meter, secrets=secrets,
+                                        timezone=self.config.timezone) if self.config.llm_meter.upstreams else None
 
     async def permalink(self, channel: str, thread_ts: str) -> str | None:
         """A Slack thread's link for the dashboard. A failure (the bot left the channel, a rate limit) is remembered
@@ -239,12 +243,21 @@ class CoreApp:
         elif item.kind == "chore":
             await self.consolidation.on_result(item, result)
 
-    async def on_files(self, item_id: str, files: list[tuple[str, bytes]], text: str) -> None:
+    async def on_files(self, item_id: str, files: list[tuple[str, bytes]], text: str) -> bool:
+        """Post files to the conversation's Slack thread. Every post is logged as evidence (open_pr looks for
+        screenshots); returns whether it reached Slack."""
         ctx = self.router.context_for(item_id)
-        if not ctx.channel or not files:
-            return
-        await self.slack.files_upload_v2(channel=ctx.channel, thread_ts=ctx.thread_ts, initial_comment=text or None,
-                                         file_uploads=[{"file": data, "filename": name} for name, data in files])
+        if not files:
+            return False
+        posted = bool(ctx.channel)
+        if posted:
+            await self.slack.files_upload_v2(channel=ctx.channel, thread_ts=ctx.thread_ts,
+                                             initial_comment=text or None,
+                                             file_uploads=[{"file": data, "filename": name} for name, data in files])
+        events.append(self.conn, "files_posted", task_id=ctx.task_id, actor=ctx.actor,
+                      data={"conversation_id": ctx.conversation_id, "files": [name for name, _ in files],
+                            "text": text, "slack": posted})
+        return posted
 
     # sandboxes
 
@@ -371,6 +384,10 @@ class CoreApp:
         dashboard = web.AppRunner(self.dashboard_app)
         await dashboard.setup()
         await web.TCPSite(dashboard, "0.0.0.0", self.config.dashboard.port).start()
+        if self.meter_app is not None:
+            meter = web.AppRunner(self.meter_app)
+            await meter.setup()
+            await web.TCPSite(meter, "0.0.0.0", self.config.llm_meter.port).start()
         loops = [self._every(300, self.refresh_git), self._every(60, self.conversations.intake_linear),
                  self._every(300, self.sweep_memory), self._every(3600, self.maintenance),
                  self._every(15, self.ensure_sandboxes), self._every(300, self.post_digest),

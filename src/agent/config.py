@@ -122,6 +122,30 @@ class DashboardSettings:
     agent_origins: tuple[str, ...] = ("agent-core", "agent-sandbox")  # the account proxy's origins that are the agent
 
 
+@dataclass(frozen=True)
+class LlmUpstream:
+    base_url: str                  # e.g. https://<resource>.openai.azure.com/openai/v1
+    key: str                       # the name of core's secret holding its API key
+    header: str = "api-key"        # where the key goes; "Authorization" sends it as a Bearer token
+
+
+@dataclass(frozen=True)
+class LlmPrice:
+    input: float                   # USD per million tokens
+    cached_input: float
+    output: float
+
+
+@dataclass
+class LlmMeterSettings:
+    """Model calls made by the apps the agent runs and tests, metered against caps (core/llm_meter.py)."""
+    port: int = 8087
+    daily_usd: float = 10.0        # starting caps; the dashboard can change them at runtime
+    monthly_usd: float = 100.0
+    upstreams: dict[str, LlmUpstream] = field(default_factory=dict)
+    prices: dict[str, LlmPrice] = field(default_factory=dict)   # by model name or part of one; "default" for the rest
+
+
 @dataclass
 class AgentConfig:
     name: str
@@ -138,6 +162,7 @@ class AgentConfig:
     mcp: dict[str, McpServer] = field(default_factory=dict)
     github: str = ""  # the agent's GitHub login
     dashboard: DashboardSettings = field(default_factory=DashboardSettings)
+    llm_meter: LlmMeterSettings = field(default_factory=LlmMeterSettings)
 
     def person_by_tailscale(self, login: str | None) -> Person | None:
         if not login:
@@ -272,6 +297,48 @@ def _mcp(name: str, data: dict, where: str, problems: list[str]) -> McpServer:
     return McpServer(kind, url if isinstance(url, str) else "", dict(headers))
 
 
+def _usd(data: dict, key: str, default: float, where: str, problems: list[str]) -> float:
+    value = data.get(key, default)
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        problems.append(f"{where}: '{key}' must be a non-negative number (US dollars)")
+        return default
+    return float(value)
+
+
+def _llm_meter(data: dict, where: str, problems: list[str]) -> LlmMeterSettings:
+    mw = f"{where} [llm_meter]"
+    upstreams = {}
+    for name, up in (data.get("upstreams") or {}).items():
+        uw = f"{mw}.upstreams.{name}"
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
+            problems.append(f"{uw}: the name goes in a URL path; use lowercase letters, digits and '-'")
+        if not isinstance(up, dict):
+            problems.append(f"{uw}: must be a table")
+            continue
+        base = up.get("base_url", "")
+        if not (isinstance(base, str) and base.startswith("https://")):
+            problems.append(f"{uw}: 'base_url' must be an https:// URL")
+            base = ""
+        header = up.get("header", "api-key")
+        if header not in ("api-key", "Authorization"):
+            problems.append(f"{uw}: 'header' must be \"api-key\" or \"Authorization\"")
+        upstreams[name] = LlmUpstream(base.rstrip("/"), _str(up, "key", uw, problems), header)
+    prices = {}
+    for model, price in (data.get("prices") or {}).items():
+        pw = f"{mw}.prices"
+        if not (isinstance(price, list) and len(price) == 3 and
+                all(isinstance(p, (int, float)) and not isinstance(p, bool) and p >= 0 for p in price)):
+            problems.append(f"{pw}: '{model}' must be [input, cached input, output] in USD per million tokens")
+            continue
+        prices[model] = LlmPrice(*(float(p) for p in price))
+    if upstreams and "default" not in prices:
+        problems.append(f"{mw}.prices: add a 'default' price for models not listed, so every call is counted")
+    return LlmMeterSettings(port=_int(data, "port", 8087, mw, problems),
+                            daily_usd=_usd(data, "daily_usd", 10.0, mw, problems),
+                            monthly_usd=_usd(data, "monthly_usd", 100.0, mw, problems),
+                            upstreams=upstreams, prices=prices)
+
+
 def load_agent_config(path: Path) -> AgentConfig:
     problems: list[str] = []
     data = _read_toml(Path(path), problems)
@@ -378,10 +445,12 @@ def load_agent_config(path: Path) -> AgentConfig:
         agent_origins=tuple(_str_list(dash, "agent_origins", dw, problems)) if "agent_origins" in dash
         else DashboardSettings.agent_origins)
 
+    llm_meter = _llm_meter(data.get("llm_meter") or {}, where, problems)
+
     if problems:
         raise ConfigError(problems)
     return AgentConfig(name, timezone, people, channels, limits, models, budget, sandbox, cli, observability,
-                       linear, mcp, github_login, dashboard)
+                       linear, mcp, github_login, dashboard, llm_meter)
 
 
 def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:

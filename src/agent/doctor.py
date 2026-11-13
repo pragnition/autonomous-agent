@@ -58,6 +58,7 @@ async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, g
         checks.append(Check("packs", False, "; ".join(e.problems)))
 
     names = list(required if required is not None else required_core(config)) + sorted({r.secret for p in packs.values() for r in p.project.egress_inject.values()})
+    names += sorted(up.key for up in config.llm_meter.upstreams.values())  # keys the model-call meter adds
     for name in dict.fromkeys(names):
         checks.append(Check(f"secret:{name}", bool(secrets.get(name)), "set" if secrets.get(name) else "missing"))
 
