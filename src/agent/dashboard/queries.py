@@ -168,6 +168,50 @@ def paused_by(conn: sqlite3.Connection) -> dict | None:
     return {"actor": row["actor"], "at": row["ts"]} if row else {"actor": None, "at": None}
 
 
+SESSION_SOURCES = {"slack": "slack", "linear": "linear", "chore": "automation", "handover": "agent", "other": "other"}
+SYSTEM_ACTORS = {"local", "memory", "agent", "system"}
+
+
+def _event_sources(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[tuple[str, str | None]]:
+    """Where each event came from (slack, linear, automation, dashboard, command line, agent, other) and, for
+    Slack and the dashboard, who: a person key or tailscale:<login>."""
+    datas = [d if isinstance(d := _json(r["data"]), dict) else {} for r in rows]
+    items = sorted({d["work_item"] for d in datas if isinstance(d.get("work_item"), str)})
+    sessions = {}
+    if items:
+        marks = ",".join("?" * len(items))
+        sessions = {r["id"]: (r["source"], r["task_requester"] or r["actor"])
+                    for r in conn.execute(f"{_SELECT} WHERE w.id IN ({marks})", items)}
+    task_ids = sorted({r["task_id"] for r in rows if r["task_id"]})
+    task_rows = {}
+    if task_ids:
+        marks = ",".join("?" * len(task_ids))
+        task_rows = {r["id"]: (r["source"], r["requester"])
+                     for r in conn.execute(f"SELECT id, source, requester FROM tasks WHERE id IN ({marks})", task_ids)}
+    out = []
+    for r, d in zip(rows, datas):
+        actor = r["actor"]
+        if d.get("via") == "dashboard":
+            out.append(("dashboard", actor))
+        elif actor == "local":
+            out.append(("command line", None))
+        elif d.get("work_item") in sessions:
+            source, requester = sessions[d["work_item"]]
+            source = SESSION_SOURCES.get(source, "other")
+            out.append((source, requester if source == "slack" else None))
+        elif r["task_id"] in task_rows:
+            source, requester = task_rows[r["task_id"]]
+            source = source if source in ("slack", "linear") else "automation"
+            out.append((source, requester if source == "slack" else None))
+        elif actor == "memory":
+            out.append(("automation", None))
+        elif actor and actor not in SYSTEM_ACTORS and not actor.startswith("tailscale:"):
+            out.append(("slack", actor))   # a person's request to the agent, made in a Slack conversation
+        else:
+            out.append(("other", None))
+    return out
+
+
 def list_events(conn: sqlite3.Connection, type: str | None, limit: int, before: int | None) -> dict:
     where, args = [], []
     if type:
@@ -180,8 +224,8 @@ def list_events(conn: sqlite3.Connection, type: str | None, limit: int, before: 
     rows = conn.execute(f"SELECT id, ts, type, actor, task_id, data FROM events{clause} ORDER BY id DESC LIMIT ?",
                         [*args, limit]).fetchall()
     types = [r["type"] for r in conn.execute("SELECT DISTINCT type FROM events ORDER BY type")]
-    return {"rows": [{"id": r["id"], "ts": r["ts"], "type": r["type"], "actor": r["actor"], "task_id": r["task_id"],
-                      "data": _json(r["data"])} for r in rows], "types": types}
+    return {"rows": [{"id": r["id"], "ts": r["ts"], "type": r["type"], "source": source, "sender": sender}
+                     for r, (source, sender) in zip(rows, _event_sources(conn, rows))], "types": types}
 
 
 def _json(text: str | None):

@@ -9,6 +9,7 @@ test *args:
 
 # Build and start the stack
 up:
+    -just account-names
     docker compose up -d --build
 
 # Stop and remove the stack (data stays under ./data)
@@ -39,6 +40,10 @@ resume:
 # Run one real task against the sample pack (needs the full install)
 smoke:
     docker compose exec core python /app/scripts/smoke.py
+
+# Give the dashboard the Claude account holders' names (from the account proxy's config; run on the laptop)
+account-names:
+    python3 -c "import sys; sys.path.insert(0, 'src'); from agent.dashboard.names import main; main()" data/config/account-names.toml
 
 # Put the dashboard on the tailnet only (https://<node>.<tailnet>.ts.net:9443); never Funnel. Run on the laptop.
 dashboard-serve:

@@ -196,10 +196,10 @@ def test_events_paging_and_types(conn):
     for i in range(5):
         events.append(conn, "stop_all" if i % 2 else "resume_all", task_id=None, actor=f"p{i}", data={"i": i})
     page = list_events(conn, None, 2, None)
-    assert [r["actor"] for r in page["rows"]] == ["p4", "p3"] and page["rows"][0]["data"] == {"i": 4}
+    assert [r["sender"] for r in page["rows"]] == ["p4", "p3"] and "data" not in page["rows"][0]
     older = list_events(conn, None, 10, page["rows"][-1]["id"])
-    assert [r["actor"] for r in older["rows"]] == ["p2", "p1", "p0"]
-    assert [r["actor"] for r in list_events(conn, "stop_all", 10, None)["rows"]] == ["p3", "p1"]
+    assert [r["sender"] for r in older["rows"]] == ["p2", "p1", "p0"]
+    assert [r["sender"] for r in list_events(conn, "stop_all", 10, None)["rows"]] == ["p3", "p1"]
     assert page["types"] == ["resume_all", "stop_all"]
 
 
@@ -243,3 +243,29 @@ def test_overview_counts_local_day(conn, queue):
         conn.execute("UPDATE work_items SET status = ?, updated_at = ? WHERE id = ?", (status, ts, item))
     assert overview_counts(conn, now, "Asia/Singapore") == {"running": 1, "queued": 1, "done_today": 1,
                                                            "failed_today": 1}
+
+
+def test_event_sources(conn, queue):
+    slack = add_conversation(conn, sandbox="general", project=None)
+    item = add_item(queue, slack, "general", actor="ann")
+    chore = queue.enqueue(None, "general", "chore", {})
+    lin = add_conversation(conn, sandbox="general", project=None, channel=None, thread_ts=None)
+    db.set_setting(conn, "linear_session:x", lin)
+    lin_item = add_item(queue, lin, "general", actor=None)
+    task = make_task(conn, source="linear", requester=None)
+    cases = [
+        ("session_started", None, {"work_item": item}, None, ("slack", "ann")),
+        ("work_started", None, {"work_item": chore}, None, ("automation", None)),
+        ("session_started", None, {"work_item": lin_item}, None, ("linear", None)),
+        ("stop_all", "tailscale:x@y", {"via": "dashboard"}, None, ("dashboard", "tailscale:x@y")),
+        ("stop_all", "local", {"cancelled": []}, None, ("command line", None)),
+        ("status_changed", "agent", {}, task.id, ("linear", None)),
+        ("consolidated", "memory", {}, None, ("automation", None)),
+        ("cli_command", "ann", {"args": "x"}, None, ("slack", "ann")),
+        ("mystery", None, None, None, ("other", None)),
+    ]
+    conn.execute("DELETE FROM events")
+    for type, actor, data, task_id, _ in cases:
+        events.append(conn, type, task_id=task_id, actor=actor, data=data)
+    rows = list_events(conn, None, 100, None)["rows"][::-1]
+    assert [(r["source"], r["sender"]) for r in rows] == [c[-1] for c in cases]

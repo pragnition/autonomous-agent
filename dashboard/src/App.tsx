@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router"
 import { Layout } from "@/components/Layout"
 import { Accounts } from "@/pages/Accounts"
 import { Activity } from "@/pages/Activity"
+import { Foundry } from "@/pages/Foundry"
 import { Kpis } from "@/pages/Kpis"
 import { NotFound } from "@/pages/NotFound"
 import { Overview } from "@/pages/Overview"
@@ -16,6 +17,7 @@ export function App() {
         <Route path="sessions" element={<Sessions />} />
         <Route path="sessions/:id" element={<SessionDetail />} />
         <Route path="accounts" element={<Accounts />} />
+        <Route path="foundry" element={<Foundry />} />
         <Route path="kpis" element={<Kpis />} />
         <Route path="activity" element={<Activity />} />
         <Route path="*" element={<NotFound />} />

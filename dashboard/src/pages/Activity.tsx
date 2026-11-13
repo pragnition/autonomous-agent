@@ -1,10 +1,9 @@
-import { CirclePause, CirclePlay, CircleX, Dot } from "lucide-react"
+import { Bot, CirclePause, CirclePlay, CircleX, Dot, Kanban, LayoutDashboard, MessageSquare, Sparkles, Terminal }
+  from "lucide-react"
 import { useState } from "react"
-import { Link } from "react-router"
-import { type EventRow, useEvents } from "@/api"
+import { type EventRow, type EventSource, useEvents } from "@/api"
 import { Page } from "@/components/Page"
 import { QueryState } from "@/components/QueryState"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -31,48 +30,48 @@ const LABELS: Record<string, string> = {
   llm_cap_reached: "Model-call cap reached",
 }
 
-const ICONS: Record<string, typeof Dot> = {
-  stop_all: CirclePause, resume_all: CirclePlay, session_cancelled: CircleX, llm_cap_reached: CirclePause,
+const LOUD: Record<string, { icon: typeof Dot; tone: string }> = {
+  stop_all: { icon: CirclePause, tone: "text-critical" },
+  session_cancelled: { icon: CircleX, tone: "text-critical" },
+  llm_cap_reached: { icon: CirclePause, tone: "text-critical" },
+  resume_all: { icon: CirclePlay, tone: "text-good" },
 }
 
-function Data({ data }: { data: unknown }) {
-  if (data == null) return <span className="text-muted-foreground">—</span>
-  if (typeof data !== "object") return <span className="font-mono text-xs">{String(data)}</span>
-  const items = Object.entries(data as Record<string, unknown>)
+const SOURCES: Record<EventSource, { label: string; icon: typeof Dot }> = {
+  slack: { label: "Slack", icon: MessageSquare },
+  linear: { label: "Linear", icon: Kanban },
+  automation: { label: "Automation", icon: Sparkles },
+  dashboard: { label: "Dashboard", icon: LayoutDashboard },
+  "command line": { label: "Command line", icon: Terminal },
+  agent: { label: "Agent", icon: Bot },
+  other: { label: "Other", icon: Dot },
+}
+
+function Source({ row }: { row: EventRow }) {
+  const s = SOURCES[row.source] ?? SOURCES.other
   return (
-    <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
-      {items.map(([k, v]) => {
-        const value = Array.isArray(v) ? (v.length ? v.join(", ") : "none") : typeof v === "object" && v ? JSON.stringify(v) : String(v)
-        const link = k === "work_item" && typeof v === "string"
-        return (
-          <span key={k} className="min-w-0">
-            <span className="text-muted-foreground">{k.replaceAll("_", " ")}</span>{" "}
-            {link ? <Link to={`/sessions/${v}`} className="font-mono hover:underline">{value}</Link>
-              : <span className="font-mono break-all">{value.length > 160 ? `${value.slice(0, 159)}…` : value}</span>}
-          </span>
-        )
-      })}
+    <span className="inline-flex items-center gap-1.5">
+      <s.icon className="size-4 text-muted-foreground" aria-hidden />
+      <span>{s.label}</span>
+      {row.sender && <span className="text-muted-foreground">· {row.sender}</span>}
     </span>
   )
 }
 
 function Rows({ rows }: { rows: EventRow[] }) {
   return rows.map((e) => {
-    const Icon = ICONS[e.type] ?? Dot
-    const loud = e.type in ICONS
-    const tone = e.type === "resume_all" ? "text-good" : "text-critical"
+    const loud = LOUD[e.type]
+    const Icon = loud?.icon ?? Dot
     return (
       <TableRow key={e.id}>
         <TableCell className="tabular whitespace-nowrap text-muted-foreground">{fmtDateTime(e.ts)}</TableCell>
         <TableCell className="whitespace-nowrap">
           <span className="inline-flex items-center gap-1.5">
-            <Icon className={loud ? `size-4 ${tone}` : "size-4 text-muted-foreground"} aria-hidden />
+            <Icon className={`size-4 ${loud?.tone ?? "text-muted-foreground"}`} aria-hidden />
             <span className={loud ? "font-medium" : ""}>{LABELS[e.type] ?? e.type}</span>
           </span>
         </TableCell>
-        <TableCell className="whitespace-nowrap">{e.actor ?? <span className="text-muted-foreground">—</span>}</TableCell>
-        <TableCell className="font-mono text-xs whitespace-nowrap">{e.task_id ?? ""}</TableCell>
-        <TableCell className="max-w-[36rem]"><Data data={e.data} /></TableCell>
+        <TableCell className="whitespace-nowrap"><Source row={e} /></TableCell>
       </TableRow>
     )
   })
@@ -87,7 +86,7 @@ function OlderPage({ type, before, last, onMore }: { type?: string; before: numb
       <Rows rows={rows} />
       {page.data && last && (
         <TableRow>
-          <TableCell colSpan={5} className="py-2 text-center">
+          <TableCell colSpan={3} className="py-2 text-center">
             {rows.length === 100
               ? <Button variant="ghost" size="sm" onClick={() => onMore(rows[rows.length - 1].id)}>Load older</Button>
               : <span className="text-xs text-muted-foreground">That's everything.</span>}
@@ -109,7 +108,7 @@ export function Activity() {
   }
 
   return (
-    <Page title="Activity" subtitle="Everything core recorded, newest first: who stopped or resumed the agent, tasks, commands."
+    <Page title="Activity" subtitle="Everything core recorded, newest first, and where it came from."
       actions={
         <Select value={type || ALL} onValueChange={choose}>
           <SelectTrigger size="sm" className="w-56" aria-label="Event type"><SelectValue /></SelectTrigger>
@@ -125,21 +124,19 @@ export function Activity() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>When</TableHead>
+                  <TableHead className="w-48">When</TableHead>
                   <TableHead>What</TableHead>
-                  <TableHead>Who</TableHead>
-                  <TableHead>Task</TableHead>
-                  <TableHead>Details</TableHead>
+                  <TableHead>Source</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.length === 0 && (
-                  <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Nothing yet.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={3} className="py-10 text-center text-muted-foreground">Nothing yet.</TableCell></TableRow>
                 )}
                 <Rows rows={rows} />
                 {older.length === 0 && rows.length === 100 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="py-2 text-center">
+                    <TableCell colSpan={3} className="py-2 text-center">
                       <Button variant="ghost" size="sm" onClick={() => setOlder([rows[rows.length - 1].id])}>Load older</Button>
                     </TableCell>
                   </TableRow>
@@ -153,10 +150,6 @@ export function Activity() {
           )}
         </QueryState>
       </Card>
-      <p className="mt-3 text-xs text-muted-foreground">
-        <Badge variant="outline" className="mr-1.5 font-normal">Tip</Badge>
-        Stops, resumes and cancels carry the person's name, or their Tailscale login when they aren't in the config.
-      </p>
     </Page>
   )
 }

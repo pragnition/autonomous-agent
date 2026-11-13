@@ -124,7 +124,7 @@ export function Sessions() {
                       <TableCell className="tabular text-right">{fmtDuration(elapsed(r, now))}</TableCell>
                       <TableCell>
                         {r.account
-                          ? <button type="button" className="hover:underline" onClick={() => set({ account: r.account! })}>{r.account}</button>
+                          ? <button type="button" className="hover:underline" onClick={() => set({ account: r.account! })}>{r.account_name ?? r.account}</button>
                           : <span className="text-muted-foreground">—</span>}
                       </TableCell>
                       <TableCell className="tabular text-right">{r.tokens ? fmtTokens(sumTokens(r.tokens)) : "—"}</TableCell>

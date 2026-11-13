@@ -120,7 +120,7 @@ export function SessionCard({ row, recent, now }: { row: SessionRow; recent?: En
       </div>
       {row.state !== "queued" && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span>account <span className="font-medium text-foreground">{row.account ?? "—"}</span></span>
+          <span>account <span className="font-medium text-foreground">{row.account_name ?? row.account ?? "—"}</span></span>
           <span>tokens <span className="tabular font-medium text-foreground">{fmtTokens(sumTokens(row.tokens))}</span></span>
           {row.turns != null && <span>calls <span className="tabular font-medium text-foreground">{row.turns}</span></span>}
         </div>

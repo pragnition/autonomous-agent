@@ -70,7 +70,8 @@ function HistoryCharts({ h }: { h: History }) {
   if (h.error) return <ErrorNote error={h.error} />
   const x = timeLabel(h.hours)
   const label = tooltipLabel(h.bucket_s)
-  const byAccount = toSeries(h, "account")
+  const named = toSeries(h, "account")
+  const byAccount = { ...named, series: named.series.map((s) => ({ ...s, label: h.names?.[s.key] ?? s.label })) }
   const byOrigin = toSeries(h, "origin")
   const byKind = toSeries(h, "kind")
   const requests = h.buckets.map((b) => ({ t: b.t, requests: b.requests }))
@@ -153,8 +154,9 @@ export function Accounts() {
                       <TableRow key={acc.code} className="cursor-pointer"
                         onClick={() => navigate(`/sessions?account=${encodeURIComponent(acc.code)}`)}>
                         <TableCell>
-                          <div className="font-medium">{acc.code}</div>
-                          <div className="text-xs text-muted-foreground">
+                          <div className="font-medium">{acc.name ?? acc.code}</div>
+                          <div className="text-xs text-muted-foreground" title={acc.email ?? undefined}>
+                            {acc.name && <span className="font-mono">{acc.code} · </span>}
                             {acc.rank != null ? `rank ${acc.rank}` : acc.verified ? "closed" : "not used yet"}
                             {acc.status && acc.status !== "allowed" && ` · ${acc.status}`}
                           </div>

@@ -1,13 +1,13 @@
 import { ArrowRight } from "lucide-react"
 import { Link } from "react-router"
-import { useAccounts, useHistory, useKpis, useOverview } from "@/api"
+import { useAccounts, useHistory, useKpis, useLlm, useOverview } from "@/api"
 import { StackedColumns } from "@/components/charts"
 import { Page } from "@/components/Page"
 import { ErrorNote, QueryState } from "@/components/QueryState"
 import { SessionCard } from "@/components/session"
 import { StatTile } from "@/components/StatTile"
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { fmtDuration, fmtPct, fmtTokens, sumTokens } from "@/lib/format"
+import { fmtDuration, fmtPct, fmtTokens, fmtUsd, sumTokens } from "@/lib/format"
 import { agentPeopleHourly } from "@/lib/history"
 import { useNow } from "@/lib/hooks"
 
@@ -61,13 +61,15 @@ export function Overview() {
   const overview = useOverview()
   const accounts = useAccounts()
   const history = useHistory(24)
+  const llm = useLlm()
+  const meter = llm.data?.installed ? llm.data : null
   const pool = accounts.data?.pool
   const agentHour = accounts.data?.accounts.reduce((n, a) => n + sumTokens(a.agent_60m), 0)
   const peopleHour = accounts.data?.accounts.reduce((n, a) => n + sumTokens(a.people_60m), 0)
 
   return (
     <Page title="Overview" subtitle="What the agent is doing now and how the week is going.">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <div className={`grid grid-cols-2 gap-3 md:grid-cols-3 ${meter ? "xl:grid-cols-6" : "xl:grid-cols-5"}`}>
         <StatTile label="Running now" value={overview.data?.counts.running ?? "—"}
           sub={overview.data?.paused ? "paused" : "sessions"} />
         <StatTile label="Queued" value={overview.data?.counts.queued ?? "—"} sub="waiting to start" />
@@ -77,6 +79,12 @@ export function Overview() {
           sub={pool ? `on-pace target ${fmtPct(pool.target_7d)} · ${pool.state ?? "unknown"}` : "proxy unreachable"} />
         <StatTile label="Tokens, last hour" value={agentHour == null ? "—" : fmtTokens(agentHour + (peopleHour ?? 0))}
           sub={`agent ${fmtTokens(agentHour)} · people ${fmtTokens(peopleHour)}`} />
+        {meter && (
+          <Link to="/foundry" className="contents">
+            <StatTile label="Foundry spend today" value={fmtUsd(meter.spend.today_usd)}
+              sub={`${fmtUsd(meter.spend.month_usd)} this month${meter.capped ? " · capped" : ""}`} />
+          </Link>
+        )}
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">

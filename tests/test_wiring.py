@@ -310,3 +310,40 @@ async def test_failed_permalinks_are_not_retried_at_once(app):
     assert await app.permalink("C9", "1.0") is None
     assert await app.permalink("C9", "1.0") is None
     assert len(calls) == 1
+
+
+async def test_person_names_come_from_slack_and_are_cached(app):
+    calls = []
+
+    async def users_info(**kw):
+        calls.append(kw)
+        return {"user": {"real_name": "Parthib Das Gupta", "profile": {"real_name": "Parthib Das Gupta"}}}
+
+    app.slack.users_info = users_info
+    assert await app.person_name("parthib") == "Parthib Das Gupta"
+    assert await app.person_name("parthib") == "Parthib Das Gupta"
+    assert await app.person_name("nobody") is None
+    assert calls == [{"user": "U00000001"}]
+
+
+def test_core_reads_account_names_from_its_config_dir(app):
+    assert app.account_names.path == app.config_dir / "account-names.toml"
+
+
+def test_foundry_meter_is_wired_when_installed(app, monkeypatch):
+    import sys
+    import types
+    fake = types.ModuleType("agent.core.llm_meter")
+    fake.meter_view = lambda conn, settings, tz: {"tz": tz, "settings": settings}
+    fake.set_caps = lambda conn, *, actor, daily_usd=None, monthly_usd=None: {"actor": actor, "daily": daily_usd}
+    monkeypatch.setitem(sys.modules, "agent.core.llm_meter", fake)
+    monkeypatch.setattr(app.config, "llm_meter", "SETTINGS", raising=False)
+    view, set_caps = app.llm_meter()
+    assert view() == {"tz": app.config.timezone, "settings": "SETTINGS"}
+    assert set_caps("ann", 5, None) == {"actor": "ann", "daily": 5}
+
+
+def test_foundry_meter_absent_is_none(app, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "agent.core.llm_meter", None)   # import fails
+    assert app.llm_meter() == (None, None)

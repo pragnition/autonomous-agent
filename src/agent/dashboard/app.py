@@ -21,6 +21,7 @@ from agent.dashboard.access import access_middleware, viewer
 from agent.dashboard.accounts import HOURS, accounts_view, bucket_seconds, history_view
 from agent.dashboard.queries import (SessionFilter, get_session, kpi_view, list_events, list_sessions,
                                      overview_counts, paused_by)
+from agent.dashboard.names import AccountNames
 from agent.dashboard.transcript import TranscriptCache, lines_before, read_from
 
 log = logging.getLogger(__name__)
@@ -60,12 +61,18 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
                        permalink: Callable[[str, str], Awaitable[str | None]] | None = None,
                        scrub: Callable[[str], str] = str,
                        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-                       poll_s: float = 1.0) -> web.Application:
+                       poll_s: float = 1.0, account_names: AccountNames | None = None,
+                       person_name: Callable[[str], Awaitable[str | None]] | None = None,
+                       llm_view: Callable[[], dict] | None = None,
+                       llm_set_caps: Callable[..., object] | None = None) -> web.Application:
     queue = WorkQueue(conn)
     origins = config.dashboard.agent_origins
     history_cache: dict[int, tuple[float, dict]] = {}
     transcripts = TranscriptCache(scrub, recent=RECENT)
     pinned: dict[str, str] = {}  # session id -> account; a session never moves to another account
+
+    def holder(code: str | None) -> str | None:
+        return account_names.name(code) if account_names else None
 
     def transcript(item_id: str) -> Path:
         return runs_dir / f"{item_id}.jsonl"
@@ -97,6 +104,7 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
             row.update(tokens=stats.tokens, turns=stats.turns)
             if running:
                 row.update(live=True, account=await account_of(stats.session_id))
+        row["account_name"] = holder(row["account"])
         public = _public(row)
         if recent:
             public["recent"] = last
@@ -175,7 +183,12 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
             raw = await asyncio.wait_for(proxy.raw_usage(), PROXY_TIMEOUT_S)
         except Exception as e:
             return web.json_response(accounts_view(None, origins, error=str(e) or type(e).__name__))
-        return web.json_response(accounts_view(raw, origins))
+        view = accounts_view(raw, origins)
+        known = account_names.all() if account_names else {}
+        for account in view["accounts"]:
+            rec = known.get(account["code"]) or {}
+            account.update(name=rec.get("name"), email=rec.get("email"))
+        return web.json_response(view)
 
     async def history(request: web.Request) -> web.Response:
         hours = _int(request, "hours", 24, 1, max(HOURS))
@@ -183,7 +196,7 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
             raise BadRequest(f"hours must be one of {', '.join(map(str, HOURS))}")
         cached = history_cache.get(hours)
         if cached and time.monotonic() - cached[0] < HISTORY_TTL_S:
-            return web.json_response(cached[1])
+            return web.json_response({**cached[1], "names": names_for(cached[1]["accounts"])})
         try:
             rows = await asyncio.wait_for(proxy.perf(hours), PROXY_TIMEOUT_S * 3)
         except Exception as e:
@@ -192,16 +205,57 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
                                       "buckets": []})
         view = await asyncio.to_thread(history_view, rows, hours, origins)
         history_cache[hours] = (time.monotonic(), view)
-        return web.json_response(view)
+        return web.json_response({**view, "names": names_for(view["accounts"])})
+
+    def names_for(codes: list[str]) -> dict[str, str]:
+        return {code: name for code in codes if (name := holder(code))}
 
     async def kpis(request: web.Request) -> web.Response:
         days = _int(request, "days", 7, 1, 365)
         return web.json_response(kpi_view(conn, days, request.query.get("project") or None, clock(), config.timezone))
 
     async def event_log(request: web.Request) -> web.Response:
-        return web.json_response(list_events(conn, request.query.get("type") or None,
-                                             _int(request, "limit", 100, 1, 500), _int(request, "before", None, 0,
-                                                                                       2**62)))
+        page = list_events(conn, request.query.get("type") or None, _int(request, "limit", 100, 1, 500),
+                           _int(request, "before", None, 0, 2**62))
+        senders = sorted({r["sender"] for r in page["rows"] if r["sender"]})
+
+        async def display(sender: str) -> str:
+            if sender.startswith("tailscale:"):
+                return sender.removeprefix("tailscale:")
+            try:
+                return (await person_name(sender) if person_name else None) or sender
+            except Exception:
+                return sender
+
+        shown = dict(zip(senders, await asyncio.gather(*(display(x) for x in senders))))
+        for r in page["rows"]:
+            r["sender"] = shown.get(r["sender"], r["sender"])
+        return web.json_response(page)
+
+    async def llm(request: web.Request) -> web.Response:
+        """What the apps under test spent on their model provider (Azure AI Foundry) through core's meter."""
+        if llm_view is None:
+            return web.json_response({"installed": False})
+        return web.json_response({"installed": True, **llm_view()})
+
+    async def llm_caps(request: web.Request) -> web.Response:
+        if llm_view is None or llm_set_caps is None:
+            return web.json_response({"error": "the model-call meter isn't installed"}, status=404)
+        v = viewer(request)
+        if not v.can_resume:
+            return web.json_response({"error": "only an admin can change the caps"}, status=403)
+        try:
+            body = await request.json()
+            values = {k: body.get(k) for k in ("daily_usd", "monthly_usd")}
+            if not isinstance(body, dict) or all(x is None for x in values.values()):
+                raise ValueError("give daily_usd, monthly_usd or both")
+            for key, value in values.items():
+                if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                    raise ValueError(f"{key} must be a number of US dollars")
+            llm_set_caps(v.actor, **values)
+        except (ValueError, AttributeError) as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response({"installed": True, **llm_view()})
 
     async def stop(request: web.Request) -> web.Response:
         db.set_setting(conn, "paused", "1")
@@ -258,5 +312,6 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
         web.post("/api/sessions/{id}/cancel", cancel), web.get("/api/accounts", accounts),
         web.get("/api/accounts/history", history), web.get("/api/kpis", kpis), web.get("/api/events", event_log),
         web.post("/api/stop", stop), web.post("/api/resume", resume),
+        web.get("/api/llm", llm), web.post("/api/llm/caps", llm_caps),
         web.get("/{tail:.*}", web_app)])
     return app

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -351,7 +352,8 @@ async def test_events_route(api, conn):
     from agent import events as event_log
     event_log.append(conn, "stop_all", task_id=None, actor="ann", data={"x": 1})
     body = await (await api.get("/api/events?type=stop_all", headers=ANN)).json()
-    assert body["rows"][0]["actor"] == "ann" and "stop_all" in body["types"]
+    assert body["rows"][0]["sender"] == "ann" and body["rows"][0]["source"] == "slack"
+    assert "stop_all" in body["types"]
     assert (await api.get("/api/events?before=x", headers=ANN)).status == 400
 
 
@@ -523,3 +525,82 @@ async def test_no_claude_cost_in_any_response(tmp_path, api, conn):
                  "/api/kpis?days=7"):
         text = await (await api.get(path, headers=ANN)).text()
         assert "cost" not in text, path
+
+
+async def test_accounts_sessions_and_history_carry_holder_names(tmp_path, conn, proxy):
+    from agent.dashboard.names import AccountNames
+    names = tmp_path / "account-names.toml"
+    names.write_text('[accounts]\nbadger = { name = "Sam Taylor", email = "sam.taylor@example.com" }\n')
+    client = await make_client(tmp_path, conn, proxy, account_names=AccountNames(names))
+    try:
+        proxy.usage = {"badger": {"status": "allowed", "rank": 1}, "onyx": {"status": "allowed"}, "_all": {}}
+        proxy.rows = [{"t": time.time() - 600, "accounts": {"badger": {"tokens": {"in": 1}}}, "origins": {},
+                       "all": {}}]
+        proxy.pins["sid-1"] = "badger"
+        item = running_item(conn)
+        write_transcript(tmp_path, item, [INIT])
+        accounts = {a["code"]: a for a in (await (await client.get("/api/accounts", headers=ANN)).json())["accounts"]}
+        assert accounts["badger"]["name"] == "Sam Taylor" and accounts["badger"]["email"] == "sam.taylor@example.com"
+        assert accounts["onyx"]["name"] is None
+        overview = await (await client.get("/api/overview", headers=ANN)).json()
+        assert overview["running"][0]["account_name"] == "Sam Taylor"
+        history = await (await client.get("/api/accounts/history?hours=6", headers=ANN)).json()
+        assert history["names"] == {"badger": "Sam Taylor"}
+    finally:
+        await client.close()
+
+
+async def test_events_show_their_source_and_sender(tmp_path, conn, proxy):
+    from agent import events as event_log
+
+    async def person_name(key):
+        return {"ann": "Ann Archer"}.get(key)
+
+    client = await make_client(tmp_path, conn, proxy, person_name=person_name)
+    try:
+        item = running_item(conn)   # a Slack thread, asked by ann
+        event_log.append(conn, "session_started", task_id=None, actor=None, data={"work_item": item})
+        event_log.append(conn, "stop_all", task_id=None, actor="bob", data={"cancelled": [], "via": "dashboard"})
+        body = await (await client.get("/api/events", headers=ANN)).json()
+        stop, started = body["rows"][0], body["rows"][1]
+        assert (started["source"], started["sender"]) == ("slack", "Ann Archer")
+        assert (stop["source"], stop["sender"]) == ("dashboard", "bob")
+        assert "data" not in stop
+    finally:
+        await client.close()
+
+
+METER = {"caps": {"daily_usd": 5.0, "monthly_usd": 100.0, "changed_at_runtime": False},
+         "spend": {"today_usd": 1.5, "month_usd": 12.25}, "capped": None, "upstreams": ["foundry"],
+         "by_model": [{"upstream": "foundry", "model": "gpt-5", "calls": 3, "errors": 0, "input_tokens": 10,
+                       "cached_tokens": 0, "output_tokens": 5, "cost_usd": 1.5}],
+         "daily": [{"day": "2026-11-13", "calls": 3, "cost_usd": 1.5}]}
+
+
+async def test_foundry_spend_without_the_meter(api):
+    assert await (await api.get("/api/llm", headers=ANN)).json() == {"installed": False}
+    assert (await api.post("/api/llm/caps", json={"daily_usd": 1}, headers={**ANN, **POST})).status == 404
+
+
+async def test_foundry_spend_and_caps(tmp_path, conn, proxy):
+    changes = []
+
+    def set_caps(actor, daily_usd=None, monthly_usd=None):
+        if daily_usd is not None and daily_usd < 0:
+            raise ValueError("daily_usd must be a non-negative number of US dollars")
+        changes.append((actor, daily_usd, monthly_usd))
+
+    client = await make_client(tmp_path, conn, proxy, llm_view=lambda: METER, llm_set_caps=set_caps)
+    try:
+        body = await (await client.get("/api/llm", headers=EVE)).json()
+        assert body["installed"] is True and body["spend"]["month_usd"] == 12.25
+        r = await client.post("/api/llm/caps", json={"daily_usd": 8}, headers={**BOB, **POST})
+        assert r.status == 403 and changes == []
+        r = await client.post("/api/llm/caps", json={"daily_usd": 8, "monthly_usd": 150}, headers={**ANN, **POST})
+        assert r.status == 200 and changes == [("ann", 8, 150)] and (await r.json())["installed"] is True
+        r = await client.post("/api/llm/caps", json={"daily_usd": -1}, headers={**ANN, **POST})
+        assert r.status == 400 and "non-negative" in (await r.json())["error"]
+        r = await client.post("/api/llm/caps", json={"daily_usd": "lots"}, headers={**ANN, **POST})
+        assert r.status == 400
+    finally:
+        await client.close()

@@ -41,6 +41,7 @@ from agent.core.sandbox_tools import register_sandbox_tools
 from agent.core.sessions import Gate, WorkItem, WorkQueue, mint_token, resolve_token
 from agent.core.tracker_tools import register_tracker_tools
 from agent.dashboard.app import make_dashboard_app
+from agent.dashboard.names import NAMES_FILE, AccountNames
 from agent.dashboard.transcript import make_scrubber
 from agent.memory.store import MemoryStore
 from agent.persona import load_persona, render_persona
@@ -185,10 +186,43 @@ class CoreApp:
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         self.agent_app.router.add_route("*", "/git/{project}.git/{tail:.*}", self.githost.aiohttp_handler)
         self._permalinks: dict[tuple[str, str], tuple[float, str | None]] = {}
+        self._names: dict[str, tuple[float, str | None]] = {}
+        self.account_names = AccountNames(self.config_dir / NAMES_FILE)
         self.dashboard_app = make_dashboard_app(
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
             static_dir=DASHBOARD_STATIC if DASHBOARD_STATIC.is_dir() else None, permalink=self.permalink,
-            scrub=make_scrubber(self.secret_values))
+            scrub=make_scrubber(self.secret_values), account_names=self.account_names,
+            person_name=self.person_name, **dict(zip(("llm_view", "llm_set_caps"), self.llm_meter())))
+
+    def llm_meter(self):
+        """The model-call meter's view and cap setter for the dashboard, when the meter is installed."""
+        try:
+            from agent.core import llm_meter
+        except ImportError:
+            return None, None
+        settings = getattr(self.config, "llm_meter", None)
+        if settings is None:
+            return None, None
+        return (lambda: llm_meter.meter_view(self.conn, settings, self.config.timezone),
+                lambda actor, daily_usd=None, monthly_usd=None: llm_meter.set_caps(
+                    self.conn, actor=actor, daily_usd=daily_usd, monthly_usd=monthly_usd))
+
+    async def person_name(self, key: str) -> str | None:
+        """A person's name as Slack has it, for the dashboard; failures are remembered like permalinks'."""
+        person = self.config.people.get(key)
+        if person is None or not person.slack:
+            return None
+        now, cached = time.monotonic(), self._names.get(key)
+        if cached and (cached[1] is not None or now - cached[0] < PERMALINK_RETRY_S):
+            return cached[1]
+        try:
+            user = (await self.slack.users_info(user=person.slack))["user"]
+            name = user.get("real_name") or (user.get("profile") or {}).get("real_name") or None
+        except Exception:
+            log.info("no Slack name for %s", key, exc_info=True)
+            name = None
+        self._names[key] = (now, name)
+        return name
 
     async def permalink(self, channel: str, thread_ts: str) -> str | None:
         """A Slack thread's link for the dashboard. A failure (the bot left the channel, a rate limit) is remembered

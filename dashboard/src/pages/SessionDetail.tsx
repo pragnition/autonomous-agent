@@ -124,7 +124,7 @@ export function SessionDetail() {
                 <Fact label={r.state === "queued" ? "Waiting" : "Duration"}>
                   <span className="tabular">{fmtDuration(elapsed(r, now))}</span>
                 </Fact>
-                <Fact label="Account">{r.account ?? "—"}</Fact>
+                <Fact label="Account">{r.account_name ?? r.account ?? "—"}</Fact>
                 <Fact label="Model calls"><span className="tabular">{r.turns ?? "—"}</span></Fact>
                 <Fact label="Tokens"><span className="tabular">{r.tokens ? fmtTokens(sumTokens(r.tokens)) : "—"}</span></Fact>
                 <Fact label="Outcome">{r.outcome ?? (active ? "in progress" : "—")}</Fact>

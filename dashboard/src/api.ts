@@ -21,6 +21,7 @@ export type SessionRow = {
   started_at: string | null
   ended_at: string | null
   account: string | null
+  account_name: string | null
   turns: number | null
   tokens: Tokens | null
   outcome: string | null
@@ -63,6 +64,8 @@ export type Pace = "ahead" | "on" | "behind"
 
 export type Account = {
   code: string
+  name: string | null
+  email: string | null
   status: string
   rank: number | null
   verified: boolean
@@ -119,6 +122,7 @@ export type History = {
   accounts: string[]
   origins: string[]
   buckets: HistoryBucket[]
+  names?: Record<string, string>
   error?: string
 }
 
@@ -135,9 +139,22 @@ export type KpiView = {
   projects: string[]
 }
 
-export type EventRow = { id: number; ts: string; type: string; actor: string | null; task_id: string | null;
-  data: unknown }
+export type EventSource = "slack" | "linear" | "automation" | "dashboard" | "command line" | "agent" | "other"
+export type EventRow = { id: number; ts: string; type: string; source: EventSource; sender: string | null }
 export type Events = { rows: EventRow[]; types: string[] }
+
+export type LlmModelRow = { upstream: string; model: string; calls: number; errors: number; input_tokens: number;
+  cached_tokens: number; output_tokens: number; cost_usd: number }
+export type LlmMeter = {
+  installed: true
+  caps: { daily_usd: number | null; monthly_usd: number | null; changed_at_runtime: boolean }
+  spend: { today_usd: number; month_usd: number }
+  capped: string | null
+  upstreams: string[]
+  by_model: LlmModelRow[]
+  daily: { day: string; calls: number; cost_usd: number }[]
+}
+export type LlmView = { installed: false } | LlmMeter
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -230,6 +247,17 @@ export const useEvents = (type?: string, before?: number) =>
     placeholderData: keepPreviousData,
     ...(before == null ? live : { staleTime: Infinity }),
   })
+
+export const useLlm = () =>
+  useQuery({ queryKey: ["llm"], queryFn: () => api.get<LlmView>("/api/llm"), ...live })
+
+export function useSetCaps() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (caps: { daily_usd?: number; monthly_usd?: number }) => api.post<LlmView>("/api/llm/caps", caps),
+    onSuccess: (view) => client.setQueryData(["llm"], view),
+  })
+}
 
 /** Stop, resume and cancel: on success, everything that shows state refreshes at once. */
 export function useAction<T = unknown>(path: string) {
