@@ -110,6 +110,7 @@ async def test_ask_without_task_posts_in_thread(router, ctx_member):
 async def test_post_update_is_scrubbed(router, ctx_member):
     await router.call(ctx_member, "post_update", {"text": "token SUPERSECRETVALUE here"})
     assert "SUPERSECRETVALUE" not in router.slack.posts[-1]["text"]
+    assert "SUPERSECRETVALUE" not in router.slack.posts[-1]["blocks"][0]["text"]
 
 
 async def test_replies_are_scrubbed(router, ctx_member):

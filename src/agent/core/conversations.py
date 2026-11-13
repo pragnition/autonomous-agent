@@ -14,6 +14,7 @@ import uuid
 
 from agent import db, tasks
 from agent.core.sessions import WorkItem, WorkQueue
+from agent.core.slack_markdown import post_markdown
 from agent.tasks import Status
 
 log = logging.getLogger(__name__)
@@ -171,7 +172,7 @@ class Conversations:
         if failed:
             text = FAILED_REPLY
         if text and convo["channel"]:
-            await self.slack.chat_postMessage(channel=convo["channel"], thread_ts=convo["thread_ts"], text=text)
+            await post_markdown(self.slack, channel=convo["channel"], thread_ts=convo["thread_ts"], text=text)
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
             self.conn.execute("UPDATE conversations SET session_id = NULL, last_active_at = ? WHERE id = ?",
                               (db.utcnow(), convo["id"]))

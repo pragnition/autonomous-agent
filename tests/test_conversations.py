@@ -203,7 +203,8 @@ async def test_on_result_posts_reply_and_session(convos, queue, slack, conn):
     item = queue.claim("code-sample")
     queue.complete(item.id, {"text": "the answer", "session_id": "sess-1"})
     await convos.on_result(queue.get(item.id), {"text": "the answer", "session_id": "sess-1", "outcome": "done"})
-    assert slack.posts[-1] == {"channel": "C-SAMPLE", "thread_ts": "t8", "text": "the answer"}
+    assert slack.posts[-1] == {"channel": "C-SAMPLE", "thread_ts": "t8", "text": "the answer",
+                               "blocks": [{"type": "markdown", "text": "the answer"}]}
     assert convo(conn, "t8")["session_id"] == "sess-1"
 
 

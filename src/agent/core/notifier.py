@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from agent import db, tasks
+from agent.core.slack_markdown import post_markdown
 from agent.tasks import Status, Task
 
 REACTIONS = {Status.queued: "eyes", Status.working: "hammer", Status.needs_input: "question",
@@ -55,6 +56,6 @@ class SlackNotifier:
     async def ask(self, task: Task, question: str) -> None:
         if not task.slack_channel:
             return
-        await self.slack.chat_postMessage(channel=task.slack_channel, thread_ts=task.slack_thread_ts,
-                                          text=f"Question about {task.id}: {question}\n"
-                                               "Reply in this thread and I'll pick it back up.")
+        await post_markdown(self.slack, channel=task.slack_channel, thread_ts=task.slack_thread_ts,
+                            text=f"Question about {task.id}: {question}\n"
+                                 "Reply in this thread and I'll pick it back up.")

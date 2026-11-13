@@ -97,7 +97,8 @@ async def test_dm_turn_end_to_end(app, api):
     await api.post("/agent/result", json={"result": {"outcome": "done", "text": "Nothing else is running.",
                                                      "session_id": "sess-1", "turns": 2, "cost_usd_est": 0.1}},
                    headers=bearer(session))
-    assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": "5.1", "text": "Nothing else is running."}
+    assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": "5.1", "text": "Nothing else is running.",
+                                   "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
     run = app.conn.execute("SELECT role, stage, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
     assert tuple(run) == ("general", "turn", 2, "done")
 
