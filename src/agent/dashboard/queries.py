@@ -35,7 +35,7 @@ _SELECT = f"""SELECT w.id, w.kind, w.status, w.sandbox, w.conversation_id, w.cre
     COALESCE(c.project, t.project) AS project, c.channel, c.thread_ts,
     t.id AS task_id, t.title AS task_title, t.requester AS task_requester, t.pr_url,
     r.id AS run_id, r.account_code, r.turns, r.input_tokens, r.output_tokens, r.cache_read_tokens,
-    r.cache_write_tokens, r.cost_usd_est, r.outcome, r.error, r.ended_at,
+    r.cache_write_tokens, r.outcome, r.error, r.ended_at,
     {_SOURCE} AS source
 FROM work_items w
 LEFT JOIN conversations c ON c.id = w.conversation_id
@@ -94,7 +94,7 @@ def _row(r: sqlite3.Row, started_at: str | None) -> dict:
         "account": r["account_code"], "turns": r["turns"] if has_run else None,
         "tokens": {"in": r["input_tokens"], "out": r["output_tokens"], "cache_read": r["cache_read_tokens"],
                    "cache_write": r["cache_write_tokens"]} if has_run else None,
-        "cost_usd": r["cost_usd_est"] if has_run else None, "outcome": r["outcome"], "error": r["error"],
+        "outcome": r["outcome"], "error": r["error"],
         "live": False,
         "links": {"slack": None, "linear": issue.get("url") if issue else None, "pr": r["pr_url"]},
         # private to the API layer, which removes them: where to ask Slack for the thread's permalink
@@ -191,9 +191,14 @@ def _json(text: str | None):
         return text
 
 
+COST_FIELDS = {"cost_usd", "cost_per_task", "cost_per_merged"}  # Claude Code's API-price estimates: not shown
+
+
 def _kpis_dict(k) -> dict:
     out = {}
     for f in dataclasses.fields(k):
+        if f.name in COST_FIELDS:
+            continue
         value = getattr(k, f.name)
         if isinstance(value, datetime):
             value = value.astimezone(UTC).strftime(FMT)
@@ -210,32 +215,21 @@ def kpi_view(conn: sqlite3.Connection, days: int, project: str | None, now: date
     dates = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
     lo = datetime.combine(dates[0], time(), zone).astimezone(UTC).strftime(FMT)
     hi = now.astimezone(UTC).strftime(FMT)
-    daily = {d.isoformat(): {"date": d.isoformat(), "tasks": 0, "prs": 0, "merged": 0, "cost_usd": 0} for d in dates}
+    daily = {d.isoformat(): {"date": d.isoformat(), "tasks": 0, "prs": 0, "merged": 0} for d in dates}
     by_project = " AND t.project = ?" if project else ""
     p = [project] if project else []
 
-    def bucket(sql: str, key: str, weight: str | None = None) -> None:
+    def bucket(sql: str, key: str) -> None:
         for r in conn.execute(sql, (lo, hi, *p)):
             day = datetime.strptime(r["ts"], FMT).replace(tzinfo=UTC).astimezone(zone).date().isoformat()
             if day in daily:
-                daily[day][key] += r[weight] if weight else 1
+                daily[day][key] += 1
 
     bucket(f"SELECT t.created_at AS ts FROM tasks t WHERE t.created_at >= ? AND t.created_at < ?{by_project}", "tasks")
     bucket(f"SELECT s.opened_at AS ts FROM pr_stats s JOIN tasks t ON t.id = s.task_id "
            f"WHERE s.opened_at >= ? AND s.opened_at < ?{by_project}", "prs")
     bucket(f"SELECT s.merged_at AS ts FROM pr_stats s JOIN tasks t ON t.id = s.task_id "
            f"WHERE s.merged_at >= ? AND s.merged_at < ?{by_project}", "merged")
-    cost_join = "JOIN tasks t ON t.id = r.task_id" if project else "LEFT JOIN tasks t ON t.id = r.task_id"
-    bucket(f"SELECT r.ended_at AS ts, r.cost_usd_est AS cost FROM runs r {cost_join} "
-           f"WHERE r.ended_at >= ? AND r.ended_at < ?{by_project}", "cost_usd", "cost")
-    for row in daily.values():
-        row["cost_usd"] = round(row["cost_usd"], 4)
-
-    cost_by_project = [
-        {"project": r["project"], "cost_usd": round(r["cost"], 4), "tasks": r["tasks"]}
-        for r in conn.execute(
-            "SELECT COALESCE(t.project, '(none)') AS project, SUM(r.cost_usd_est) AS cost, "
-            "COUNT(DISTINCT r.task_id) AS tasks FROM runs r LEFT JOIN tasks t ON t.id = r.task_id "
-            "WHERE r.ended_at >= ? AND r.ended_at < ? GROUP BY 1 ORDER BY cost DESC, project", (lo, hi))]
+    projects = [r[0] for r in conn.execute("SELECT DISTINCT project FROM tasks ORDER BY project")]
     kpis = compute_kpis(conn, since=now - timedelta(days=days), until=now, project=project)
-    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values()), "cost_by_project": cost_by_project}
+    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values()), "projects": projects}

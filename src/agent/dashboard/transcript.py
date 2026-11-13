@@ -132,9 +132,7 @@ def parse_record(record: dict, line: int, scrub: Scrub) -> list[dict]:
                 add("text", role="user", text=scrub(block["text"]))
         return out
     if kind == "ResultMessage":
-        cost = record.get("total_cost_usd")
-        add("result", subtype=record.get("subtype"), turns=record.get("num_turns"),
-            cost_usd=cost if isinstance(cost, (int, float)) else None, usage=tokens_of(record.get("usage")),
+        add("result", subtype=record.get("subtype"), turns=record.get("num_turns"), usage=tokens_of(record.get("usage")),
             is_error=bool(record.get("is_error")), text=_cut(scrub(str(record.get("result") or "")), RESULT_CHARS))
         return out
     if kind == "RateLimitEvent":

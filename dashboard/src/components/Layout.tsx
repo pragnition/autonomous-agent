@@ -11,7 +11,7 @@ const NAV = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/sessions", label: "Sessions", icon: ListTree, end: false },
   { to: "/accounts", label: "Accounts", icon: Gauge, end: false },
-  { to: "/kpis", label: "KPIs & cost", icon: ChartLine, end: false },
+  { to: "/kpis", label: "KPIs", icon: ChartLine, end: false },
   { to: "/activity", label: "Activity", icon: Activity, end: false },
 ]
 

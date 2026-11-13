@@ -23,7 +23,6 @@ export type SessionRow = {
   account: string | null
   turns: number | null
   tokens: Tokens | null
-  cost_usd: number | null
   outcome: string | null
   error: string | null
   live: boolean
@@ -43,7 +42,6 @@ export type Entry = {
   is_error?: boolean
   content?: string
   turns?: number | null
-  cost_usd?: number | null
   usage?: Tokens
   subtype?: string | null
 }
@@ -131,10 +129,10 @@ export type KpiView = {
     since: string; until: string; project: string | null
     pickup: Stat; to_pr: Stat; to_merge: Stat; queue_wait: Stat
     tasks: number; prs: number; merged: number; closed: number; reverted: number; failed: number; cancelled: number
-    cost_usd: number; cost_per_task: number | null; cost_per_merged: number | null; merge_rate: number | null
+    merge_rate: number | null
   }
-  daily: { date: string; tasks: number; prs: number; merged: number; cost_usd: number }[]
-  cost_by_project: { project: string; cost_usd: number; tasks: number }[]
+  daily: { date: string; tasks: number; prs: number; merged: number }[]
+  projects: string[]
 }
 
 export type EventRow = { id: number; ts: string; type: string; actor: string | null; task_id: string | null;

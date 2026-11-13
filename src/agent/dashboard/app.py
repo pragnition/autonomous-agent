@@ -94,7 +94,7 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
         running = row["state"] == "running"
         if running or (row["tokens"] is None and row["state"] != "queued" and transcript(row["id"]).exists()):
             stats, last = await asyncio.to_thread(transcripts.follow, transcript(row["id"]))
-            row.update(tokens=stats.tokens, turns=stats.turns, cost_usd=stats.cost_usd)
+            row.update(tokens=stats.tokens, turns=stats.turns)
             if running:
                 row.update(live=True, account=await account_of(stats.session_id))
         public = _public(row)

@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { fmtAgo, fmtDuration, fmtTokens, fmtUsd, sumTokens } from "@/lib/format"
+import { fmtAgo, fmtDuration, fmtTokens, sumTokens } from "@/lib/format"
 import { useNow } from "@/lib/hooks"
 
 const PAGE = 50
@@ -98,14 +98,13 @@ export function Sessions() {
                     <TableHead className="text-right">Duration</TableHead>
                     <TableHead>Account</TableHead>
                     <TableHead className="text-right">Tokens</TableHead>
-                    <TableHead className="text-right">Cost</TableHead>
                     <TableHead>Outcome</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {rows.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                      <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
                         {filtered ? "No sessions match these filters." : "No sessions yet."}
                       </TableCell>
                     </TableRow>
@@ -129,7 +128,6 @@ export function Sessions() {
                           : <span className="text-muted-foreground">—</span>}
                       </TableCell>
                       <TableCell className="tabular text-right">{r.tokens ? fmtTokens(sumTokens(r.tokens)) : "—"}</TableCell>
-                      <TableCell className="tabular text-right">{fmtUsd(r.cost_usd)}</TableCell>
                       <TableCell className="max-w-40 truncate text-muted-foreground">{r.outcome ?? "—"}</TableCell>
                     </TableRow>
                   ))}

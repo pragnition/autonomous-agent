@@ -155,7 +155,7 @@ def test_finished_row_has_run_numbers(conn, queue):
     add_run(conn, item, task_id=task.id)
     conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (item,))
     row = get_session(conn, item)
-    assert row["account"] == "badger" and row["turns"] == 7 and row["cost_usd"] == 0.5
+    assert row["account"] == "badger" and row["turns"] == 7 and "cost_usd" not in row
     assert row["tokens"] == {"in": 10, "out": 20, "cache_read": 30, "cache_write": 40}
     assert row["outcome"] == "answered" and row["ended_at"] == "2026-11-13T10:05:00Z"
     assert row["links"]["pr"] == "https://github.com/o/r/pull/3" and row["requester"] == "ann"
@@ -203,7 +203,7 @@ def test_events_paging_and_types(conn):
     assert page["types"] == ["resume_all", "stop_all"]
 
 
-def test_kpi_daily_zero_filled_and_cost_by_project(conn, queue):
+def test_kpi_daily_zero_filled_without_cost(conn, queue):
     now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
     task = make_task(conn)
     conn.execute("UPDATE tasks SET created_at = '2026-11-12T03:00:00Z' WHERE id = ?", (task.id,))
@@ -216,11 +216,11 @@ def test_kpi_daily_zero_filled_and_cost_by_project(conn, queue):
     view = kpi_view(conn, 3, None, now, "Asia/Singapore")
     assert [d["date"] for d in view["daily"]] == ["2026-11-11", "2026-11-12", "2026-11-13"]
     by_date = {d["date"]: d for d in view["daily"]}
-    assert by_date["2026-11-11"] == {"date": "2026-11-11", "tasks": 0, "prs": 0, "merged": 0, "cost_usd": 0}
+    assert by_date["2026-11-11"] == {"date": "2026-11-11", "tasks": 0, "prs": 0, "merged": 0}
     assert by_date["2026-11-12"]["tasks"] == 1 and by_date["2026-11-12"]["prs"] == 1
-    assert by_date["2026-11-13"]["merged"] == 1 and by_date["2026-11-13"]["cost_usd"] == 0.25
-    assert view["cost_by_project"][0] == {"project": "sample", "cost_usd": 1.25, "tasks": 1}
-    assert view["cost_by_project"][1]["project"] == "(none)"
+    assert by_date["2026-11-13"]["merged"] == 1
+    assert "cost_by_project" not in view and view["projects"] == ["sample"]
+    assert not {"cost_usd", "cost_per_task", "cost_per_merged"} & set(view["kpis"])
     assert view["kpis"]["merged"] == 1 and view["kpis"]["merge_rate"] == 1.0
     assert view["kpis"]["to_merge"]["n"] == 1
 

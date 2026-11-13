@@ -5,7 +5,7 @@ import { Link } from "react-router"
 import type { Entry, SessionRow, SessionState, Source } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { fmtDuration, fmtTokens, fmtUsd, secondsBetween, sumTokens } from "@/lib/format"
+import { fmtDuration, fmtTokens, secondsBetween, sumTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 type Icon = ComponentType<{ className?: string }>
@@ -123,7 +123,6 @@ export function SessionCard({ row, recent, now }: { row: SessionRow; recent?: En
           <span>account <span className="font-medium text-foreground">{row.account ?? "—"}</span></span>
           <span>tokens <span className="tabular font-medium text-foreground">{fmtTokens(sumTokens(row.tokens))}</span></span>
           {row.turns != null && <span>calls <span className="tabular font-medium text-foreground">{row.turns}</span></span>}
-          {row.cost_usd != null && <span>cost <span className="tabular font-medium text-foreground">{fmtUsd(row.cost_usd)}</span></span>}
         </div>
       )}
       {recent && recent.length > 0 && (

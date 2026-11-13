@@ -2,7 +2,7 @@ import { ChevronRight, Loader2 } from "lucide-react"
 import { useState } from "react"
 import type { Entry } from "@/api"
 import { entryIcon, toolLabel } from "@/components/session"
-import { fmtTime, fmtTokens, fmtUsd, sumTokens } from "@/lib/format"
+import { fmtTime, fmtTokens, sumTokens } from "@/lib/format"
 import type { TimelineItem } from "@/lib/activity"
 import { cn } from "@/lib/utils"
 
@@ -104,7 +104,6 @@ function Result({ entry }: { entry: Entry }) {
         <span className="flex flex-wrap gap-x-4 text-xs text-muted-foreground">
           {entry.turns != null && <span>calls <b className="tabular text-foreground">{entry.turns}</b></span>}
           <span>tokens <b className="tabular text-foreground">{fmtTokens(sumTokens(entry.usage))}</b></span>
-          <span>cost <b className="tabular text-foreground">{fmtUsd(entry.cost_usd)}</b></span>
           <Time ts={entry.ts} />
         </span>
       </div>

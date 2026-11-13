@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { pairEntries, useSessionStream } from "@/lib/activity"
-import { fmtDateTime, fmtDuration, fmtTokens, fmtUsd, sumTokens } from "@/lib/format"
+import { fmtDateTime, fmtDuration, fmtTokens, sumTokens } from "@/lib/format"
 import { useNow } from "@/lib/hooks"
 
 function CancelButton({ id }: { id: string }) {
@@ -118,7 +118,7 @@ export function SessionDetail() {
                 <Badge variant="outline" className="font-normal">{r.kind}</Badge>
                 {r.live && <Badge variant="secondary" className="font-normal">live numbers</Badge>}
               </div>
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4 lg:grid-cols-8">
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4 lg:grid-cols-7">
                 <Fact label="Asked by">{r.requester ?? "—"}</Fact>
                 <Fact label="Created">{fmtDateTime(r.created_at)}</Fact>
                 <Fact label={r.state === "queued" ? "Waiting" : "Duration"}>
@@ -127,7 +127,6 @@ export function SessionDetail() {
                 <Fact label="Account">{r.account ?? "—"}</Fact>
                 <Fact label="Model calls"><span className="tabular">{r.turns ?? "—"}</span></Fact>
                 <Fact label="Tokens"><span className="tabular">{r.tokens ? fmtTokens(sumTokens(r.tokens)) : "—"}</span></Fact>
-                <Fact label="Cost"><span className="tabular">{fmtUsd(r.cost_usd)}</span></Fact>
                 <Fact label="Outcome">{r.outcome ?? (active ? "in progress" : "—")}</Fact>
               </dl>
               {(r.links.slack || r.links.linear || r.links.pr || r.task_id) && (

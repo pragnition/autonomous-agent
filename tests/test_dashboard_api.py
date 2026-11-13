@@ -503,3 +503,23 @@ async def test_only_the_detail_page_asks_slack_for_permalinks(tmp_path, conn, pr
         assert body["links"]["slack"] == "https://x.slack.com/archives/C1/p10" and len(asked) == 1
     finally:
         await client.close()
+
+
+async def test_no_claude_cost_in_any_response(tmp_path, api, conn):
+    from agent import tasks as task_store
+    task = task_store.create_task(conn, project="sample", title="t", description="", kind="bug", source="slack",
+                                  source_ref=None, requester="ann", owner="ann")
+    cid = add_conversation(conn, sandbox="code-sample", task_id=task.id)
+    done = add_item(WorkQueue(conn), cid, "code-sample")
+    conn.execute("INSERT INTO runs(id, task_id, role, status, cost_usd_est, started_at, ended_at) "
+                 "VALUES (?, ?, 'code', 'finished', 1.25, '2026-11-13T01:00:00Z', ?)", (done, task.id, db.utcnow()))
+    conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (done,))
+    write_transcript(tmp_path, done, [INIT, {"type": "ResultMessage", "subtype": "success", "num_turns": 1,
+                                             "total_cost_usd": 1.25, "result": "ok", "usage": USAGE}])
+    live = running_item(conn)
+    write_transcript(tmp_path, live, [INIT, {"type": "ResultMessage", "num_turns": 1, "total_cost_usd": 0.5,
+                                             "usage": USAGE}])
+    for path in ("/api/overview", "/api/sessions", f"/api/sessions/{done}", f"/api/sessions/{live}?entries=0",
+                 "/api/kpis?days=7"):
+        text = await (await api.get(path, headers=ANN)).text()
+        assert "cost" not in text, path

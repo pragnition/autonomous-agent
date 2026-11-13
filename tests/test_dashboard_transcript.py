@@ -76,7 +76,7 @@ def test_user_prompt_string_is_text():
 
 def test_result_entry_tokens():
     [e] = parse(RESULT)
-    assert e["kind"] == "result" and e["subtype"] == "success" and e["turns"] == 5 and e["cost_usd"] == 0.0762
+    assert e["kind"] == "result" and e["subtype"] == "success" and e["turns"] == 5 and "cost_usd" not in e
     assert e["usage"] == {"in": 10, "out": 384, "cache_read": 65109, "cache_write": 6934}
     assert e["text"] == "Done."
 
