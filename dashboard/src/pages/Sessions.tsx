@@ -116,7 +116,7 @@ export function Sessions() {
                         <Link to={`/sessions/${r.id}`} className="block truncate font-medium hover:underline">{r.title}</Link>
                         <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                           <SourceBadge source={r.source} />
-                          <span className="font-mono">{r.sandbox}</span>
+                          {r.project && <span className="font-mono">{r.project}</span>}
                         </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{r.requester ?? "—"}</TableCell>

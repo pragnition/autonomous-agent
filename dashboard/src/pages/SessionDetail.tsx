@@ -6,7 +6,7 @@ import { useAction, useSession, useSessionEntries } from "@/api"
 import { ActivityTimeline } from "@/components/ActivityTimeline"
 import { Page } from "@/components/Page"
 import { ErrorNote, QueryState } from "@/components/QueryState"
-import { SourceBadge, StateBadge, elapsed } from "@/components/session"
+import { ProjectBadge, SourceBadge, StateBadge, elapsed } from "@/components/session"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
@@ -114,7 +114,7 @@ export function SessionDetail() {
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <StateBadge state={r.state} />
                 <SourceBadge source={r.source} />
-                <Badge variant="outline" className="font-mono font-normal">{r.sandbox}</Badge>
+                <ProjectBadge project={r.project} />
                 <Badge variant="outline" className="font-normal">{r.kind}</Badge>
                 {r.live && <Badge variant="secondary" className="font-normal">live numbers</Badge>}
               </div>

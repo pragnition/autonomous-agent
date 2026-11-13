@@ -85,7 +85,7 @@ def _row(r: sqlite3.Row, started_at: str | None) -> dict:
     state = _state(r["status"])
     has_run = r["run_id"] is not None
     return {
-        "id": r["id"], "kind": r["kind"], "state": state, "sandbox": r["sandbox"], "project": r["project"],
+        "id": r["id"], "kind": r["kind"], "state": state, "project": r["project"],
         "conversation_id": r["conversation_id"], "task_id": r["task_id"], "title": _title(r, issue),
         "source": r["source"], "requester": r["task_requester"] or r["actor"],
         "created_at": r["created_at"], "started_at": started_at,

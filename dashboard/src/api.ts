@@ -10,7 +10,6 @@ export type SessionRow = {
   id: string
   kind: string
   state: SessionState
-  sandbox: string
   project: string | null
   conversation_id: string | null
   task_id: string | null

@@ -62,6 +62,13 @@ def test_rows_newest_first_with_total(conn, queue):
     assert [r["id"] for r in rows] == [a]
 
 
+def test_session_row_has_no_sandbox_field(conn, queue):
+    cid = add_conversation(conn, sandbox="general", project="sample")
+    add_item(queue, cid, "general")
+    rows, _ = list_sessions(conn, SessionFilter())
+    assert "sandbox" not in rows[0]
+
+
 def test_state_maps_claimed_to_running(conn, queue):
     cid = add_conversation(conn, sandbox="general", project=None)
     item = add_item(queue, cid, "general")

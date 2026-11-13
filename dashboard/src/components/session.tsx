@@ -47,6 +47,12 @@ export function SourceBadge({ source }: { source: Source }) {
   )
 }
 
+/** The project a session is bound to, or nothing when it isn't bound to one. */
+export function ProjectBadge({ project }: { project: string | null }) {
+  if (!project) return null
+  return <Badge variant="outline" className="font-mono font-normal">{project}</Badge>
+}
+
 export function toolLabel(name: string): string {
   return name.startsWith("mcp__") ? name.slice(5).replace("__", " · ") : name
 }
@@ -109,7 +115,7 @@ export function SessionCard({ row, recent, now }: { row: SessionRow; recent?: En
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
             <StateBadge state={row.state} />
             <SourceBadge source={row.source} />
-            <Badge variant="outline" className="font-mono font-normal">{row.sandbox}</Badge>
+            <ProjectBadge project={row.project} />
             {row.requester && <span>for {row.requester}</span>}
           </div>
         </div>
