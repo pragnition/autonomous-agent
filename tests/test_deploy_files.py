@@ -151,6 +151,7 @@ def test_agent_docker_daemon(compose):
     docker = compose["services"]["docker"]
     assert docker["image"].endswith("-dind") and docker["privileged"] is True
     assert docker["networks"] == ["agentnet"] and docker["environment"]["DOCKER_TLS_CERTDIR"] == ""
+    assert docker["command"][0] == "dockerd"  # otherwise the image adds a 0.0.0.0:2375 listener of its own
     assert "--host=tcp://127.0.0.1:2375" in docker["command"] and not any("0.0.0.0" in c for c in docker["command"])
     assert "agentwork:/var/agent" in volumes(compose, "docker") and "agentdocker" in compose["volumes"]
     assert compose["services"]["agent"]["depends_on"] == ["docker"]

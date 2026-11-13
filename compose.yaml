@@ -50,7 +50,9 @@ services:
     networks: [agentnet]
     environment:
       DOCKER_TLS_CERTDIR: ""
-    command: [--host=tcp://127.0.0.1:2375, --tls=false, "--default-address-pool=base=10.201.0.0/16,size=24"]
+    # Starting with `dockerd` keeps the image from adding its own 0.0.0.0:2375 listener on the stack network
+    command: [dockerd, --host=unix:///var/run/docker.sock, --host=tcp://127.0.0.1:2375, --tls=false,
+              "--default-address-pool=base=10.201.0.0/16,size=24"]
     volumes:
       - agentdocker:/var/lib/docker
       - agentwork:/var/agent
