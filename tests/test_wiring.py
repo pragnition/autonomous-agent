@@ -117,15 +117,78 @@ async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
     assert app.conn.execute("SELECT status FROM tasks WHERE id = ?", (task["id"],)).fetchone()[0] == "working"
 
 
-async def test_work_on_binds_a_dm_through_core(tmp_path):
-    """A DM session's work_on: core binds its conversation, names the branch from the message's first line, and
-    hands the runner the real test keys, which a tool reply would have scrubbed."""
+def dm_event(ts, text):
+    return {"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001", "ts": ts, "text": text}
+
+
+async def pull(client, app):
+    tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
+    r = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+    assert r.status == 200
+    return await r.json()
+
+
+def last_item_id(app):
+    return app.conn.execute("SELECT id FROM work_items ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+
+
+def keyed_app(tmp_path):
+    """The example config with the sample pack's test key, SAMPLE_TEST_USER, given to sessions with its checkout."""
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
     project = config / "packs" / "sample" / "project.toml"
     project.write_text(project.read_text().replace("worker = []", 'worker = ["SAMPLE_TEST_USER"]'))
-    app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={"SAMPLE_TEST_USER": "tester@example.com"},
-                  slack=FakeSlack(), proxy=Proxy())
+    return CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={"SAMPLE_TEST_USER": "tester@example.com"},
+                   slack=FakeSlack(), proxy=Proxy())
+
+
+async def test_follow_up_queued_during_a_turn_resumes_its_session(app, api):
+    """A DM's second message arrives while its first turn runs, before that turn has a session. The follow-up is
+    queued then, but resolved when it is claimed: it resumes the session the first turn ended with."""
+    await app.conversations.handle_slack(dm_event("5.1", "run the tests"))
+    first = await pull(api, app)
+    await app.conversations.handle_slack(dm_event("5.2", "and the linter"))
+    follow_up = last_item_id(app)
+    assert app.queue.get(follow_up).payload["resume_session_id"] is None  # all that was known when it was queued
+    await api.post("/agent/result", json={"result": {"outcome": "done", "text": "ok", "session_id": "S1"}},
+                   headers=bearer(first["session_token"]))
+    second = (await pull(api, app))["work_item"]
+    assert second["id"] == follow_up and second["payload"]["text"] == "and the linter"
+    assert second["payload"]["resume_session_id"] == "S1"
+    assert app.queue.get(follow_up).payload["resume_session_id"] == "S1"  # what later readers of the item see too
+
+
+async def test_follow_up_queued_before_work_on_gets_its_checkout(tmp_path):
+    """A follow-up queued before the running turn's work_on bound the conversation gets the checkout and the test
+    keys when it is claimed after the bind."""
+    app = keyed_app(tmp_path)
+    client = TestClient(TestServer(app.agent_app))
+    await client.start_server()
+    try:
+        await app.conversations.handle_slack(dm_event("5.1", "run sample locally"))
+        first = await pull(client, app)
+        await app.conversations.handle_slack(dm_event("5.2", "and show me the home page"))
+        follow_up = last_item_id(app)
+        queued = app.queue.get(follow_up).payload
+        assert (queued["worktree"], queued["test_secrets"], queued["project"]) == (None, {}, None)
+        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(first["session_token"]))
+        assert r.status == 200
+        bound = await r.json()
+        await client.post("/agent/result", json={"result": {"outcome": "done", "text": "ok", "session_id": "S1"}},
+                          headers=bearer(first["session_token"]))
+        payload = (await pull(client, app))["work_item"]["payload"]
+        assert payload["worktree"] == {k: bound[k] for k in ("project", "default_branch", "branch", "setup", "checks")}
+        assert payload["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
+        assert (payload["project"], payload["workdir"], payload["resume_session_id"]) == ("sample", "session", "S1")
+        assert app.queue.get(follow_up).payload == payload
+    finally:
+        await client.close()
+
+
+async def test_work_on_binds_a_dm_through_core(tmp_path):
+    """A DM session's work_on: core binds its conversation, names the branch from the message's first line, and
+    hands the runner the real test keys, which a tool reply would have scrubbed."""
+    app = keyed_app(tmp_path)
     client = TestClient(TestServer(app.agent_app))
     await client.start_server()
     try:

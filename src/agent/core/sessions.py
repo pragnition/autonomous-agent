@@ -153,6 +153,10 @@ class WorkQueue:
                               (_iso(now + timedelta(seconds=self.lease_s)), db.utcnow(), row["id"]))
             return self.get(row["id"])
 
+    def set_payload(self, item_id: str, payload: dict) -> None:
+        self.conn.execute("UPDATE work_items SET payload = ?, updated_at = ? WHERE id = ?",
+                          (json.dumps(payload), db.utcnow(), item_id))
+
     def heartbeat(self, item_id: str, now: datetime | None = None) -> bool:
         cur = self.conn.execute("UPDATE work_items SET lease_until = ?, updated_at = ? WHERE id = ? "
                                 "AND status = 'claimed'",

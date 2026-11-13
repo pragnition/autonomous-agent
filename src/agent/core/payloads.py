@@ -65,12 +65,17 @@ class Payloads:
                              model=convo["model"] or self.config.models.default,
                              system_parts=[self.system_prompt(), self.persona_text,
                                            self._briefing(scopes, text, "session")])
-        checkout = self.checkout(convo)
-        payload.update(resume_session_id=convo["session_id"], conversation_id=convo["id"], project=project,
-                       worktree=checkout, workdir=convo["workdir"])
-        if checkout is not None:
-            payload["test_secrets"] = self.test_secrets(project)
-        return payload
+        payload["conversation_id"] = convo["id"]
+        return self.refresh_turn(convo, payload)
+
+    def refresh_turn(self, convo, payload: dict) -> dict:
+        """The turn with its conversation's state as it is now: the session to resume, the project, the checkout,
+        the working folder and the test keys. Done again when a runner claims the turn, because a turn queued while
+        the one before it ran must resume the session that turn ended with and get the checkout its work_on made.
+        The text, system prompt and briefing stay as they were when the turn was queued."""
+        project, checkout = convo["project"], self.checkout(convo)
+        return {**payload, "resume_session_id": convo["session_id"], "project": project, "worktree": checkout,
+                "workdir": convo["workdir"], "test_secrets": self.test_secrets(project) if checkout is not None else {}}
 
     def chore(self, prompt: str, schema: dict) -> dict:
         payload = self._base(text=prompt, actor=None, unattended=True,

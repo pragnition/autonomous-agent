@@ -364,6 +364,24 @@ async def test_dm_message_during_running_turn_queues_on_same_conversation(convos
     assert queue.claim(AGENT_QUEUE).payload["text"] == "and the linter"
 
 
+async def test_session_is_saved_before_the_reply_is_posted(convos, conn, queue, slack):
+    """The next turn can be claimed the moment this one completes, while its reply is still going to Slack: by then
+    the conversation already has the session to resume."""
+    await convos.handle_slack(dm("run the tests"))
+    item = queue.claim(AGENT_QUEUE)
+    queue.complete(item.id, {})
+    seen, original = [], slack.chat_postMessage
+
+    async def post(**kw):
+        seen.append(conn.execute("SELECT session_id FROM conversations WHERE id = ?",
+                                 (item.conversation_id,)).fetchone()[0])
+        return await original(**kw)
+
+    slack.chat_postMessage = post
+    await convos.on_result(queue.get(item.id), {"outcome": "done", "text": "all green", "session_id": "S1"})
+    assert seen == ["S1"]
+
+
 async def test_dm_reply_is_posted_top_level(convos, queue, slack):
     await convos.handle_slack(dm("hi"))
     await finish_turn(convos, queue, "hello")

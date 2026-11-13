@@ -245,17 +245,19 @@ class Conversations:
         failed = outcome in FAILED_OUTCOMES
         if failed:
             text = FAILED_REPLY
-        if text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
-            reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
-            for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
-                record_message(self.conn, convo["channel"], ts, convo["id"])
+        # Saved before anything is awaited: the next turn can be claimed as soon as this one completed, and it
+        # resumes whatever session the conversation has at that moment
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
             self.conn.execute("UPDATE conversations SET session_id = NULL, last_active_at = ? WHERE id = ?",
                               (db.utcnow(), convo["id"]))
         else:
             self.conn.execute("UPDATE conversations SET session_id = COALESCE(?, session_id), last_active_at = ? "
                               "WHERE id = ?", (result.get("session_id"), db.utcnow(), convo["id"]))
-        task = tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
+        if text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
+            reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
+            for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
+                record_message(self.conn, convo["channel"], ts, convo["id"])
+        task =tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
         if failed and task is not None and task.status == Status.working:
             await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.failed, actor="agent",
                                                               data={"outcome": outcome}))

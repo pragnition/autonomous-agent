@@ -40,8 +40,11 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    on_result: Callable[[WorkItem, dict], Awaitable[None]],
                    on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[bool | None]],
                    bind: Callable[[str, str, str], dict],
+                   refresh: Callable[[str, dict], dict] | None = None,
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
                    runs_dir: Path | None = None) -> web.Application:
+    """`refresh(conversation_id, payload)` re-reads a turn's conversation when the turn is claimed (see
+    Payloads.refresh_turn); what it returns is handed out and kept as the item's payload."""
     def resolved(request: web.Request, kind: str) -> TokenInfo:
         tok = _token(request)
         info = resolve_token(conn, tok) if tok else None
@@ -62,6 +65,10 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                 kinds = tuple([k for k in claimable if (await gate.can_start(k))[0]])
                 item = queue.claim(sandbox, kinds=kinds) if kinds else None
             if item is not None:
+                if refresh is not None and item.kind == "turn" and item.conversation_id:
+                    # no await since the claim: nothing can change the conversation between the two
+                    item.payload = refresh(item.conversation_id, item.payload)
+                    queue.set_payload(item.id, item.payload)
                 session = mint_token(conn, "session", sandbox=sandbox, work_item_id=item.id, ttl_s=session_ttl_s)
                 ctx = context_for(item.id)
                 # A turn's start is where the KPIs' pickup and queue-wait times begin; other kinds are logged apart

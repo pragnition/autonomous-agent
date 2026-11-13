@@ -58,7 +58,7 @@ def parts(tmp_path):
     return SimpleNamespace(router=FakeRouter(), results=[], files=[], runs=tmp_path / "runs")
 
 
-async def _client(conn, queue, parts, gate_ok=True, bind=no_bind):
+async def _client(conn, queue, parts, gate_ok=True, bind=no_bind, **kw):
     async def on_result(item, result):
         parts.results.append((item.id, result))
 
@@ -69,7 +69,7 @@ async def _client(conn, queue, parts, gate_ok=True, bind=no_bind):
                          context_for=lambda item_id: SimpleNamespace(work_item_id=item_id, task_id=None, project=None),
                          bundles=lambda: ("v1", b"bundle-bytes"),
                          on_result=on_result, on_files=on_files, bind=bind, pull_wait_s=0.2,
-                         runs_dir=parts.runs)
+                         runs_dir=parts.runs, **kw)
     client = TestClient(TestServer(app))
     await client.start_server()
     return client
@@ -114,6 +114,28 @@ async def test_pull_hands_out_item_token_and_tools(api):
     stok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=3600)
     body = await (await api.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(stok))).json()
     assert body["tools"][0]["name"] == "status"
+
+
+async def test_pull_resolves_a_turn_from_its_conversation_when_claimed(conn, queue, parts):
+    """A turn's conversation-derived fields are re-read when it is claimed, not when it was queued, and the item
+    keeps what was handed out. Only turns of a conversation are refreshed."""
+    seen = []
+
+    def refresh(conversation_id, payload):
+        seen.append(conversation_id)
+        return {**payload, "resume_session_id": "S1"}
+
+    client = await _client(conn, queue, parts, refresh=refresh)
+    try:
+        queue.enqueue(None, AGENT_QUEUE, "chore", {"text": "consolidate"})
+        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
+        chore = (await (await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json())
+        assert chore["work_item"]["payload"] == {"text": "consolidate"} and seen == []
+        item, _ = await pull_one(client, AGENT_QUEUE, {"text": "hi", "resume_session_id": None})
+        assert item["payload"] == {"text": "hi", "resume_session_id": "S1"} and seen == ["c1"]
+        assert queue.get(item["id"]).payload == item["payload"]
+    finally:
+        await client.close()
 
 
 async def test_pull_returns_204_when_nothing_queued(api, conn):

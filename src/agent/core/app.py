@@ -159,7 +159,7 @@ class CoreApp:
             conn=self.conn, queue=self.queue, gate=Gate(self.conn, self.config, proxy), tools=self.router,
             context_for=self.router.context_for,
             bundles=lambda: build_bundle(self.config_dir),
-            on_result=self.on_result, on_files=self.on_files, bind=self.bind,
+            on_result=self.on_result, on_files=self.on_files, bind=self.bind, refresh=self._refresh_turn,
             runs_dir=self.data_dir / "runs",
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         self.agent_app.router.add_route("*", "/git/{project}.git/{tail:.*}", self.githost.aiohttp_handler)
@@ -219,6 +219,10 @@ class CoreApp:
     def _turn_payload(self, conversation_id: str, text: str, actor: str | None, unattended: bool) -> dict:
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
         return self.payloads.turn(convo, text, actor, unattended=unattended)
+
+    def _refresh_turn(self, conversation_id: str, payload: dict) -> dict:
+        convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        return self.payloads.refresh_turn(convo, payload) if convo is not None else payload
 
     def bind(self, work_item_id: str, project: str, title: str) -> dict:
         """work_on, core's half: bind the session's conversation to the project and hand the runner what its
