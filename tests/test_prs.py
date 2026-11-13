@@ -1,6 +1,6 @@
 import pytest
 
-from agent import db, tasks
+from agent import db, events, tasks
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.prs import pr_body, register_pr_tools
 from agent.core.sessions import WorkQueue
@@ -57,9 +57,15 @@ def build(conn, tmp_path, *, writer=None, tips=None):
     return router, ctx, githost, writer
 
 
-def pr_args(branch="agent/t1-x", sha=SHA, passed=True):
-    return {"title": "Fix export", "body": "Fixes the crash.", "branch": branch, "sha": sha,
+def pr_args(branch="agent/t1-x", sha=SHA, passed=True, no_ui="the export API only"):
+    args = {"title": "Fix export", "body": "Fixes the crash.", "branch": branch, "sha": sha,
             "checks": {"passed": passed, "log_tail": "1 failed: test_export"}}
+    return {**args, "no_ui": no_ui} if no_ui else args
+
+
+def post_screenshots(conn, ctx, *names):
+    events.append(conn, "files_posted", task_id=None, actor=ctx.actor,
+                  data={"conversation_id": ctx.conversation_id, "files": list(names), "text": "", "slack": True})
 
 
 async def test_refuses_wrong_branch_prefix(conn, tmp_path):
@@ -123,3 +129,35 @@ def test_pr_body_format():
                    checks=["pytest -q"])
     assert body.startswith("🤖 agent (AI agent) · Requested by @bob-gh in Slack")
     assert "- `pytest -q`" in body
+
+
+async def test_new_feature_needs_browser_evidence(conn, tmp_path):
+    router, ctx, githost, _ = build(conn, tmp_path)
+    post_screenshots(conn, ctx, "notes.txt")  # not a screenshot
+    r = await router.call(ctx, "open_pr", pr_args(no_ui=""))
+    assert "tested end to end in a browser" in r.text and githost.pushes == []
+
+
+async def test_screenshots_let_a_feature_through_and_show_in_the_body(conn, tmp_path):
+    router, ctx, githost, writer = build(conn, tmp_path)
+    post_screenshots(conn, ctx, "01-empty.png", "02-saved.PNG", "flow.webm")
+    r = await router.call(ctx, "open_pr", pr_args(no_ui=""))
+    assert "pull/42" in r.text and len(githost.pushes) == 1
+    assert "**Tested end to end in a browser**: 3 screenshot(s)" in writer.body
+
+
+async def test_no_ui_reason_goes_in_the_body(conn, tmp_path):
+    router, ctx, _, writer = build(conn, tmp_path)
+    await router.call(ctx, "open_pr", pr_args(no_ui="a database index; nothing on screen changes"))
+    assert "**No browser test**: a database index; nothing on screen changes" in writer.body
+
+
+async def test_bugs_and_pr_updates_skip_the_evidence_check(conn, tmp_path):
+    router, ctx, githost, _ = build(conn, tmp_path)
+    await router.call(ctx, "track_task", {"project": "sample", "title": "Export crash", "kind": "bug"})
+    ctx = router.context_for(ctx.work_item_id)  # each call gets a fresh context, as in a session
+    assert "pull/42" in (await router.call(ctx, "open_pr", pr_args(no_ui=""))).text
+    router2, ctx2, githost2, _ = build(conn, tmp_path)
+    task = router2.ensure_task(ctx2, "Copy button")
+    tasks.set_fields(conn, task.id, pr_number=41)
+    assert "pull/42" in (await router2.call(ctx2, "open_pr", pr_args(no_ui=""))).text

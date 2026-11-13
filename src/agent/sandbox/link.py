@@ -47,10 +47,12 @@ class CoreLink:
                                                 json={"name": name, "args": args}, timeout=20 * 60))
         return resp.json()
 
-    async def files(self, tok: str, items: list[tuple[str, bytes]], text: str) -> None:
+    async def files(self, tok: str, items: list[tuple[str, bytes]], text: str) -> bool:
+        """Whether the files reached the conversation's Slack thread."""
         files = [("file", (name, data)) for name, data in items]
-        self._check(await self.http.post(f"{self.base}/agent/files", headers=self._auth(tok), data={"text": text},
-                                         files=files))
+        resp = self._check(await self.http.post(f"{self.base}/agent/files", headers=self._auth(tok),
+                                                data={"text": text}, files=files))
+        return resp.json().get("posted", True)
 
     async def result(self, tok: str, result: dict) -> None:
         await self._post("/agent/result", tok, {"result": result})

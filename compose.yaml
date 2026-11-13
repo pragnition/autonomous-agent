@@ -2,6 +2,7 @@
 #   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos runners clone)   mirrors/   cli/
 #   runner/ (core's runner tokens for the agent container)
 #   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
+#   secrets/projects/<project>.env   (a project's app .env; core hands it to the agent as runner/projects/)
 # Claude never runs in core. With [sandbox] isolation = "open" (spec v3) sessions run in the `agent` service below;
 # with "sandboxes" (spec v2) they run in Docker Sandboxes managed by sandboxd on the host, which reach core on
 # 127.0.0.1:18080 (then set SANDBOXD_HEALTH for the supervisor). The Claude account proxy runs on the host; the
@@ -20,7 +21,10 @@ services:
     build: {context: ., target: core}
     container_name: agent-core
     restart: unless-stopped
-    networks: [agentnet]
+    networks:
+      agentnet:
+        ipv4_address: 172.30.0.10   # fixed: apps in the agent's own Docker reach the model-call meter by address,
+                                    # since they can't resolve the name `core`
     ports:
       - "127.0.0.1:18080:8080"    # the agent API and git endpoint, for sandboxes via host.docker.internal only
       - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port
@@ -37,14 +41,36 @@ services:
       - ${AGENT_DATA:-./data}/cli:/data/cli
       - ${AGENT_DATA:-./data}/runner:/data/runner
       - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
+      - ${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro   # apps' own .env files, passed to the agent
+
+  # The agent's own Docker daemon: the apps it runs to test its work start here, never on the laptop's Docker.
+  # Its API listens only on 127.0.0.1 of this container's network, which the agent container shares (below), so an
+  # app published on 127.0.0.1:<port> is the agent's localhost too. The work volume is mounted at the same path as
+  # in the agent container, so a compose file's bind mounts of a worktree resolve.
+  docker:
+    image: docker:29-dind
+    container_name: agent-docker
+    restart: unless-stopped
+    privileged: true
+    networks: [agentnet]
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    # Starting with `dockerd` keeps the image from adding its own 0.0.0.0:2375 listener on the stack network
+    command: [dockerd, --host=unix:///var/run/docker.sock, --host=tcp://127.0.0.1:2375, --tls=false,
+              "--default-address-pool=base=10.201.0.0/16,size=24"]
+    volumes:
+      - agentdocker:/var/lib/docker
+      - agentwork:/var/agent
 
   # isolation = "open": Claude Code sessions with a full development environment (spec v3). It pulls work from
-  # core, reads its runner tokens from data/runner and shares core's Azure login in data/cli/azure.
+  # core, reads its runner tokens from data/runner and shares core's Azure login in data/cli/azure. It runs in the
+  # docker service's network namespace: same stack network, and the apps it starts are on its localhost.
   agent:
     build: {context: ., target: agent}
     container_name: agent-runner
     restart: unless-stopped
-    networks: [agentnet]
+    network_mode: service:docker
+    depends_on: [docker]
     command: [python, -m, agent, runners, --tokens, /run/agent/runner-tokens.json, --core, "http://core:8080",
               --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
               --git-email, "${AGENT_GIT_EMAIL:-}"]
@@ -85,3 +111,4 @@ services:
 
 volumes:
   agentwork:     # the agent's clones, sessions and caches; survives rebuilds so sessions can resume
+  agentdocker:   # the agent's Docker images, containers and volumes (the apps it tests)

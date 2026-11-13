@@ -127,6 +127,18 @@ CREATE TABLE IF NOT EXISTS proposals (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    upstream TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS llm_usage_at ON llm_usage(at);
 """
 
 SCHEMA_VERSION = 2

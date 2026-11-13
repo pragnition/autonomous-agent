@@ -70,6 +70,21 @@ port = 8086
 trusted_peers = ["172.30.0.1"]
 agent_origins = ["agent-core", "agent-sandbox"]   # the account proxy's origins that are the agent; others are people
 
+# Model calls from the apps the agent runs and tests (a project's own LLM features). Apps point their OpenAI-style
+# base URL at http://172.30.0.10:8087/llm/<upstream> (core's fixed address) with any placeholder key; core adds the real key (core.env), counts
+# each call's tokens at these prices, and refuses calls once the day's or month's cap is spent. The dashboard can
+# change the caps at runtime. Without upstreams, the meter doesn't run.
+[llm_meter]
+daily_usd = 10
+monthly_usd = 100
+# [llm_meter.upstreams.<project>-dev]
+# base_url = "https://<resource>.openai.azure.com/openai/v1"
+# key = "<PROJECT>_DEV_FOUNDRY_KEY"        # in core.env
+
+[llm_meter.prices]                         # USD per million tokens: [input, cached input, output]
+"gpt-5.6-terra" = [2.0, 0.2, 12.0]         # Azure Global Standard, short context
+default = [5.0, 0.5, 30.0]                 # anything not listed: priced high on purpose
+
 [observability]
 digest_channel = ""              # e.g. "#agent-ops": a daily KPI digest; empty means none
 digest_time = "09:00"            # in `timezone`

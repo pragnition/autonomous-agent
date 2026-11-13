@@ -130,6 +130,20 @@ async def test_on_files_uploads_to_thread(app):
     upload = app.slack.uploads[-1]
     assert upload["channel"] == "D1" and upload["thread_ts"] == "6.1"
     assert upload["file_uploads"] == [{"file": b"png", "filename": "a.png"}]
+    row = app.conn.execute("SELECT data FROM events WHERE type = 'files_posted'").fetchone()
+    assert json.loads(row["data"])["files"] == ["a.png"] and json.loads(row["data"])["slack"] is True
+
+
+async def test_on_files_without_a_thread_is_recorded_not_posted(app):
+    app.conn.execute("INSERT INTO conversations(id, sandbox, is_primary, created_at, last_active_at) "
+                     "VALUES ('V-linear', 'general', 1, 'now', 'now')")
+    item_id = app.queue.enqueue("V-linear", "general", "turn", {"text": "x", "actor": None})
+    uploads = len(app.slack.uploads)
+    assert await app.on_files(item_id, [("a.png", b"png")], "after") is False
+    assert len(app.slack.uploads) == uploads
+    row = app.conn.execute("SELECT data FROM events WHERE type = 'files_posted'").fetchone()
+    assert json.loads(row["data"]) == {"conversation_id": "V-linear", "files": ["a.png"], "text": "after",
+                                       "slack": False}
 
 
 async def test_git_endpoint_needs_a_token(api):
@@ -217,6 +231,23 @@ def test_prepare_agent_dirs_hands_them_to_the_agent(app, monkeypatch):
     assert {str(app.data_dir / "cli"), str(app.data_dir / "cli" / "azure"),
             str(app.data_dir / "cli" / "azure" / "msal_token_cache.json"), str(app.data_dir / "runner")} <= owned
     assert any(path.endswith("runner-tokens.json.tmp") for path, _ in calls)
+
+
+def test_project_envs_go_to_the_agent_readable_only_by_it(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: calls.append((str(path), uid)))
+    monkeypatch.setattr("agent.core.app.core_is_root", lambda: True)
+    app.share_project_envs()  # no secrets/projects: nothing to do
+    assert not (app.data_dir / "runner" / "projects").exists()
+    source = app.data_dir / "secrets" / "projects"
+    source.mkdir(parents=True)
+    (source / "sample.env").write_text("A=1\n")
+    (source / "notes.txt").write_text("not an env file")
+    app.share_project_envs()
+    shared = app.data_dir / "runner" / "projects" / "sample.env"
+    assert shared.read_text() == "A=1\n" and oct(shared.stat().st_mode & 0o777) == "0o600"
+    assert sorted(p.name for p in shared.parent.iterdir()) == ["sample.env"]
+    assert {str(shared.parent), str(shared.parent / ".sample.env.tmp")} <= {p for p, uid in calls if uid == 1001}
 
 
 async def test_digest_uses_local_time_and_posts_once(app):
@@ -331,19 +362,16 @@ def test_core_reads_account_names_from_its_config_dir(app):
 
 
 def test_foundry_meter_is_wired_when_installed(app, monkeypatch):
-    import sys
-    import types
-    fake = types.ModuleType("agent.core.llm_meter")
-    fake.meter_view = lambda conn, settings, tz: {"tz": tz, "settings": settings}
-    fake.set_caps = lambda conn, *, actor, daily_usd=None, monthly_usd=None: {"actor": actor, "daily": daily_usd}
-    monkeypatch.setitem(sys.modules, "agent.core.llm_meter", fake)
-    monkeypatch.setattr(app.config, "llm_meter", "SETTINGS", raising=False)
+    from agent.config import LlmMeterSettings, LlmUpstream
+    settings = LlmMeterSettings(daily_usd=10.0, monthly_usd=100.0,
+                                upstreams={"dev": LlmUpstream(base_url="https://x.invalid/openai/v1", key="DEV_KEY")})
+    monkeypatch.setattr(app.config, "llm_meter", settings)
     view, set_caps = app.llm_meter()
-    assert view() == {"tz": app.config.timezone, "settings": "SETTINGS"}
-    assert set_caps("ann", 5, None) == {"actor": "ann", "daily": 5}
+    assert view()["upstreams"] == ["dev"]
+    set_caps("ann", 5, None)
+    assert view()["caps"]["daily_usd"] == 5
 
 
-def test_foundry_meter_absent_is_none(app, monkeypatch):
-    import sys
-    monkeypatch.setitem(sys.modules, "agent.core.llm_meter", None)   # import fails
+def test_foundry_meter_absent_is_none(app):
+    assert not app.config.llm_meter.upstreams
     assert app.llm_meter() == (None, None)
