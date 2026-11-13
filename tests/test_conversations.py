@@ -354,6 +354,18 @@ async def test_dm_after_idle_starts_new_conversation(convos, conn, queue):
     assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (second,)).fetchone()[0] is None
 
 
+async def test_dm_continues_the_chat_active_most_recently(convos, conn, queue):
+    """Two DM chats inside the idle window (a reply in a thread under one of its messages woke the older one): a
+    top-level message continues the one that was really active last, not the one made last."""
+    older = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-1", thread_ts=None)
+    newer = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-1", thread_ts=None)
+    for cid, made, active in ((older, 20, 1), (newer, 10, 5)):
+        conn.execute("UPDATE conversations SET created_at = ?, last_active_at = ? WHERE id = ?",
+                     (hours_ago(made), hours_ago(active), cid))
+    await convos.handle_slack(dm("where were we?"))
+    assert last_item(queue).conversation_id == older
+
+
 async def test_dm_message_during_running_turn_queues_on_same_conversation(convos, queue):
     await convos.handle_slack(dm("run the tests"))
     first = queue.claim(AGENT_QUEUE)

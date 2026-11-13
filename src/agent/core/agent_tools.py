@@ -317,7 +317,8 @@ class AgentToolRouter:
         # a DM has no thread of its own: post the child's thread-opening line before anything is created, so a
         # failed post (caught by the router and reported as a tool error) leaves no task, conversation or work item
         if ctx.channel and ctx.thread_ts is None:
-            posted = await self.slack.chat_postMessage(channel=ctx.channel, text=f"Working on {title}")
+            posted = await self.slack.chat_postMessage(channel=ctx.channel,
+                                                       text=scrub(f"Working on {title}", self.secret_values))
             thread_ts, is_primary = posted["ts"], 1
         else:
             thread_ts, is_primary = ctx.thread_ts, 0
@@ -335,8 +336,10 @@ class AgentToolRouter:
 
     async def _status(self, ctx, args) -> ToolReply:
         paused = db.get_setting(self.conn, "paused", "0") == "1"
-        running = self.conn.execute("SELECT sandbox, kind FROM work_items WHERE status = 'claimed' "
-                                    "ORDER BY sandbox").fetchall()
+        # every item runs on the one queue, so each is named by its conversation's project ("-" when unbound)
+        running = self.conn.execute("SELECT COALESCE(c.project, '-'), w.kind FROM work_items w LEFT JOIN "
+                                    "conversations c ON c.id = w.conversation_id WHERE w.status = 'claimed' "
+                                    "ORDER BY w.created_at, w.rowid").fetchall()
         queued = self.conn.execute("SELECT COUNT(*) FROM work_items WHERE status = 'queued'").fetchone()[0]
         open_tasks = self.conn.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('queued', 'working', "
                                        "'needs_input', 'ready_for_review')").fetchone()[0]
@@ -388,8 +391,8 @@ class AgentToolRouter:
         events.append(self.conn, "stop_all", task_id=None, actor=ctx.actor, data={"cancelled": cancelled})
         for channel, thread_ts in sorted(threads):
             await self.slack.chat_postMessage(channel=channel, thread_ts=thread_ts,
-                                              text=f"Stopped by {ctx.actor or 'an admin'}. I'll pick this up again "
-                                                   "when an admin resumes.")
+                                              text=scrub(f"Stopped by {ctx.actor or 'an admin'}. I'll pick this up "
+                                                         "again when an admin resumes.", self.secret_values))
         return ToolReply(f"Stopped. Interrupted {len(cancelled)} running sessions; queued messages wait, and nothing "
                          "new starts until an admin resumes.")
 

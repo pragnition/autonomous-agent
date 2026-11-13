@@ -163,9 +163,16 @@ async def test_production_and_chores_are_not_blocked_by_busy_turns(conn):
 def test_cancel_running(conn):
     q = WorkQueue(conn)
     a = q.enqueue("c1", "code-p", "turn", {})
-    b = q.enqueue("c2", "code-p", "production", {})
+    b = q.enqueue("c2", "code-p", "turn", {})
     q.claim("code-p")
     assert q.cancel_running() == [a] and q.get(b).status == "queued"
+
+
+def test_claim_with_no_kinds_claims_nothing(conn):
+    q = WorkQueue(conn)
+    q.enqueue("c1", AGENT_QUEUE, "turn", {})
+    assert q.claim(AGENT_QUEUE, kinds=()) is None
+    assert q.claim(AGENT_QUEUE) is not None
 
 
 def test_claim_skips_kinds_not_allowed(conn):

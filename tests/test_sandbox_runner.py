@@ -398,6 +398,7 @@ async def test_work_on_makes_checkout_runs_setup_writes_keys(worktrees, session,
         assert part in reply
     again = await call(tools, "work_on", {"project": "sample"})
     assert str(path) in again and (path / ".setup-count").read_text().count("ran") == 1
+    assert "tester@example.com" not in reply and "tester@example.com" not in again  # the file's path, never a key
 
 
 async def test_work_on_without_an_app_env_file_says_nothing_about_one(worktrees, session, tmp_path):
@@ -435,6 +436,7 @@ async def test_open_pr_after_work_on_uses_new_checkout(worktrees, session, serve
     await call(tools, "open_pr", {"title": "Fix export", "body": "b"})
     name, args = link.tool_calls[-1]
     assert name == "open_pr" and args["branch"] == BOUND_BRANCH and args["checks"]["passed"] is True
+    assert "$ true" in args["checks"]["log_tail"]  # the bound project's checks ran, not an empty list
     assert args["sha"] == git(server[1], "rev-parse", f"refs/heads/{BOUND_BRANCH}")
     (session / "sample" / "shot.png").write_bytes(b"png")
     (session / "notes.txt").write_text("n")
@@ -517,6 +519,16 @@ def test_prepare_refuses_a_folder_that_isnt_a_repo(worktrees, tmp_path):
     with pytest.raises(CheckoutRefused, match="isn't a checkout"):
         worktrees.prepare(path, "sample", "agent/T-7-x", "main")
     assert [p.name for p in path.iterdir()] == ["notes.md"] and (path / "notes.md").read_text() == "the agent's notes"
+
+
+def test_prepare_refuses_a_link_even_to_its_own_checkout(worktrees, tmp_path):
+    real, _ = worktrees.prepare(tmp_path / "scratch" / "V-7" / "sample", "sample", "agent/T-7-x", "main")
+    link = tmp_path / "scratch" / "V-8" / "sample"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(real)
+    with pytest.raises(CheckoutRefused, match="is a link"):
+        worktrees.prepare(link, "sample", "agent/T-8-x", "main")
+    assert link.is_symlink() and git(real, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-7-x"
 
 
 def test_prepare_uses_an_empty_folder(worktrees, tmp_path):

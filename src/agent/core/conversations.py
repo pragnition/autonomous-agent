@@ -124,12 +124,13 @@ class Conversations:
         return named.get(self._channel_names[channel])
 
     def _rolling_dm(self, channel: str) -> sqlite3.Row | None:
-        """The DM's current chat: its newest top-level conversation, unless that has been quiet for DM_IDLE. DM
-        conversations from before the rolling chat have a thread_ts, so they're never picked."""
+        """The DM's current chat: the top-level conversation active most recently, unless it has been quiet for
+        DM_IDLE. DM conversations from before the rolling chat have a thread_ts, so they're never picked."""
         since = (datetime.now(UTC) - DM_IDLE).strftime("%Y-%m-%dT%H:%M:%SZ")
         return self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS NULL AND "
-                                 "is_primary = 1 AND last_active_at >= ? ORDER BY created_at DESC, rowid DESC "
-                                 "LIMIT 1", (channel, since)).fetchone()
+                                 "is_primary = 1 AND last_active_at >= ? "
+                                 "ORDER BY last_active_at DESC, created_at DESC, rowid DESC LIMIT 1",
+                                 (channel, since)).fetchone()
 
     def _in_thread(self, channel: str, thread_ts: str) -> sqlite3.Row | None:
         """A thread's own primary conversation, otherwise the conversation of the message it hangs off."""

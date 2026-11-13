@@ -55,11 +55,13 @@ class Worktrees:
         its .git), whatever branch the agent has switched it to since. Anything else there is refused and left
         alone. A new repo is made beside `path` and moved into place once it is complete, so a failure leaves
         nothing behind."""
+        if path.is_symlink():  # checked first: a link to a checkout prepare made is still not this one
+            raise CheckoutRefused(f"{path} is a link, so it was left as it is")
         if (path / ".git").exists():
             if not (path / ".git" / MADE_BY_PREPARE).is_file():
                 raise CheckoutRefused(f"{path} is a git repo this runner didn't make, so it was left as it is")
             return path, False
-        if path.is_symlink() or (path.exists() and (not path.is_dir() or any(path.iterdir()))):
+        if path.exists() and (not path.is_dir() or any(path.iterdir())):
             raise CheckoutRefused(f"{path} already exists and isn't a checkout, so it was left as it is")
         clone = self.ensure_clone(project)
         path.parent.mkdir(parents=True, exist_ok=True)

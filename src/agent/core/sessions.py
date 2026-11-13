@@ -132,11 +132,14 @@ class WorkQueue:
 
     def claim(self, sandbox: str, now: datetime | None = None, kinds: tuple[str, ...] | None = None) -> WorkItem | None:
         """The oldest eligible queued item for `sandbox`: no other item of its conversation is claimed, and (when
-        `kinds` is given) its kind is one of them. A runner asks once per kind it may start right now (the Gate
-        decides that), so this is the only place that has to know which kinds share a conversation's turn order."""
+        `kinds` is given, even empty) its kind is one of them. A runner asks once per kind it may start right now
+        (the Gate decides that), so this is the only place that has to know which kinds share a conversation's turn
+        order."""
         now = _now(now)
         kind_filter, args = "", [sandbox]
-        if kinds:
+        if kinds is not None:
+            if not kinds:  # no kind may start: nothing to claim
+                return None
             kind_filter = f" AND w.kind IN ({','.join('?' * len(kinds))})"
             args += list(kinds)
         with self.conn:

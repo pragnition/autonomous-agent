@@ -19,6 +19,7 @@ const LABELS: Record<string, string> = {
   session_started: "Session started",
   work_started: "Chore started",
   task_created: "Task created",
+  project_bound: "Project bound",
   status_changed: "Task status changed",
   consolidated: "Memory consolidated",
   consolidation_failed: "Memory consolidation failed",

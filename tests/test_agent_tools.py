@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from agent import db, tasks
@@ -273,6 +275,18 @@ async def test_stop_all_and_resume(router, ctx_member, ctx_with_task, conn):
     assert db.get_setting(conn, "paused") == "0"
 
 
+async def test_start_task_and_stop_all_posts_are_scrubbed(router, conn):
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    await router.call(ctx, "start_task", {"project": "sample", "title": "rotate SUPERSECRETVALUE", "kind": "chore",
+                                          "brief": "b"})
+    router.queue.claim(AGENT_QUEUE)
+    await router.call(dataclasses.replace(ctx, actor="SUPERSECRETVALUE"), "stop_all", {})
+    texts = [p["text"] for p in router.slack.posts]
+    assert any(t.startswith("Working on rotate") for t in texts) and any(t.startswith("Stopped by") for t in texts)
+    assert not any("SUPERSECRETVALUE" in t for t in texts)
+
+
 async def test_cancel_task_cancels_its_items(router, ctx_with_task, conn):
     await router.call(ctx_with_task, "cancel_task", {"task_id": ctx_with_task.task_id})
     assert tasks.get_task(conn, ctx_with_task.task_id).status == Status.cancelled
@@ -283,6 +297,16 @@ async def test_status_and_tasks(router, ctx_with_task):
     assert "running" in (await router.call(ctx_with_task, "status", {})).text
     assert ctx_with_task.task_id in (await router.call(ctx_with_task, "list_tasks", {})).text
     assert "working" in (await router.call(ctx_with_task, "get_task", {"task_id": ctx_with_task.task_id})).text
+
+
+async def test_status_names_each_running_items_project(router, conn):
+    bound = add_item(router.queue, add_conversation(conn, sandbox=AGENT_QUEUE, project="sample"), AGENT_QUEUE)
+    add_item(router.queue, add_conversation(conn, sandbox=AGENT_QUEUE, project=None), AGENT_QUEUE)
+    router.queue.enqueue(None, AGENT_QUEUE, "chore", {})
+    for _ in range(3):
+        router.queue.claim(AGENT_QUEUE)
+    text = (await router.call(router.context_for(bound), "status", {})).text
+    assert "running: 3 (sample/turn, -/turn, -/chore)" in text
 
 
 async def test_read_thread(router, ctx_member):
