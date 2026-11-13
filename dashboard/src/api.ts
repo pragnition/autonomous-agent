@@ -191,8 +191,17 @@ export const useSessions = (f: SessionFilter) =>
     ...live,
   })
 
+/** The session's header, polled; its timeline is loaded once by useSessionEntries and then streamed. */
 export const useSession = (id: string) =>
-  useQuery({ queryKey: ["session", id], queryFn: () => api.get<SessionDetail>(`/api/sessions/${id}`), ...live })
+  useQuery({ queryKey: ["session", id], queryFn: () => api.get<SessionRow>(`/api/sessions/${id}?entries=0`), ...live })
+
+export const useSessionEntries = (id: string) =>
+  useQuery({
+    queryKey: ["session-entries", id],
+    queryFn: () => api.get<SessionDetail>(`/api/sessions/${id}`),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  })
 
 export const useAccounts = () =>
   useQuery({ queryKey: ["accounts"], queryFn: () => api.get<AccountsView>("/api/accounts"), ...live })

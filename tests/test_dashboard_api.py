@@ -395,3 +395,25 @@ async def test_payload_secrets_never_in_any_response(tmp_path, conn, proxy):
         assert "[secret]" in bodies[2]
     finally:
         await client.close()
+
+
+async def test_session_detail_without_entries(tmp_path, api, conn):
+    item = running_item(conn)
+    write_transcript(tmp_path, item, [INIT, say("hello")])
+    body = await (await api.get(f"/api/sessions/{item}?entries=0", headers=ANN)).json()
+    assert body["id"] == item and "entries" not in body and "offset" not in body
+
+
+async def test_finished_session_without_run_row_uses_its_transcript(tmp_path, api, conn):
+    item = running_item(conn)
+    write_transcript(tmp_path, item, [INIT, say("a", "m1"), say("b", "m2")])
+    WorkQueue(conn).cancel(item)
+    body = await (await api.get(f"/api/sessions/{item}?entries=0", headers=ANN)).json()
+    assert body["state"] == "cancelled" and body["live"] is False
+    assert body["turns"] == 2 and body["tokens"] == {"in": 6, "out": 8, "cache_read": 10, "cache_write": 12}
+
+
+async def test_queued_session_has_no_numbers(api, conn):
+    item = add_item(WorkQueue(conn), add_conversation(conn, sandbox="general", project=None), "general")
+    body = await (await api.get(f"/api/sessions/{item}?entries=0", headers=ANN)).json()
+    assert body["tokens"] is None and body["turns"] is None

@@ -86,6 +86,10 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
             stats = await asyncio.to_thread(live_stats, transcript(row["id"]))
             row.update(live=True, tokens=stats.tokens, turns=stats.turns, cost_usd=stats.cost_usd,
                        account=await account_of(stats.session_id))
+        elif row["tokens"] is None and row["state"] != "queued" and transcript(row["id"]).exists():
+            # finished without a run row (cancelled before the runner reported): what the transcript shows
+            stats = await asyncio.to_thread(live_stats, transcript(row["id"]))
+            row.update(tokens=stats.tokens, turns=stats.turns, cost_usd=stats.cost_usd)
         return _public(row)
 
     async def me(request: web.Request) -> web.Response:
@@ -119,6 +123,8 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
         row = get_session(conn, request.match_info["id"])
         if row is None:
             return web.json_response({"error": "no such session"}, status=404)
+        if request.query.get("entries") == "0":  # the page polls the header; the timeline comes from the stream
+            return web.json_response(await fill(row))
         entries, offset = await asyncio.to_thread(read_entries, transcript(row["id"]), 0, scrub)
         return web.json_response({**await fill(row), "entries": entries, "offset": offset})
 
