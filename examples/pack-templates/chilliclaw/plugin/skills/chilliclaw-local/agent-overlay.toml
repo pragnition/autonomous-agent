@@ -1,0 +1,70 @@
+# Appended to deployments/default/config.local-lite.toml for the agent's local runs (the chilliclaw-local skill).
+# Every chat model call goes to the dev Foundry deployment through the agent's meter: core adds the key and stops
+# calls once the cost cap is spent. AGENT_LLM_KEY is a placeholder in .env; the meter replaces it.
+# Integrations that need a real tenant's credentials (Slack, Teams, Outlook, Microsoft sharing) and the features
+# that would call OpenRouter (audio transcription, image generation) are off, so the stack runs with no secrets.
+
+[projects]
+sharing_enabled = false
+
+[integrations.slack]
+enabled = false
+
+[integrations.microsoft.teams]
+enabled = false
+
+[integrations.microsoft.outlook.triggers]
+enabled = false
+
+[integrations.microsoft.outlook.calendar_triggers]
+enabled = false
+
+[workspace.transcribe_audio]
+enabled = false
+
+[workspace.generate_image]
+enabled = false
+
+[llm.deployments.main]
+backend = "foundry"
+model = "chilliclaw-dev-gpt-5.6-terra"
+
+[llm.deployments.main.foundry]
+base_url = "http://core:8087/llm/chilliclaw-dev"
+auth_mode = "api_key"
+api_key_env = "AGENT_LLM_KEY"
+key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
+regional_endpoints_env = "AGENT_LLM_NO_REGIONS"
+
+[llm.deployments.vision_subagent]
+backend = "foundry"
+model = "chilliclaw-dev-gpt-5.6-terra"
+
+[llm.deployments.vision_subagent.foundry]
+base_url = "http://core:8087/llm/chilliclaw-dev"
+auth_mode = "api_key"
+api_key_env = "AGENT_LLM_KEY"
+key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
+regional_endpoints_env = "AGENT_LLM_NO_REGIONS"
+
+[llm.deployments.email_summary]
+backend = "foundry"
+model = "chilliclaw-dev-gpt-5.6-terra"
+
+[llm.deployments.email_summary.foundry]
+base_url = "http://core:8087/llm/chilliclaw-dev"
+auth_mode = "api_key"
+api_key_env = "AGENT_LLM_KEY"
+key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
+regional_endpoints_env = "AGENT_LLM_NO_REGIONS"
+
+[llm.deployments.usecase_classifier]
+backend = "foundry"
+model = "chilliclaw-dev-gpt-5.6-terra"
+
+[llm.deployments.usecase_classifier.foundry]
+base_url = "http://core:8087/llm/chilliclaw-dev"
+auth_mode = "api_key"
+api_key_env = "AGENT_LLM_KEY"
+key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
+regional_endpoints_env = "AGENT_LLM_NO_REGIONS"

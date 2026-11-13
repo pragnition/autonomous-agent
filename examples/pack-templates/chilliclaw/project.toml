@@ -1,38 +1,32 @@
-# ChilliClaw pack template. Copy to /data/config/packs/chilliclaw/ once the values marked CONFIRM are filled in;
-# `just doctor` fails on this pack until the repo is real and [build] checks are set.
+# The ChilliClaw pack. Copy it to /data/config/packs/chilliclaw/ (the data directory's config/packs/chilliclaw).
+# Its local runs call the dev Foundry through the agent's meter, so agent.toml needs the upstream, and core.env the key:
+#   [llm_meter.upstreams.chilliclaw-dev]
+#   base_url = "https://chilliclaw-dev-models-eastus2.openai.azure.com/openai/v1"
+#   key = "CHILLICLAW_DEV_FOUNDRY_KEY"
 [project]
 name = "chilliclaw"
-repo = "CHANGE-ME/chilliclaw"        # CONFIRM: the GitHub owner/name
-default_branch = "main"              # CONFIRM
+repo = "pragnition/chilliclaw"
+default_branch = "main"
 owner = "parthib"                    # owns PRs from unmapped requesters
-slack_channel = "#chilliclaw-dev"    # CONFIRM: where its task threads go
-linear_team = "CHI"                  # CONFIRM: the Linear team key
-network = "open"                     # the coding sandbox's internet; "read" limits it to GET-only registries, GitHub, docs
+slack_channel = "#chilliclaw-dev"    # CONFIRM: where task threads for work that starts outside Slack go
+linear_team = "PRA"
+network = "open"
 
-[linear.status]                      # CONFIRM: these must match the team's workflow state names
+[linear.status]                      # the PRA team's workflow states
 working = "In Progress"
-ready_for_review = "In Review"
+ready_for_review = "In Review/Testing"
 merged = "Done"
 failed = "Todo"
 
 [build]
-# CONFIRM: the commands from ChilliClaw's CLAUDE.md. `setup` runs when a session's worktree is created;
-# `checks` run before any PR is opened, so a pack without checks gets PRs nobody verified; doctor flags that.
-setup = []
-checks = []
-
-
-[egress]
-allow = []                           # CONFIRM (only needed with network = "read"): extra exact hosts, e.g. the dev Foundry endpoint
-# [egress.inject."CHANGE-ME-dev.openai.azure.com"]   # CONFIRM: the dev Foundry endpoint the app calls under test
-# header = "api-key"
-# secret = "CHILLICLAW_DEV_FOUNDRY_KEY"            # value lives in core's secrets; the sandbox sees a placeholder
-
-[scrub]
-patterns = []                        # CONFIRM: customer ID formats to strip from production answers, e.g. "C-\\d{5}"
-
-[sandbox.code]
-setup = []                           # CONFIRM: system tools the coding sandbox needs, run as root on create/rebuild
+# `setup` runs once when a session's worktree is created. The .env holds no real secrets: placeholders are filled
+# with local-only values, and model calls go through the agent's meter, which adds the Foundry key (the
+# chilliclaw-local skill). `checks` run before every PR.
+setup = [
+  '''test -f .env || { cp .env.example .env && sed -i -E "s/^(CREDENTIAL_ENCRYPTION_KEY)=.*/\1=$(python3 -c 'import secrets; print(secrets.token_hex(32))')/; s/^([A-Z0-9_]+)=REPLACE_ME.*/\1=local-placeholder/" .env && echo AGENT_LLM_KEY=metered >> .env; }''',
+  "bun install --frozen-lockfile",
+]
+checks = ["just check"]
 
 [secrets]
-worker = []                          # CONFIRM: test-only values (test accounts) handed to coding sessions
+worker = []                          # test-only values handed to coding sessions; none needed
