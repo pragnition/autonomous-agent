@@ -1,5 +1,8 @@
 # Autonomous Engineering Agent v2: One General Agent on Docker Sandboxes
 
+**Note:** The isolation and container designs were removed in the one-queue phase. Still current: the work-item
+and runner model.
+
 - **Date:** 2026-11-13
 - **Status:** Approved 2026-11-13. Its isolation design (G2–G4, G9, §4–§5) is the next phase; `2026-11-13-open-agent-design.md` (v3) covers the current phase.
 - **Author:** Parthib Das Gupta (with Claude)

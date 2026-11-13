@@ -140,3 +140,11 @@ async def test_meter_upstream_keys_are_required_secrets(tmp_path):
         "[llm_meter.upstreams.sample-dev]\nbase_url = \"https://x.openai.azure.com/openai/v1\"\nkey = \"SAMPLE_DEV_KEY\""))
     checks = by_name(await run_checks(config_dir=config, secrets=ALL_SECRETS))
     assert not checks["secret:SAMPLE_DEV_KEY"].ok
+
+
+def test_proxy_check_uses_proxy_url(monkeypatch):
+    from agent.doctor import _proxy_relay
+
+    monkeypatch.setenv("PROXY_URL", "http://p:1")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    assert _proxy_relay() == "http://p:1"

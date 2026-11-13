@@ -85,6 +85,11 @@ async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, g
     return checks
 
 
+def _proxy_relay() -> str | None:
+    """core's container sets PROXY_URL (compose.yaml); ANTHROPIC_BASE_URL is the older fallback."""
+    return os.environ.get("PROXY_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+
+
 def _config_or_none(config_dir: Path):
     try:
         return load_agent_config(Path(config_dir) / "agent.toml")
@@ -100,7 +105,7 @@ def main() -> int:
     from agent.secrets import load_secrets
 
     secrets = load_secrets(paths.SECRETS_FILE)
-    relay = os.environ.get("ANTHROPIC_BASE_URL")
+    relay = _proxy_relay()
     checks = asyncio.run(run_checks(
         config_dir=paths.CONFIG_DIR, secrets=secrets, proxy=ProxyClient(relay) if relay else None,
         github=GitHubReader(secrets["GITHUB_READ_TOKEN"]) if secrets.get("GITHUB_READ_TOKEN") else None,

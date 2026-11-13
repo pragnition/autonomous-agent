@@ -1,5 +1,8 @@
 # Autonomous Engineering Agent — Design Spec
 
+**Note:** The isolation and container designs were removed in the one-queue phase. Still current: memory §6.15,
+persona §6.13, the proxy §5.4, and metrics §6.11.
+
 - **Date:** 2026-11-12
 - **Status:** Partly superseded by `2026-11-13-general-agent-sandboxes-design.md` (v2), which lists the sections it replaces.
 - **Author:** Parthib Das Gupta (with Claude)

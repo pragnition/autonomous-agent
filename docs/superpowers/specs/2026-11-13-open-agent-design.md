@@ -1,8 +1,7 @@
 # Autonomous Engineering Agent v3: One Container, Measured
 
 **Status:** Draft for review, 2026-11-13. This phase runs the agent in one container. The isolation design in
-`2026-11-13-general-agent-sandboxes-design.md` (G2–G4, G9, §4–§5) is the next phase, and its code stays in the
-repo behind a config switch.
+`2026-11-13-general-agent-sandboxes-design.md` (G2–G4, G9, §4–§5) was removed in the one-queue phase.
 
 ## 1. Approach
 

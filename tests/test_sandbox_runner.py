@@ -303,6 +303,21 @@ def test_scratch_files_are_never_committed(worktrees):
     assert git(path, "status", "--porcelain") == ""
 
 
+async def test_open_pr_commit_uses_configured_email(worktrees, worktree, monkeypatch):
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "bot@example.com")
+    seen = []
+
+    async def shell(cmd, cwd, timeout_s=0, env=None):
+        seen.append((cmd, env))
+        return 0, ""
+
+    tools = remote_sdk_tools(MANIFEST, FakeLink(), "tok", worktree=worktree, checks=[],
+                             branch="agent/T-0009-x", worktrees=worktrees, shell=shell)
+    await call(tools, "open_pr", {"title": "t", "body": "b"})
+    commit_env = seen[0][1]
+    assert commit_env["GIT_AUTHOR_EMAIL"] == "bot@example.com"
+
+
 async def test_commit_step_never_sees_the_sandbox_token(worktrees, worktree):
     seen = []
 

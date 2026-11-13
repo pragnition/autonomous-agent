@@ -56,10 +56,11 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, worktree: Path | N
         if worktree is None or not branch or worktrees is None:
             return "open_pr needs a coding worktree; this session doesn't have one."
         title = args.get("title") or "Agent changes"
-        ident = {"GIT_AUTHOR_NAME": agent_name, "GIT_COMMITTER_NAME": agent_name,
-                 "GIT_AUTHOR_EMAIL": f"{agent_name}@users.noreply.github.com",
-                 "GIT_COMMITTER_EMAIL": f"{agent_name}@users.noreply.github.com"}
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **ident}  # no token: the session user runs this
+        default_email = f"{agent_name}@users.noreply.github.com"
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # no token: the session user runs this
+        for key, default in (("GIT_AUTHOR_NAME", agent_name), ("GIT_COMMITTER_NAME", agent_name),
+                             ("GIT_AUTHOR_EMAIL", default_email), ("GIT_COMMITTER_EMAIL", default_email)):
+            env.setdefault(key, default)  # runners.main already set these from --git-email; this is only a fallback
         await shell(f"git add -A && (git diff --cached --quiet || git commit -q -m {shlex.quote(title)})",
                     worktree, 120, env)
         log, passed = [], True
