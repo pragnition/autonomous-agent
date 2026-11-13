@@ -6,7 +6,7 @@ import pytest
 from agent import db
 from agent.connectors.linear import LinearClient
 from agent.core.linear_sessions import LinearAgentSessions
-from agent.core.sessions import WorkQueue
+from agent.core.sessions import AGENT_QUEUE, WorkQueue
 
 
 class FakePayloads:
@@ -52,7 +52,7 @@ async def test_created_acks_and_passes_the_event_to_the_agent(sessions, client, 
     await sessions.on_event(event("created", promptContext="fix the login bug"))
     assert client.activities == [("S1", "thought", "On it.")]
     [turn] = turns(conn)
-    assert "fix the login bug" in turn["text"] and turn["sandbox"] == "general"
+    assert "fix the login bug" in turn["text"] and turn["sandbox"] == AGENT_QUEUE
 
 
 async def test_prompted_resumes_the_same_conversation(sessions, conn):

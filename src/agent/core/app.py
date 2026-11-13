@@ -20,7 +20,7 @@ from agent import db, events
 from agent.config import load_agent_config, load_packs
 from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
-from agent.core.agent_tools import AgentToolRouter, profile_of
+from agent.core.agent_tools import AgentToolRouter
 from agent.core.bundles import build_bundle
 from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
 from agent.core.consolidation import ConsolidationService
@@ -35,9 +35,9 @@ from agent.core.public_api import make_public_app
 from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
-from agent.core.runner_tokens import queue_names, sync_runner_tokens
+from agent.core.runner_tokens import sync_runner_tokens
 from agent.core.prs import register_pr_tools
-from agent.core.sessions import Gate, WorkItem, WorkQueue, resolve_token
+from agent.core.sessions import AGENT_QUEUE, Gate, WorkItem, WorkQueue, resolve_token
 from agent.core.tracker_tools import register_tracker_tools
 from agent.dashboard.app import make_dashboard_app
 from agent.dashboard.names import NAMES_FILE, AccountNames
@@ -234,7 +234,7 @@ class CoreApp:
             "INSERT OR REPLACE INTO runs(id, task_id, role, status, session_id, account_code, forks, outcome, "
             "turns, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_est, transcript_path, "
             "error, started_at, ended_at) VALUES (?, ?, ?, 'finished', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (item.id, convo["task_id"] if convo else None, profile_of(item.sandbox),
+            (item.id, convo["task_id"] if convo else None, item.kind,
              result.get("session_id"), result.get("account_code"), int(result.get("forks") or 0), result.get("outcome"),
              int(result.get("turns") or 0), int(result.get("input_tokens") or 0), int(result.get("output_tokens") or 0),
              int(result.get("cache_read_tokens") or 0), int(result.get("cache_write_tokens") or 0),
@@ -305,7 +305,7 @@ class CoreApp:
             os.chown(dest, owner, -1)
 
     def sync_runners(self) -> dict[str, str]:
-        return sync_runner_tokens(self.conn, self.runner_tokens_path, queue_names(self.packs),
+        return sync_runner_tokens(self.conn, self.runner_tokens_path, [AGENT_QUEUE],
                                   owner_uid=self._agent_owner())
 
     # loops

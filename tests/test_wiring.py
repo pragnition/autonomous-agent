@@ -9,7 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from agent.core.agent_tools import ToolContext
 from agent.core.app import CoreApp
-from agent.core.sessions import mint_token, resolve_token
+from agent.core.sessions import AGENT_QUEUE, mint_token, resolve_token
 from agent.proxy import AccountUsage, Usage
 from agent_fixtures import FakeSlack
 
@@ -75,10 +75,12 @@ async def test_health(api):
 async def test_dm_turn_end_to_end(app, api):
     await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
                                           "ts": "5.1", "text": "what's running?"})
-    tok = mint_token(app.conn, "sandbox", sandbox="general", work_item_id=None, ttl_s=60)
-    body = await (await api.post("/agent/pull", json={"sandbox": "general"}, headers=bearer(tok))).json()
+    tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
+    body = await (await api.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json()
     item, session = body["work_item"], body["session_token"]
-    assert item["payload"]["profile"] == "general" and "status" in {t["name"] for t in body["tools"]}
+    # A DM has no project, but open mode's one queue maps to the "code" profile (today's full tool set,
+    # open_pr included) for every session on it, so it isn't stuck with "general"'s narrower set.
+    assert item["payload"]["profile"] == "code" and "status" in {t["name"] for t in body["tools"]}
     r = await api.post("/agent/tool", json={"name": "status", "args": {}}, headers=bearer(session))
     assert "running: 1" in (await r.json())["text"]
     await api.post("/agent/result", json={"result": {"outcome": "done", "text": "Nothing else is running.",
@@ -87,7 +89,7 @@ async def test_dm_turn_end_to_end(app, api):
     assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": "5.1", "text": "Nothing else is running.",
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
     run = app.conn.execute("SELECT role, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
-    assert tuple(run) == ("general", 2, "done")
+    assert tuple(run) == ("turn", 2, "done")
 
 
 async def test_on_files_uploads_to_thread(app):
@@ -157,7 +159,7 @@ async def test_open_mode_tools(app):
 async def test_open_mode_writes_runner_tokens(app):
     tokens = app.sync_runners()
     assert json.loads(app.runner_tokens_path.read_text()) == tokens
-    assert sorted(tokens) == ["code-sample", "general"]
+    assert sorted(tokens) == [AGENT_QUEUE]
     assert all(resolve_token(app.conn, tok).sandbox == name for name, tok in tokens.items())
 
 
@@ -249,7 +251,7 @@ async def test_linear_session_event_becomes_a_turn(tmp_path):
                                                                       "team": {"key": "SAM"}}}})
     assert acts == [("S1", "thought")]
     row = app.conn.execute("SELECT sandbox, payload FROM work_items WHERE kind = 'turn'").fetchone()
-    assert row["sandbox"] == "general" and "fix it" in json.loads(row["payload"])["text"]
+    assert row["sandbox"] == AGENT_QUEUE and "fix it" in json.loads(row["payload"])["text"]
 
 
 async def test_core_serves_the_dashboard_behind_its_access_rules(app):

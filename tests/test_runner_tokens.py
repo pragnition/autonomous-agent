@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agent import db
-from agent.core.runner_tokens import queue_names, sync_runner_tokens
+from agent.core.runner_tokens import sync_runner_tokens
 from agent.core.sessions import resolve_token
 
 NAMES = ["code-sample", "general"]
@@ -21,10 +21,6 @@ def conn(tmp_path):
 @pytest.fixture
 def path(tmp_path):
     return tmp_path / "runner" / "runner-tokens.json"
-
-
-def test_queue_names():
-    assert queue_names({"sample": object(), "alpha": object()}) == ["code-alpha", "code-sample", "general"]
 
 
 def test_writes_a_token_per_queue(conn, path):

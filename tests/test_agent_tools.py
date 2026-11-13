@@ -2,7 +2,7 @@ import pytest
 
 from agent import db, tasks
 from agent.core.agent_tools import AgentToolRouter, ToolReply, ToolSpec
-from agent.core.sessions import WorkQueue
+from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
@@ -80,6 +80,15 @@ async def test_context_fields(router, ctx_debug):
     assert (ctx_debug.channel, ctx_debug.thread_ts) == ("C1", "1.0")
 
 
+async def test_agent_queue_gets_the_code_profile(router):
+    """Open mode's one queue (AGENT_QUEUE) maps to the "code" profile, so a session on it keeps today's tool
+    set (a "code"/"general" tool like track_task included), whether or not it has a project. Without this
+    mapping, sandbox "agent" would match neither "code" nor "general" and the tool would disappear."""
+    ctx = ctx_for(router, sandbox=AGENT_QUEUE)
+    assert ctx.profile == "code"
+    assert "track_task" in {t["name"] for t in router.manifest(ctx)}
+
+
 async def test_manifest_filters_by_profile(router, ctx_debug):
     names = {t["name"] for t in router.manifest(ctx_debug)}
     assert "track_task" not in names and "status" in names
@@ -143,7 +152,7 @@ async def test_finish_task(router, ctx_with_task, conn):
 async def test_start_task_queues_code_session(router, ctx_general, conn):
     await router.call(ctx_general, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
     item = latest_item(router)
-    assert item.sandbox == "code-sample" and item.payload["text"] == "b"
+    assert item.sandbox == AGENT_QUEUE and item.payload["text"] == "b"
     row = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
     assert (row["channel"], row["thread_ts"], row["is_primary"]) == ("D-ann", "1.0", 0)
     assert tasks.get_task(conn, row["task_id"]).title == "fix x"

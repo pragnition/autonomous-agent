@@ -5,7 +5,7 @@ import pytest
 
 from agent import db
 from agent.config import Limits
-from agent.core.sessions import Gate, WorkQueue, mint_token, resolve_token, revoke_for_work_item
+from agent.core.sessions import AGENT_QUEUE, Gate, WorkQueue, mint_token, resolve_token, revoke_for_work_item
 from agent.proxy import ProxyUnavailable
 
 T0 = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
@@ -160,12 +160,17 @@ async def test_production_and_chores_are_not_blocked_by_busy_turns(conn):
     assert (await gate.can_start("chore")) == (True, "")
 
 
-def test_peek_and_cancel_running(conn):
+def test_cancel_running(conn):
     q = WorkQueue(conn)
-    assert q.peek("code-p") is None
     a = q.enqueue("c1", "code-p", "turn", {})
     b = q.enqueue("c2", "code-p", "production", {})
-    assert q.peek("code-p") == "turn"
     q.claim("code-p")
-    assert q.peek("code-p") == "production"
     assert q.cancel_running() == [a] and q.get(b).status == "queued"
+
+
+def test_claim_skips_kinds_not_allowed(conn):
+    q = WorkQueue(conn)
+    q.enqueue("c1", AGENT_QUEUE, "turn", {})
+    chore = q.enqueue("c2", AGENT_QUEUE, "chore", {})
+    item = q.claim(AGENT_QUEUE, kinds=("chore",))
+    assert item.id == chore and item.kind == "chore"

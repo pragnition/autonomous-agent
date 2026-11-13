@@ -4,7 +4,7 @@ import pytest
 
 from agent import db, tasks
 from agent.core.conversations import FAILED_REPLY, NOT_AUTHORISED, Conversations
-from agent.core.sessions import WorkQueue
+from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, make_config, make_pack
 
@@ -87,27 +87,45 @@ def last_item(queue):
 async def test_second_message_waits_for_first(convos, queue):
     await convos.handle_slack(mention("t1", "do a"))
     await convos.handle_slack(reply("t1", "also b"))
-    first = queue.claim("code-sample")
-    assert first.payload["text"] == "do a" and queue.claim("code-sample") is None
+    first = queue.claim(AGENT_QUEUE)
+    assert first.payload["text"] == "do a" and queue.claim(AGENT_QUEUE) is None
     queue.complete(first.id, {"text": "ok"})
-    assert queue.claim("code-sample").payload["text"].endswith("also b")
+    assert queue.claim(AGENT_QUEUE).payload["text"].endswith("also b")
 
 
-async def test_dm_goes_to_general(convos, queue):
+async def test_dm_goes_to_the_agent_queue(convos, queue):
     await convos.handle_slack(dm("hi"))
-    payload = queue.claim("general").payload
+    payload = queue.claim(AGENT_QUEUE).payload
     assert {k: payload[k] for k in ("text", "actor", "unattended", "model")} == \
         {"text": "hi", "actor": "ann", "unattended": False, "model": None}
 
 
-async def test_mention_outside_pack_channel_goes_to_general(convos, queue):
+async def test_mention_outside_pack_channel_goes_to_the_agent_queue(convos, queue):
     await convos.handle_slack(mention("t9", "hello", channel="C-OTHER"))
-    assert queue.claim("general") is not None
+    assert queue.claim(AGENT_QUEUE) is not None
+
+
+async def test_dm_and_project_channel_use_one_queue(convos, conn, queue):
+    """Nothing about where a message came from routes it to a different queue: a DM, a mention in a channel with
+    no project pack, and a mention in a project's channel all land on AGENT_QUEUE, and only the project one
+    carries a project."""
+    await convos.handle_slack(dm("hi"))
+    await convos.handle_slack(mention("t9", "hello", channel="C-OTHER"))
+    await convos.handle_slack(mention("t1", "do a"))
+
+    rows = conn.execute("SELECT * FROM conversations").fetchall()
+    assert len(rows) == 3 and all(r["sandbox"] == AGENT_QUEUE for r in rows)
+    dm_row = next(r for r in rows if r["channel"] == "D-1")
+    other_row = next(r for r in rows if r["thread_ts"] == "t9")
+    sample_row = next(r for r in rows if r["thread_ts"] == "t1")
+    assert dm_row["project"] is None and other_row["project"] is None and sample_row["project"] == "sample"
+
+    assert {queue.claim(AGENT_QUEUE).payload["text"] for _ in range(3)} == {"hi", "hello", "do a"}
 
 
 async def test_reply_goes_to_waiting_split_session(convos, conn, queue):
     await convos.handle_slack(mention("t1", "fix 2 bugs"))
-    child = add_conversation(conn, sandbox="code-sample", channel="C-SAMPLE", thread_ts="t1", is_primary=0)
+    child = add_conversation(conn, sandbox=AGENT_QUEUE, channel="C-SAMPLE", thread_ts="t1", is_primary=0)
     conn.execute("UPDATE conversations SET waiting = 1 WHERE id = ?", (child,))
     await convos.handle_slack(reply("t1", "use staging"))
     assert last_item(queue).conversation_id == child
@@ -119,7 +137,7 @@ async def test_answer_moves_waiting_task_back_to_working(convos, conn, queue):
                           source_ref=None, requester="ann", owner="ann")
     tasks.transition(conn, t.id, Status.working, actor="x")
     tasks.transition(conn, t.id, Status.needs_input, actor="x")
-    cid = add_conversation(conn, sandbox="code-sample", channel="C-SAMPLE", thread_ts="t2", task_id=t.id)
+    cid = add_conversation(conn, sandbox=AGENT_QUEUE, channel="C-SAMPLE", thread_ts="t2", task_id=t.id)
     conn.execute("UPDATE conversations SET waiting = 1 WHERE id = ?", (cid,))
     await convos.handle_slack(reply("t2", "prod"))
     assert tasks.get_task(conn, t.id).status == Status.working
@@ -128,21 +146,21 @@ async def test_answer_moves_waiting_task_back_to_working(convos, conn, queue):
 async def test_unmentioned_message_in_unknown_thread_is_ignored(convos, queue):
     await convos.handle_slack(reply("t3", "chatter"))
     await convos.handle_slack({"type": "message", "user": "U1", "channel": "C-SAMPLE", "ts": "7.0", "text": "hi"})
-    assert queue.claim("code-sample") is None and queue.claim("general") is None
+    assert queue.claim(AGENT_QUEUE) is None
 
 
 async def test_unknown_person_gets_ephemeral(convos, slack, queue):
     await convos.handle_slack(mention("t1", "hi", user="U999"))
     assert len(slack.ephemerals) == 1 and slack.ephemerals[0]["text"] == NOT_AUTHORISED
-    assert queue.claim("code-sample") is None
+    assert queue.claim(AGENT_QUEUE) is None
 
 
 async def test_duplicate_events_handled_once(convos, queue):
     event = mention("t4", "once")
     await convos.handle_slack(event)
     await convos.handle_slack({**event, "type": "message"})
-    queue.claim("code-sample")
-    assert queue.claim("code-sample") is None
+    queue.claim(AGENT_QUEUE)
+    assert queue.claim(AGENT_QUEUE) is None
     assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 1
 
 
@@ -184,13 +202,13 @@ async def test_failed_eyes_still_queues_the_turn(convos, slack, queue):
 
     slack.reactions_add = down
     await convos.handle_slack(mention("t10", "hi"))
-    assert queue.claim("code-sample").payload["text"] == "hi"
+    assert queue.claim(AGENT_QUEUE).payload["text"] == "hi"
 
 
 async def test_linear_issue_is_unattended(convos, fake_linear, queue, slack, conn):
     fake_linear.new = ["Export broken"]
     created = await convos.intake_linear()
-    item = queue.claim("code-sample")
+    item = queue.claim(AGENT_QUEUE)
     assert item.payload["unattended"] is True and item.payload["text"].startswith("Linear issue SAM-7: Export broken")
     assert slack.posts[0]["channel"] == "C-SAMPLE"
     task = tasks.get_task(conn, created[0])
@@ -200,7 +218,7 @@ async def test_linear_issue_is_unattended(convos, fake_linear, queue, slack, con
 
 async def test_on_result_posts_reply_and_session(convos, queue, slack, conn):
     await convos.handle_slack(mention("t8", "question"))
-    item = queue.claim("code-sample")
+    item = queue.claim(AGENT_QUEUE)
     queue.complete(item.id, {"text": "the answer", "session_id": "sess-1"})
     await convos.on_result(queue.get(item.id), {"text": "the answer", "session_id": "sess-1", "outcome": "done"})
     assert slack.posts[-1] == {"channel": "C-SAMPLE", "thread_ts": "t8", "text": "the answer",
@@ -210,7 +228,7 @@ async def test_on_result_posts_reply_and_session(convos, queue, slack, conn):
 
 async def test_on_result_failure_posts_failed_reply(convos, queue, slack):
     await convos.handle_slack(mention("t10", "question"))
-    item = queue.claim("code-sample")
+    item = queue.claim(AGENT_QUEUE)
     queue.complete(item.id, {"outcome": "error"})
     await convos.on_result(queue.get(item.id), {"outcome": "error", "error": "boom"})
     assert slack.posts[-1]["text"] == FAILED_REPLY
@@ -218,7 +236,7 @@ async def test_on_result_failure_posts_failed_reply(convos, queue, slack):
 
 async def test_on_result_for_cancelled_item_posts_nothing(convos, queue, slack):
     await convos.handle_slack(mention("t11", "question"))
-    item = queue.claim("code-sample")
+    item = queue.claim(AGENT_QUEUE)
     queue.cancel(item.id)
     before = len(slack.posts)
     await convos.on_result(queue.get(item.id), {"outcome": "interrupted"})
@@ -227,7 +245,7 @@ async def test_on_result_for_cancelled_item_posts_nothing(convos, queue, slack):
 
 async def test_failed_turn_forgets_the_session(convos, queue, conn):
     await convos.handle_slack(mention("t20", "question"))
-    item = queue.claim("code-sample")
+    item = queue.claim(AGENT_QUEUE)
     conn.execute("UPDATE conversations SET session_id = 'sess-old' WHERE id = ?", (item.conversation_id,))
     queue.complete(item.id, {"outcome": "error"})
     await convos.on_result(queue.get(item.id), {"outcome": "error", "error": "boom"})
@@ -244,8 +262,8 @@ async def test_linear_task_is_reattached_after_a_slack_failure(convos, fake_line
 
     slack.chat_postMessage = down
     await convos.intake_linear()
-    assert queue.claim("code-sample") is None
+    assert queue.claim(AGENT_QUEUE) is None
     slack.chat_postMessage = original
     await convos.intake_linear()
-    item = queue.claim("code-sample")
+    item = queue.claim(AGENT_QUEUE)
     assert item is not None and item.payload["text"].startswith("Linear issue SAM-7")

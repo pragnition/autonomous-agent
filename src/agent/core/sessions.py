@@ -19,6 +19,8 @@ from typing import Literal
 from agent import db
 from agent.proxy import ProxyUnavailable
 
+AGENT_QUEUE = db.AGENT_QUEUE  # re-exported: this is the queue everything (every conversation, every chore) uses
+
 _FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -111,23 +113,23 @@ class WorkQueue:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(_now(now))
 
-    def peek(self, sandbox: str) -> str | None:
-        """The kind of the next item claim() would hand out, without claiming it."""
-        row = self.conn.execute(
-            "SELECT w.kind FROM work_items w WHERE w.sandbox = ? AND w.status = 'queued' AND (w.conversation_id IS NULL "
-            "OR NOT EXISTS (SELECT 1 FROM work_items o WHERE o.conversation_id = w.conversation_id "
-            "AND o.status = 'claimed')) ORDER BY w.created_at, w.rowid LIMIT 1", (sandbox,)).fetchone()
-        return row["kind"] if row else None
-
-    def claim(self, sandbox: str, now: datetime | None = None) -> WorkItem | None:
+    def claim(self, sandbox: str, now: datetime | None = None, kinds: tuple[str, ...] | None = None) -> WorkItem | None:
+        """The oldest eligible queued item for `sandbox`: no other item of its conversation is claimed, and (when
+        `kinds` is given) its kind is one of them. A runner asks once per kind it may start right now (the Gate
+        decides that), so this is the only place that has to know which kinds share a conversation's turn order."""
         now = _now(now)
+        kind_filter, args = "", [sandbox]
+        if kinds:
+            kind_filter = f" AND w.kind IN ({','.join('?' * len(kinds))})"
+            args += list(kinds)
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(now)
             row = self.conn.execute(
-                "SELECT * FROM work_items w WHERE w.sandbox = ? AND w.status = 'queued' AND (w.conversation_id IS NULL "
-                "OR NOT EXISTS (SELECT 1 FROM work_items o WHERE o.conversation_id = w.conversation_id "
-                "AND o.status = 'claimed')) ORDER BY w.created_at, w.rowid LIMIT 1", (sandbox,)).fetchone()
+                f"SELECT * FROM work_items w WHERE w.sandbox = ? AND w.status = 'queued'{kind_filter} AND "
+                "(w.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM work_items o WHERE "
+                "o.conversation_id = w.conversation_id AND o.status = 'claimed')) ORDER BY w.created_at, w.rowid "
+                "LIMIT 1", args).fetchone()
             if row is None:
                 return None
             self.conn.execute("UPDATE work_items SET status = 'claimed', lease_until = ?, updated_at = ? WHERE id = ?",

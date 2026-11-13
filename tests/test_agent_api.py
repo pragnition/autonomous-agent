@@ -6,8 +6,10 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from agent import db
+from agent.config import Limits
 from agent.core.agent_api import CONN_KEY, make_agent_app
-from agent.core.sessions import WorkQueue, mint_token
+from agent.core.sessions import AGENT_QUEUE, Gate, WorkQueue, mint_token
+from agent_fixtures import add_conversation
 
 
 def bearer(tok):
@@ -59,7 +61,7 @@ async def _client(conn, queue, parts, gate_ok=True):
         parts.files.append((item_id, files, text))
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(gate_ok), tools=parts.router,
-                         context_for=lambda item_id: {"work_item_id": item_id},
+                         context_for=lambda item_id: SimpleNamespace(work_item_id=item_id, task_id=None, project=None),
                          bundles=lambda profile, project: ("v1", f"{profile}:{project}".encode()),
                          on_result=on_result, on_files=on_files, pull_wait_s=0.2,
                          runs_dir=parts.runs)
@@ -150,7 +152,8 @@ async def test_pull_respects_gate(api_paused):
 async def test_tool_call_resolves_context(api, parts):
     item, tok = await pull_one(api, "debug-p")
     r = await (await api.post("/agent/tool", json={"name": "status", "args": {"x": 1}}, headers=bearer(tok))).json()
-    assert parts.router.calls[-1] == ({"work_item_id": item["id"]}, "status", {"x": 1})
+    assert parts.router.calls[-1] == (SimpleNamespace(work_item_id=item["id"], task_id=None, project=None),
+                                      "status", {"x": 1})
     assert r == {"text": "ran status"}
 
 
@@ -213,23 +216,27 @@ class CountingGate(FakeGate):
         return True, ""
 
 
-async def test_idle_pull_never_asks_the_gate(conn, queue, parts):
+async def test_pull_asks_the_gate_for_turn_and_chore_even_when_idle(conn, queue, parts):
+    """pull() no longer peeks at the queue before asking the gate (one queue, up to 10 kinds of session at once
+    share it): it asks can_start for every kind it might claim, whether or not anything is actually queued."""
     gate = CountingGate()
 
     async def noop(*a):
         pass
 
-    app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router, context_for=lambda i: {},
-                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+    app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
+                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
         tok = mint_token(conn, "sandbox", sandbox="debug-p", work_item_id=None, ttl_s=60)
         assert (await client.post("/agent/pull", json={"sandbox": "debug-p"}, headers=bearer(tok))).status == 204
-        assert gate.calls == []
-        queue.enqueue("c1", "debug-p", "production", {})
+        assert set(gate.calls) == {"turn", "chore"}
+        gate.calls.clear()
+        queue.enqueue("c1", "debug-p", "chore", {})
         assert (await client.post("/agent/pull", json={"sandbox": "debug-p"}, headers=bearer(tok))).status == 200
-        assert gate.calls == ["production"]
+        assert set(gate.calls) == {"turn", "chore"}
     finally:
         await client.close()
 
@@ -241,7 +248,8 @@ async def test_result_survives_a_failing_callback(conn, queue, parts):
     async def noop(*a):
         pass
 
-    app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=parts.router, context_for=lambda i: {},
+    app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=parts.router,
+                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
                          bundles=lambda p, q: ("v", b""), on_result=boom, on_files=noop, pull_wait_s=0.2)
     client = TestClient(TestServer(app))
     await client.start_server()
@@ -262,7 +270,7 @@ async def test_pull_records_session_started(conn):
         return None
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=FakeRouter(),
-                         context_for=lambda i: SimpleNamespace(task_id="T-1"),
+                         context_for=lambda i: SimpleNamespace(task_id="T-1", project="sample"),
                          bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
     client = TestClient(TestServer(app))
     await client.start_server()
@@ -276,6 +284,7 @@ async def test_pull_records_session_started(conn):
         assert len(rows) == 1 and rows[0]["task_id"] == "T-1"
         data = json.loads(rows[0]["data"])
         assert data["work_item"] == turn and data["sandbox"] == "code-p" and data["queued_at"]
+        assert data["project"] == "sample"
     finally:
         await client.close()
 
@@ -287,7 +296,7 @@ async def test_chore_claim_logs_work_started(conn):
         return None
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=FakeRouter(),
-                         context_for=lambda i: SimpleNamespace(task_id=None),
+                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
                          bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
     client = TestClient(TestServer(app))
     await client.start_server()
@@ -298,5 +307,68 @@ async def test_chore_claim_logs_work_started(conn):
         rows = conn.execute("SELECT type, data FROM events WHERE type IN ('session_started', 'work_started')").fetchall()
         assert [r["type"] for r in rows] == ["work_started"]
         assert json.loads(rows[0]["data"])["work_item"] == chore
+    finally:
+        await client.close()
+
+
+class AlwaysCapacity:
+    async def usage(self):
+        return SimpleNamespace(has_capacity=lambda: True)
+
+
+def cfg(sessions):
+    return SimpleNamespace(limits=Limits(max_concurrent_sessions=sessions))
+
+
+async def test_ten_conversations_run_at_once_eleventh_waits(conn, parts):
+    """One queue is not one at a time: with room for 10 turns and 11 separate conversations queued (3 of them
+    bound to the 'sample' project, the rest to none), 10 pulls succeed and the 11th finds nothing to claim —
+    through the real make_agent_app pull path and the real Gate, not a stand-in for either."""
+    queue = WorkQueue(conn)
+    gate = Gate(conn, cfg(10), AlwaysCapacity())
+
+    async def noop(*a):
+        return None
+
+    app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
+                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.2)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        for i in range(11):
+            cid = add_conversation(conn, sandbox=AGENT_QUEUE, project="sample" if i < 3 else None,
+                                   conversation_id=f"c{i}")
+            queue.enqueue(cid, AGENT_QUEUE, "turn", {"text": f"t{i}"})
+        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
+        statuses = [(await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).status
+                   for _ in range(11)]
+        assert statuses.count(200) == 10 and statuses.count(204) == 1
+    finally:
+        await client.close()
+
+
+async def test_second_turn_of_running_conversation_waits(conn, parts):
+    """Only turns of the same conversation wait for each other: with plenty of gate capacity, a conversation's
+    second queued turn still isn't handed out while its first is claimed."""
+    queue = WorkQueue(conn)
+    gate = Gate(conn, cfg(10), AlwaysCapacity())
+
+    async def noop(*a):
+        return None
+
+    app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
+                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
+                         bundles=lambda p, q: ("v", b""), on_result=noop, on_files=noop, pull_wait_s=0.1)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "first"})
+        queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "second"})
+        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
+        first = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+        assert first.status == 200
+        second = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+        assert second.status == 204
     finally:
         await client.close()

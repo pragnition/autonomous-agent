@@ -20,7 +20,7 @@ linear = "alice@example.com"
 role = "member"
 
 [limits]
-max_concurrent_sessions = 3      # Claude sessions running at once, across every queue
+max_concurrent_sessions = 10     # Claude sessions running at once, across the one queue
 max_tasks_per_day = 20
 task_minutes = 90                # wall-time budget per work item
 max_turns = 400

@@ -19,10 +19,6 @@ SANDBOX_TOKEN_TTL_S = 60 * 86400
 RENEW_BEFORE_S = 7 * 86400
 
 
-def queue_names(packs: dict) -> list[str]:
-    return [*(f"code-{project}" for project in sorted(packs)), "general"]
-
-
 def _read(path: Path) -> dict[str, str]:
     try:
         data = json.loads(path.read_text())

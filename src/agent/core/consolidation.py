@@ -1,4 +1,4 @@
-"""Memory consolidation (v1 §6.15), run as a chore in the `general` sandbox (spec v2 §5).
+"""Memory consolidation (v1 §6.15), run as a chore on the one agent queue (spec v2 §5).
 
 When a task ends, or a conversation has been quiet for 24 h with notes jotted down, core queues a chore whose
 session returns JSON; core validates it and writes the notes. A failed chore leaves the task unconsolidated so
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from agent import events, tasks
 from agent.core.agent_tools import conversation_scopes
-from agent.core.sessions import WorkItem, WorkQueue
+from agent.core.sessions import AGENT_QUEUE, WorkItem, WorkQueue
 from agent.memory.consolidate import (CONSOLIDATION_SCHEMA, ConsolidationError, apply_consolidation,
                                       consolidation_prompt)
 from agent.memory.store import MemoryStore
@@ -56,7 +56,7 @@ class ConsolidationService:
     def _enqueue(self, prompt: str, ref: dict) -> None:
         payload = self.payloads.chore(prompt, CONSOLIDATION_SCHEMA)
         payload["consolidate"] = ref
-        self.queue.enqueue(None, "general", "chore", payload)
+        self.queue.enqueue(None, AGENT_QUEUE, "chore", payload)
 
     # tasks
 

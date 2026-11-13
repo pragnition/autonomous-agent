@@ -17,10 +17,17 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from agent.db import AGENT_QUEUE
+
 log = logging.getLogger(__name__)
 
 
 def profile_for(queue: str) -> str:
+    # Open mode has one queue (AGENT_QUEUE); until profiles go too (a later task), its runner gets the "code"
+    # profile, so it keeps today's full tool set and bundle (open_pr included) whether or not a session has a
+    # project.
+    if queue == AGENT_QUEUE:
+        return "code"
     return "general" if queue == "general" else queue.split("-", 1)[0]
 
 

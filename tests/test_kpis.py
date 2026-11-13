@@ -5,6 +5,7 @@ import pytest
 
 from agent import db
 from agent.core.kpis import Stat, compute_kpis, format_duration, format_kpis
+from agent.core.sessions import AGENT_QUEUE
 
 SINCE, UNTIL = datetime(2026, 11, 13, tzinfo=UTC), datetime(2026, 11, 14, tzinfo=UTC)
 
@@ -25,9 +26,10 @@ def task(conn, tid, *, source="linear", project="sample", status="working", crea
                  "VALUES (?, ?, 't', 'bug', ?, ?, ?, ?)", (tid, project, source, status, at(created), at(created)))
 
 
-def started(conn, tid, hhmm, queued="09:59", sandbox="code-sample"):
+def started(conn, tid, hhmm, queued="09:59", sandbox=AGENT_QUEUE, project="sample"):
     conn.execute("INSERT INTO events(ts, task_id, type, data) VALUES (?, ?, 'session_started', ?)",
-                 (at(hhmm), tid, json.dumps({"work_item": "W", "sandbox": sandbox, "queued_at": at(queued)})))
+                 (at(hhmm), tid, json.dumps({"work_item": "W", "sandbox": sandbox, "queued_at": at(queued),
+                                            "project": project})))
 
 
 def pr(conn, tid, opened, merged=None):
@@ -104,6 +106,17 @@ async def test_kpis_tool(conn, tmp_path):
     ctx = router.context_for(add_item(router.queue, cid, "code-sample", actor="bob"))
     assert "Ticket → pickup" in (await router.call(ctx, "kpis", {"days": 7})).text
     assert "sample" in (await router.call(ctx, "kpis", {"project": "nope"})).text
+
+
+def test_kpi_queue_wait_filters_by_project(conn):
+    """Open mode has one queue (AGENT_QUEUE) for every project, so the queue-wait filter can no longer tell
+    projects apart by sandbox name; it must use the event's own "project" field instead."""
+    task(conn, "T1", project="sample")
+    started(conn, "T1", "10:05", queued="10:04", sandbox=AGENT_QUEUE, project="sample")
+    task(conn, "T2", project="other")
+    started(conn, "T2", "10:15", queued="10:00", sandbox=AGENT_QUEUE, project="other")
+    k = compute_kpis(conn, since=SINCE, until=UNTIL, project="sample")
+    assert k.queue_wait == Stat(1, 60, 60)
 
 
 def test_pickup_to_pr_for_slack_tasks_starts_at_creation(conn):

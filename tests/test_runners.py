@@ -1,5 +1,6 @@
 import asyncio
 
+from agent.db import AGENT_QUEUE
 from agent.sandbox.runners import RunnerSet, profile_for, read_tokens
 
 
@@ -25,7 +26,8 @@ def runner_set(finish=False):
 
 
 def test_profile_for():
-    assert [profile_for(q) for q in ("general", "code-sample", "debug-sample")] == ["general", "code", "debug"]
+    assert [profile_for(q) for q in ("general", "code-sample", "debug-sample", AGENT_QUEUE)] == \
+        ["general", "code", "debug", "code"]
 
 
 async def test_starts_one_runner_per_queue():

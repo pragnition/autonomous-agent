@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agent import db, events, tasks
+from agent.core.sessions import AGENT_QUEUE
 from agent.core.slack_markdown import post_markdown
 from agent.memory.scopes import SessionContext, scopes_for
 from agent.memory.scrub import scrub
@@ -82,6 +83,10 @@ def conversation_scopes(channel: str | None, project: str | None, actor: str | N
 
 
 def profile_of(sandbox: str) -> str:
+    # Open mode has one queue (AGENT_QUEUE); until profiles go too (a later task), every session on it gets the
+    # "code" profile, so it keeps today's full tool set (open_pr included) whether or not it has a project.
+    if sandbox == AGENT_QUEUE:
+        return "code"
     return "general" if sandbox == "general" else sandbox.split("-", 1)[0]
 
 
@@ -303,11 +308,11 @@ class AgentToolRouter:
         convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
         self.conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, task_id, is_primary, "
                           "created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
-                          (convo_id, ctx.channel, ctx.thread_ts, f"code-{project}", project, task.id, now, now))
-        self.queue.enqueue(convo_id, f"code-{project}", "turn",
+                          (convo_id, ctx.channel, ctx.thread_ts, AGENT_QUEUE, project, task.id, now, now))
+        self.queue.enqueue(convo_id, AGENT_QUEUE, "turn",
                            self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended))
         await self.notifier.task_changed(task)
-        return ToolReply(f"Started {task.id} ({task.title}) in a new session in code-{project}.")
+        return ToolReply(f"Started {task.id} ({task.title}) in a new session for {project}.")
 
     async def _status(self, ctx, args) -> ToolReply:
         paused = db.get_setting(self.conn, "paused", "0") == "1"

@@ -7,6 +7,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+AGENT_QUEUE = "agent"  # the one queue for every conversation and chore (open mode)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -119,7 +121,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 CREATE INDEX IF NOT EXISTS llm_usage_at ON llm_usage(at);
 """
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # One row per agent session: a Slack thread, a Linear issue, a hand-over or a split (spec v2 §6, §7)
 CONVERSATIONS = """
@@ -156,11 +158,21 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
         _drop_column_if_exists(conn, table, column)
 
 
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    """Collapse every queue into the one AGENT_QUEUE (open mode, one queue for everything). Still-open work items
+    (queued or claimed) and every conversation move; a finished item keeps its old sandbox as history, and
+    `project` is untouched either way, so KPIs and auth can still tell which project (if any) a session is for."""
+    conn.execute("UPDATE work_items SET sandbox = ? WHERE sandbox != ? AND status IN ('queued', 'claimed')",
+                 (AGENT_QUEUE, AGENT_QUEUE))
+    conn.execute("UPDATE conversations SET sandbox = ? WHERE sandbox != ?", (AGENT_QUEUE, AGENT_QUEUE))
+
+
 # Keyed by the version each migration upgrades a database to. Every entry must be safe to run on a database
 # that is already at or past its version (checked with PRAGMA table_info / IF EXISTS / IF NOT EXISTS), so a
 # fresh database (already created at SCHEMA's current shape) runs every migration as a no-op.
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migrate_v3,
+    4: _migrate_v4,
 }
 
 

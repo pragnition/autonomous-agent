@@ -119,14 +119,13 @@ def test_working_copy_follows_branch(githost, upstream):
     assert (githost.working_copy("p", "main") / "d.txt").exists()
 
 
-def test_tokens_are_bound_to_their_project():
+def test_any_agent_token_reaches_every_repo():
     from types import SimpleNamespace
 
     from agent.core.gitserve import tokens_auth
+    from agent.core.sessions import AGENT_QUEUE
 
-    tokens = {"a": SimpleNamespace(sandbox="code-p"), "b": SimpleNamespace(sandbox="debug-p"),
-              "c": SimpleNamespace(sandbox="code-other"), "g": SimpleNamespace(sandbox="general")}
+    tokens = {"a": SimpleNamespace(sandbox=AGENT_QUEUE)}
     check = tokens_auth(tokens.get)
-    assert check("a", "p")
-    assert not check("b", "p") and not check("c", "p") and not check("g", "p") and not check("zzz", "p") \
-        and not check(None, "p")
+    assert check("a", "sample") and check("a", "other")
+    assert not check("revoked", "sample") and not check(None, "sample")

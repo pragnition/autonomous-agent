@@ -177,7 +177,7 @@ def _assert_v3_shape(conn: sqlite3.Connection) -> None:
     assert "priority" not in _columns(conn, "tasks") and "pending_input" not in _columns(conn, "tasks")
     assert "stage" not in _columns(conn, "runs") and "memory_tokens" not in _columns(conn, "runs")
     assert "scope" not in _columns(conn, "conversations")
-    assert db.get_setting(conn, "schema_version") == "3"
+    assert db.get_setting(conn, "schema_version") == str(db.SCHEMA_VERSION)
 
 
 def test_v2_database_upgrades_to_v3(tmp_path):
@@ -200,3 +200,23 @@ def test_fresh_database_is_v3(tmp_path):
     db.migrate(conn)
 
     _assert_v3_shape(conn)
+
+
+def test_migration_moves_queue_and_leaves_old_dms(tmp_path):
+    conn = db.connect(tmp_path / "agent.db")
+    conn.executescript(db.SCHEMA)
+    conn.executescript(db.CONVERSATIONS)
+    db.set_setting(conn, "schema_version", "3")
+    now = db.utcnow()
+    conn.execute("INSERT INTO work_items(id, conversation_id, sandbox, kind, payload, status, created_at, "
+                 "updated_at) VALUES ('W-1', NULL, 'general', 'turn', '{}', 'queued', ?, ?)", (now, now))
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, is_primary, created_at, "
+                 "last_active_at) VALUES ('V-1', 'D1', '5.1', 'general', NULL, 1, ?, ?)", (now, now))
+
+    db.migrate(conn)
+
+    item = conn.execute("SELECT sandbox FROM work_items WHERE id = 'W-1'").fetchone()
+    convo = conn.execute("SELECT sandbox, thread_ts FROM conversations WHERE id = 'V-1'").fetchone()
+    assert item["sandbox"] == db.AGENT_QUEUE
+    assert convo["sandbox"] == db.AGENT_QUEUE and convo["thread_ts"] == "5.1"
+    assert db.get_setting(conn, "schema_version") == "4"

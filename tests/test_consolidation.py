@@ -5,7 +5,7 @@ import pytest
 
 from agent import db, tasks
 from agent.core.consolidation import ConsolidationService
-from agent.core.sessions import WorkQueue
+from agent.core.sessions import AGENT_QUEUE, WorkQueue
 from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import add_conversation
@@ -57,7 +57,7 @@ async def test_terminal_task_enqueues_one_chore(env):
     assert svc.sweep() == []
     [chore] = chores(conn)
     payload = json.loads(chore["payload"])
-    assert chore["sandbox"] == "general" and "Citations live in src/cite.ts" in payload["text"]
+    assert chore["sandbox"] == AGENT_QUEUE and "Citations live in src/cite.ts" in payload["text"]
     assert payload["consolidate"] == {"task_id": task.id}
 
 

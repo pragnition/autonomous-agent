@@ -97,7 +97,7 @@ def compute_kpis(conn: sqlite3.Connection, *, since: datetime, until: datetime, 
     queue_wait = []
     for r in started:
         data = json.loads(r["data"] or "{}")
-        if data.get("queued_at") and (not project or data.get("sandbox") == f"code-{project}"):
+        if data.get("queued_at") and (not project or data.get("project") == project):
             queue_wait.append(_secs(data["queued_at"], r["ts"]))
 
     pr_base = "SELECT COUNT(*) FROM pr_stats s JOIN tasks t ON t.id = s.task_id WHERE "

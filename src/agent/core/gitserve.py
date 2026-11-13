@@ -13,6 +13,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from agent.core.sessions import AGENT_QUEUE
 from agent.gitutil import GitError, credential_args, git
 
 PRE_RECEIVE = """#!/bin/sh
@@ -123,10 +124,10 @@ class GitHost:
 
 
 def tokens_auth(resolve: Callable[[str], object]) -> Callable[[str | None, str], bool]:
-    """A live token from that project's own coding sandbox only (resolve returns None for unknown, expired or
-    revoked tokens); `general`, debug sandboxes and other projects' sandboxes never see a project's code."""
+    """A live token for the one agent queue (resolve returns None for unknown, expired or revoked tokens); open
+    mode has one runner for every project, so any such token reaches every repo this install knows."""
     def check(token: str | None, project: str) -> bool:
         info = resolve(token) if token else None
-        return info is not None and info.sandbox == f"code-{project}"
+        return info is not None and info.sandbox == AGENT_QUEUE
     return check
 

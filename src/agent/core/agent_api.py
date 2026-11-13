@@ -54,9 +54,8 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
             return web.json_response({"error": "token is for another sandbox"}, status=403)
         deadline = time.monotonic() + pull_wait_s
         while True:
-            kind = queue.peek(sandbox)
-            ok = kind is not None and (await gate.can_start(kind))[0]
-            item = queue.claim(sandbox) if ok else None
+            kinds = tuple([k for k in ("turn", "chore") if (await gate.can_start(k))[0]])
+            item = queue.claim(sandbox, kinds=kinds) if kinds else None
             if item is not None:
                 session = mint_token(conn, "session", sandbox=sandbox, work_item_id=item.id, ttl_s=session_ttl_s)
                 ctx = context_for(item.id)
@@ -64,7 +63,8 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                 # so the dashboard knows when every item started without moving the KPIs.
                 event_log.append(conn, "session_started" if item.kind == "turn" else "work_started",
                                  task_id=getattr(ctx, "task_id", None), actor=None,
-                                 data={"work_item": item.id, "sandbox": sandbox, "queued_at": item.created_at})
+                                 data={"work_item": item.id, "sandbox": sandbox, "queued_at": item.created_at,
+                                       "project": ctx.project})
                 return web.json_response({
                     "work_item": {"id": item.id, "conversation_id": item.conversation_id, "kind": item.kind,
                                   "payload": item.payload, "attempts": item.attempts},

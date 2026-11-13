@@ -62,7 +62,7 @@ class ObservabilitySettings:
 
 @dataclass
 class Limits:
-    max_concurrent_sessions: int = 3
+    max_concurrent_sessions: int = 10
     max_tasks_per_day: int = 20
     task_minutes: int = 90
     max_turns: int = 400
@@ -314,7 +314,7 @@ def load_agent_config(path: Path) -> AgentConfig:
 
     lim = data.get("limits") or {}
     lw = f"{where} [limits]"
-    limits = Limits(max_concurrent_sessions=_int(lim, "max_concurrent_sessions", 3, lw, problems),
+    limits = Limits(max_concurrent_sessions=_int(lim, "max_concurrent_sessions", 10, lw, problems),
                     max_tasks_per_day=_int(lim, "max_tasks_per_day", 20, lw, problems),
                     task_minutes=_int(lim, "task_minutes", 90, lw, problems),
                     max_turns=_int(lim, "max_turns", 400, lw, problems))

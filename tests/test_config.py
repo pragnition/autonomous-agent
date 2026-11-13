@@ -63,7 +63,7 @@ def problems_of(fn):
 
 def test_defaults(tmp_path):
     cfg = load_agent_config(write_agent(tmp_path, ""))
-    assert cfg.limits.max_concurrent_sessions == 3 and cfg.limits.task_minutes == 90
+    assert cfg.limits.max_concurrent_sessions == 10 and cfg.limits.task_minutes == 90
     assert cfg.limits.max_tasks_per_day == 20 and cfg.limits.max_turns == 400
     assert cfg.models.default == "claude-opus-5-5" and cfg.models.hard == "claude-fable-5-1"
     assert cfg.models.chores == "claude-sonnet-5"

@@ -13,7 +13,7 @@ import sqlite3
 import uuid
 
 from agent import db, tasks
-from agent.core.sessions import WorkItem, WorkQueue
+from agent.core.sessions import AGENT_QUEUE, WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
 from agent.tasks import Status
 
@@ -89,8 +89,7 @@ class Conversations:
         if primary is not None:
             return primary
         project = None if is_dm else await self._project_for_channel(channel)
-        sandbox = f"code-{project}" if project else "general"
-        return self._row(self._new(channel, thread_ts, sandbox, project))
+        return self._row(self._new(channel, thread_ts, AGENT_QUEUE, project))
 
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, unattended: bool = False,
                       message_ts: str | None = None) -> str:
@@ -152,7 +151,7 @@ class Conversations:
         resp = await self.slack.chat_postMessage(channel=pack.slack_channel,
                                                  text=f"Linear {task.source_ref}: {task.title}")
         task = tasks.set_fields(self.conn, task.id, slack_channel=resp["channel"], slack_thread_ts=resp["ts"])
-        convo = self._row(self._new(resp["channel"], resp["ts"], f"code-{task.project}", task.project, task.id))
+        convo = self._row(self._new(resp["channel"], resp["ts"], AGENT_QUEUE, task.project, task.id))
         task = tasks.transition(self.conn, task.id, Status.working, actor="linear")
         self._enqueue_turn(convo, f"Linear issue {task.source_ref}: {task.title}\n\n{task.description}",
                            task.requester, unattended=True)

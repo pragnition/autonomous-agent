@@ -113,11 +113,10 @@ def main() -> int:
     config = _config_or_none(paths.CONFIG_DIR)
     if config is not None:
         from agent import db
-        from agent.core.runner_tokens import queue_names
+        from agent.core.sessions import AGENT_QUEUE
 
         conn = db.connect(paths.DB_DIR / "agent.db")
-        checks.append(check_runner_tokens(conn, paths.DATA / "runner" / "runner-tokens.json",
-                                          queue_names(load_packs(paths.CONFIG_DIR, config))))
+        checks.append(check_runner_tokens(conn, paths.DATA / "runner" / "runner-tokens.json", [AGENT_QUEUE]))
     for c in checks:
         print(f"{'ok  ' if c.ok else 'FAIL'}  {c.name}: {c.detail}")
     return 0 if all(c.ok for c in checks) else 1
