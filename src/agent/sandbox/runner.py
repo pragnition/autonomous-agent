@@ -200,7 +200,7 @@ class SandboxRunner:
                        env={"CLAUDE_CONFIG_DIR": str(sessions), **env, **(payload.get("test_secrets") or {})},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, resume_session_id=payload.get("resume_session_id"),
-                       permission_mode="bypass", on_message=self._forwarder(tok))
+                       on_message=self._forwarder(tok))
         return spec, sink
 
     async def run_forever(self) -> None:

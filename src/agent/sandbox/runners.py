@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.root)
     env = agent_environment(os.environ, args.agent_name, args.git_email)
     os.environ.update(env)  # the git identity, for setup commands and open_pr's checks in plain shells
-    claude = ClaudeRunner(ProxyClient(args.proxy), args.proxy, root / "transcripts", submit_tool_factory=None)
+    claude = ClaudeRunner(ProxyClient(args.proxy), args.proxy, root / "transcripts")
     users = SessionUsers()
 
     def make_runner(queue: str, token: str) -> SandboxRunner:

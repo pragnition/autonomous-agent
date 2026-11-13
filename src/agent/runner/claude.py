@@ -38,14 +38,12 @@ class _Attempt:
 class ClaudeRunner:
     def __init__(self, proxy: ProxyClient, base_url: str, transcripts_dir: Path, *,
                  client_factory: Callable | None = None, watchdog_s: float = 60,
-                 uuid_factory: Callable[[], str] | None = None, submit_tool_factory=None,
-                 max_forks: int = 2):
+                 uuid_factory: Callable[[], str] | None = None, max_forks: int = 2):
         self.proxy, self.base_url = proxy, base_url
         self.transcripts_dir = Path(transcripts_dir)
         self.client_factory = client_factory or (lambda options: ClaudeSDKClient(options=options))
         self.watchdog_s, self.max_forks = watchdog_s, max_forks
         self.uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
-        self.submit_tool_factory = submit_tool_factory
         self._active: dict[str, tuple[object, dict]] = {}
         self._stopped: set[str] = set()
 
@@ -55,17 +53,15 @@ class ClaudeRunner:
                 "CLAUDE_CODE_OAUTH_TOKEN": PLACEHOLDER_TOKEN}
 
     def build_options(self, spec: RunSpec, *, session_id: str | None, resume: str | None = None,
-                      fork: bool = False, sink: dict | None = None) -> ClaudeAgentOptions:
+                      fork: bool = False) -> ClaudeAgentOptions:
         tools = [*spec.sdk_tools]
-        if self.submit_tool_factory is not None:
-            tools.append(self.submit_tool_factory({} if sink is None else sink))
         servers = {**spec.mcp_servers, **({"agent": create_sdk_mcp_server("agent", tools=tools)} if tools else {})}
         return ClaudeAgentOptions(
-            model=spec.model, effort=spec.effort, max_turns=spec.max_turns, cwd=str(spec.cwd),
-            system_prompt=spec.system_prompt, max_budget_usd=spec.max_budget_usd, env=self._env(spec),
+            model=spec.model, max_turns=spec.max_turns, cwd=str(spec.cwd),
+            system_prompt=spec.system_prompt, env=self._env(spec),
             setting_sources=["project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
-            user=spec.os_user, tools=spec.tools, session_id=session_id, resume=resume, fork_session=fork,
+            session_id=session_id, resume=resume, fork_session=fork,
             strict_mcp_config=True)
 
     async def interrupt(self, run_id: str) -> None:
@@ -119,9 +115,7 @@ class ClaudeRunner:
 
     async def _attempt(self, spec: RunSpec, *, resume: str | None, fork: bool) -> _Attempt:
         session_id = None if (resume and not fork) else self.uuid_factory()
-        sink: dict = {}
-        client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume, fork=fork,
-                                                        sink=sink))
+        client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume, fork=fork))
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False}
         self._active[spec.run_id] = (client, state)
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -157,14 +151,14 @@ class ClaudeRunner:
             self._active.pop(spec.run_id, None)
 
         result = RunResult(run_id=spec.run_id, session_id=state["sid"], outcome="error",
-                           summary=sink.get("summary", ""), account_code=state["account"])
+                           account_code=state["account"])
         fork_wanted = False
         if final is not None:
             result.turns = final.num_turns
             (result.input_tokens, result.output_tokens, result.cache_read_tokens,
              result.cache_write_tokens) = usage_tokens(final.usage)
             result.cost_usd_est = final.total_cost_usd or 0.0
-            result.summary = result.summary or (final.result or "")
+            result.summary = final.result or ""
         if state["reason"] == "timeout":
             result.outcome, result.error = "timeout", f"no result within {spec.timeout_s} s"
         elif state["reason"] == "external":

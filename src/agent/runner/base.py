@@ -19,17 +19,11 @@ class RunSpec:
     system_prompt: str
     max_turns: int
     timeout_s: int
-    effort: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     mcp_servers: dict[str, Any] = field(default_factory=dict)
     plugins: list[Path] = field(default_factory=list)
     sdk_tools: list[Any] = field(default_factory=list)
-    tools: list[str] | None = None
     resume_session_id: str | None = None
-    os_user: str | None = None
-    max_budget_usd: float | None = None
-    # "bypass": full permissions inside a sandbox, where every limit is enforced outside the agent (spec v2 G2)
-    permission_mode: Literal["default", "bypass"] = "default"
     on_message: Callable[[dict], Awaitable[None]] | None = None
 
 

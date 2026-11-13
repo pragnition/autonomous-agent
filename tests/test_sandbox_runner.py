@@ -117,7 +117,7 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
     link, claude = FakeLink(), FakeClaude()
     await make_runner(tmp_path, worktrees, link, claude).handle(item(), "tok", [])
     spec = claude.specs[0]
-    assert spec.permission_mode == "bypass" and spec.model == "claude-opus-5-5"
+    assert spec.model == "claude-opus-5-5"
     assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
     assert spec.env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert git(spec.cwd, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
@@ -315,12 +315,6 @@ async def test_commit_step_never_sees_the_sandbox_token(worktrees, worktree):
     await call(tools, "open_pr", {"title": "t", "body": "b"})
     commit_env = seen[0][1]
     assert "commit" in seen[0][0] and not any("sandbox-token" in str(v) for v in commit_env.values())
-
-
-async def test_open_runner_runs_sessions_as_itself(tmp_path, worktrees):
-    link, claude = FakeLink(), FakeClaude()
-    await make_runner(tmp_path, worktrees, link, claude).handle(item(), "tok", [])
-    assert claude.specs[0].os_user is None
 
 
 async def test_extra_env_reaches_the_session(tmp_path, worktrees):
