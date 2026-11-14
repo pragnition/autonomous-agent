@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,7 +34,10 @@ def check_runner_token(conn, path: Path) -> Check:
     from agent.core.sessions import resolve_token
 
     token = read_runner_token(path)
-    info = resolve_token(conn, token) if token else None
+    try:
+        info = resolve_token(conn, token) if token else None
+    except sqlite3.OperationalError as e:  # core hasn't created the database's tables yet
+        return Check("runner token", False, f"no tokens table in the database yet ({e}); start core first")
     ok = info is not None and info.kind == "runner"
     return Check("runner token", ok, "live" if ok else f"missing or invalid in {path}")
 

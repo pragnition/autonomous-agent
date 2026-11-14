@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agent import db, events, tasks
-from agent.core.conversations import create_conversation, record_message
+from agent.core.conversations import create_conversation, origin_line, record_message
 from agent.core.slack_markdown import post_markdown
 from agent.scrub import scrub
 from agent.tasks import IllegalTransition, Status
@@ -63,6 +63,10 @@ def schema(required: dict[str, str] | None = None, optional: dict[str, str] | No
     props = {k: {"type": "array", "items": {"type": "string"}} if v == "array" else {"type": v}
              for k, v in {**(required or {}), **(optional or {})}.items()}
     return {"type": "object", "properties": props, "required": list(required or {})}
+
+
+def _running(project: str, minutes: int | None) -> str:
+    return project if minutes is None else f"{project} {minutes}m"
 
 
 class AgentToolRouter:
@@ -303,21 +307,33 @@ class AgentToolRouter:
                                        is_primary=is_primary)
         if is_primary:
             record_message(self.conn, ctx.channel, thread_ts, convo_id)
-        self.queue.enqueue(convo_id, "turn", self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended))
+        payload = self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended)
+        payload["origin"] = self._handover_origin(ctx)
+        self.queue.enqueue(convo_id, "turn", payload)
         await self.notifier.task_changed(task)
         return ToolReply(f"Started {task.id} ({task.title}) in a new session for {project}.")
 
+    def _handover_origin(self, ctx: ToolContext) -> str:
+        """A hand-over turn's first line: the calling turn's own (who sent its message, where and the link), marked
+        as handed over once however often it is handed on. A calling turn without one gives its actor and channel."""
+        asked = self._payload(ctx).get("origin") or origin_line(ctx.channel or "no Slack thread", who=ctx.actor)
+        mark = f" (handed over by {self.config.name})"
+        return asked if asked.endswith(mark) else asked + mark
+
     async def _status(self, ctx, args) -> ToolReply:
         paused = db.get_setting(self.conn, "paused", "0") == "1"
-        # each running item is named by its conversation's project ("-" when unbound)
-        running = self.conn.execute("SELECT COALESCE(c.project, '-'), w.kind FROM work_items w LEFT JOIN "
-                                    "conversations c ON c.id = w.conversation_id WHERE w.status = 'claimed' "
-                                    "ORDER BY w.created_at, w.rowid").fetchall()
+        # each running item is named by its conversation's project ("-" when unbound), with how long it has run
+        # since its runner claimed it (the item's latest session_started event)
+        running = self.conn.execute(
+            "SELECT COALESCE(c.project, '-'), (SELECT CAST((julianday('now') - julianday(MAX(e.ts))) * 1440 AS "
+            "INTEGER) FROM events e WHERE e.type = 'session_started' AND json_extract(e.data, '$.work_item') = w.id) "
+            "FROM work_items w LEFT JOIN conversations c ON c.id = w.conversation_id WHERE w.status = 'claimed' "
+            "ORDER BY w.created_at, w.rowid").fetchall()
         queued = self.conn.execute("SELECT COUNT(*) FROM work_items WHERE status = 'queued'").fetchone()[0]
         open_tasks = self.conn.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('queued', 'working', "
                                        "'needs_input', 'ready_for_review')").fetchone()[0]
         lines = [f"paused: {'yes' if paused else 'no'}",
-                 f"running: {len(running)}" + (f" ({', '.join(f'{r[0]}/{r[1]}' for r in running)})" if running else ""),
+                 f"running: {len(running)}" + (f" ({', '.join(_running(*r) for r in running)})" if running else ""),
                  f"queued: {queued}", f"open tasks: {open_tasks}"]
         return ToolReply("\n".join(lines))
 

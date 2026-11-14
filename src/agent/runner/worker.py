@@ -31,6 +31,11 @@ SETUP_FAILED_NOTE = ("(Setup failed in {checkout}, so it may not be ready to bui
 _VAR = re.compile(r"\$\{(\w+)\}")
 
 
+def origin_of(payload: dict) -> str:
+    """The prompt's first line, who sent the message, where and its link, or "" for a turn without one."""
+    return f"{payload['origin']}\n" if payload.get("origin") else ""
+
+
 def read_env_files(paths: list[Path]) -> dict[str, str]:
     env = {}
     for path in paths:
@@ -138,13 +143,14 @@ class Runner:
             log.exception("session %s failed", spec.run_id)
             return RunResult(spec.run_id, None, "error", error=f"{type(e).__name__}: {e}")
 
-    async def _run_or_start_fresh(self, spec: RunSpec) -> RunResult:
+    async def _run_or_start_fresh(self, spec: RunSpec, origin: str) -> RunResult:
         result = await self._run(spec)
         if result.outcome == "error" and spec.resume_session_id and not result.turns:
             # The saved session is gone (the agent container was rebuilt, or its files were lost); the thread has
-            # the history, so start a fresh session that reads it
+            # the history, so start a fresh session that reads it. The origin line stays first, the note after it.
             log.warning("resuming %s failed (%s); starting a fresh session", spec.resume_session_id, result.error)
-            result = await self._run(dataclasses.replace(spec, resume_session_id=None, prompt=FRESH_NOTE + spec.prompt))
+            prompt = origin + FRESH_NOTE + spec.prompt.removeprefix(origin)
+            result = await self._run(dataclasses.replace(spec, resume_session_id=None, prompt=prompt))
         return result
 
     async def handle(self, item: dict, tok: str, manifest: list[dict]) -> None:
@@ -160,7 +166,7 @@ class Runner:
             return
         beat = asyncio.create_task(self._heartbeat(tok, item_id))
         try:
-            result = await self._run_or_start_fresh(spec)
+            result = await self._run_or_start_fresh(spec, origin_of(item["payload"]))
         finally:
             beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -193,9 +199,8 @@ class Runner:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             settings["autoMemoryDirectory"] = str(self.memory_dir)
         # the message's origin (who, where, link) comes first, then what the runner has to say, then the message
-        origin = f"{payload['origin']}\n" if payload.get("origin") else ""
-        spec = RunSpec(run_id=item_id, prompt=origin + note + payload["text"], cwd=cwd, model=payload["model"],
-                       system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
+        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + note + payload["text"], cwd=cwd,
+                       model=payload["model"], system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,
                        # plugins/effortless/hooks) are forced last, so a pack's test secret or the container's

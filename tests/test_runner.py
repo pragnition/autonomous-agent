@@ -17,7 +17,7 @@ from agent.gitutil import GitError, branch_name
 from agent.runner.base import RunResult
 from agent.runner.link import CoreLink, SessionRevoked
 from agent.runner.tools import Checkout, remote_sdk_tools, run_setup, setup_marker
-from agent.runner.worker import Runner
+from agent.runner.worker import FRESH_NOTE, Runner
 from agent.runner.worktrees import CheckoutRefused, Worktrees
 from agent_fixtures import make_config, make_pack
 
@@ -680,6 +680,15 @@ async def test_dead_session_falls_back_to_a_fresh_one(tmp_path, worktrees):
     assert [s.resume_session_id for s in claude.specs] == ["sess-gone", None]
     assert "read_thread" in claude.specs[1].prompt and claude.specs[1].prompt.endswith("fix the export")
     assert link.results[-1]["outcome"] == "done" and link.results[-1]["session_id"] == "sess-new"
+
+
+async def test_fresh_session_prompt_still_starts_with_the_origin(tmp_path, worktrees):
+    """The fallback's note goes after the who/where/link line, which stays the prompt's first line."""
+    origin = "[from Ann Lee (ann) · DM · https://team.slack.com/archives/D1/p51]"
+    link, claude = FakeLink(), ResumeFailsClaude()
+    await make_runner(tmp_path, worktrees, link, claude).handle(
+        item(resume_session_id="sess-gone", origin=origin), "tok", [])
+    assert claude.specs[1].prompt == f"{origin}\n{FRESH_NOTE}fix the export"
 
 
 async def test_preparation_failure_reports_an_error(tmp_path, worktrees):

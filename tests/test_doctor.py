@@ -114,6 +114,17 @@ def test_linear_app_secrets_and_runner_token(tmp_path):
     assert not check_runner_token(conn, path).ok
 
 
+def test_runner_token_check_fails_before_core_made_the_database(tmp_path):
+    """A database core hasn't set up yet has no tokens table: the check reports FAIL instead of raising."""
+    from agent import db
+    from agent.doctor import check_runner_token
+
+    path = tmp_path / "runner-token"
+    path.write_text("some-token\n")
+    check = check_runner_token(db.connect(tmp_path / "agent.db"), path)
+    assert not check.ok and check.name == "runner token" and "no tokens table" in check.detail
+
+
 def test_linear_app_secrets_required_with_public_url(tmp_path):
     import shutil
 

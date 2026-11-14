@@ -439,6 +439,19 @@ async def test_failed_permalinks_are_not_retried_at_once(app):
     assert len(calls) == 1
 
 
+async def test_permalink_cache_keeps_the_newest(app, monkeypatch):
+    from agent.core import app as core_app
+
+    async def get_permalink(**kw):
+        return {"permalink": f"https://x.slack.com/archives/{kw['channel']}/p{kw['message_ts']}"}
+
+    monkeypatch.setattr(core_app, "PERMALINK_CACHE", 2)
+    app.slack.chat_getPermalink = get_permalink
+    for ts in ("1.0", "2.0", "3.0"):
+        await app.permalink("C1", ts)
+    assert list(app._permalinks) == [("C1", "2.0"), ("C1", "3.0")]
+
+
 async def test_person_names_come_from_slack_and_are_cached(app):
     calls = []
 

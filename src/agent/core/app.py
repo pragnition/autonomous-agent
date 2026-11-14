@@ -55,6 +55,7 @@ def core_is_root() -> bool:
 PUBLIC_PORT = 8085                   # Linear's webhook and OAuth callback (Tailscale Funnel), published on 127.0.0.1:18085
 DIGEST_SETTING = "kpi_digest_date"   # the local date of the last digest, so restarts don't post twice
 PERMALINK_RETRY_S = 600  # how long a failed Slack permalink lookup is remembered
+PERMALINK_CACHE = 5000   # permalinks kept in memory; the oldest goes first
 DASHBOARD_STATIC = Path(os.environ.get("DASHBOARD_STATIC", "/app/web"))  # the built web app in the core image
 
 
@@ -213,7 +214,10 @@ class CoreApp:
         except Exception:
             log.info("no Slack permalink for %s/%s", channel, thread_ts, exc_info=True)
             link = None
+        self._permalinks.pop(key, None)
         self._permalinks[key] = (now, link)
+        while len(self._permalinks) > PERMALINK_CACHE:
+            del self._permalinks[next(iter(self._permalinks))]
         return link
 
     def _turn_payload(self, conversation_id: str, text: str, actor: str | None, unattended: bool) -> dict:

@@ -237,6 +237,26 @@ async def test_start_task_from_dm_status_stays_in_its_thread(router, conn):
     assert any(task_id in p["text"] for p in threaded)
 
 
+async def test_start_task_turn_starts_with_who_asked_and_where(router, conn):
+    """A hand-over turn's first line is the calling turn's: who asked, where and the link, marked as handed over."""
+    asked = "[from Ann Lee (ann) · #sample thread · https://team.slack.com/archives/C1/p11]"
+    ctx = router.context_for(add_item(router.queue, add_conversation(conn), origin=asked))
+    await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
+    handed = latest_item(router).payload["origin"]
+    assert handed == f"{asked} (handed over by agent)"
+
+    child = router.context_for(latest_item(router).id)    # the child hands over again: marked once
+    await router.call(child, "start_task", {"project": "sample", "title": "fix y", "kind": "bug", "brief": "c"})
+    assert latest_item(router).payload["origin"] == handed
+
+
+async def test_start_task_turn_from_a_turn_without_a_line(router, conn):
+    ctx = router.context_for(add_item(router.queue, add_conversation(conn, channel=None, thread_ts=None),
+                                      actor=None, unattended=True))
+    await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
+    assert latest_item(router).payload["origin"] == "[no Slack thread] (handed over by agent)"
+
+
 async def test_start_task_failed_post_creates_nothing(router, conn):
     """A chat_postMessage that raises (posting the thread-opening line) leaves no task, conversation or work item,
     and the router reports the failure instead of crashing."""
@@ -299,13 +319,20 @@ async def test_status_and_tasks(router, ctx_with_task):
     assert "working" in (await router.call(ctx_with_task, "get_task", {"task_id": ctx_with_task.task_id})).text
 
 
-async def test_status_names_each_running_items_project(router, conn):
+async def test_status_names_each_running_items_project_and_how_long_it_has_run(router, conn):
+    from datetime import UTC, datetime, timedelta
+
     bound = add_item(router.queue, add_conversation(conn, project="sample"))
     add_item(router.queue, add_conversation(conn, project=None))
     for _ in range(2):
         router.queue.claim()
     text = (await router.call(router.context_for(bound), "status", {})).text
-    assert "running: 2 (sample/turn, -/turn)" in text
+    assert "running: 2 (sample, -)" in text
+    started = (datetime.now(UTC) - timedelta(minutes=12, seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn.execute("INSERT INTO events(ts, type, data) VALUES (?, 'session_started', ?)",
+                 (started, json.dumps({"work_item": bound})))
+    text = (await router.call(router.context_for(bound), "status", {})).text
+    assert "running: 2 (sample 12m, -)" in text
 
 
 async def test_read_thread(router, ctx_member):

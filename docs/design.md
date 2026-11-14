@@ -99,8 +99,9 @@ would otherwise inherit), plus a git identity (`AGENT_NAME`, `AGENT_GIT_EMAIL`),
 (the effortless plugin, which picks each prompt's reasoning effort, needs it). The last two cannot be overridden.
 
 If a turn can't resume its saved session and fails before its first model turn, the runner starts a fresh session
-with a note to call `read_thread` first. When the proxy reports the session's account as rejected or disabled, the
-runner forks the session (same history, new session id, which the proxy pins to another account), up to twice.
+with a note to call `read_thread` first, placed after the prompt's who, where and link line. When the proxy reports
+the session's account as rejected or disabled, the runner forks the session (same history, new session id, which
+the proxy pins to another account), up to twice.
 
 ### docker (dind)
 
@@ -173,8 +174,8 @@ Each turn's prompt starts with one line saying who sent the message, where it ca
 
 The name comes from Slack's `users.info` and the link from `chat.getPermalink`, both cached; a failed lookup is
 retried after 10 minutes. Each lookup may take at most 3 s, and a part that isn't known in time is left out.
-Messages in one channel still route in arrival order. Turns started with `start_task` and the smoke test's turn
-have no line.
+Messages in one channel still route in arrival order. A turn started with `start_task` gets the calling turn's
+line followed by `(handed over by <agent name>)`; the smoke test's turn has no line.
 
 ### One queue
 
