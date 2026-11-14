@@ -67,7 +67,7 @@ def test_defaults(tmp_path):
     assert cfg.limits.max_tasks_per_day == 20 and cfg.limits.max_turns == 400
     assert cfg.models.default == "claude-opus-5-5" and cfg.models.hard == "claude-fable-5-1"
     assert cfg.models.chores == "claude-sonnet-5"
-    assert cfg.sandbox.agent_uid == 1001
+    assert cfg.agent.uid == 1001
     assert set(cfg.memory_budget.briefing) >= {"session"}
     assert cfg.cli == {}
 
@@ -132,8 +132,8 @@ def test_pack_rejects_reserved_secret_names(tmp_path):
 
 @pytest.mark.parametrize("value", ["0", '"x"'])
 def test_agent_uid_must_be_positive_int(tmp_path, value):
-    probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, f"[sandbox]\nagent_uid = {value}")))
-    assert any("agent_uid" in p for p in probs)
+    probs = problems_of(lambda: load_agent_config(write_agent(tmp_path, f"[agent]\nuid = {value}")))
+    assert any("uid" in p for p in probs)
 
 
 def test_observability_settings(tmp_path):

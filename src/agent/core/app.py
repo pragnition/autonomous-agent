@@ -133,7 +133,7 @@ class CoreApp:
                 self.conn, client_id=secrets["LINEAR_CLIENT_ID"], client_secret=secrets.get("LINEAR_CLIENT_SECRET", ""),
                 redirect_uri=f"{self.config.linear.public_url}/linear/oauth/callback",
                 token_path=self.data_dir / "runner" / "linear.env",
-                owner_uid=self.config.sandbox.agent_uid if core_is_root() else None)
+                owner_uid=self.config.agent.uid if core_is_root() else None)
             register_linear_tools(self.router, self.linear_auth)
             if linear_client is not None:   # installed, core's own Linear calls show as the agent too
                 linear_client.token = self.linear_auth.token
@@ -145,7 +145,7 @@ class CoreApp:
                                               on_installed=self.on_linear_installed)
         self.runner_token_path = self.data_dir / "runner" / "runner-token"
         self.login = DeviceCodeLogin(slack, config=self.config, rules=self.config.cli, exec_fn=cli_exec,
-                                     run_as=self.config.sandbox.agent_uid)
+                                     run_as=self.config.agent.uid)
         register_login_tools(self.router, self.login)
 
         self.conversations = Conversations(self.conn, config=self.config, packs=self.packs, queue=self.queue,
@@ -288,7 +288,7 @@ class CoreApp:
     # the agent container
 
     def _agent_owner(self) -> int | None:
-        return self.config.sandbox.agent_uid if core_is_root() else None
+        return self.config.agent.uid if core_is_root() else None
 
     def prepare_agent_dirs(self) -> None:
         """The agent container owns what core shares with it (the CLI logins, its runner token)."""

@@ -38,8 +38,8 @@ class Person:
 
 
 @dataclass
-class SandboxSettings:
-    agent_uid: int = 1001          # the agent container's user, which owns what core shares with it
+class AgentSettings:
+    uid: int = 1001                # the agent container's user, which owns what core shares with it
 
 
 @dataclass
@@ -129,7 +129,7 @@ class AgentConfig:
     limits: Limits
     models: Models
     memory_budget: MemoryBudget
-    sandbox: SandboxSettings = field(default_factory=SandboxSettings)
+    agent: AgentSettings = field(default_factory=AgentSettings)
     cli: dict[str, CliRules] = field(default_factory=dict)
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     linear: LinearSettings = field(default_factory=LinearSettings)
@@ -331,14 +331,14 @@ def load_agent_config(path: Path) -> AgentConfig:
         for kind, value in (mem.get(key) or {}).items():
             target[kind] = _int({kind: value}, kind, target.get(kind, 0), f"{where} [memory.budget.{key}]", problems)
 
-    sb = data.get("sandbox") or {}
-    sw = f"{where} [sandbox]"
-    sandbox = SandboxSettings()
-    uid = sb.get("agent_uid", 1001)
+    ag = data.get("agent") or {}
+    aw = f"{where} [agent]"
+    agent_settings = AgentSettings()
+    uid = ag.get("uid", 1001)
     if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
-        problems.append(f"{sw}: 'agent_uid' must be a positive integer (the agent container's uid)")
+        problems.append(f"{aw}: 'uid' must be a positive integer (the agent container's uid)")
     else:
-        sandbox.agent_uid = uid
+        agent_settings.uid = uid
 
     ob = data.get("observability") or {}
     ow = f"{where} [observability]"
@@ -371,7 +371,7 @@ def load_agent_config(path: Path) -> AgentConfig:
 
     if problems:
         raise ConfigError(problems)
-    return AgentConfig(name, timezone, people, channels, limits, models, budget, sandbox, cli, observability,
+    return AgentConfig(name, timezone, people, channels, limits, models, budget, agent_settings, cli, observability,
                        linear, mcp, github_login, dashboard, llm_meter)
 
 

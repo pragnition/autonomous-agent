@@ -1,7 +1,6 @@
-"""core's tools as in-process SDK tools (spec v2 §6). The tool code runs in the runner's process, so the session
-token never reaches the session's OS user. Three tools do local work: work_on binds the conversation's project
-and makes its checkout, open_pr runs the checks and pushes the branch, and post_files reads files from the
-session folder."""
+"""core's tools as in-process SDK tools. The tool code runs in the runner's process, so the session token never
+reaches the session's OS user. Three tools do local work: work_on binds the conversation's project and makes its
+checkout, open_pr runs the checks and pushes the branch, and post_files reads files from the session folder."""
 
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ from pathlib import Path
 
 from claude_agent_sdk import tool
 
-from agent.sandbox.link import SessionRevoked
+from agent.runner.link import SessionRevoked
 
 CHECK_TIMEOUT_S = 1800
 SETUP_TIMEOUT_S = 1800
@@ -141,7 +140,7 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path,
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # no token: the session user runs this
         for key, default in (("GIT_AUTHOR_NAME", agent_name), ("GIT_COMMITTER_NAME", agent_name),
                              ("GIT_AUTHOR_EMAIL", default_email), ("GIT_COMMITTER_EMAIL", default_email)):
-            env.setdefault(key, default)  # runners.main already set these from --git-email; this is only a fallback
+            env.setdefault(key, default)  # runner.main already set these from --git-email; this is only a fallback
         await shell(f"git add -A && (git diff --cached --quiet || git commit -q -m {shlex.quote(title)})",
                     worktree, 120, env)
         log, passed = [], True

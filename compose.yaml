@@ -67,7 +67,7 @@ services:
     restart: unless-stopped
     network_mode: service:docker
     depends_on: [docker]
-    command: [python, -m, agent, runners, --token-file, /run/agent/runner-token, --core, "http://core:8080",
+    command: [python, -m, agent, runner, --token-file, /run/agent/runner-token, --core, "http://core:8080",
               --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
               --git-email, "${AGENT_GIT_EMAIL:-}"]
     # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables (spec v3 O4). Compose reads

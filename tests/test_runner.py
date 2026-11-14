@@ -17,10 +17,10 @@ from agent.core.payloads import Payloads
 from agent.gitutil import GitError, branch_name
 from agent.memory.store import MemoryStore
 from agent.runner.base import RunResult
-from agent.sandbox.link import CoreLink, SessionRevoked
-from agent.sandbox.remote_tools import Checkout, remote_sdk_tools, run_setup, setup_marker
-from agent.sandbox.runner import SandboxRunner
-from agent.sandbox.worktrees import CheckoutRefused, Worktrees
+from agent.runner.link import CoreLink, SessionRevoked
+from agent.runner.tools import Checkout, remote_sdk_tools, run_setup, setup_marker
+from agent.runner.worker import Runner
+from agent.runner.worktrees import CheckoutRefused, Worktrees
 from agent_fixtures import make_config, make_pack
 
 
@@ -132,8 +132,8 @@ def item(conversation_id="V-1", **payload_over):
 
 
 def make_runner(tmp_path, worktrees, link, claude):
-    return SandboxRunner(link, worktrees, claude, bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
-                         scratch_root=tmp_path / "scratch", heartbeat_s=0.05)
+    return Runner(link, worktrees, claude, bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
+                  scratch_root=tmp_path / "scratch", heartbeat_s=0.05)
 
 
 async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
@@ -776,9 +776,9 @@ LINEAR_MCP = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
 
 
 def env_runner(tmp_path, worktrees, claude, env_file):
-    return SandboxRunner(FakeLink(), worktrees, claude, bundles_dir=tmp_path / "bundles",
-                         sessions_root=tmp_path / "sessions", scratch_root=tmp_path / "scratch", heartbeat_s=0.05,
-                         env_files=[env_file])
+    return Runner(FakeLink(), worktrees, claude, bundles_dir=tmp_path / "bundles",
+                  sessions_root=tmp_path / "sessions", scratch_root=tmp_path / "scratch", heartbeat_s=0.05,
+                  env_files=[env_file])
 
 
 async def test_mcp_headers_use_current_linear_token(tmp_path, worktrees):

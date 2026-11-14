@@ -1,4 +1,4 @@
-"""The agent container's runner process: one SandboxRunner on core's runner token.
+"""The agent container's runner process: one runner on core's runner token.
 
 core writes the runner token to a file the container mounts. Every few seconds the process checks that file: it
 starts the runner when a token appears, restarts it when the token changes (core replaced a revoked or expiring
@@ -65,11 +65,11 @@ def main(argv: list[str] | None = None) -> int:
     from agent.core.runner_tokens import read_runner_token
     from agent.proxy import ProxyClient
     from agent.runner.claude import ClaudeRunner
-    from agent.sandbox.link import CoreLink
-    from agent.sandbox.runner import SandboxRunner
-    from agent.sandbox.worktrees import Worktrees
+    from agent.runner.link import CoreLink
+    from agent.runner.worker import Runner
+    from agent.runner.worktrees import Worktrees
 
-    parser = argparse.ArgumentParser(prog="agent runners", description="Run the agent container's runner")
+    parser = argparse.ArgumentParser(prog="agent runner", description="Run the agent container's runner")
     parser.add_argument("--token-file", default="/run/agent/runner-token")
     parser.add_argument("--core", default="http://core:8080")
     parser.add_argument("--proxy", default="http://172.30.0.1:28091")
@@ -86,11 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     token_file = Path(args.token_file)
     shared = token_file.parent  # what core shares with the container: the token, linear.env, the projects' env files
 
-    def make_runner(token: str) -> SandboxRunner:
-        return SandboxRunner(CoreLink(args.core, token), Worktrees(root, args.core, lambda: token), claude,
-                             bundles_dir=root / "bundles", sessions_root=root / "sessions",
-                             scratch_root=root / "scratch", agent_name=args.agent_name, extra_env=env,
-                             env_files=[shared / "linear.env"], app_env_dir=shared / "projects")
+    def make_runner(token: str) -> Runner:
+        return Runner(CoreLink(args.core, token), Worktrees(root, args.core, lambda: token), claude,
+                      bundles_dir=root / "bundles", sessions_root=root / "sessions",
+                      scratch_root=root / "scratch", agent_name=args.agent_name, extra_env=env,
+                      env_files=[shared / "linear.env"], app_env_dir=shared / "projects")
 
     async def run() -> None:
         keeper = RunnerKeeper(make_runner)

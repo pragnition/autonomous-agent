@@ -30,8 +30,8 @@ default = "claude-opus-5-5"      # all real work
 hard = "claude-fable-5-1"        # when someone says "use fable" in a conversation
 chores = "claude-sonnet-5"       # memory consolidation
 
-[sandbox]
-agent_uid = 1001                 # the agent container's user; core hands it the Azure login and runner tokens
+[agent]
+uid = 1001                       # the agent container's user; core hands it the Azure login and runner tokens
 
 [linear]
 public_url = ""                  # e.g. "https://jensen.<tailnet>.ts.net": Linear's webhook and OAuth callback, via Tailscale Funnel

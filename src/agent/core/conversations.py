@@ -37,7 +37,7 @@ def record_message(conn: sqlite3.Connection, channel: str, ts: str, conversation
                  (channel, ts, conversation_id))
 
 
-def create_conversation(conn: sqlite3.Connection, *, agent_name: str, channel: str | None, thread_ts: str | None,
+def create_conversation(conn: sqlite3.Connection, *, agent_name: str = "", channel: str | None, thread_ts: str | None,
                         project: str | None, title: str, task_id: str | None = None, is_primary: int = 1) -> str:
     """A new conversation. One bound to its project up front gets its branch now, named from `title`, and works in
     its checkout; any other works in its session folder. The working folder never changes, so --resume always finds

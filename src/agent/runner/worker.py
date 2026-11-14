@@ -1,5 +1,5 @@
-"""The runner inside the agent container (spec v3 §6): pull work from core, prepare the worktree, run a Claude
-Code session with full permissions, and report the result. Limits are enforced by core's tools, not the OS."""
+"""The runner inside the agent container: pull work from core, prepare the worktree, run a Claude Code session
+with full permissions, and report the result. Limits are enforced by core's tools, not the OS."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ import tarfile
 from pathlib import Path
 
 from agent.runner.base import RunResult, RunSpec
-from agent.sandbox.link import SessionRevoked
-from agent.sandbox.remote_tools import Checkout, remote_sdk_tools, run_setup, setup_marker
-from agent.sandbox.worktrees import CheckoutRefused
+from agent.runner.link import SessionRevoked
+from agent.runner.tools import Checkout, remote_sdk_tools, run_setup, setup_marker
+from agent.runner.worktrees import CheckoutRefused
 
 log = logging.getLogger(__name__)
 FRESH_NOTE = ("(Your earlier session in this conversation couldn't be resumed. Call read_thread to catch up on "
@@ -58,7 +58,7 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
     return out
 
 
-class SandboxRunner:
+class Runner:
     def __init__(self, link, worktrees, claude, *, bundles_dir: Path, sessions_root: Path, scratch_root: Path,
                  agent_name: str = "agent", heartbeat_s: float = 15, max_parallel: int = 32,
                  extra_env: dict[str, str] | None = None, env_files: list[Path] = (),

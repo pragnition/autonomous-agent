@@ -99,7 +99,7 @@ class GitHost:
             return web.Response(status=401, headers={"WWW-Authenticate": 'Basic realm="agent"'})
         if not self.path(project).is_dir():
             return web.Response(status=404)
-        env = {"GIT_PROJECT_ROOT": str(self.root), "GIT_HTTP_EXPORT_ALL": "1", "REMOTE_USER": "sandbox",
+        env = {"GIT_PROJECT_ROOT": str(self.root), "GIT_HTTP_EXPORT_ALL": "1", "REMOTE_USER": "agent",
                "PATH_INFO": f"/{project}.git/{request.match_info['tail']}", "REQUEST_METHOD": request.method,
                "QUERY_STRING": request.query_string, "CONTENT_TYPE": request.headers.get("Content-Type", ""),
                "PATH": "/usr/bin:/bin"}

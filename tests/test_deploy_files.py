@@ -129,7 +129,7 @@ def test_agent_image():
     target = agent_target()
     for needle in ("--uid 1001", "--shell /bin/bash", "NOPASSWD:ALL", "ln -sf /bin/bash /bin/sh", "USER agent",
                    "AZURE_CONFIG_DIR=/data/cli/azure", " gh", "azure-cli", "chown agent /var/agent",
-                   '"agent", "runners"', "chmod -R a+rX /app"):
+                   '"agent", "runner"', "chmod -R a+rX /app"):
         assert needle in target, needle
 
 
@@ -143,7 +143,7 @@ def test_agent_service(compose):
     assert not any("agent.env" in v for v in vols)        # a 0600 file mounted in would be unreadable to uid 1001
     assert "agentwork:/var/agent" in vols and "agentwork" in compose["volumes"]
     command = " ".join(agent["command"])
-    for part in ("agent runners", "--core http://core:8080", "--proxy http://172.30.0.1:28091",
+    for part in ("agent runner", "--core http://core:8080", "--proxy http://172.30.0.1:28091",
                  "--token-file /run/agent/runner-token"):
         assert part in command, part
     assert "${AGENT_DATA:-./data}/runner:/data/runner" in volumes(compose, "core")
