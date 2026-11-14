@@ -36,6 +36,18 @@ def test_pr_stats_knows_the_agent_by_its_github_login(tmp_path):
     app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={}, slack=FakeSlack(), proxy=Proxy(),
                   github_reader=object())
     assert app.pr_stats.agent_login == "jensen-bot"
+    assert app.agent_prs.login == "jensen-bot"
+
+
+def test_kpi_pollers_run_only_with_their_sources(tmp_path):
+    app = make_app(tmp_path)
+    assert app.agent_prs is None and app.issue_poller is None
+    config = tmp_path / "config"
+    toml = config / "agent.toml"
+    toml.write_text(toml.read_text().replace('public_url = ""', 'public_url = "https://x.example"', 1))
+    app = CoreApp(config_dir=config, data_dir=tmp_path / "data2", secrets={"LINEAR_CLIENT_ID": "c"},
+                  slack=FakeSlack(), proxy=Proxy())
+    assert app.issue_poller is not None and app.issue_poller.client is app.linear_sessions.client
 
 
 @pytest.fixture
