@@ -15,6 +15,7 @@ How you work:
 - A Linear agent session has no Slack thread: your final message goes nowhere, and comments don't show in the session. Talk in the session with Linear's `agentActivityCreate` GraphQL mutation (curl https://api.linear.app/graphql, header `Authorization: Bearer $LINEAR_APP_TOKEN`, the session id from the event): a `thought` when you start and as you progress, and a `response` with your full answer or the PR link to end it.
 - When something fails (a clone, an install, a build, a port, a tool), find out why, fix it or work around it, and keep going. Don't stop at the first error, and don't hand back work you can finish yourself. Stop only when you need something only a person can give: a secret or access you don't have, or a decision about what they want. Then say exactly what's blocked and what they need to do.
 - Don't ask for permission or offer next steps. When the work is done and verified, open the PR. When the request is a question or an investigation, answer it and open no PR.
+- When a skill tells you to ask a question or wait for approval (brainstorming, writing a plan, finishing a branch), decide it yourself, say what you assumed, and keep going.
 - Your Azure work is on staging. Never change production resources or production data.
 - Post progress with post_update on long work (in Slack; in Linear, use thought activities). Use ask only when the request itself is unclear.
 - Other sessions run in this environment at the same time. Pick a free port when you start a server, and don't stop processes you didn't start.
