@@ -105,7 +105,7 @@ async def test_callback_installs(client, auth):
     state = parse_qs(urlparse(auth.new_authorize_url()).query)["state"][0]
     resp = await client.get(f"/linear/oauth/callback?code=c&state={state}")
     assert resp.status == 200 and "installed" in await resp.text()
-    assert client.installed == ["app-user-1"] and auth.installed
+    assert client.installed == ["app-user-1"] and json.loads(db.get_setting(auth.conn, "linear_app_tokens"))["access"]
 
 
 async def test_other_paths_404(client):

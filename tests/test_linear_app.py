@@ -79,7 +79,7 @@ async def test_exchange_stores_tokens_and_app_user(conn, tmp_path):
     assert form == {"code": "the-code", "redirect_uri": REDIRECT, "client_id": "cid", "client_secret": "csecret",
                     "grant_type": "authorization_code"}
     assert linear.graphql[0][0] == "Bearer acc-1" and "viewer" in linear.graphql[0][1]["query"]
-    assert auth.installed and auth.app_user_id == "app-user-1"
+    assert json.loads(db.get_setting(conn, "linear_app_tokens"))["app_user_id"] == "app-user-1"
     env = tmp_path / "runner" / "linear.env"
     assert env.read_text() == "LINEAR_APP_TOKEN=acc-1\n" and os.stat(env).st_mode & 0o777 == 0o600
 
@@ -97,9 +97,9 @@ async def test_token_refreshes_and_rotates(conn, tmp_path):
     assert (stored["access"], stored["refresh"]) == ("acc-2", "ref-2")
     assert (tmp_path / "runner" / "linear.env").read_text() == "LINEAR_APP_TOKEN=acc-2\n"
     again = make_auth(conn, tmp_path, linear, clock)                    # a restarted core keeps the tokens
-    assert again.installed and await again.token() == "acc-2" and again.app_user_id == "app-user-1"
+    assert await again.token() == "acc-2"
 
 
 async def test_not_installed_returns_none(conn, tmp_path):
     auth = make_auth(conn, tmp_path, Linear(), Clock())
-    assert not auth.installed and await auth.token() is None and auth.app_user_id is None
+    assert await auth.token() is None

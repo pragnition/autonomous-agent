@@ -259,15 +259,11 @@ def make_meter_app(conn: sqlite3.Connection, settings: LlmMeterSettings, *, secr
         finally:
             await answer.aclose()
 
-    async def status(request: web.Request) -> web.Response:
-        return web.json_response(meter_view(conn, settings, timezone))
-
     async def close_client(app: web.Application) -> None:
         if http is None:
             await client.aclose()
 
     app = web.Application(client_max_size=64 * 1024 * 1024)
-    app.router.add_get("/llm", status)
     app.router.add_route("*", "/llm/{upstream}/{tail:.*}", forward)
     app.on_cleanup.append(close_client)
     return app

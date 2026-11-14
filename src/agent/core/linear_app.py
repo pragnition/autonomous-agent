@@ -73,14 +73,6 @@ class LinearAppAuth:
     def _stored(self) -> dict:
         return json.loads(db.get_setting(self.conn, TOKENS_KEY) or "{}")
 
-    @property
-    def installed(self) -> bool:
-        return bool(self._stored.get("access"))
-
-    @property
-    def app_user_id(self) -> str | None:
-        return self._stored.get("app_user_id")
-
     async def token(self) -> str | None:
         stored = self._stored
         if not stored.get("access"):

@@ -230,11 +230,6 @@ async def test_paused_unknown_and_keyless(client, conn):
     assert resp.status == 503 and (await resp.json())["error"]["code"] == "agent_stopped"
 
 
-async def test_status_route(client):
-    resp = await client.get("/llm")
-    assert resp.status == 200 and (await resp.json())["caps"]["daily_usd"] == 10.0
-
-
 async def test_missing_key_is_a_clear_error(conn):
     app = make_meter_app(conn, settings(), secrets={}, timezone=TZ, http=httpx.AsyncClient())
     async with TestClient(TestServer(app)) as c:

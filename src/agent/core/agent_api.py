@@ -20,13 +20,17 @@ from agent import db
 from agent import events as event_log
 from agent.core.conversations import BindRefused
 from agent.core.sessions import TokenInfo, WorkItem, WorkQueue, mint_token, resolve_token
-from agent.httpauth import health
 
 log = logging.getLogger(__name__)
 
 MAX_FILES = 10
 CONN_KEY = web.AppKey("conn", sqlite3.Connection)
 MAX_FILE_BYTES = 25 * 1024 * 1024
+
+
+async def health(request: web.Request) -> web.Response:
+    """The supervisor's health check."""
+    return web.json_response({"ok": True})
 
 
 def _token(request: web.Request) -> str | None:
