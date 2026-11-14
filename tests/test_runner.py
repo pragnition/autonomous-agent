@@ -772,6 +772,19 @@ async def test_extra_env_reaches_the_session(tmp_path, worktrees):
     assert claude.specs[0].env["SAMPLE_TEST_USER"] == "tester@example.com"
 
 
+async def test_forced_env_keys_cannot_be_overridden(tmp_path, worktrees):
+    """CLAUDE_CONFIG_DIR and the function-hooks flag are forced last: neither the container's extra env nor a
+    pack's test secrets can override them, even when both try to."""
+    link, claude = FakeLink(), FakeClaude()
+    runner = make_runner(tmp_path, worktrees, link, claude)
+    runner.extra_env = {"CLAUDE_CONFIG_DIR": "/from-extra-env", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "0"}
+    await runner.handle(item(test_secrets={"CLAUDE_CONFIG_DIR": "/from-test-secrets",
+                                           "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "0"}), "tok", [])
+    spec = claude.specs[0]
+    assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
+    assert spec.env["CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"] == "1"
+
+
 LINEAR_MCP = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
                          "headers": {"Authorization": "Bearer ${LINEAR_APP_TOKEN}"}}}
 

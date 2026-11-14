@@ -193,9 +193,11 @@ class Runner:
         spec = RunSpec(run_id=item_id, prompt=note + payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
-                       # function hooks load the effortless plugin's code (plugins/effortless/hooks)
-                       env={"CLAUDE_CONFIG_DIR": str(sessions), "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1",
-                            **env, **(payload.get("test_secrets") or {})},
+                       # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,
+                       # plugins/effortless/hooks) are forced last, so a pack's test secret or the container's
+                       # extra env can never override them
+                       env={**env, **(payload.get("test_secrets") or {}), "CLAUDE_CONFIG_DIR": str(sessions),
+                            "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, resume_session_id=payload.get("resume_session_id"),
                        on_message=self._forwarder(tok))
