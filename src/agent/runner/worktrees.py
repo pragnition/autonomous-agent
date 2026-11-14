@@ -1,7 +1,7 @@
 """Worktrees inside the agent container: one local clone of core's git endpoint per project, and one repo per
 conversation that borrows its objects (`clone --reference`), inside that conversation's session folder. Each
-conversation's repo is a real `.git` directory its session user owns, so it can commit without touching root-owned
-files. The runner token rides in git's environment, never on a command line or in a repo's config."""
+conversation's repo is a real `.git` directory, so its commits stay in that folder and never touch the shared clone.
+The runner token rides in git's environment, never on a command line or in a repo's config."""
 
 from __future__ import annotations
 

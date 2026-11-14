@@ -1,4 +1,4 @@
-"""The agent's persona: a small character sheet rendered into every session's system prompt (spec §6.13).
+"""The agent's persona: a small character sheet rendered into every session's system prompt.
 
 Conscientiousness is pinned "very high" here, whatever the file says: lowering it costs safety and capability.
 """

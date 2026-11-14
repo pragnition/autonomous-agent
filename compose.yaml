@@ -1,6 +1,6 @@
 # The autonomous agent's stack. Host data lives under ${AGENT_DATA:-./data}:
-#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos runners clone)   mirrors/   cli/
-#   runner/ (core's runner tokens for the agent container)
+#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos the runner clones)   mirrors/   cli/
+#   runner/ (core's runner token for the agent container)
 #   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
 #   secrets/projects/<project>.env   (a project's app .env; core hands it to the agent as runner/projects/)
 # Claude never runs in core: Claude Code sessions run in the `agent` service below, a container of its own. The
@@ -70,7 +70,7 @@ services:
     command: [python, -m, agent, runner, --token-file, /run/agent/runner-token, --core, "http://core:8080",
               --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
               --git-email, "${AGENT_GIT_EMAIL:-}"]
-    # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables (spec v3 O4). Compose reads
+    # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables. Compose reads
     # the file as the laptop user, so it can stay 0600, and `docker compose exec agent` shells see the keys too.
     env_file: ["${AGENT_DATA:-./data}/secrets/agent.env"]
     volumes:

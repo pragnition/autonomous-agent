@@ -442,7 +442,7 @@ async def test_top_level_dm_does_not_continue_a_threaded_dm_conversation(convos,
     new = last_item(queue).conversation_id
     assert new != old
     assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (new,)).fetchone()[0] is None
-    await convos.handle_slack(dm_reply("5.1", "about that old thread"))
+    await convos.handle_slack(dm_reply("5.1", "about that thread"))
     assert last_item(queue).conversation_id == old
 
 

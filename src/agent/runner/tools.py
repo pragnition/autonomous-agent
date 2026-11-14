@@ -1,5 +1,5 @@
-"""core's tools as in-process SDK tools. The tool code runs in the runner's process, so the session token never
-reaches the session's OS user. Three tools do local work: work_on binds the conversation's project and makes its
+"""core's tools as in-process SDK tools. The tool code runs in the runner's process, so the session token stays
+out of the session's environment, files and command lines. Three tools do local work: work_on binds the conversation's project and makes its
 checkout, open_pr runs the checks and pushes the branch, and post_files reads files from the session folder."""
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path,
             return "call work_on(<project>) first"
         title = args.get("title") or "Agent changes"
         default_email = f"{agent_name}@users.noreply.github.com"
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # no token: the session user runs this
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # no token: committing needs none
         for key, default in (("GIT_AUTHOR_NAME", agent_name), ("GIT_COMMITTER_NAME", agent_name),
                              ("GIT_AUTHOR_EMAIL", default_email), ("GIT_COMMITTER_EMAIL", default_email)):
             env.setdefault(key, default)  # runner.main already set these from --git-email; this is only a fallback

@@ -44,7 +44,7 @@ class AgentSettings:
 
 @dataclass
 class LinearSettings:
-    public_url: str = ""           # Tailscale Funnel base URL for Linear's webhook and OAuth callback (spec v3 §8)
+    public_url: str = ""           # Tailscale Funnel base URL for Linear's webhook and OAuth callback
 
 
 @dataclass(frozen=True)

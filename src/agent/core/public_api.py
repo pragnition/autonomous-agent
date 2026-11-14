@@ -1,4 +1,4 @@
-"""core's public listener (spec v3 §8): the only thing Tailscale Funnel exposes, with exactly two routes.
+"""core's public listener: the only thing Tailscale Funnel exposes, with exactly two routes.
 
 `POST /linear/webhook` accepts a request only when its `Linear-Signature` is the HMAC-SHA256 of the raw body with
 the webhook secret and its `webhookTimestamp` is within a minute, answers at once (Linear waits 5 s at most) and

@@ -1,4 +1,4 @@
-"""Conversations: Slack and Linear messages become work items on the one work queue.
+"""Conversations: Slack and Linear messages become work items on the work queue.
 
 Code only routes. A Slack thread, a DM or a Linear issue is a conversation mapped to one agent session; each new
 message is the next turn of that session (the work queue never runs two turns of one conversation at once). A DM

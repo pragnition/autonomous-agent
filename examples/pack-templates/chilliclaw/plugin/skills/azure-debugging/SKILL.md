@@ -18,7 +18,7 @@ Your `az` login reaches these. **Dev is your staging environment.** Read UAT, ne
 | Foundry | `chilliclaw-dev-models-eastus2` (deployment `chilliclaw-dev-gpt-5.6-terra`), `chilliclaw-dev-classifier-models-eastus2` | `chilliclaw-uat-models-eastus2` |
 | Web | https://chilliclaw-dev.ncs.com.sg | |
 
-The older sandbox deployment lives in subscription `NCSgpt-Sandbox`, resource group `rg-chilliclaw` (`chilliclaw-gateway-web`, workspace `chilliclaw-aca-law`). Look there only when a report names it.
+A separate deployment lives in subscription `NCSgpt-Sandbox`, resource group `rg-chilliclaw` (`chilliclaw-gateway-web`, workspace `chilliclaw-aca-law`). Look there only when a report names it.
 
 Always pass `--subscription`. Keep the time window narrow, and save large output to a file and grep it.
 

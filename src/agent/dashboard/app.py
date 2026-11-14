@@ -1,4 +1,4 @@
-"""The dashboard's HTTP app (spec §6): JSON read models, a live stream per session, the kill switch, and the built
+"""The dashboard's HTTP app: JSON read models, a live stream per session, the kill switch, and the built
 web app with an index.html fallback for its client-side routes."""
 
 from __future__ import annotations

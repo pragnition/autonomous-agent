@@ -1,4 +1,4 @@
-"""GitHub and Linear tools for the agent (spec v2 §7). core holds the tokens; the agent gets text back."""
+"""GitHub and Linear tools for the agent. core holds the tokens; the agent gets text back."""
 
 from __future__ import annotations
 

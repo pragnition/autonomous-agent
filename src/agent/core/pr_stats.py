@@ -1,4 +1,4 @@
-"""PR outcome metrics (spec §6.11): review and merge times, human edits, and reverts within 30 days."""
+"""PR outcome metrics: review and merge times, human edits, and reverts within 30 days."""
 
 from __future__ import annotations
 

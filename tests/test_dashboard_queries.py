@@ -32,7 +32,7 @@ def set_created(conn, item_id, ts):
 
 
 def add_run(conn, item_id, *, task_id=None, account="badger", cost=0.5, ended="2026-11-13T10:05:00Z"):
-    conn.execute("INSERT INTO runs(id, task_id, role, status, account_code, outcome, turns, input_tokens, "
+    conn.execute("INSERT INTO runs(id, task_id, kind, status, account_code, outcome, turns, input_tokens, "
                  "output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_est, error, started_at, ended_at) "
                  "VALUES (?, ?, 'code', 'finished', ?, 'answered', 7, 10, 20, 30, 40, ?, NULL, ?, ?)",
                  (item_id, task_id, account, cost, ended, ended))

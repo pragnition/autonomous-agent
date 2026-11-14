@@ -24,7 +24,7 @@ class Status(StrEnum):
 
 TERMINAL = {Status.done, Status.merged, Status.closed, Status.cancelled}
 
-# v2 lifecycle (spec v2 §7): the agent decides the work; these only record where a task stands
+# The agent decides the work; these transitions only record where a task stands
 _LEGAL: dict[Status, set[Status]] = {
     Status.queued: {Status.working},
     Status.working: {Status.needs_input, Status.ready_for_review, Status.done, Status.failed, Status.queued},

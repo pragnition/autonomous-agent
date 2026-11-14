@@ -1,4 +1,4 @@
-"""KPIs (spec v3 §4): how fast tickets get picked up, turned into PRs and merged, and what that costs.
+"""KPIs: how fast tickets get picked up, turned into PRs and merged, and what that costs.
 
 Everything comes from what core already records: tasks, pr_stats (the PR poller), runs (cost estimates through
 the account proxy) and the `session_started` event a pull appends when a runner claims a turn.

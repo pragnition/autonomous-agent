@@ -1,4 +1,4 @@
-"""Who may use the dashboard (spec §4).
+"""Who may use the dashboard.
 
 Tailscale Serve is the only way in: it reaches core's dashboard port from the host, so requests arrive from the
 Docker gateway, and it names the person in Tailscale-User-Login. The headers are trusted only from those peers; the

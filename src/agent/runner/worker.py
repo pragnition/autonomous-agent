@@ -140,7 +140,7 @@ class Runner:
     async def _run_or_start_fresh(self, spec: RunSpec) -> RunResult:
         result = await self._run(spec)
         if result.outcome == "error" and spec.resume_session_id and not result.turns:
-            # The saved session is gone (the sandbox was rebuilt, or its files were lost); the thread still has
+            # The saved session is gone (the agent container was rebuilt, or its files were lost); the thread has
             # the history, so start a fresh session that reads it
             log.warning("resuming %s failed (%s); starting a fresh session", spec.resume_session_id, result.error)
             result = await self._run(dataclasses.replace(spec, resume_session_id=None, prompt=FRESH_NOTE + spec.prompt))

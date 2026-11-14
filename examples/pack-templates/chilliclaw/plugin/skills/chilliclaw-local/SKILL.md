@@ -17,7 +17,7 @@ Your worktree's setup already wrote `.env` from the team's own ChilliClaw `.env`
    ```bash
    docker ps --filter publish=5173 --format '{{.Names}}  {{.Label "com.docker.compose.project.working_dir"}}'
    ```
-   If it's another worktree's, don't stop it. Wait and check again every few minutes. If its working directory no longer exists, it's orphaned and you may remove it: `docker compose -p <project> down`.
+   If it's another worktree's, don't stop it. Wait and check again every few minutes. If its working directory is gone, it's orphaned and you may remove it: `docker compose -p <project> down`.
 2. **Build the config overlay**: local-lite, with model calls through the meter.
    ```bash
    mkdir -p .agent-out

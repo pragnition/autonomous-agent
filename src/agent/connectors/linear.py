@@ -1,4 +1,4 @@
-"""Linear: intake of issues labelled with the agent's name, and status sync back (spec §6.2)."""
+"""Linear: intake of issues labelled with the agent's name, and status sync back."""
 
 from __future__ import annotations
 

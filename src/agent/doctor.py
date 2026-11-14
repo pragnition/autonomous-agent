@@ -1,4 +1,4 @@
-"""`doctor`: one pass over everything the install needs, each check reported by name (spec §6.5)."""
+"""`doctor`: one pass over everything the install needs, each check reported by name."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ REQUIRED_CORE = ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "LINEAR_API_KEY", "GITHUB
 
 def required_core(config) -> tuple[str, ...]:
     required = REQUIRED_CORE
-    if config.linear.public_url:  # the Linear agent app (spec v3 §8)
+    if config.linear.public_url:  # the Linear agent app
         required += ("LINEAR_CLIENT_ID", "LINEAR_CLIENT_SECRET", "LINEAR_WEBHOOK_SECRET")
     return required
 

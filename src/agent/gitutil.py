@@ -1,4 +1,4 @@
-"""Git helpers shared by core's git host and the sandbox runner."""
+"""Git helpers shared by core's git host and the runner."""
 
 from __future__ import annotations
 

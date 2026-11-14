@@ -36,9 +36,9 @@ def test_scopes_dm():
 
 
 def test_private_channel_note_not_visible_elsewhere(store):
-    add(store, "Decided to drop the v1 upload API", scope="channels/C1")
+    add(store, "Decided to drop the bulk upload API", scope="channels/C1")
     other = scopes_for(SessionContext(project="p", channel_id="C2"))
-    assert "drop the v1" not in build_briefing(store, other, "upload api", 1000).text
+    assert "bulk upload" not in build_briefing(store, other, "upload api", 1000).text
 
 
 def test_empty_store_gives_empty_briefing(store):

@@ -1,4 +1,4 @@
-"""open_pr (spec v2 §7): the only way code reaches GitHub.
+"""open_pr: the only way code reaches GitHub.
 
 The runner runs the project's checks on the exact commit and pushes the branch to core's git endpoint; core then
 checks the branch name, that the commit is the branch's tip, and that the checks passed, before pushing it to

@@ -513,7 +513,7 @@ async def test_no_claude_cost_in_any_response(tmp_path, api, conn):
                                   source_ref=None, requester="ann", owner="ann")
     cid = add_conversation(conn, task_id=task.id)
     done = add_item(WorkQueue(conn), cid)
-    conn.execute("INSERT INTO runs(id, task_id, role, status, cost_usd_est, started_at, ended_at) "
+    conn.execute("INSERT INTO runs(id, task_id, kind, status, cost_usd_est, started_at, ended_at) "
                  "VALUES (?, ?, 'code', 'finished', 1.25, '2026-11-13T01:00:00Z', ?)", (done, task.id, db.utcnow()))
     conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (done,))
     write_transcript(tmp_path, done, [INIT, {"type": "ResultMessage", "subtype": "success", "num_turns": 1,

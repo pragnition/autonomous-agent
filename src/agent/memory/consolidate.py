@@ -1,4 +1,4 @@
-"""Consolidation: turning a finished task or thread into an episode note and updated facts (spec §6.15)."""
+"""Consolidation: turning a finished task or thread into an episode note and updated facts."""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def apply_consolidation(store: MemoryStore, output: dict, *, project: str, task_
 
     for u in output["upserts"]:
         scope = u["scope"]
-        # Phase 1: inferred notes about people and the team wait for human review (Phase 3), so they are dropped
+        # notes about people and the team are never inferred from a session, so they are dropped
         if scope not in allowed_scopes or scope == "team" or scope.startswith("people/"):
             continue
         note = NoteInput(scope=scope, kind=u["kind"], summary=clip_summary(clean(u["summary"])),

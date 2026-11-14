@@ -1,4 +1,4 @@
-"""ClaudeRunner: one run = one Agent SDK session, through the host's account proxy (spec §5.4, §6.3).
+"""ClaudeRunner: one run = one Agent SDK session, through the host's account proxy.
 
 The proxy pins each session to one account and returns that account's limits to it. When the account is rejected
 or disabled (seen by the watchdog, or as a 403/503, or a 429 while the proxy reports the account rejected), the run

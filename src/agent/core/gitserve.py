@@ -16,7 +16,7 @@ from aiohttp import web
 from agent.gitutil import GitError, credential_args, git
 
 PRE_RECEIVE = """#!/bin/sh
-# Installed by core: sandboxes may push only to refs/heads/{agent}/*, and never delete.
+# Installed by core: the agent may push only to refs/heads/{agent}/*, and never delete.
 while read old new ref; do
   case "$ref" in
     refs/heads/{agent}/*) ;;

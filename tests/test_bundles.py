@@ -58,12 +58,11 @@ def test_no_packs_dir_has_core_and_effortless_only(tmp_path):
 
 
 def test_version_stable_and_changes_with_pack_content(config_dir):
-    v1, d1 = build_bundle(config_dir)
-    v2, d2 = build_bundle(config_dir)
-    assert v1 == v2 and d1 == d2
+    version, data = build_bundle(config_dir)
+    assert build_bundle(config_dir) == (version, data)
     (config_dir / "packs" / "sample" / "plugin" / "skills" / "sample-debugging" / "SKILL.md").write_text(
         "---\nname: sample-debugging\n---\nchanged\n")
-    assert build_bundle(config_dir)[0] != v1
+    assert build_bundle(config_dir)[0] != version
 
 
 @pytest.mark.parametrize("skill", [p for d in SKILL_DIRS for p in sorted(d.glob("*/SKILL.md"))],

@@ -1,4 +1,4 @@
-# The shipped default persona (spec §6.13). An install overrides it with /data/config/persona.toml.
+# The shipped default persona. An install overrides it with /data/config/persona.toml.
 identity = "{name}, the team's senior engineer who happens to be an AI."
 
 [traits]                    # very low | low | moderate | high | very high

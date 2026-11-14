@@ -1,4 +1,4 @@
-"""Memory consolidation (v1 §6.15), run as a chore on the one agent queue (spec v2 §5).
+"""Memory consolidation, run as a chore on the work queue.
 
 When a task ends, or a conversation has been quiet for 24 h with notes jotted down, core queues a chore whose
 session returns JSON; core validates it and writes the notes. A failed chore leaves the task unconsolidated so

@@ -67,7 +67,7 @@ async def _client(conn, queue, parts, gate_ok=True, bind=no_bind, **kw):
 
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(gate_ok), tools=parts.router,
                          context_for=lambda item_id: SimpleNamespace(work_item_id=item_id, task_id=None, project=None),
-                         bundles=lambda: ("v1", b"bundle-bytes"),
+                         bundles=lambda: ("b1", b"bundle-bytes"),
                          on_result=on_result, on_files=on_files, bind=bind, pull_wait_s=0.2,
                          runs_dir=parts.runs, **kw)
     client = TestClient(TestServer(app))
@@ -247,7 +247,7 @@ async def test_files_upload_and_limit(api, parts):
 async def test_bundle_needs_runner_token(api, conn):
     tok = mint_token(conn, "runner", ttl_s=3600)
     r = await api.get("/agent/bundle", headers=bearer(tok))
-    assert r.status == 200 and r.headers["X-Bundle-Version"] == "v1" and await r.read() == b"bundle-bytes"
+    assert r.status == 200 and r.headers["X-Bundle-Version"] == "b1" and await r.read() == b"bundle-bytes"
     _, stok = await pull_one(api)
     assert (await api.get("/agent/bundle", headers=bearer(stok))).status == 401
 

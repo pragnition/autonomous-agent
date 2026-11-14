@@ -77,8 +77,8 @@ async def test_dm_turn_end_to_end(app, api):
     tok = mint_token(app.conn, "runner", ttl_s=60)
     body = await (await api.post("/agent/pull", headers=bearer(tok))).json()
     item, session = body["work_item"], body["session_token"]
-    # A DM has no project, but with profiles gone every session gets the full tool set by tier alone, so it
-    # isn't missing anything a project-bound session would have.
+    # A DM has no project, but tools are offered by tier alone, so it isn't missing anything a project-bound
+    # session would have.
     assert "status" in {t["name"] for t in body["tools"]}
     r = await api.post("/agent/tool", json={"name": "status", "args": {}}, headers=bearer(session))
     assert "running: 1" in (await r.json())["text"]
@@ -87,7 +87,7 @@ async def test_dm_turn_end_to_end(app, api):
                    headers=bearer(session))
     assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": None, "text": "Nothing else is running.",
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
-    run = app.conn.execute("SELECT role, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
+    run = app.conn.execute("SELECT kind, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
     assert tuple(run) == ("turn", 2, "done")
 
 

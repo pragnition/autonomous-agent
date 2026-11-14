@@ -1,4 +1,4 @@
-"""memory.db: the agent's long-term memory (spec §6.15).
+"""memory.db: the agent's long-term memory.
 
 Notes, an immutable version row per change, an FTS5 index kept in the same transaction, and the inbox of raw
 notes from agents.

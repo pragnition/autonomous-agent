@@ -1,4 +1,4 @@
-"""Which memory scopes a session may read (spec §6.15). Enforced here in code, never by the prompt."""
+"""Which memory scopes a session may read. Enforced here in code, never by the prompt."""
 
 from __future__ import annotations
 

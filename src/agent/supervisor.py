@@ -1,4 +1,4 @@
-"""The supervisor's watchdog (spec §6.12): health-checks core and speaks up, independently of core."""
+"""The supervisor's watchdog: health-checks core and speaks up, independently of core."""
 
 from __future__ import annotations
 

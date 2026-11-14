@@ -1,4 +1,4 @@
-"""Linear agent sessions (spec v3 §8): a Linear webhook is just another way a message reaches Claude Code.
+"""Linear agent sessions: a Linear webhook is one more way a message reaches Claude Code.
 
 Code acks at once (Linear marks a session unresponsive after about 10 s) and hands the raw event to the agent.
 Follow-ups in the same Linear session resume the same Claude session. Everything else (reading the issue, picking

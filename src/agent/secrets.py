@@ -1,5 +1,5 @@
 """Secrets come from the service's own mounted file, into memory only — never os.environ, which the SDK
-passes on to every agent process (spec §6.9 H2)."""
+passes on to every agent process."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""core's tools for the general agent (spec v2 §7): where the guarantees live.
+"""core's tools for the agent: where the guarantees live.
 
 Every call arrives with a session token; core resolves it to a ToolContext (conversation, project and the actor
 whose message started the turn). Tiers come from the actor, never from the model's arguments,
@@ -66,7 +66,7 @@ def schema(required: dict[str, str] | None = None, optional: dict[str, str] | No
 
 
 def conversation_scopes(channel: str | None, project: str | None, actor: str | None, packs: dict) -> list[str]:
-    """Memory scopes for a conversation (v1 §6.15): a DM sees the person's notes, a channel its own."""
+    """Memory scopes for a conversation: a DM sees the person's notes, a channel its own."""
     if channel and channel.startswith("D") and actor:
         sctx = SessionContext(dm_person=actor, person_projects=list(packs))
     elif channel:
@@ -244,8 +244,7 @@ class AgentToolRouter:
                      s({"text": "string"}, {"about": "string"}), "act"), self._remember)
 
     async def _post_files(self, ctx, args) -> ToolReply:
-        return ToolReply("post_files is handled by the sandbox runner, which reads the files from your session "
-                         "folder")
+        return ToolReply("post_files is handled by the runner, which reads the files from your session folder")
 
     async def _work_on(self, ctx, args) -> ToolReply:
         return ToolReply("work_on is handled by the runner")
@@ -332,7 +331,7 @@ class AgentToolRouter:
 
     async def _status(self, ctx, args) -> ToolReply:
         paused = db.get_setting(self.conn, "paused", "0") == "1"
-        # every item runs on the one queue, so each is named by its conversation's project ("-" when unbound)
+        # each running item is named by its conversation's project ("-" when unbound)
         running = self.conn.execute("SELECT COALESCE(c.project, '-'), w.kind FROM work_items w LEFT JOIN "
                                     "conversations c ON c.id = w.conversation_id WHERE w.status = 'claimed' "
                                     "ORDER BY w.created_at, w.rowid").fetchall()

@@ -36,7 +36,7 @@ def pr(conn, tid, opened, merged=None):
 
 
 def run(conn, rid, tid, cost):
-    conn.execute("INSERT INTO runs(id, task_id, role, status, cost_usd_est, started_at, ended_at) "
+    conn.execute("INSERT INTO runs(id, task_id, kind, status, cost_usd_est, started_at, ended_at) "
                  "VALUES (?, ?, 'code', 'finished', ?, ?, ?)", (rid, tid, cost, at("10:00"), at("14:00")))
 
 

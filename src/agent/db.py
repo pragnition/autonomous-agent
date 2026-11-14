@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status);
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     task_id TEXT REFERENCES tasks(id),
-    role TEXT NOT NULL,
+    kind TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'running',
     session_id TEXT,
     account_code TEXT,

@@ -1,4 +1,4 @@
-"""Logging a CLI in with a device code (spec v2 §7): code-driven; the model only asks."""
+"""Logging a CLI in with a device code: code-driven; the model only asks."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class DeviceCodeLogin:
 
     def __init__(self, slack, *, config, rules: dict, exec_fn=asyncio.create_subprocess_exec,
                  run_as: int | None = None):
-        """run_as: the uid the login runs as, so the agent container (open mode) owns and can refresh it."""
+        """run_as: the uid the login runs as, so the agent container owns and can refresh it."""
         self.slack, self.config, self.rules, self.exec_fn, self.run_as = slack, config, rules, exec_fn, run_as
         self.pending: set[asyncio.Task] = set()
 

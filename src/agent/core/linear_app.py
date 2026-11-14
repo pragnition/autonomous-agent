@@ -1,4 +1,4 @@
-"""The agent's Linear app (spec v3 §8): installed with actor=app, so people can delegate issues to it and its own
+"""The agent's Linear app: installed with actor=app, so people can delegate issues to it and its own
 Linear actions show as the agent.
 
 Install: an admin gets the authorize URL (single-use `state`, 15 minutes); Linear redirects to the public callback

@@ -38,7 +38,7 @@ CMD ["python", "-m", "agent", "core"]
 FROM app AS supervisor
 CMD ["python", "-m", "agent", "supervisor"]
 
-# The open agent container (spec v3 O3): Claude Code sessions with a full development environment.
+# The agent container: Claude Code sessions with a full development environment.
 # Bash everywhere (models write bash), sudo for installing what a task needs, gh and az for the agent's own use.
 # To test what it builds end to end: Docker (the CLI; the daemon is the stack's own `docker` service) to run a
 # project's app, just and bun for projects that use them, and a browser: Playwright's Chromium, driven with

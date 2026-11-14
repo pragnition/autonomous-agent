@@ -1,4 +1,4 @@
-"""What a session starts with (spec v2 §6): the work item payload a runner turns into a Claude Code session.
+"""What a session starts with: the work item payload a runner turns into a Claude Code session.
 
 A short system prompt from config (or the shipped default), the persona for Slack turns only, a capped memory
 briefing, the model and budgets, the checkout to prepare and the folder to work in. Sessions with a checkout also

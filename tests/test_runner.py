@@ -99,7 +99,7 @@ class FakeLink:
         self.results.append(result)
 
     async def bundle(self):
-        return "v1", bundle_bytes()
+        return "b1", bundle_bytes()
 
 
 class FakeClaude:
@@ -155,10 +155,9 @@ async def test_runner_loads_core_effortless_and_all_pack_plugins(tmp_path, workt
     assert [p.name for p in plugins] == ["core", "effortless", "a", "b"]
 
 
-async def test_runner_runs_more_than_eight_conversations(tmp_path, worktrees):
-    """Open mode has no SessionUsers (an OS user per conversation, capped at 8): handle() must let more than 8
-    conversations run their Claude session at once. 10 fake items block inside claude.run() until released, and
-    all 10 must be in flight together — the old SessionUsers(8) would raise on the 9th concurrent acquire()."""
+async def test_runner_runs_ten_conversations_at_once(tmp_path, worktrees):
+    """The runner runs as many conversations at once as core hands it (10 by default). 10 fake items block inside
+    claude.run() until released, and all 10 must be in flight together."""
     n = 10
     entered: list[str] = []
     all_in = asyncio.Event()

@@ -66,7 +66,7 @@ async def test_rejects_main_tags_and_deletes(githost_server, tmp_path):
     assert (await git_async(tmp_path, "clone", "-q", githost_server, "work")).returncode == 0
     commit(work, "b.txt")
     assert (await git_async(work, "push", "-q", "origin", "HEAD:refs/heads/main")).returncode != 0
-    assert (await git_async(work, "push", "-q", "origin", "HEAD:refs/tags/v1")).returncode != 0
+    assert (await git_async(work, "push", "-q", "origin", "HEAD:refs/tags/release")).returncode != 0
     assert (await git_async(work, "push", "-q", "origin", "HEAD:refs/heads/agent/t1-x")).returncode == 0
     assert (await git_async(work, "push", "-q", "origin", ":refs/heads/agent/t1-x")).returncode != 0
 

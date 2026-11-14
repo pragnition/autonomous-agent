@@ -1,4 +1,4 @@
-"""core (spec v2 §4): the identity side. It holds every credential, runs only our code and never runs Claude.
+"""core: the identity side. It holds every credential, runs only our code and never runs Claude.
 
 It turns Slack and Linear messages into work items, serves the agent API and the git endpoint the agent
 container pulls from, and carries the guarantees in its tools.
@@ -243,14 +243,14 @@ class CoreApp:
         path = self.data_dir / "mirrors" / project if project else None
         return path if path and path.exists() else None
 
-    # results from sandboxes
+    # results from the runner
 
     def _record_run(self, item: WorkItem, result: dict) -> None:
         convo = self.conn.execute("SELECT task_id FROM conversations WHERE id = ?",
                                   (item.conversation_id,)).fetchone() if item.conversation_id else None
         now = db.utcnow()
         self.conn.execute(
-            "INSERT OR REPLACE INTO runs(id, task_id, role, status, session_id, account_code, forks, outcome, "
+            "INSERT OR REPLACE INTO runs(id, task_id, kind, status, session_id, account_code, forks, outcome, "
             "turns, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_est, transcript_path, "
             "error, started_at, ended_at) VALUES (?, ?, ?, 'finished', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (item.id, convo["task_id"] if convo else None, item.kind,

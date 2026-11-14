@@ -17,7 +17,7 @@ NOW = datetime(2026, 11, 13, 12, tzinfo=UTC)
 
 class FakePayloads:
     def chore(self, prompt, schema):
-        return {"text": prompt, "structured": schema, "profile": "general"}
+        return {"text": prompt, "structured": schema}
 
 
 @pytest.fixture
@@ -119,7 +119,7 @@ def idle_thread(conn, memory, last_active, with_note=True):
     conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (last_active, cid))
     item = WorkQueue(conn).enqueue(cid, "turn", {"text": "x"})
     if with_note:
-        memory.add_inbox(item, "alice", "channel", "We agreed to drop the v1 upload API")
+        memory.add_inbox(item, "alice", "channel", "We agreed to drop the bulk upload API")
     return cid
 
 
@@ -128,8 +128,8 @@ async def test_idle_thread_with_notes_consolidated_once(env):
     cid = idle_thread(conn, memory, "2026-11-12T08:00:00Z")
     assert svc.sweep_threads(NOW) == 1
     assert svc.sweep_threads(NOW) == 0
-    out = {"episode": {"summary": "Upload API discussion", "body": "Agreed to drop v1."}, "upserts": [
-        {"scope": "channels/C1", "kind": "fact", "summary": "v1 upload API is being dropped", "body": "b"}]}
+    out = {"episode": {"summary": "Upload API discussion", "body": "Agreed to drop the bulk upload API."}, "upserts": [
+        {"scope": "channels/C1", "kind": "fact", "summary": "The bulk upload API is being dropped", "body": "b"}]}
     await finish(svc, queue, chores(conn)[0]["id"], {"structured": out})
     assert sorted(n.kind for n in memory.candidates(["channels/C1"])) == ["episode", "fact"]
     assert conn.execute("SELECT consolidated_at FROM conversations WHERE id = ?", (cid,)).fetchone()[0] is not None
