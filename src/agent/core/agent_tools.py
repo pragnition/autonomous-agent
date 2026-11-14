@@ -28,6 +28,9 @@ log = logging.getLogger(__name__)
 TIER_ORDER = {"read": 0, "act": 1, "admin": 2}
 KINDS = ("feature", "bug", "chore")
 NOT_AVAILABLE = "not available here"
+SLACK_READ_METHODS = ("conversations.history", "conversations.replies", "conversations.list", "conversations.info",
+                      "users.info", "users.list", "pins.list", "bookmarks.list")
+SLACK_READ_CHARS = 20_000
 
 
 @dataclass
@@ -237,6 +240,10 @@ class AgentToolRouter:
         reg(ToolSpec("read_thread", "Read this conversation's Slack thread, or in a DM chat its messages so far "
                                     "(oldest first).",
                      s(optional={"limit": "integer"}), "read"), self._read_thread)
+        reg(ToolSpec("slack_read", "Read from Slack with core's bot token: one Web API call, with params as Slack "
+                                   f"documents them. Methods: {', '.join(SLACK_READ_METHODS)}. Replies over "
+                                   f"{SLACK_READ_CHARS} characters are cut; page with limit and cursor.",
+                     s({"method": "string"}, {"params": "object"}), "read"), self._slack_read)
         reg(ToolSpec("recall", "Search your memory; returns ids and one-line summaries.",
                      s({"query": "string"}, {"limit": "integer"}), "read"), self._recall)
         reg(ToolSpec("read_memory", "Read one memory note by id.", s({"id": "string"}), "read"), self._read_memory)
@@ -418,6 +425,25 @@ class AgentToolRouter:
             who = person.key if person else ("agent" if m.get("bot_id") else m.get("user", "someone"))
             lines.append(f"{who}: {m.get('text', '')}")
         return ToolReply("\n".join(lines) or "the thread is empty")
+
+    async def _slack_read(self, ctx, args) -> ToolReply:
+        method = str(args.get("method") or "")
+        if method not in SLACK_READ_METHODS:
+            return ToolReply(f"slack_read can't call '{method}'. Methods: {', '.join(SLACK_READ_METHODS)}")
+        params = args.get("params") or {}
+        if not isinstance(params, dict):
+            return ToolReply("params must be an object")
+        # a query string takes strings and numbers; Slack reads 1/0 as true/false and comma lists as lists
+        query = {k: ("1" if v else "0") if isinstance(v, bool) else ",".join(map(str, v)) if isinstance(v, list)
+                 else v if isinstance(v, (str, int, float)) else json.dumps(v)
+                 for k, v in params.items() if v is not None}
+        resp = await self.slack.api_call(method, http_verb="GET", params=query)
+        # scrubbed before the cut, so a cut never lands inside a secret
+        text = scrub(json.dumps(getattr(resp, "data", resp)), self.secret_values)
+        if len(text) > SLACK_READ_CHARS:
+            text = (text[:SLACK_READ_CHARS] + f"\n[truncated: {len(text)} characters in all; ask for less with "
+                    "limit, or page with cursor]")
+        return ToolReply(text)
 
     async def _recall(self, ctx, args) -> ToolReply:
         hits = self._box(ctx).recall(args.get("query", ""), int(args.get("limit") or 5))

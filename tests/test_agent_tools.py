@@ -1,4 +1,5 @@
 import dataclasses
+import json
 
 import pytest
 
@@ -331,6 +332,46 @@ async def test_read_thread_in_a_dm_reads_the_chat_since_it_started(router, conn)
     ]
     assert (await router.call(ctx, "read_thread", {})).text == (
         "ann: login yourself to azure cli\nagent: here's the device code\nann: done\nagent: logged in")
+
+
+class SlackApi(FakeSlack):
+    """Answers slack_read's calls: each method's canned response, and every call it was asked for."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self.answers, self.calls = answers, []
+
+    async def api_call(self, method, *, http_verb="POST", params=None):
+        self.calls.append((method, http_verb, params))
+        return self.answers[method]
+
+
+async def test_slack_read_calls_an_allowed_method(router, conn):
+    router.slack = SlackApi({"conversations.history": {"ok": True, "messages": [{"ts": "1.0", "text": "hi"}]}})
+    ctx = ctx_for(router, actor=None)  # a read-tier session gets it too
+    reply = await router.call(ctx, "slack_read", {"method": "conversations.history",
+                                                  "params": {"channel": "C9", "limit": 5, "inclusive": True}})
+    assert json.loads(reply.text) == {"ok": True, "messages": [{"ts": "1.0", "text": "hi"}]}
+    assert router.slack.calls == [("conversations.history", "GET", {"channel": "C9", "limit": 5, "inclusive": "1"})]
+    assert "slack_read" in {t["name"] for t in router.manifest(ctx)}
+
+
+async def test_slack_read_refuses_other_methods(router, ctx_member):
+    router.slack = SlackApi({})
+    text = (await router.call(ctx_member, "slack_read", {"method": "chat.postMessage",
+                                                         "params": {"channel": "C9", "text": "hi"}})).text
+    assert "chat.postMessage" in text and "conversations.history" in text and "bookmarks.list" in text
+    assert router.slack.calls == []
+
+
+async def test_slack_read_truncates_big_replies_after_scrubbing(router, ctx_member):
+    messages = [{"ts": f"{i}.0", "text": "x" * 100} for i in range(400)]
+    messages.insert(0, {"ts": "0.5", "text": "the key is SUPERSECRETVALUE"})
+    router.slack = SlackApi({"conversations.replies": {"ok": True, "messages": messages}})
+    text = (await router.call(ctx_member, "slack_read", {"method": "conversations.replies",
+                                                         "params": {"channel": "C9", "ts": "0.5"}})).text
+    assert len(text) < 20_500 and "[truncated" in text
+    assert "SUPERSECRETVALUE" not in text and "[redacted]" in text
 
 
 async def test_memory_tools(router, ctx_member):
