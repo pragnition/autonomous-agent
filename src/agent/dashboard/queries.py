@@ -231,14 +231,9 @@ def _json(text: str | None):
         return text
 
 
-COST_FIELDS = {"cost_usd", "cost_per_task", "cost_per_merged"}  # Claude Code's API-price estimates: not shown
-
-
 def _kpis_dict(k) -> dict:
     out = {}
     for f in dataclasses.fields(k):
-        if f.name in COST_FIELDS:
-            continue
         value = getattr(k, f.name)
         if isinstance(value, datetime):
             value = value.astimezone(UTC).strftime(FMT)

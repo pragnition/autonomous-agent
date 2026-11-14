@@ -25,7 +25,7 @@ doctor:
     docker compose exec core python -m agent doctor
     docker compose exec agent bash -lc 'gh auth status && az account show -o none && echo "ok    agent: gh and az logged in"'
 
-# KPIs: pickup, PR and merge-queue times, merge rate and cost (e.g. just kpis --days 30 --project sample)
+# KPIs: pickup, PR and merge times, queue wait and merge rate (e.g. just kpis --days 30 --project sample)
 kpis *args:
     docker compose exec core python -m agent kpis {{args}}
 

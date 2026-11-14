@@ -35,17 +35,10 @@ def pr(conn, tid, opened, merged=None):
                  "VALUES (?, 'o/r', 1, ?, ?, ?)", (tid, at(opened), at(merged) if merged else None, at(opened)))
 
 
-def run(conn, rid, tid, cost):
-    conn.execute("INSERT INTO runs(id, task_id, kind, status, cost_usd_est, started_at, ended_at) "
-                 "VALUES (?, ?, 'code', 'finished', ?, ?, ?)", (rid, tid, cost, at("10:00"), at("14:00")))
-
-
 @pytest.fixture
 def seeded(conn):
     task(conn, "T1"), started(conn, "T1", "10:05", queued="10:04"), pr(conn, "T1", "11:05", merged="13:05")
-    run(conn, "R1", "T1", 1.5)
     task(conn, "T2"), started(conn, "T2", "10:15", queued="10:14"), pr(conn, "T2", "12:15")
-    run(conn, "R2", "T2", 0.5)
     task(conn, "T3", source="slack", status="failed"), started(conn, "T3", "10:01", queued="10:00")
     return conn
 
@@ -57,26 +50,46 @@ def test_kpis_from_seeded_history(seeded):
     assert k.to_merge == Stat(1, 7200, 7200)
     assert k.queue_wait == Stat(3, 60, 60)
     assert (k.tasks, k.prs, k.merged, k.closed, k.reverted, k.failed, k.cancelled) == (3, 2, 1, 0, 0, 1, 0)
-    assert k.merge_rate == 0.5 and k.cost_usd == 2.0 and k.cost_per_merged == 1.5
+    assert k.merge_rate == 0.5
 
 
 def test_project_filter(seeded):
     seeded.execute("UPDATE tasks SET project = 'other' WHERE id = 'T2'")
     k = compute_kpis(seeded, since=SINCE, until=UNTIL, project="sample")
-    assert k.prs == 1 and k.tasks == 2 and k.cost_usd == 1.5
+    assert k.prs == 1 and k.tasks == 2 and k.merged == 1
 
 
 def test_empty_window_reports_na(conn):
     k = compute_kpis(conn, since=SINCE, until=UNTIL)
     assert k.pickup == k.to_pr == k.to_merge == k.queue_wait == Stat(0, None, None)
-    assert k.cost_per_task is None and k.cost_per_merged is None and k.merge_rate is None
+    assert k.merge_rate is None
     assert "n/a" in format_kpis(k)
 
 
-def test_runs_without_a_task_count_only_in_total(conn):
-    run(conn, "R9", None, 1.0)
-    assert compute_kpis(conn, since=SINCE, until=UNTIL).cost_usd == 1.0
-    assert compute_kpis(conn, since=SINCE, until=UNTIL, project="sample").cost_usd == 0
+async def test_no_claude_cost_anywhere_the_kpis_are_shown(seeded, tmp_path):
+    """The digest, the kpis tool and `just kpis` all print format_kpis: none of them shows a Claude cost."""
+    import dataclasses
+
+    from agent.core.agent_tools import AgentToolRouter
+    from agent.core.kpis import Kpis, register_kpi_tools
+    from agent.core.sessions import WorkQueue
+    from agent_fixtures import FakeNotifier, FakeSlack, make_config, make_pack
+
+    assert not {f.name for f in dataclasses.fields(Kpis)} & {"cost_usd", "cost_per_task", "cost_per_merged"}
+    for k in (compute_kpis(seeded, since=SINCE, until=UNTIL), compute_kpis(seeded, since=SINCE, until=SINCE)):
+        text = format_kpis(k)
+        assert "cost" not in text.lower() and "$" not in text
+    router = AgentToolRouter(seeded, config=make_config(tmp_path), packs={"sample": make_pack()},
+                             queue=WorkQueue(seeded), slack=FakeSlack(), notifier=FakeNotifier(), secret_values=[])
+    register_kpi_tools(router)
+    [spec] = [s for s in router.manifest(router_ctx()) if s["name"] == "kpis"]
+    assert "cost" not in spec["description"].lower()
+
+
+def router_ctx():
+    from agent.core.agent_tools import ToolContext
+    return ToolContext(work_item_id="W", conversation_id=None, project=None, actor="ann", tier="admin",
+                       unattended=False, task_id=None, channel=None, thread_ts=None)
 
 
 def test_format_duration():

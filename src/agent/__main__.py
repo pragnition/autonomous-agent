@@ -8,7 +8,7 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ["kpis"]:  # pickup, PR, merge-queue and cost numbers
+    if argv[:1] == ["kpis"]:  # pickup, PR and merge times, queue wait, merge rate
         from agent.core.kpis import main as show_kpis
         return show_kpis(argv[1:])
     if argv[:1] == ["runner"]:  # the agent container's runner
@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("core", help="run the core service: Slack, the work queue and pollers")
     sub.add_parser("runner", help="run in the agent container: the runner that works on core's queue")
-    sub.add_parser("kpis", help="show the KPIs: pickup, PR and merge-queue times, merge rate, cost")
+    sub.add_parser("kpis", help="show the KPIs: pickup, PR and merge times, queue wait, merge rate")
     sub.add_parser("supervisor", help="run the health watchdog")
     sub.add_parser("doctor", help="check config, secrets, the proxy, GitHub and Linear")
     sub.add_parser("stop", help="stop everything: pause new work and cancel what is running")

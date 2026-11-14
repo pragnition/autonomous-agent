@@ -179,7 +179,6 @@ class LiveStats:
     session_id: str | None = None
     tokens: dict = field(default_factory=zero_tokens)
     turns: int = 0
-    cost_usd: float | None = None
     done: bool = False
 
 
@@ -201,13 +200,12 @@ class _Totals:
         elif kind == "AssistantMessage" and record.get("message_id"):
             self.by_message[record["message_id"]] = tokens_of(record.get("usage"))
         elif kind == "ResultMessage":
-            cost = record.get("total_cost_usd")
             self.result = LiveStats(tokens=tokens_of(record.get("usage")), turns=int(record.get("num_turns") or 0),
-                                    cost_usd=float(cost) if isinstance(cost, (int, float)) else None, done=True)
+                                    done=True)
 
     def stats(self) -> LiveStats:
         if self.result is not None:
-            return LiveStats(self.session_id, dict(self.result.tokens), self.result.turns, self.result.cost_usd, True)
+            return LiveStats(self.session_id, dict(self.result.tokens), self.result.turns, True)
         tokens = zero_tokens()
         for usage in self.by_message.values():
             for key, value in usage.items():

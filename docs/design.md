@@ -333,15 +333,15 @@ merge times, human commits and lines, and reverts within 30 days, and moves the 
 
 ## KPIs, the activity log and the dashboard
 
-KPIs come from what core records: `tasks`, `pr_stats`, `runs` and the `session_started` event appended when a
-runner claims a turn.
+KPIs come from what core records: `tasks`, `pr_stats` and the `session_started` event appended when a runner
+claims a turn.
 
 - ticket to pickup (labelled Linear issues), pickup to PR, PR to merge, queue wait: median and p90;
 - tasks, PRs, merged, closed unmerged, reverted, failed, cancelled; merge rate.
 
 They are available as the `kpis` tool, `just kpis --days 30 --project <name>`, a daily digest in
-`[observability] digest_channel` at `digest_time`, and the dashboard. The text forms also print Claude Code's own
-per-run cost estimate; the dashboard leaves it out and shows money only from the model-call meter.
+`[observability] digest_channel` at `digest_time`, and the dashboard. None of them shows a Claude cost: the only
+spend shown anywhere is the apps' Azure AI Foundry spend, from the model-call meter.
 
 The activity log is the `events` table, append-only: task creation and status changes, `session_started`,
 `project_bound`, `files_posted`, `stop_all`, `resume_all`, `session_cancelled`, cap changes and cap hits. Each

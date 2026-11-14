@@ -352,7 +352,7 @@ async def test_digest_uses_local_time_and_posts_once(app):
     assert not await app.post_digest(datetime(2026, 11, 13, 0, 30, tzinfo=UTC))       # 08:30 in Singapore
     assert await app.post_digest(datetime(2026, 11, 13, 1, 10, tzinfo=UTC))
     [post] = [p for p in app.slack.posts if p["channel"] == "#agent-ops"]
-    assert "last 7 days" in post["text"]
+    assert "last 7 days" in post["text"] and "cost" not in post["text"].lower()
     assert not await app.post_digest(datetime(2026, 11, 13, 2, 0, tzinfo=UTC))
     again = CoreApp(config_dir=app.config_dir, data_dir=app.data_dir, secrets={}, slack=FakeSlack(), proxy=Proxy())
     again.config.observability.digest_channel = "#agent-ops"

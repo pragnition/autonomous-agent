@@ -197,7 +197,7 @@ def test_transcript_cache_follows_incrementally(tmp_path):
     with f.open("a") as fh:
         fh.write(partial[30:] + "\n" + json.dumps(RESULT) + "\n")
     stats, recent = cache.follow(f)
-    assert stats.done is True and stats.turns == 5 and stats.cost_usd == 0.0762
+    assert stats.done is True and stats.turns == 5 and not hasattr(stats, "cost_usd")
     assert [e["kind"] for e in recent][-2:] == ["text", "result"]
     assert recent[-2]["id"] == "8:0"
 

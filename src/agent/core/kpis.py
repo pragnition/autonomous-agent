@@ -1,7 +1,7 @@
-"""KPIs: how fast tickets get picked up, turned into PRs and merged, and what that costs.
+"""KPIs: how fast tickets get picked up, turned into PRs and merged, and how many of them get merged.
 
-Everything comes from what core already records: tasks, pr_stats (the PR poller), runs (cost estimates through
-the account proxy) and the `session_started` event a pull appends when a runner claims a turn.
+Everything comes from what core already records: tasks, pr_stats (the PR poller) and the `session_started` event
+a pull appends when a runner claims a turn. No Claude cost is computed or shown here.
 """
 
 from __future__ import annotations
@@ -41,9 +41,6 @@ class Kpis:
     reverted: int
     failed: int
     cancelled: int
-    cost_usd: float
-    cost_per_task: float | None
-    cost_per_merged: float | None
 
     @property
     def merge_rate(self) -> float | None:
@@ -109,19 +106,8 @@ def compute_kpis(conn: sqlite3.Connection, *, since: datetime, until: datetime, 
     reverted = count(pr_base + f"s.reverted_at >= ? AND s.reverted_at < ?{by_project}", lo, hi)
     failed = count(task_base + f" AND t.status = 'failed'{by_project}", lo, hi)
     cancelled = count(task_base + f" AND t.status = 'cancelled'{by_project}", lo, hi)
-
-    if project:
-        cost = count("SELECT COALESCE(SUM(r.cost_usd_est), 0) FROM runs r JOIN tasks t ON t.id = r.task_id "
-                     "WHERE r.ended_at >= ? AND r.ended_at < ? AND t.project = ?", lo, hi)
-    else:
-        cost = conn.execute("SELECT COALESCE(SUM(cost_usd_est), 0) FROM runs WHERE ended_at >= ? AND ended_at < ?",
-                            (lo, hi)).fetchone()[0]
-    merged_cost = count("SELECT COALESCE(SUM(r.cost_usd_est), 0) FROM runs r JOIN pr_stats s ON s.task_id = r.task_id "
-                        f"JOIN tasks t ON t.id = r.task_id WHERE s.merged_at >= ? AND s.merged_at < ?{by_project}",
-                        lo, hi)
     return Kpis(since, until, project, _stat(pickup), _stat(to_pr), _stat(to_merge), _stat(queue_wait),
-                tasks, prs, merged, closed, reverted, failed, cancelled, float(cost),
-                cost / tasks if tasks else None, merged_cost / merged if merged else None)
+                tasks, prs, merged, closed, reverted, failed, cancelled)
 
 
 def format_duration(seconds: float) -> str:
@@ -139,10 +125,6 @@ def _line(label: str, stat: Stat) -> str:
     return f"{label}: median {format_duration(stat.median_s)}, p90 {format_duration(stat.p90_s)} (n={stat.n})"
 
 
-def _money(value: float | None) -> str:
-    return "n/a" if value is None else f"${value:.2f}"
-
-
 def format_kpis(k: Kpis) -> str:
     days = max(1, round((k.until - k.since) / timedelta(days=1)))
     rate = "n/a" if k.merge_rate is None else f"{k.merge_rate:.0%}"
@@ -155,8 +137,6 @@ def format_kpis(k: Kpis) -> str:
         f"Tasks: {k.tasks} · PRs: {k.prs} · merged: {k.merged} · closed unmerged: {k.closed} · "
         f"reverted: {k.reverted} · failed: {k.failed} · cancelled: {k.cancelled}",
         f"Merge rate: {rate}",
-        f"Cost: {_money(k.cost_usd)} total · {_money(k.cost_per_task)} per task · "
-        f"{_money(k.cost_per_merged)} per merged PR",
     ])
 
 
@@ -173,8 +153,8 @@ def register_kpi_tools(router: AgentToolRouter) -> None:
                                                   project=project)))
 
     router.register(ToolSpec(
-        "kpis", "The agent's own KPIs: ticket-to-pickup, pickup-to-PR and PR-to-merge times, queue wait, merge rate "
-                "and cost, over the last `days` days (default 7), for one project or all.",
+        "kpis", "The agent's own KPIs: ticket-to-pickup, pickup-to-PR and PR-to-merge times, queue wait and merge "
+                "rate, over the last `days` days (default 7), for one project or all.",
         schema({}, {"days": "integer", "project": "string"}), "read"), kpis)
 
 
