@@ -80,7 +80,7 @@ def item(conversation_id="V-1", **payload_over):
 
 
 def make_runner(tmp_path, link, claude, **kw):
-    return Runner(link, claude, bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
+    return Runner(link, claude, bundles_dir=tmp_path / "bundles", claude_home=tmp_path / "claude",
                   scratch_root=tmp_path / "scratch", heartbeat_s=0.05, **kw)
 
 
@@ -89,7 +89,7 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path):
     await make_runner(tmp_path, link, claude).handle(item(), "tok", [])
     spec = claude.specs[0]
     assert spec.model == "claude-opus-5-5"
-    assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
+    assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "claude")
     assert spec.env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert spec.env["CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"] == "1"
     assert [p.name for p in spec.plugins] == ["core", "effortless", "a", "b"] and spec.system_prompt == "SYS"
@@ -288,6 +288,16 @@ async def test_extra_env_reaches_the_session(tmp_path):
     assert claude.specs[0].env["SAMPLE_TEST_USER"] == "tester@example.com"
 
 
+async def test_every_conversation_shares_one_claude_home(tmp_path):
+    """What the agent installs in its Claude home (skills, plugins, MCP servers) is there in every later session."""
+    link, claude = FakeLink(), FakeClaude()
+    runner = make_runner(tmp_path, link, claude)
+    await runner.handle(item(), "tok", [])
+    await runner.handle(item(conversation_id="V-2"), "tok", [])
+    assert [s.env["CLAUDE_CONFIG_DIR"] for s in claude.specs] == [str(tmp_path / "claude")] * 2
+    assert (tmp_path / "claude").is_dir()
+
+
 async def test_forced_env_keys_cannot_be_overridden(tmp_path):
     """CLAUDE_CONFIG_DIR and the function-hooks flag are forced last: neither the container's extra env nor a
     pack's test secrets can override them, even when both try to."""
@@ -297,7 +307,7 @@ async def test_forced_env_keys_cannot_be_overridden(tmp_path):
     await runner.handle(item(test_secrets={"CLAUDE_CONFIG_DIR": "/from-test-secrets",
                                            "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "0"}), "tok", [])
     spec = claude.specs[0]
-    assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
+    assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "claude")
     assert spec.env["CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"] == "1"
 
 

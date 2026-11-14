@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def make_runner(token: str) -> Runner:
         return Runner(CoreLink(args.core, token), claude, bundles_dir=root / "bundles",
-                      sessions_root=root / "sessions", scratch_root=root / "scratch", extra_env=env,
+                      claude_home=root / "claude", scratch_root=root / "scratch", extra_env=env,
                       env_files=[shared / "linear.env"], memory_dir=root / "memory")
 
     async def run() -> None:

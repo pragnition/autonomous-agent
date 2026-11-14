@@ -49,8 +49,10 @@ class ClaudeRunner:
 
     def _env(self, spec: RunSpec) -> dict[str, str]:
         redacted = {k: "" for k in os.environ if SECRETISH.search(k) and k not in PROXY_VARS}
+        # The proxy signs each session in as some teammate's seat, so that account's claude.ai connectors (their
+        # mail, their drive) aren't the agent's; the MCP servers the agent adds itself still load
         return {**redacted, **spec.env, "ANTHROPIC_BASE_URL": self.base_url,
-                "CLAUDE_CODE_OAUTH_TOKEN": PLACEHOLDER_TOKEN}
+                "CLAUDE_CODE_OAUTH_TOKEN": PLACEHOLDER_TOKEN, "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}
 
     def build_options(self, spec: RunSpec, *, session_id: str | None, resume: str | None = None,
                       fork: bool = False) -> ClaudeAgentOptions:
@@ -59,10 +61,11 @@ class ClaudeRunner:
         return ClaudeAgentOptions(
             model=spec.model, max_turns=spec.max_turns, cwd=str(spec.cwd),
             system_prompt=spec.system_prompt, env=self._env(spec),
-            setting_sources=["project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
+            # "user" is the agent's own Claude home (CLAUDE_CONFIG_DIR): the skills, plugins and MCP servers it adds
+            setting_sources=["user", "project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
             session_id=session_id, resume=resume, fork_session=fork,
-            settings=json.dumps(spec.settings) if spec.settings else None, strict_mcp_config=True)
+            settings=json.dumps(spec.settings) if spec.settings else None)
 
     async def interrupt(self, run_id: str) -> None:
         self._stopped.add(run_id)

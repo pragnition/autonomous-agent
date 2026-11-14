@@ -58,11 +58,13 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
 
 
 class Runner:
-    def __init__(self, link, claude, *, bundles_dir: Path, sessions_root: Path, scratch_root: Path,
+    def __init__(self, link, claude, *, bundles_dir: Path, claude_home: Path, scratch_root: Path,
                  heartbeat_s: float = 15, max_parallel: int = 32, extra_env: dict[str, str] | None = None,
                  env_files: list[Path] = (), memory_dir: Path | None = None):
         self.link, self.claude = link, claude
-        self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
+        self.bundles_dir, self.scratch_root = Path(bundles_dir), Path(scratch_root)
+        # the agent's own Claude home, shared by every session: the skills, plugins and MCP servers it installs stay
+        self.claude_home = Path(claude_home)
         self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel  # core's Gate is the real limit; this is a safety bound
         self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
         self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
@@ -150,8 +152,7 @@ class Runner:
         plugins = await self._bundle()
         session = self.scratch_root / convo  # the conversation's own folder, the same every turn; its clones live here
         session.mkdir(parents=True, exist_ok=True)
-        sessions = self.sessions_root / convo
-        sessions.mkdir(parents=True, exist_ok=True)
+        self.claude_home.mkdir(parents=True, exist_ok=True)
         tools = remote_sdk_tools(manifest, self.link, tok, session_dir=session)
         env = {**self.extra_env, **read_env_files(self.env_files)}
         settings = {}
@@ -165,7 +166,7 @@ class Runner:
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,
                        # plugins/effortless/hooks) are forced last, so a pack's test secret or the container's
                        # extra env can never override them
-                       env={**env, **(payload.get("test_secrets") or {}), "CLAUDE_CONFIG_DIR": str(sessions),
+                       env={**env, **(payload.get("test_secrets") or {}), "CLAUDE_CONFIG_DIR": str(self.claude_home),
                             "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, settings=settings,

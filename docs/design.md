@@ -84,7 +84,7 @@ Everything lives under `/var/agent`, the `agentwork` volume, which survives rebu
 |---|---|
 | `clones/<project>` | one shared clone per project, from core's git endpoint |
 | `scratch/<conversation>/` | the conversation's session folder; its checkout is `scratch/<conversation>/<project>` |
-| `sessions/<conversation>/` | the session's `CLAUDE_CONFIG_DIR`, so the next turn can resume it |
+| `claude/` | the agent's Claude home (`CLAUDE_CONFIG_DIR`, also `~/.claude`), shared by every session: its sessions, so the next turn can resume, and the skills, plugins and MCP servers it installs itself |
 | `memory/` | Claude Code's auto memory, shared by every session |
 | `transcripts/<work item>.jsonl` | the runner's own transcript of each turn |
 | `bundles/<version>/` | the core plugin, the effortless plugin and every pack's plugin |

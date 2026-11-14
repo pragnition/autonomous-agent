@@ -76,8 +76,12 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && printf '.agent-progress.md\n.agent-out/\n' > /etc/gitignore-agent \
  && git config --system core.excludesFile /etc/gitignore-agent \
  && mkdir -p /var/agent && chown agent /var/agent \
+ && ln -s "$(python -c 'import claude_agent_sdk, os; print(os.path.dirname(claude_agent_sdk.__file__))')/_bundled/claude" \
+      /usr/local/bin/claude \
+ && ln -s /var/agent/claude /home/agent/.claude \
  && chmod -R a+rX /app   # COPY keeps the host's file modes; the agent user must read the code
-ENV SHELL=/bin/bash AZURE_CONFIG_DIR=/data/cli/azure DOCKER_HOST=tcp://127.0.0.1:2375
+# The agent's own Claude home, on the work volume: the skills, plugins and MCP servers it installs stay
+ENV SHELL=/bin/bash AZURE_CONFIG_DIR=/data/cli/azure DOCKER_HOST=tcp://127.0.0.1:2375 CLAUDE_CONFIG_DIR=/var/agent/claude
 USER agent
 CMD ["python", "-m", "agent", "runner"]
 

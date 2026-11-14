@@ -102,7 +102,8 @@ async def test_options_env_and_settings(tmp_path, monkeypatch):
     assert o.env["TZ"] == "Asia/Singapore"
     assert o.env["GITHUB_WRITE_TOKEN"] == "" and o.env["SLACK_BOT_TOKEN"] == ""
     assert "HARMLESS_SETTING" not in o.env
-    assert o.setting_sources == ["project"]
+    assert o.setting_sources == ["user", "project"]
+    assert o.env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
     assert (o.model, o.max_turns) == ("claude-opus-5-5", 10)
     assert o.plugins == [{"type": "local", "path": "/plugins/core"}]
     assert o.session_id == "00000000-0000-4000-8000-000000000001" and o.resume is None
@@ -224,10 +225,10 @@ async def test_external_interrupt(tmp_path):
     assert (await task).outcome == "interrupted"
 
 
-async def test_strict_mcp_config_so_plugin_servers_are_not_auto_loaded(tmp_path):
+async def test_mcp_servers_the_agent_adds_itself_are_loaded(tmp_path):
     runner, clients = make_runner(tmp_path, [[result()]])
     await runner.run(spec(tmp_path))
-    assert clients[0].options.strict_mcp_config is True
+    assert clients[0].options.strict_mcp_config is False
 
 
 async def test_interrupt_before_run_returns_interrupted(tmp_path):
