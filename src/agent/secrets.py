@@ -3,6 +3,7 @@ passes on to every agent process."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -17,7 +18,9 @@ def load_secrets(path: Path | str) -> dict[str, str]:
             continue
         key, _, value = line.removeprefix("export ").partition("=")
         value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+        if value[:1] in ("\"", "'") and value[0] in value[1:]:   # quoted: keep what's inside, drop the rest
+            value = value[1:value.index(value[0], 1)]
+        else:                                                   # unquoted: " #" starts a comment
+            value = re.split(r"\s+#", value, maxsplit=1)[0]
         out[key.strip()] = value
     return out
