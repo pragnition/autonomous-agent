@@ -51,8 +51,8 @@ def worktrees(tmp_path, server):
 def bundle_bytes() -> bytes:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w:gz") as tar:
-        for name in ("plugins/core/.claude-plugin/plugin.json", "plugins/packs/a/.claude-plugin/plugin.json",
-                     "plugins/packs/b/.claude-plugin/plugin.json"):
+        for name in ("plugins/core/.claude-plugin/plugin.json", "plugins/effortless/.claude-plugin/plugin.json",
+                     "plugins/packs/a/.claude-plugin/plugin.json", "plugins/packs/b/.claude-plugin/plugin.json"):
             data = b"{}"
             info = tarfile.TarInfo(name)
             info.size = len(data)
@@ -144,15 +144,16 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
     assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / "V-1")
     assert spec.env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert git(spec.cwd, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
-    assert [p.name for p in spec.plugins] == ["core", "a", "b"] and spec.system_prompt == "SYS"
+    assert spec.env["CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"] == "1"
+    assert [p.name for p in spec.plugins] == ["core", "effortless", "a", "b"] and spec.system_prompt == "SYS"
     assert link.results[-1]["text"] == "all done" and link.results[-1]["session_id"] == "sess-1"
     assert link.results[-1]["outcome"] == "done" and link.results[-1]["cost_usd_est"] == 0.5
 
 
-async def test_runner_loads_core_and_all_pack_plugins(tmp_path, worktrees):
+async def test_runner_loads_core_effortless_and_all_pack_plugins(tmp_path, worktrees):
     runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
     plugins = await runner._bundle()
-    assert [p.name for p in plugins] == ["core", "a", "b"]
+    assert [p.name for p in plugins] == ["core", "effortless", "a", "b"]
 
 
 async def test_runner_runs_more_than_eight_conversations(tmp_path, worktrees):

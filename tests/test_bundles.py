@@ -31,11 +31,13 @@ def names(data: bytes) -> set[str]:
         return set(tar.getnames())
 
 
-def test_bundle_has_core_and_pack_plugins(config_dir):
+def test_bundle_has_core_effortless_and_pack_plugins(config_dir):
     _, data = build_bundle(config_dir)
     files = names(data)
     assert "plugins/core/.claude-plugin/plugin.json" in files
     assert "plugins/core/skills/debugging/SKILL.md" in files
+    assert "plugins/effortless/.claude-plugin/plugin.json" in files
+    assert "plugins/effortless/hooks/register.tsx" in files
     assert "plugins/packs/sample/skills/sample-debugging/SKILL.md" in files
 
 
@@ -48,9 +50,10 @@ def test_bundle_has_every_pack_plugin(tmp_path):
     assert "plugins/packs/b/skills/b-debugging/SKILL.md" in files
 
 
-def test_no_packs_dir_has_only_core(tmp_path):
+def test_no_packs_dir_has_core_and_effortless_only(tmp_path):
     files = names(build_bundle(tmp_path)[1])
     assert "plugins/core/skills/debugging/SKILL.md" in files
+    assert "plugins/effortless/.claude-plugin/plugin.json" in files
     assert not any(f.startswith("plugins/packs") for f in files)
 
 

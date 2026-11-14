@@ -81,7 +81,8 @@ class Runner:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
                 tar.extractall(tmp, filter="data")
             tmp.rename(dest)
-        return [dest / "plugins" / "core", *sorted((dest / "plugins" / "packs").glob("*"))]
+        return [dest / "plugins" / "core", dest / "plugins" / "effortless",
+                *sorted((dest / "plugins" / "packs").glob("*"))]
 
     async def _workdir(self, convo: str, payload: dict) -> tuple[Path, Path | None, str]:
         """(cwd, checkout, note). The checkout, when the conversation has one, lives in its session folder at
@@ -192,7 +193,9 @@ class Runner:
         spec = RunSpec(run_id=item_id, prompt=note + payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
-                       env={"CLAUDE_CONFIG_DIR": str(sessions), **env, **(payload.get("test_secrets") or {})},
+                       # function hooks load the effortless plugin's code (plugins/effortless/hooks)
+                       env={"CLAUDE_CONFIG_DIR": str(sessions), "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1",
+                            **env, **(payload.get("test_secrets") or {})},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, resume_session_id=payload.get("resume_session_id"),
                        on_message=self._forwarder(tok))

@@ -1,6 +1,6 @@
-"""Config bundles for sandbox runners (spec v2 §5): the system prompt, the core plugin's skills and every pack's
-plugin — every session gets every pack's skills. Deterministic, so the version (a hash of the contents) changes
-only when they do."""
+"""Config bundles for the runner: the system prompt, the core plugin's skills, the effortless plugin (picks each
+prompt's reasoning effort) and every pack's plugin — every session gets every pack's skills. Deterministic, so the
+version (a hash of the contents) changes only when they do."""
 
 from __future__ import annotations
 
@@ -11,10 +11,13 @@ import tarfile
 from pathlib import Path
 
 CORE_PLUGIN = Path(__file__).parent.parent / "plugins" / "core"
+EFFORTLESS_PLUGIN = Path(__file__).parent.parent / "plugins" / "effortless"
 
 
 def _files(config_dir: Path) -> list[tuple[str, Path]]:
-    files = [(f"plugins/core/{p.relative_to(CORE_PLUGIN)}", p) for p in sorted(CORE_PLUGIN.rglob("*")) if p.is_file()]
+    files = []
+    for name, root in (("core", CORE_PLUGIN), ("effortless", EFFORTLESS_PLUGIN)):
+        files += [(f"plugins/{name}/{p.relative_to(root)}", p) for p in sorted(root.rglob("*")) if p.is_file()]
     packs_dir = config_dir / "packs"
     for pack_plugin in sorted(packs_dir.glob("*/plugin")) if packs_dir.is_dir() else []:
         if pack_plugin.is_dir():
