@@ -16,7 +16,7 @@ import logging
 import re
 import sqlite3
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime, timedelta
 
 from agent import db, events, tasks
@@ -24,6 +24,7 @@ from agent.connectors.linear import issue_link
 from agent.core.sessions import WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
 from agent.gitutil import branch_name
+from agent.scrub import scrub
 from agent.tasks import Status
 
 log = logging.getLogger(__name__)
@@ -100,9 +101,12 @@ class Conversations:
     def __init__(self, conn: sqlite3.Connection, *, config, packs: dict, queue: WorkQueue, slack, payloads,
                  notifier, bot_user_id: str | None, linear_poller=None,
                  person_name: Callable[[str], Awaitable[str | None]] = _nothing,
-                 permalink: Callable[[str, str], Awaitable[str | None]] = _nothing):
-        """person_name(key) and permalink(channel, ts) are core's cached Slack lookups, for each turn's first line."""
+                 permalink: Callable[[str, str], Awaitable[str | None]] = _nothing,
+                 secret_values: Iterable[str] = ()):
+        """person_name(key) and permalink(channel, ts) are core's cached Slack lookups, for each turn's first line.
+        secret_values are core's own, scrubbed from each turn's final reply before it is posted."""
         self.conn, self.config, self.packs, self.queue = conn, config, packs, queue
+        self.secret_values = list(secret_values)
         self.slack, self.payloads, self.notifier = slack, payloads, notifier
         self.bot_user_id, self.linear_poller = bot_user_id, linear_poller
         self.person_name, self.permalink = person_name, permalink
@@ -304,8 +308,7 @@ class Conversations:
         outcome = result.get("outcome", "done")
         text = (result.get("text") or "").strip()
         failed = outcome in FAILED_OUTCOMES
-        if failed:
-            text = FAILED_REPLY
+        text = FAILED_REPLY if failed else scrub(text, self.secret_values)
         # Saved before anything is awaited: the next turn can be claimed as soon as this one completed, and it
         # resumes whatever session the conversation has at that moment
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh

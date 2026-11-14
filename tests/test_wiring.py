@@ -245,6 +245,22 @@ async def test_on_files_uploads_to_the_conversation(app):
     assert json.loads(row["data"])["files"] == ["a.png"] and json.loads(row["data"])["slack"] is True
 
 
+async def test_core_scrubs_the_final_reply_and_the_files_comment(tmp_path):
+    """core's own secret values reach Conversations, so a turn's final reply and post_files' line of text are
+    scrubbed before they reach Slack."""
+    config = tmp_path / "config"
+    shutil.copytree(EXAMPLES, config)
+    app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={"LINEAR_API_KEY": "linear-key-0123456789"},
+                  slack=FakeSlack(), proxy=Proxy())
+    await app.conversations.handle_slack(dm_event("6.1", "what's the Linear key?"))
+    item_id = last_item_id(app)
+    await app.on_files(item_id, [("a.png", b"png")], "key: linear-key-0123456789")
+    assert app.slack.uploads[-1]["initial_comment"] == "key: [redacted]"
+    await app.on_result(app.queue.get(item_id), {"outcome": "done", "text": "it is linear-key-0123456789",
+                                                 "session_id": "sess-1"})
+    assert app.slack.posts[-1]["text"] == "it is [redacted]"
+
+
 async def test_on_files_without_a_thread_is_recorded_not_posted(app):
     app.conn.execute("INSERT INTO conversations(id, is_primary, created_at, last_active_at) "
                      "VALUES ('V-linear', 1, 'now', 'now')")

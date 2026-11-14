@@ -42,6 +42,7 @@ from agent.dashboard.app import make_dashboard_app
 from agent.dashboard.names import NAMES_FILE, AccountNames
 from agent.dashboard.transcript import make_scrubber
 from agent.persona import load_persona, render_persona
+from agent.scrub import scrub
 from agent.tasks import Task
 
 log = logging.getLogger("agent.core")
@@ -150,7 +151,8 @@ class CoreApp:
         self.conversations = Conversations(self.conn, config=self.config, packs=self.packs, queue=self.queue,
                                            slack=slack, payloads=self.payloads, notifier=self.notifier,
                                            bot_user_id=bot_user_id, linear_poller=self.linear_poller,
-                                           person_name=self.person_name, permalink=self.permalink)
+                                           person_name=self.person_name, permalink=self.permalink,
+                                           secret_values=self.secret_values)
         self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
                                       on_change=self.notifier.task_changed) if github_reader else None
         self.agent_app = make_agent_app(
@@ -266,6 +268,7 @@ class CoreApp:
         ctx = self.router.context_for(item_id)
         if not files:
             return False
+        text = scrub(text, self.secret_values)
         posted = bool(ctx.channel)
         if posted:
             await self.slack.files_upload_v2(channel=ctx.channel, thread_ts=ctx.thread_ts,

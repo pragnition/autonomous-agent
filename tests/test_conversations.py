@@ -381,6 +381,31 @@ async def test_on_result_posts_reply_and_session(convos, queue, slack, conn):
     assert convo(conn, "t8")["session_id"] == "sess-1"
 
 
+async def test_on_result_reply_is_scrubbed(conn, queue, slack, tmp_path):
+    """The session's final reply goes through the same scrub as every tool reply: configured secret values and
+    token patterns."""
+    convos = Conversations(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=queue,
+                           slack=slack, payloads=FakePayloads(), notifier=FakeNotifier(), bot_user_id="UBOT",
+                           secret_values=["SUPERSECRETVALUE"])
+    await convos.handle_slack(mention("t9", "what are the tokens?"))
+    item = queue.claim()
+    text = "the bot token is xoxb-1234567890-abcdefghij and the key is SUPERSECRETVALUE"
+    queue.complete(item.id, {"text": text})
+    await convos.on_result(queue.get(item.id), {"text": text, "outcome": "done"})
+    posted = slack.posts[-1]
+    assert posted["text"] == "the bot token is [redacted] and the key is [redacted]"
+    assert posted["blocks"] == [{"type": "markdown", "text": posted["text"]}]
+
+
+async def test_on_result_reply_without_configured_secrets_still_drops_token_patterns(convos, queue, slack):
+    await convos.handle_slack(mention("t9b", "and the GitHub one?"))
+    item = queue.claim()
+    text = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    queue.complete(item.id, {"text": text})
+    await convos.on_result(queue.get(item.id), {"text": text, "outcome": "done"})
+    assert slack.posts[-1]["text"] == "[redacted]"
+
+
 async def test_on_result_failure_posts_failed_reply(convos, queue, slack):
     await convos.handle_slack(mention("t10", "question"))
     item = queue.claim()

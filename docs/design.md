@@ -199,9 +199,9 @@ resumes the session that turn ended with.
 ### Results
 
 The runner reports the outcome, the session's final text, the session id and token counts. core records a row in
-`runs`, saves the session id on the conversation and posts the text in the thread as Markdown. A failed turn
-(error, timeout, turn limit, interrupted) gets a short failure reply, and its task, if any, becomes `failed`. After
-an error the next turn starts a fresh session.
+`runs`, saves the session id on the conversation and posts the text, scrubbed of secrets, in the thread as
+Markdown. A failed turn (error, timeout, turn limit, interrupted) gets a short failure reply, and its task, if any,
+becomes `failed`. After an error the next turn starts a fresh session.
 
 ### Linear
 
@@ -468,10 +468,10 @@ and loop errors; `just logs agent` shows the runner's.
   delete or force-push path. The agent's own `GH_TOKEN` (`agent.env`) is outside these checks: `gh` can do whatever
   that token allows, so scope it accordingly.
 - **Secrets are scrubbed from what leaves core.** Every tool reply, `post_update` and other messages core's tools
-  post, `slack_read` replies and the dashboard's transcript view have known secret values from `core.env` (8
-  characters or more) and token patterns (Anthropic, GitHub, Slack, Linear, AWS keys, private key blocks) replaced
-  with `[redacted]`. The session's final reply for a turn, which core posts to the thread as written, and files
-  sent with `post_files` are not scrubbed. Values in `agent.env` are unknown to core, so only the patterns catch
+  post, the session's final reply for each turn, the line of text sent with `post_files`, `slack_read` replies and
+  the dashboard's transcript view have known secret values from `core.env` (8 characters or more) and token
+  patterns (Anthropic, GitHub, Slack, Linear, AWS keys, private key blocks) replaced with `[redacted]`. The files
+  that `post_files` sends are not scrubbed. Values in `agent.env` are unknown to core, so only the patterns catch
   them.
 - **Each service has its own secrets.** Each service mounts only its own secrets file. core and the supervisor read
   theirs into memory, never into their environment; the agent container gets `agent.env` as plain environment
