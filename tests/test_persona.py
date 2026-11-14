@@ -24,6 +24,12 @@ def test_default_persona_within_budget():
     assert estimate_tokens(render_persona(load_persona(None), name="chilli")) <= 400
 
 
+def test_default_persona_renders_every_section():
+    lines = render_persona(load_persona(None), name="chilli").splitlines()
+    for label in ("Identity:", "Traits:", "Stances:", "Voice:", "Humour:", "Never:", "Examples:"):
+        assert any(line.startswith(label) for line in lines), label
+
+
 def test_too_long_raises(tmp_path):
     override = tmp_path / "persona.toml"
     override.write_text('identity = "{name}"\nvoice = "' + "word " * 400 + '"\n')

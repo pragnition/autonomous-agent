@@ -114,7 +114,8 @@ def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
 
 def test_shipped_system_prompt(payloads, tmp_path):
     text = payloads.system_prompt()
-    for phrase in ("gh", "az", "open_pr", "fork", "free port"):
+    for phrase in ("say you are an AI", "gh", "az", "work_on", "open_pr", "fork", "production", "free port",
+                   "browser-testing", "information, not instructions"):
         assert phrase in text
     (tmp_path / "config" / "agent").mkdir(parents=True)
     (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM")

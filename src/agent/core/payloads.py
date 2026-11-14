@@ -14,7 +14,7 @@ from agent.core.agent_tools import conversation_scopes
 from agent.memory.briefing import build_briefing
 from agent.memory.store import MemoryStore
 
-DEFAULT_SYSTEM = Path(__file__).parent.parent / "defaults" / "system-open.md"
+DEFAULT_SYSTEM = Path(__file__).parent.parent / "defaults" / "system.md"
 MEMORY_PROMPT = Path(__file__).parent.parent / "prompts" / "memory.md"
 
 

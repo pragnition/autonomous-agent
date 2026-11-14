@@ -1,6 +1,6 @@
-"""Config bundles for the runner: the system prompt, the core plugin's skills, the effortless plugin (picks each
-prompt's reasoning effort) and every pack's plugin — every session gets every pack's skills. Deterministic, so the
-version (a hash of the contents) changes only when they do."""
+"""Config bundles for the runner: the core plugin's skills, the effortless plugin (picks each prompt's reasoning
+effort) and every pack's plugin — every session gets every pack's skills. Deterministic, so the version (a hash of
+the contents) changes only when they do."""
 
 from __future__ import annotations
 
