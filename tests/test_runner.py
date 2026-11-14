@@ -149,6 +149,17 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path, worktrees):
     assert link.results[-1]["outcome"] == "done" and link.results[-1]["cost_usd_est"] == 0.5
 
 
+async def test_every_session_shares_one_claude_code_memory(tmp_path, worktrees):
+    claude = FakeClaude()
+    runner = Runner(FakeLink(), worktrees, claude, bundles_dir=tmp_path / "bundles",
+                    sessions_root=tmp_path / "sessions", scratch_root=tmp_path / "scratch", heartbeat_s=0.05,
+                    memory_dir=tmp_path / "memory")
+    await runner.handle(item("V-1"), "tok", [])
+    await runner.handle(item("V-2", worktree=None, workdir="session"), "tok", [])
+    assert [s.settings for s in claude.specs] == [{"autoMemoryDirectory": str(tmp_path / "memory")}] * 2
+    assert (tmp_path / "memory").is_dir()
+
+
 async def test_runner_loads_core_effortless_and_all_pack_plugins(tmp_path, worktrees):
     runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
     plugins = await runner._bundle()

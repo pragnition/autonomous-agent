@@ -122,6 +122,15 @@ def test_shipped_system_prompt(payloads, tmp_path):
     assert payloads.system_prompt() == "CUSTOM"
 
 
+def test_shipped_system_prompt_says_how_memory_and_context_work(payloads):
+    text = payloads.system_prompt()
+    for phrase in ("Claude Code memory is shared by all your sessions", "with who, when and the link",
+                   "contradicts a saved note, say so and ask which stands",
+                   "Check code facts against the code", "as claims, not facts",
+                   "Slack via slack_read, Linear via its MCP, GitHub via gh"):
+        assert phrase in text
+
+
 def test_payload_carries_mcp_servers(tmp_path, conn, memory):
     cfg = make_config(tmp_path, '\n[mcp.linear]\ntype = "http"\nurl = "https://mcp.linear.app/mcp"\n'
                                 'headers = { Authorization = "Bearer ${LINEAR_APP_TOKEN}" }\n')

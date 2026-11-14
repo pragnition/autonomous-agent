@@ -23,6 +23,7 @@ class RunSpec:
     mcp_servers: dict[str, Any] = field(default_factory=dict)
     plugins: list[Path] = field(default_factory=list)
     sdk_tools: list[Any] = field(default_factory=list)
+    settings: dict[str, Any] = field(default_factory=dict)  # Claude Code settings for this session only
     resume_session_id: str | None = None
     on_message: Callable[[dict], Awaitable[None]] | None = None
 

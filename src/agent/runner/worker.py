@@ -62,7 +62,7 @@ class Runner:
     def __init__(self, link, worktrees, claude, *, bundles_dir: Path, sessions_root: Path, scratch_root: Path,
                  agent_name: str = "agent", heartbeat_s: float = 15, max_parallel: int = 32,
                  extra_env: dict[str, str] | None = None, env_files: list[Path] = (),
-                 app_env_dir: Path | None = None):
+                 app_env_dir: Path | None = None, memory_dir: Path | None = None):
         self.link, self.worktrees, self.claude = link, worktrees, claude
         self.agent_name = agent_name
         self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
@@ -70,6 +70,7 @@ class Runner:
         self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
         self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
         self.app_env_dir = app_env_dir  # each project's app .env, shared by core (work_on points the agent at it)
+        self.memory_dir = memory_dir  # Claude Code's auto memory, one folder for every session
 
     async def _bundle(self) -> list[Path]:
         version, data = await self.link.bundle()
@@ -190,6 +191,10 @@ class Runner:
                                  worktrees=self.worktrees, agent_name=self.agent_name, structured_sink=sink,
                                  structured_schema=payload.get("structured"), app_env_dir=self.app_env_dir)
         env = {**self.extra_env, **read_env_files(self.env_files)}
+        settings = {}
+        if self.memory_dir is not None:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            settings["autoMemoryDirectory"] = str(self.memory_dir)
         spec = RunSpec(run_id=item_id, prompt=note + payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
@@ -199,8 +204,8 @@ class Runner:
                        env={**env, **(payload.get("test_secrets") or {}), "CLAUDE_CONFIG_DIR": str(sessions),
                             "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
-                       plugins=plugins, sdk_tools=tools, resume_session_id=payload.get("resume_session_id"),
-                       on_message=self._forwarder(tok))
+                       plugins=plugins, sdk_tools=tools, settings=settings,
+                       resume_session_id=payload.get("resume_session_id"), on_message=self._forwarder(tok))
         return spec, sink
 
     async def run_forever(self) -> None:

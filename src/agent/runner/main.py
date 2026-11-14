@@ -90,7 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         return Runner(CoreLink(args.core, token), Worktrees(root, args.core, lambda: token), claude,
                       bundles_dir=root / "bundles", sessions_root=root / "sessions",
                       scratch_root=root / "scratch", agent_name=args.agent_name, extra_env=env,
-                      env_files=[shared / "linear.env"], app_env_dir=shared / "projects")
+                      env_files=[shared / "linear.env"], app_env_dir=shared / "projects",
+                      memory_dir=root / "memory")
 
     async def run() -> None:
         keeper = RunnerKeeper(make_runner)

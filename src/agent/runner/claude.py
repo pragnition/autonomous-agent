@@ -62,7 +62,7 @@ class ClaudeRunner:
             setting_sources=["project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
             session_id=session_id, resume=resume, fork_session=fork,
-            strict_mcp_config=True)
+            settings=json.dumps(spec.settings) if spec.settings else None, strict_mcp_config=True)
 
     async def interrupt(self, run_id: str) -> None:
         self._stopped.add(run_id)

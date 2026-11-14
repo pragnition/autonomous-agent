@@ -108,6 +108,14 @@ async def test_options_env_and_settings(tmp_path, monkeypatch):
     assert o.session_id == "00000000-0000-4000-8000-000000000001" and o.resume is None
 
 
+async def test_settings_go_to_the_session_as_inline_json(tmp_path):
+    runner, clients = make_runner(tmp_path, [[result()], [result()]])
+    await runner.run(spec(tmp_path, settings={"autoMemoryDirectory": "/var/agent/memory"}))
+    assert json.loads(clients[0].options.settings) == {"autoMemoryDirectory": "/var/agent/memory"}
+    await runner.run(spec(tmp_path, run_id="R2"))
+    assert clients[1].options.settings is None
+
+
 async def test_sdk_tools_become_the_agent_mcp_server(tmp_path):
     @tool("ping", "d", {"type": "object", "properties": {}})
     async def ping(args):
