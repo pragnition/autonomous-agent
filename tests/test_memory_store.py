@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent.memory.store import InvalidNote, MemoryStore, NoteInput, Tombstoned, TrustViolation
+from agent.memory.store import InvalidNote, MemoryStore, NoteInput, TrustViolation
 
 P = "projects/chilliclaw"
 
@@ -37,30 +37,6 @@ def test_update_adds_version(store):
     assert n2.body.startswith("Gateway limit")
     assert [v["version"] for v in store.versions(n.id)] == [1, 2]
     assert store.versions(n.id)[1]["op"] == "modified"
-
-
-def test_forget_hides_and_tombstones(store):
-    n = store.upsert(note())
-    store.forget(n.id, actor="ann")
-    assert store.get(n.id).status == "forgotten"
-    assert store.search("gateway", [P], active_only=False) == []
-    assert store.candidates([P]) == []
-
-
-def test_upsert_tombstoned_id_raises(store):
-    n = store.upsert(note())
-    store.forget(n.id, actor="ann")
-    with pytest.raises(Tombstoned):
-        store.upsert(note(id=n.id))
-    with pytest.raises(Tombstoned):  # same content under a new id is blocked too
-        store.upsert(note())
-
-
-def test_purge_removes_versions(store):
-    n = store.upsert(note())
-    store.purge(n.id)
-    assert store.get(n.id) is None
-    assert store.versions(n.id) == []
 
 
 def test_search_respects_scopes(store):

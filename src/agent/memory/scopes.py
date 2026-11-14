@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 
 @dataclass
 class SessionContext:
-    role: str
     project: str | None = None
     requester: str | None = None
     channel_id: str | None = None

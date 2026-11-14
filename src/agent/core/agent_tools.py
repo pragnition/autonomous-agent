@@ -68,12 +68,12 @@ def schema(required: dict[str, str] | None = None, optional: dict[str, str] | No
 def conversation_scopes(channel: str | None, project: str | None, actor: str | None, packs: dict) -> list[str]:
     """Memory scopes for a conversation (v1 §6.15): a DM sees the person's notes, a channel its own."""
     if channel and channel.startswith("D") and actor:
-        sctx = SessionContext(role="session", dm_person=actor, person_projects=list(packs))
+        sctx = SessionContext(dm_person=actor, person_projects=list(packs))
     elif channel:
-        sctx = SessionContext(role="session", project=project, channel_id=channel,
+        sctx = SessionContext(project=project, channel_id=channel,
                               participants=[actor] if actor else [])
     else:
-        sctx = SessionContext(role="session", project=project, requester=actor)
+        sctx = SessionContext(project=project, requester=actor)
     return scopes_for(sctx)
 
 

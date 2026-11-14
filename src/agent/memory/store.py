@@ -1,12 +1,11 @@
 """memory.db: the agent's long-term memory (spec §6.15).
 
-Notes, an immutable version row per change, an FTS5 index kept in the same transaction, the inbox of raw notes
-from agents, and tombstones that stop forgotten notes from being recreated.
+Notes, an immutable version row per change, an FTS5 index kept in the same transaction, and the inbox of raw
+notes from agents.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -64,12 +63,6 @@ CREATE TABLE IF NOT EXISTS inbox (
     at TEXT NOT NULL,
     processed_at TEXT
 );
-CREATE TABLE IF NOT EXISTS tombstones (
-    id TEXT PRIMARY KEY,
-    content_hash TEXT NOT NULL,
-    at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS tombstones_hash ON tombstones(content_hash);
 """
 
 _JSON_FIELDS = ("entities", "links", "sources", "citations")
@@ -80,10 +73,6 @@ class MemoryError(Exception):
 
 
 class InvalidNote(MemoryError):
-    pass
-
-
-class Tombstoned(MemoryError):
     pass
 
 
@@ -130,10 +119,6 @@ class Note:
 def _slug(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60].strip("-")
     return slug or "note"
-
-
-def _content_hash(scope: str, summary: str) -> str:
-    return hashlib.sha256(f"{scope}\n{' '.join(summary.lower().split())}".encode()).hexdigest()
 
 
 def _fts_query(text: str) -> str:
@@ -223,23 +208,15 @@ class MemoryStore:
 
     def _unique_id(self, base: str) -> str:
         candidate, n = base, 1
-        while self.conn.execute("SELECT 1 FROM notes WHERE id = ? UNION SELECT 1 FROM tombstones WHERE id = ?",
-                                (candidate, candidate)).fetchone():
+        while self.conn.execute("SELECT 1 FROM notes WHERE id = ?", (candidate,)).fetchone():
             n += 1
             candidate = f"{base}-{n}"
         return candidate
-
-    def _check_tombstones(self, n: NoteInput) -> None:
-        hit = self.conn.execute("SELECT id FROM tombstones WHERE id = ? OR content_hash = ?",
-                                (n.id or "", _content_hash(n.scope, n.summary))).fetchone()
-        if hit:
-            raise Tombstoned(f"note {hit['id']} was forgotten and must not be recreated")
 
     def upsert(self, note: NoteInput, *, run_id: str | None = None, actor: str | None = None) -> Note:
         _validate(note)
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
-            self._check_tombstones(note)
             existing = self.get(note.id) if note.id else None
             now = utcnow()
             values = (note.scope, note.kind, note.summary, note.body, json.dumps(note.entities),
@@ -281,28 +258,6 @@ class MemoryStore:
     def _set_status(self, id: str, status: str, op: str, actor: str | None = None) -> None:
         self.conn.execute("UPDATE notes SET status=?, updated_at=? WHERE id=?", (status, utcnow(), id))
         self._snapshot(id, op, None, actor)
-
-    def forget(self, id: str, *, actor: str) -> None:
-        note = self.get(id)
-        if note is None:
-            return
-        with self.conn:
-            self.conn.execute("BEGIN IMMEDIATE")
-            self._set_status(id, "forgotten", "forgotten", actor)
-            self._reindex(id)
-            self.conn.execute("INSERT OR REPLACE INTO tombstones(id, content_hash, at) VALUES (?, ?, ?)",
-                              (id, _content_hash(note.scope, note.summary), utcnow()))
-
-    def purge(self, id: str) -> None:
-        note = self.get(id)
-        with self.conn:
-            self.conn.execute("BEGIN IMMEDIATE")
-            if note is not None:
-                self.conn.execute("INSERT OR IGNORE INTO tombstones(id, content_hash, at) VALUES (?, ?, ?)",
-                                  (id, _content_hash(note.scope, note.summary), utcnow()))
-            self.conn.execute("DELETE FROM notes WHERE id = ?", (id,))
-            self.conn.execute("DELETE FROM note_versions WHERE note_id = ?", (id,))
-            self._reindex(id)
 
     def touch(self, ids: list[str]) -> None:
         now = utcnow()

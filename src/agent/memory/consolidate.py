@@ -11,7 +11,6 @@ from agent.memory.store import MAX_SUMMARY, MemoryError, MemoryStore, Note, Note
 from agent.tokens import estimate_tokens
 
 MAX_INPUT_TOKENS = 8000
-MAX_OUTPUT_TOKENS = 1500
 CONSOLIDATION_SCHEMA = {
     "type": "object",
     "required": ["episode", "upserts"],
@@ -111,7 +110,7 @@ def apply_consolidation(store: MemoryStore, output: dict, *, project: str, task_
             else:
                 written.append(store.upsert(note, run_id=run_id))
         except MemoryError:
-            continue  # invalid, tombstoned or trust-violating upserts are skipped; the rest still land
+            continue  # invalid or trust-violating upserts are skipped; the rest still land
     return written
 
 

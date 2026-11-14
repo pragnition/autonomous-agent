@@ -21,23 +21,23 @@ def add(store, summary, scope=P, **kw):
 
 
 def test_scopes_builder():
-    assert scopes_for(SessionContext(role="builder", project="p", requester="alice")) == \
+    assert scopes_for(SessionContext(project="p", requester="alice")) == \
         ["projects/p", "team", "people/alice"]
 
 
 def test_scopes_channel_chat():
-    ctx = SessionContext(role="chat", project="p", channel_id="C1", participants=["alice", "bob"])
+    ctx = SessionContext(project="p", channel_id="C1", participants=["alice", "bob"])
     assert scopes_for(ctx) == ["channels/C1", "projects/p", "team", "people/alice", "people/bob"]
 
 
 def test_scopes_dm():
-    ctx = SessionContext(role="chat", dm_person="alice", person_projects=["p", "q"])
+    ctx = SessionContext(dm_person="alice", person_projects=["p", "q"])
     assert scopes_for(ctx) == ["channels/dm-alice", "people/alice", "team", "projects/p", "projects/q"]
 
 
 def test_private_channel_note_not_visible_elsewhere(store):
     add(store, "Decided to drop the v1 upload API", scope="channels/C1")
-    other = scopes_for(SessionContext(role="chat", project="p", channel_id="C2"))
+    other = scopes_for(SessionContext(project="p", channel_id="C2"))
     assert "drop the v1" not in build_briefing(store, other, "upload api", 1000).text
 
 
@@ -63,11 +63,10 @@ def test_briefing_has_header_and_external_label(store):
     assert f"- [{n.id}] Trace shows retries on 502 (from external text)" in b.text
 
 
-def test_briefing_excludes_stale_superseded_forgotten(store):
-    stale, gone, old = add(store, "stale fact"), add(store, "forgotten fact"), add(store, "old fact")
+def test_briefing_excludes_stale_and_superseded(store):
+    stale, replaced = add(store, "stale fact"), add(store, "replaced fact")
     store.mark_stale(stale.id)
-    store.forget(gone.id, actor="ann")
-    new = store.supersede(old.id, NoteInput(scope=P, kind="fact", summary="new fact", body="b"))
+    new = store.supersede(replaced.id, NoteInput(scope=P, kind="fact", summary="new fact", body="b"))
     b = build_briefing(store, [P], "fact", 1000)
     assert b.note_ids == [new.id]
 
