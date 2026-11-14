@@ -63,6 +63,7 @@ class Limits:
     max_tasks_per_day: int = 20
     task_minutes: int = 90
     max_turns: int = 400
+    continuations: int = 3         # times a turn that hit task_minutes or max_turns carries on by itself
 
 
 @dataclass
@@ -149,8 +150,6 @@ class ProjectConfig:
     slack_channel: str
     linear_team: str
     linear_status: dict[str, str]
-    build_setup: list[str]
-    build_checks: list[str]
     secrets_worker: list[str]
 
 
@@ -300,7 +299,8 @@ def load_agent_config(path: Path) -> AgentConfig:
     limits = Limits(max_concurrent_sessions=_int(lim, "max_concurrent_sessions", 10, lw, problems),
                     max_tasks_per_day=_int(lim, "max_tasks_per_day", 20, lw, problems),
                     task_minutes=_int(lim, "task_minutes", 90, lw, problems),
-                    max_turns=_int(lim, "max_turns", 400, lw, problems))
+                    max_turns=_int(lim, "max_turns", 400, lw, problems),
+                    continuations=_int(lim, "continuations", 3, lw, problems))
 
     claude = (data.get("claude") or {}).get("models") or {}
     models = Models()
@@ -361,7 +361,6 @@ def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
     where = str(pack_dir / "project.toml")
     proj = data.get("project") or {}
     pw = f"{where} [project]"
-    build = data.get("build") or {}
     secrets = data.get("secrets") or {}
 
     project = ProjectConfig(
@@ -372,8 +371,6 @@ def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
         slack_channel=_str(proj, "slack_channel", pw, problems),
         linear_team=_str(proj, "linear_team", pw, problems),
         linear_status={k: v for k, v in ((data.get("linear") or {}).get("status") or {}).items()},
-        build_setup=_str_list(build, "setup", f"{where} [build]", problems),
-        build_checks=_str_list(build, "checks", f"{where} [build]", problems),
         secrets_worker=_str_list(secrets, "worker", f"{where} [secrets]", problems),
     )
     reserved = RESERVED_SECRETS & set(project.secrets_worker)

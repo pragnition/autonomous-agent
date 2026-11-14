@@ -29,7 +29,7 @@ sessions across the team's Claude accounts and reports their usage. Put it at
    ```
 
    In `data/config/agent.toml`, set `name`, `github` and `[people]` (Slack user ids, Linear emails, roles). Turn
-   the sample pack into one of your projects (`repo`, `owner`, `slack_channel`, `linear_team`, `[build]`), or start
+   the sample pack into one of your projects (`repo`, `owner`, `slack_channel`, `linear_team`), or start
    from `examples/pack-templates/`. `data/config/persona.toml` is optional.
 
    The secrets are `KEY=value` files, mode 0600, and all three must exist:
@@ -40,9 +40,9 @@ sessions across the team's Claude accounts and reports their usage. Put it at
    SLACK_APP_TOKEN=xapp-…
    LINEAR_API_KEY=lin_api_…
    GITHUB_READ_TOKEN=…
-   GITHUB_WRITE_TOKEN=…
 
-   # data/secrets/agent.env: the agent's own keys, as environment variables in its container
+   # data/secrets/agent.env: the agent's own keys, as environment variables in its container. GH_TOKEN is how it
+   # clones, pushes and opens PRs, so it needs write access to the projects' repos
    GH_TOKEN=…
 
    # data/secrets/supervisor.env: optional, may be empty

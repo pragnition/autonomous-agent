@@ -1,15 +1,12 @@
 import asyncio
 import itertools
-import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from agent import db, tasks
-from agent.core.conversations import (DM_IDLE, NOT_AUTHORISED, BindRefused, Conversations,
-                                      bind_project, create_conversation, record_message)
+from agent.core.conversations import DM_IDLE, NOT_AUTHORISED, Conversations, record_message
 from agent.core.sessions import WorkQueue
-from agent.gitutil import branch_name
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, make_config, make_pack
 
@@ -163,24 +160,8 @@ async def test_only_a_project_channel_binds_a_project(convos, conn, queue):
     other_row = next(r for r in rows if r["thread_ts"] == "t9")
     sample_row = next(r for r in rows if r["thread_ts"] == "t1")
     assert dm_row["project"] is None and other_row["project"] is None and sample_row["project"] == "sample"
-    assert (dm_row["branch"], dm_row["workdir"]) == (None, "session")
-    assert (other_row["branch"], other_row["workdir"]) == (None, "session")
 
     assert {queue.claim().payload["text"] for _ in range(3)} == {"hi", "hello", "do a"}
-
-
-async def test_project_channel_conversation_gets_branch_at_creation(convos, conn):
-    await convos.handle_slack(mention("t30", "fix login"))
-    row = convo(conn, "t30")
-    assert row["branch"] == branch_name(convos.config.name, row["id"], "fix login")
-    assert row["workdir"] == "checkout"
-
-
-async def test_branch_is_named_from_the_first_line_and_kept(convos, conn):
-    await convos.handle_slack(mention("t31", "fix login\n\nIt fails after the password reset."))
-    await convos.handle_slack(reply("t31", "and the signup page too"))
-    row = convo(conn, "t31")
-    assert row["branch"] == branch_name(convos.config.name, row["id"], "fix login")
 
 
 async def test_reply_goes_to_waiting_split_session(convos, conn, queue):
@@ -298,7 +279,7 @@ async def test_dm_turn_starts_with_who_where_and_link(convos, queue, lookups):
     event = dm("deploy it")
     await convos.handle_slack(event)
     item = queue.claim()
-    assert item.payload["origin"] == f"[from Ann Lee (ann) · DM · {permalink_of('D-1', event['ts'])}]"
+    assert item.payload["origin"] == f"[from Ann Lee (ann, GitHub @ann-gh) · DM · {permalink_of('D-1', event['ts'])}]"
     assert item.payload["text"] == "deploy it"
 
 
@@ -309,8 +290,8 @@ async def test_channel_mention_and_thread_reply_each_carry_their_own_link(convos
     first = queue.claim()
     queue.complete(first.id, {"text": "ok"})
     second = queue.claim()
-    assert first.payload["origin"] == f"[from Ann Lee (ann) · #chilliclaw · {permalink_of('C-SAMPLE', 't1')}]"
-    assert second.payload["origin"] == (f"[from Ann Lee (ann) · #chilliclaw thread · "
+    assert first.payload["origin"] == f"[from Ann Lee (ann, GitHub @ann-gh) · #chilliclaw · {permalink_of('C-SAMPLE', 't1')}]"
+    assert second.payload["origin"] == (f"[from Ann Lee (ann, GitHub @ann-gh) · #chilliclaw thread · "
                                         f"{permalink_of('C-SAMPLE', answer['ts'])}]")
 
 
@@ -319,7 +300,7 @@ async def test_failed_lookups_leave_out_what_is_unknown(convos, queue, slack):
         raise RuntimeError("channel_not_found")
     slack.conversations_info = broken
     await convos.handle_slack(mention("t1", "fix the export", user="U2"))
-    assert queue.claim().payload["origin"] == "[from bob · #C-SAMPLE]"
+    assert queue.claim().payload["origin"] == "[from bob (GitHub @bob-gh) · #C-SAMPLE]"
 
 
 async def test_slow_lookups_never_hold_the_turn(convos, queue, lookups, monkeypatch):
@@ -329,7 +310,7 @@ async def test_slow_lookups_never_hold_the_turn(convos, queue, lookups, monkeypa
         await asyncio.sleep(10)
     convos.permalink = stuck
     await asyncio.wait_for(convos.handle_slack(dm("deploy it")), 2)
-    assert queue.claim().payload["origin"] == "[from Ann Lee (ann) · DM]"
+    assert queue.claim().payload["origin"] == "[from Ann Lee (ann, GitHub @ann-gh) · DM]"
 
 
 async def test_messages_keep_their_order_while_lookups_run(convos, queue, lookups):
@@ -367,8 +348,7 @@ async def test_linear_issue_is_unattended(convos, fake_linear, queue, slack, con
     task = tasks.get_task(conn, created[0])
     assert task.slack_thread_ts == slack.posts[0].get("ts", task.slack_thread_ts) and task.status == Status.working
     row = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
-    assert row["task_id"] == task.id and row["workdir"] == "checkout"
-    assert row["branch"] == branch_name(convos.config.name, task.id, "Export broken")
+    assert row["task_id"] == task.id and row["project"] == "sample"
 
 
 async def test_on_result_posts_reply_and_session(convos, queue, slack, conn):
@@ -436,13 +416,48 @@ async def test_failed_turn_without_an_error_says_so(convos, queue, slack):
 
 
 async def test_timed_out_turn_says_it_ran_out_of_time(convos, queue, slack):
+    convos.config.limits.continuations = 0
     await failed_turn(convos, queue, "t10t", {"outcome": "timeout", "error": "no result within 3600 s"})
     assert slack.posts[-1]["text"] == "I ran out of time before finishing that (no result within 3600 s)."
 
 
 async def test_turn_at_the_step_limit_says_so(convos, queue, slack):
+    convos.config.limits.continuations = 0
     await failed_turn(convos, queue, "t10m", {"outcome": "max_turns"})
     assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
+
+
+async def test_turn_that_hits_a_limit_carries_on_by_itself(convos, queue, slack, conn):
+    await convos.handle_slack(mention("t40", "build it"))
+    first = queue.claim()
+    result = {"outcome": "timeout", "error": "no result within 5400 s", "session_id": "sess-1"}
+    queue.complete(first.id, result)
+    await convos.on_result(queue.get(first.id), result)
+    assert slack.posts[-1]["text"] == ("Still on it: that turn hit its 90-minute limit, so I'm carrying on from where "
+                                       "I stopped.")
+    nxt = queue.claim()
+    assert nxt.conversation_id == first.conversation_id and nxt.payload["continuation"] == 1
+    assert nxt.payload["text"] == ("(Your last turn hit its 90-minute limit before you finished. Carry on from where "
+                                   "you stopped.)")
+    assert (nxt.payload["actor"], nxt.payload["origin"]) == (first.payload["actor"], first.payload["origin"])
+    assert conn.execute("SELECT session_id FROM conversations WHERE id = ?",
+                        (first.conversation_id,)).fetchone()[0] == "sess-1"   # the next turn resumes it
+
+
+async def test_carrying_on_stops_after_the_configured_number_of_times(convos, fake_linear, queue, slack, conn):
+    fake_linear.new = ["Export broken"]
+    task_id = (await convos.intake_linear())[0]
+    for n in range(4):
+        item = queue.claim()
+        assert item.payload.get("continuation", 0) == n and item.payload["unattended"] is True
+        queue.complete(item.id, {"outcome": "max_turns"})
+        await convos.on_result(queue.get(item.id), {"outcome": "max_turns"})
+        if n < 3:
+            assert slack.posts[-1]["text"].startswith("Still on it: that turn hit its 400-step limit")
+            assert tasks.get_task(conn, task_id).status == Status.working
+    assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
+    assert queue.claim() is None
+    assert tasks.get_task(conn, task_id).status == Status.failed
 
 
 async def test_interrupted_turn_says_it_was_stopped(convos, queue, slack):
@@ -683,41 +698,3 @@ async def test_thread_reply_to_an_old_dm_chat_is_answered_in_its_thread(convos, 
     await finish_turn(convos, queue, "answer two")
     assert (slack.posts[-1]["channel"], slack.posts[-1]["thread_ts"]) == ("D-1", sent[0])
     assert conn.execute("SELECT conversation_id FROM slack_messages WHERE ts = ?", (sent[1],)).fetchone()[0] == old
-
-
-PACKS = {"sample": make_pack(), "other": make_pack("other", repo="o/other")}
-
-
-def unbound(conn) -> str:
-    """A DM's conversation: no project, so the session picks one with work_on."""
-    return create_conversation(conn, agent_name="agent", channel="D-1", thread_ts="5.1", project=None, title="hi")
-
-
-def test_bind_sets_project_and_branch_once(conn):
-    cid = unbound(conn)
-    row = bind_project(conn, cid, "sample", packs=PACKS, agent_name="agent", title="run sample locally")
-    assert row["project"] == "sample" and row["branch"] == branch_name("agent", cid, "run sample locally")
-    assert row["workdir"] == "session"   # the working folder is fixed by the first turn
-    again = bind_project(conn, cid, "sample", packs=PACKS, agent_name="agent", title="something else")
-    assert (again["project"], again["branch"], again["workdir"]) == ("sample", row["branch"], "session")
-    logged = conn.execute("SELECT data FROM events WHERE type = 'project_bound'").fetchall()
-    assert [json.loads(r["data"]) for r in logged] == [{"conversation_id": cid, "project": "sample",
-                                                         "branch": row["branch"]}]
-    tracked = add_conversation(conn, project="sample")  # track_task's binding: no branch yet
-    assert bind_project(conn, tracked, "sample", packs=PACKS, agent_name="agent", title="t")["branch"] == \
-        branch_name("agent", tracked, "t")
-    upfront = create_conversation(conn, agent_name="agent", channel="C-SAMPLE", thread_ts="9.1", project="sample",
-                                  title="fix login")
-    kept = bind_project(conn, upfront, "sample", packs=PACKS, agent_name="agent", title="other title")
-    assert (kept["branch"], kept["workdir"]) == (branch_name("agent", upfront, "fix login"), "checkout")
-
-
-def test_bind_refuses_unknown_and_second_project(conn):
-    cid = unbound(conn)
-    with pytest.raises(BindRefused, match=r"unknown project 'nope' \(known: other, sample\)"):
-        bind_project(conn, cid, "nope", packs=PACKS, agent_name="agent", title="t")
-    assert conn.execute("SELECT project, branch FROM conversations WHERE id = ?", (cid,)).fetchone()[:] == (None, None)
-    bind_project(conn, cid, "sample", packs=PACKS, agent_name="agent", title="t")
-    with pytest.raises(BindRefused, match="bound to sample"):
-        bind_project(conn, cid, "other", packs=PACKS, agent_name="agent", title="t")
-    assert conn.execute("SELECT project FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == "sample"

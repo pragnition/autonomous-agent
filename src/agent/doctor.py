@@ -11,7 +11,7 @@ from pathlib import Path
 from agent.config import ConfigError, load_agent_config, load_packs
 from agent.proxy import ProxyUnavailable
 
-REQUIRED_CORE = ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "LINEAR_API_KEY", "GITHUB_READ_TOKEN", "GITHUB_WRITE_TOKEN")
+REQUIRED_CORE = ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "LINEAR_API_KEY", "GITHUB_READ_TOKEN")
 
 
 def required_core(config) -> tuple[str, ...]:
@@ -71,9 +71,6 @@ async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, g
         except ProxyUnavailable as e:
             checks.append(Check("proxy", False, str(e)))
     for name, pack in sorted(packs.items()):
-        checks.append(Check(f"checks:{name}", bool(pack.project.build_checks),
-                            f"{len(pack.project.build_checks)} check command(s)" if pack.project.build_checks
-                            else "no [build] checks: PRs would go out unverified"))
         if github is not None:
             ok = await github.can_read(pack.project.repo)
             checks.append(Check(f"github:{pack.project.repo}", ok, "readable" if ok else "cannot read the repo"))

@@ -23,4 +23,4 @@ Nobody should have to tell you where to look. Find the cause before you change c
 
 6. **Verify it the way the reporter would.** Run the reproduction again. For a UI bug, post the before and after screenshots together (`post_files`). For an error in the logs, give the query that will show it's gone after deploy.
 
-7. **Close the loop.** review-before-pr, then `open_pr`. Reply in the thread with the cause, the fix and the evidence.
+7. **Close the loop.** review-before-pr, then push your branch and open the PR with `gh pr create` (pr-description). Reply in the thread with the link, the cause, the fix and the evidence.

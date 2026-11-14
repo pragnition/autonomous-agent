@@ -1,6 +1,6 @@
 ---
 name: review-before-pr
-description: Use right before open_pr, to have a fresh-context subagent review the diff against the request.
+description: Use right before opening a PR, to have a fresh-context subagent review the diff against the request.
 ---
 
 # Fresh eyes before the PR

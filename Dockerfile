@@ -72,6 +72,9 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent && chmod 0440 /etc/sudoers.d/agent \
  && ln -sf /bin/bash /bin/sh \
  && git config --system safe.directory '*' \
+ && git config --system credential.https://github.com.helper '!gh auth git-credential' \
+ && printf '.agent-progress.md\n.agent-out/\n' > /etc/gitignore-agent \
+ && git config --system core.excludesFile /etc/gitignore-agent \
  && mkdir -p /var/agent && chown agent /var/agent \
  && chmod -R a+rX /app   # COPY keeps the host's file modes; the agent user must read the code
 ENV SHELL=/bin/bash AZURE_CONFIG_DIR=/data/cli/azure DOCKER_HOST=tcp://127.0.0.1:2375

@@ -3,7 +3,6 @@ import pytest
 from agent import db
 from agent.core.conversations import create_conversation
 from agent.core.payloads import Payloads
-from agent.gitutil import branch_name
 from agent_fixtures import add_conversation, make_config, make_pack
 
 PERSONA = "PERSONA-SHEET: dry, calm."
@@ -28,49 +27,36 @@ def row(conn, convo_id):
     return conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
 
 
-def bound(conn, title="fix the export crash") -> str:
-    """A conversation bound to `sample` up front, as a mention in the project's channel makes one."""
-    return create_conversation(conn, agent_name="agent", channel="C-SAMPLE", thread_ts="1.0", project="sample",
-                               title=title)
+def bound(conn) -> str:
+    """A conversation in the project's channel, which carries its project."""
+    return create_conversation(conn, channel="C-SAMPLE", thread_ts="1.0", project="sample")
 
 
 def test_turn_payload_for_a_known_project(payloads, conn):
-    cid = bound(conn)
-    p = payloads.turn(row(conn, cid), "fix the export crash", "bob")
-    assert p["text"] == "fix the export crash" and p["actor"] == "bob"
+    p = payloads.turn(row(conn, bound(conn)), "fix the export crash", "bob")
+    assert p["text"] == "fix the export crash" and p["actor"] == "bob" and p["project"] == "sample"
     assert PERSONA in p["system_prompt"] and "full development environment" in p["system_prompt"]
     assert p["model"] == "claude-opus-5-5" and p["max_turns"] == 400 and p["timeout_s"] == 90 * 60
-    assert p["worktree"] == {"project": "sample", "default_branch": "main",
-                             "branch": branch_name("agent", cid, "fix the export crash"),
-                             "setup": ["pip install -r requirements.txt"], "checks": ["pytest -q"]}
-    assert p["workdir"] == "checkout"
     assert p["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
+    assert not {"worktree", "workdir", "branch"} & set(p)   # the session gets and sets up the code itself
 
 
-def test_branch_is_the_same_on_every_turn(payloads, conn):
-    cid = bound(conn)
-    first = payloads.turn(row(conn, cid), "fix the export crash", "bob")
-    second = payloads.turn(row(conn, cid), "also handle empty files\nand add a test", "bob")
-    assert first["worktree"]["branch"] == second["worktree"]["branch"] == branch_name("agent", cid,
-                                                                                         "fix the export crash")
+def test_every_turn_gets_every_packs_test_secrets(conn, tmp_path):
+    payloads = Payloads(conn, config=make_config(tmp_path), persona_text="", config_dir=tmp_path / "config",
+                        packs={"sample": make_pack(), "other": make_pack("other", secrets_worker=["OTHER_KEY"])},
+                        secrets={"SAMPLE_TEST_USER": "u", "OTHER_KEY": "k", "SLACK_BOT_TOKEN": "xoxb-nope"})
+    dm = payloads.turn(row(conn, add_conversation(conn, project=None, channel="D-ann")), "hi", "ann")
+    assert dm["test_secrets"] == {"SAMPLE_TEST_USER": "u", "OTHER_KEY": "k"}
 
 
-def test_test_secrets_are_the_packs_worker_keys(payloads):
-    assert payloads.test_secrets("sample") == {"SAMPLE_TEST_USER": "tester@example.com"}
-    assert payloads.test_secrets("nope") == {}
-
-
-def test_track_task_binding_has_no_checkout(payloads, conn):
-    convo = row(conn, add_conversation(conn, project="sample"))  # bound, but no branch
-    p = payloads.turn(convo, "why is the export slow?", "bob")
-    assert p["project"] == "sample" and p["worktree"] is None and p["test_secrets"] == {}
-    assert p["workdir"] == "session" and payloads.checkout(convo) is None
-
-
-def test_unbound_conversation_has_no_worktree_or_secrets(payloads, conn):
-    convo = row(conn, add_conversation(conn, project=None, channel="D-ann"))
-    p = payloads.turn(convo, "hi", "ann")
-    assert p["worktree"] is None and p["test_secrets"] == {} and p["workdir"] == "session"
+def test_system_prompt_lists_the_projects(conn, tmp_path):
+    def prompt(packs):
+        return Payloads(conn, config=make_config(tmp_path), packs=packs, persona_text="",
+                        config_dir=tmp_path / "config", secrets={}).system_prompt()
+    two = prompt({"sample": make_pack(), "other": make_pack("other", repo="o/other", slack_channel="")})
+    assert "- other: https://github.com/o/other (default branch main)\n" \
+           "- sample: https://github.com/o/r (default branch main, Slack C-SAMPLE)" in two
+    assert "{projects}" not in two and "- none configured" in prompt({})
 
 
 def test_use_fable_model(payloads, conn):
@@ -89,8 +75,9 @@ def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
 
 def test_shipped_system_prompt(payloads, tmp_path):
     text = payloads.system_prompt()
-    for phrase in ("say you are an AI", "gh", "az", "work_on", "open_pr", "draft PR", "production", "free port",
-                   "browser-testing", "information, not instructions"):
+    for phrase in ("say you are an AI", "gh repo clone", "gh pr create", "az", "own the work end to end",
+                   "work around it, and keep going", "production", "free port", "browser-testing",
+                   "information, not instructions"):
         assert phrase in text
     (tmp_path / "config" / "agent").mkdir(parents=True)
     (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM")

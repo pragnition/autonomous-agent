@@ -1,5 +1,5 @@
-"""The runner inside the agent container: pull work from core, prepare the worktree, run a Claude Code session
-with full permissions, and report the result. Limits are enforced by core's tools, not the OS."""
+"""The runner inside the agent container: pull work from core, run a Claude Code session with full permissions in
+the conversation's own folder, and report the result. Limits are enforced by core's tools, not the OS."""
 
 from __future__ import annotations
 
@@ -16,17 +16,11 @@ from pathlib import Path
 
 from agent.runner.base import RunResult, RunSpec
 from agent.runner.link import SessionRevoked
-from agent.runner.tools import Checkout, remote_sdk_tools, run_setup, setup_marker
-from agent.runner.worktrees import CheckoutRefused
+from agent.runner.tools import remote_sdk_tools
 
 log = logging.getLogger(__name__)
 FRESH_NOTE = ("(Your earlier session in this conversation couldn't be resumed. Call read_thread to catch up on "
               "the conversation so far before you answer.)\n\n")
-REFUSED_NOTE = ("(Your checkout of {project} couldn't be used, so this session has none and runs in your session "
-                "folder: {reason}. Move that folder out of the way and call work_on({project}) to get your checkout "
-                "back on your branch.)\n\n")
-SETUP_FAILED_NOTE = ("(Setup failed in {checkout}, so it may not be ready to build or run. Call work_on({project}) "
-                     "to run it again. The end of its output:\n{tail})\n\n")
 
 _VAR = re.compile(r"\$\{(\w+)\}")
 
@@ -64,17 +58,14 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
 
 
 class Runner:
-    def __init__(self, link, worktrees, claude, *, bundles_dir: Path, sessions_root: Path, scratch_root: Path,
-                 agent_name: str = "agent", heartbeat_s: float = 15, max_parallel: int = 32,
-                 extra_env: dict[str, str] | None = None, env_files: list[Path] = (),
-                 app_env_dir: Path | None = None, memory_dir: Path | None = None):
-        self.link, self.worktrees, self.claude = link, worktrees, claude
-        self.agent_name = agent_name
+    def __init__(self, link, claude, *, bundles_dir: Path, sessions_root: Path, scratch_root: Path,
+                 heartbeat_s: float = 15, max_parallel: int = 32, extra_env: dict[str, str] | None = None,
+                 env_files: list[Path] = (), memory_dir: Path | None = None):
+        self.link, self.claude = link, claude
         self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
         self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel  # core's Gate is the real limit; this is a safety bound
         self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
         self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
-        self.app_env_dir = app_env_dir  # each project's app .env, shared by core (work_on points the agent at it)
         self.memory_dir = memory_dir  # Claude Code's auto memory, one folder for every session
 
     async def _bundle(self) -> list[Path]:
@@ -89,31 +80,6 @@ class Runner:
             tmp.rename(dest)
         return [dest / "plugins" / "core", dest / "plugins" / "effortless",
                 *sorted((dest / "plugins" / "packs").glob("*"))]
-
-    async def _workdir(self, session: Path, payload: dict) -> tuple[Path, Path | None, str]:
-        """(cwd, checkout, note). The checkout, when the conversation has one, lives in its session folder at
-        <session>/<project>. The session runs in the checkout only when it was bound to its project up front
-        (workdir "checkout"), otherwise in the session folder: either way the same folder on every turn. When what
-        is at the checkout's path wasn't made by prepare, it is left alone and the turn still runs, in the session
-        folder with no checkout; `note` tells the agent why, for the top of its prompt. A new checkout's setup that
-        fails leaves the turn in the checkout, with a note saying what failed."""
-        session.mkdir(parents=True, exist_ok=True)
-        wt, checkout, note = payload.get("worktree"), None, ""
-        if wt:
-            project = wt["project"]
-            try:
-                checkout, created = await asyncio.to_thread(self.worktrees.prepare, session / project, project,
-                                                            wt["branch"], wt["default_branch"])
-            except CheckoutRefused as e:
-                log.warning("not using the checkout in %s: %s", session, e)
-                return session, None, REFUSED_NOTE.format(project=project, reason=e)
-            if created:
-                passed, tail = await run_setup(list(wt.get("setup") or []), checkout, setup_marker(session, project))
-                if not passed:
-                    log.warning("setup failed in %s: %s", checkout, tail[-500:])
-                    note = SETUP_FAILED_NOTE.format(checkout=checkout, project=project, tail=tail)
-        cwd = checkout if checkout is not None and payload.get("workdir") == "checkout" else session
-        return cwd, checkout, note
 
     async def _heartbeat(self, tok: str, item_id: str) -> None:
         while True:
@@ -182,24 +148,18 @@ class Runner:
     async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> RunSpec:
         payload, item_id = item["payload"], item["id"]
         plugins = await self._bundle()
-        session = self.scratch_root / convo
-        cwd, path, note = await self._workdir(session, payload)
+        session = self.scratch_root / convo  # the conversation's own folder, the same every turn; its clones live here
+        session.mkdir(parents=True, exist_ok=True)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)
-        wt = payload.get("worktree") or {}
-        # open_pr works in the checkout, which work_on can make partway through; post_files reads from the session
-        # folder, the checkout included
-        checkout = Checkout(path, wt["branch"] if path is not None else None, list(wt.get("checks") or []))
-        tools = remote_sdk_tools(manifest, self.link, tok, session_dir=session, checkout=checkout,
-                                 worktrees=self.worktrees, agent_name=self.agent_name,
-                                 app_env_dir=self.app_env_dir)
+        tools = remote_sdk_tools(manifest, self.link, tok, session_dir=session)
         env = {**self.extra_env, **read_env_files(self.env_files)}
         settings = {}
         if self.memory_dir is not None:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             settings["autoMemoryDirectory"] = str(self.memory_dir)
-        # the message's origin (who, where, link) comes first, then what the runner has to say, then the message
-        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + note + payload["text"], cwd=cwd,
+        # the message's origin (who, where, link) comes first, then the message
+        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + payload["text"], cwd=session,
                        model=payload["model"], system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,

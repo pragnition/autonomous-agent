@@ -32,7 +32,7 @@ class LinearAgentSessions:
             except Exception:
                 log.exception("couldn't ack Linear session %s", sid)
             # no project yet, so no branch to name: the agent picks the project itself
-            convo_id = create_conversation(self.conn, channel=None, thread_ts=None, project=None, title="")
+            convo_id = create_conversation(self.conn, channel=None, thread_ts=None, project=None)
             db.set_setting(self.conn, SESSION_KEY.format(sid), convo_id)
         elif body.get("action") != "prompted" or convo_id is None:
             return  # a redelivered `created`, or an event for a session we never saw

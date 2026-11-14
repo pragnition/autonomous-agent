@@ -7,17 +7,26 @@ description: Use when running ChilliClaw locally to build, test, debug or demo a
 
 ChilliClaw runs in `dev-lite` mode: Postgres, Redis, the gateway, the renderer and office/DSL workers, and the Forge UI on http://localhost:5173. Knowledge search (Milvus) and PII sanitisation are off, so use made-up test data only, and say so when a change needs search to be tested. Audio transcription and image generation are off too (no keys for them).
 
-The stack runs with the team's real integration credentials (Slack, Microsoft, Teams), so it acts as the real dev bot. Send test messages only to yourself or a test channel, never to people or team channels, and never to customers. This skill's directory (shown when it loads) holds `agent-overlay.toml` and `seed-test-user.sql`.
+The stack uses the team's integration credentials (Slack, Microsoft, Teams). Send test messages only to yourself or a test channel, never to people, team channels or customers. This skill's directory (shown when it loads) holds `setup.sh`, `write-env.py`, `agent-overlay.toml` and `seed-test-user.sql`.
+
+## Get the code
+
+Clone it into your working directory, or reuse the clone you already have there, and set it up from the clone's root (safe to run again):
+
+```bash
+gh repo clone pragnition/chilliclaw && cd chilliclaw
+bash <skill-dir>/setup.sh
+```
+
+`setup.sh` writes `.env` from the team's own ChilliClaw `.env` (`/run/agent/projects/chilliclaw.env`) on top of `.env.example` when there's no `.env` yet, then runs `bun install`. If your `.env` still has placeholders where the team's file has values, copy those values in. Never put the Foundry key in `.env`: the meter adds it (see Model calls).
 
 ## Start it
-
-Your worktree's setup already wrote `.env` from the team's own ChilliClaw `.env` (`/run/agent/projects/chilliclaw.env`) and ran `bun install`. If your `.env` still has placeholders where that file has values, copy those values in from it. Never put the Foundry key in `.env`: the meter adds it (see Model calls).
 
 1. **Make sure nobody else's ChilliClaw is up.** Ports are fixed, so only one stack runs at a time:
    ```bash
    docker ps --filter publish=5173 --format '{{.Names}}  {{.Label "com.docker.compose.project.working_dir"}}'
    ```
-   If it's another worktree's, don't stop it. Wait and check again every few minutes. If its working directory is gone, it's orphaned and you may remove it: `docker compose -p <project> down`.
+   If it's another session's, don't stop it. Wait and check again every few minutes. If its working directory is gone, it's orphaned and you may remove it: `docker compose -p <project> down`.
 2. **Build the config overlay**: local-lite, with model calls through the meter.
    ```bash
    mkdir -p .agent-out

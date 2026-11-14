@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from agent.connectors.github_write import HEADERS
+HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
 
 class GitHubReader:

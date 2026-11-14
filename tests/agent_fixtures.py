@@ -39,7 +39,6 @@ def make_pack(name: str = "sample", **over) -> Pack:
     fields = dict(name=name, repo="o/r", default_branch="main", owner="ann", slack_channel="C-SAMPLE",
                   linear_team="SAM", linear_status={"working": "In Progress", "ready_for_review": "In Review",
                                                     "merged": "Done", "failed": "Todo"},
-                  build_setup=["pip install -r requirements.txt"], build_checks=["pytest -q"],
                   secrets_worker=["SAMPLE_TEST_USER"])
     fields.update(over)
     return Pack(ProjectConfig(**fields))

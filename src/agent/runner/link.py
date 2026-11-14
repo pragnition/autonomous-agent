@@ -45,15 +45,6 @@ class CoreLink:
                                                 json={"name": name, "args": args}, timeout=20 * 60))
         return resp.json()
 
-    async def bind(self, tok: str, project: str, title: str) -> dict:
-        """work_on's binding: the checkout details and the project's test keys, or {"error": ...} when core refuses
-        (an unknown project, or the conversation is bound to another one)."""
-        resp = await self.http.post(f"{self.base}/agent/bind", headers=self._auth(tok),
-                                    json={"project": project, "title": title})
-        if resp.status_code == 409:
-            return {"error": resp.json().get("error") or "refused"}
-        return self._check(resp).json()
-
     async def files(self, tok: str, items: list[tuple[str, bytes]], text: str) -> bool:
         """Whether the files reached the conversation's Slack thread."""
         files = [("file", (name, data)) for name, data in items]

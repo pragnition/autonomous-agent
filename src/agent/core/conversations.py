@@ -19,17 +19,17 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime, timedelta
 
-from agent import db, events, tasks
+from agent import db, tasks
 from agent.connectors.linear import issue_link
 from agent.core.sessions import WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
-from agent.gitutil import branch_name
 from agent.scrub import scrub
 from agent.tasks import Status
 
 log = logging.getLogger(__name__)
 NOT_AUTHORISED = "Sorry, I only work with people on this team's list."
 FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
+LIMIT_OUTCOMES = {"timeout", "max_turns"}  # a turn that ran out of time or steps carries on in a new one
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
 DM_IDLE = timedelta(hours=12)  # a DM quiet this long starts a fresh conversation on its next top-level message
@@ -39,6 +39,10 @@ LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the
 def origin_line(where: str, *, who: str | None = None, link: str | None = None) -> str:
     """A turn's first line, e.g. [from Sam Taylor (sam) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
     return "[" + " · ".join(p for p in (f"from {who}" if who else None, where, link) if p) + "]"
+
+
+def limit_name(outcome: str, limits) -> str:
+    return f"{limits.task_minutes}-minute limit" if outcome == "timeout" else f"{limits.max_turns}-step limit"
 
 
 def failure_reply(outcome: str, error: str | None) -> str:
@@ -72,41 +76,13 @@ def record_message(conn: sqlite3.Connection, channel: str, ts: str, conversation
                  (channel, ts, conversation_id))
 
 
-def create_conversation(conn: sqlite3.Connection, *, agent_name: str = "", channel: str | None, thread_ts: str | None,
-                        project: str | None, title: str, task_id: str | None = None, is_primary: int = 1) -> str:
-    """A new conversation. One bound to its project up front gets its branch now, named from `title`, and works in
-    its checkout; any other works in its session folder. The working folder never changes, so --resume always finds
-    the session, and a branch once set never does either, so every turn and every open_pr use the same one."""
+def create_conversation(conn: sqlite3.Connection, *, channel: str | None, thread_ts: str | None,
+                        project: str | None, task_id: str | None = None, is_primary: int = 1) -> str:
     convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
-    branch = branch_name(agent_name, task_id or convo_id, title) if project else None
-    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, branch, workdir, "
-                 "created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 (convo_id, channel, thread_ts, project, task_id, is_primary, branch,
-                  "checkout" if project else "session", now, now))
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, created_at, "
+                 "last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (convo_id, channel, thread_ts, project, task_id, is_primary, now, now))
     return convo_id
-
-
-class BindRefused(Exception):
-    pass
-
-
-def bind_project(conn: sqlite3.Connection, convo_id: str, project: str, *, packs: dict, agent_name: str,
-                 title: str) -> sqlite3.Row:
-    """work_on's binding: the conversation's project, and its branch the first time it needs one (named from
-    `title`). One project per conversation; binding the same one again changes nothing. The working folder stays
-    as the first turn fixed it."""
-    if project not in packs:
-        raise BindRefused(f"unknown project '{project}' (known: {', '.join(sorted(packs)) or 'none'})")
-    row = conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
-    if row["project"] and row["project"] != project:
-        raise BindRefused(f"this conversation is bound to {row['project']}; use start_task for work on {project}")
-    if row["project"] == project and row["branch"]:
-        return row
-    branch = row["branch"] or branch_name(agent_name, row["task_id"] or convo_id, title)
-    conn.execute("UPDATE conversations SET project = ?, branch = ? WHERE id = ?", (project, branch, convo_id))
-    events.append(conn, "project_bound", task_id=row["task_id"], actor=None,
-                  data={"conversation_id": convo_id, "project": project, "branch": branch})
-    return conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
 
 
 class Conversations:
@@ -144,10 +120,8 @@ class Conversations:
                                  "SELECT 1 FROM slack_messages WHERE channel = ? AND ts = ? LIMIT 1",
                                  (channel, thread_ts, channel, thread_ts)).fetchone() is not None
 
-    def _new(self, channel: str | None, thread_ts: str | None, project: str | None, title: str,
-             task_id: str | None = None) -> str:
-        return create_conversation(self.conn, agent_name=self.config.name, channel=channel, thread_ts=thread_ts,
-                                   project=project, title=title, task_id=task_id)
+    def _new(self, channel: str | None, thread_ts: str | None, project: str | None, task_id: str | None = None) -> str:
+        return create_conversation(self.conn, channel=channel, thread_ts=thread_ts, project=project, task_id=task_id)
 
     async def _channel_name(self, channel: str) -> str:
         """The channel's name, or "" when Slack won't say."""
@@ -178,7 +152,9 @@ class Conversations:
             lookups.append(self._channel_name(channel))
         name, link, *channel_name = await asyncio.gather(*map(_answer, lookups))
         where = "DM" if is_dm else f"#{channel_name[0] or channel}" + (" thread" if event.get("thread_ts") else "")
-        return origin_line(where, who=f"{name} ({person_key})" if name else person_key, link=link)
+        github = getattr(self.config.people.get(person_key), "github", "")  # so PRs can be assigned to them
+        tags = ", ".join(t for t in (person_key if name else "", f"GitHub @{github}" if github else "") if t)
+        return origin_line(where, who=f"{name or person_key} ({tags})" if tags else person_key, link=link)
 
     async def _in_order(self, channel: str, lookup: Awaitable[str]) -> str:
         """`lookup`'s answer, once every message that arrived earlier in this channel is past its own lookups.
@@ -214,7 +190,7 @@ class Conversations:
                                      "m.conversation_id WHERE m.channel = ? AND m.ts = ?",
                                      (channel, thread_ts)).fetchone())
 
-    async def _route(self, channel: str, thread_ts: str | None, is_dm: bool, text: str) -> sqlite3.Row:
+    async def _route(self, channel: str, thread_ts: str | None, is_dm: bool) -> sqlite3.Row:
         """thread_ts is None for a top-level DM message, which goes to the DM's current chat. In a thread, a session
         waiting on an answer there takes it first. The conversation is settled (and marked active) before the
         notifier is awaited, so a message arriving meanwhile routes as it would a moment later."""
@@ -226,8 +202,7 @@ class Conversations:
                                       (channel, thread_ts)).fetchone() or self._in_thread(channel, thread_ts)
         if convo is None:
             project = None if is_dm else await self._project_for_channel(channel)
-            title = text.strip().splitlines()[0] if text.strip() else ""  # the branch is named from the first line
-            return self._row(self._new(channel, thread_ts, project, title))
+            return self._row(self._new(channel, thread_ts, project))
         self.conn.execute("UPDATE conversations SET waiting = 0, last_active_at = ? WHERE id = ?",
                           (db.utcnow(), convo["id"]))
         if convo["waiting"]:  # the message answers its question
@@ -237,9 +212,11 @@ class Conversations:
         return self._row(convo["id"])
 
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, unattended: bool = False,
-                      message_ts: str | None = None, reply_thread_ts: str | None = None) -> str:
+                      message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
         payload["origin"] = origin  # the runner puts it at the top of the prompt
+        if continuation:
+            payload["continuation"] = continuation
         if message_ts:
             payload["message_ts"] = message_ts
         if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
@@ -267,7 +244,7 @@ class Conversations:
             return
         text = _MENTION.sub("", event.get("text") or "").strip()
         origin = await self._in_order(channel, self._slack_origin(person.key, event, is_dm))
-        convo = await self._route(channel, thread_ts, is_dm, text)
+        convo = await self._route(channel, thread_ts, is_dm)
         record_message(self.conn, channel, event["ts"], convo["id"])
         if _FABLE.search(text):
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
@@ -303,7 +280,7 @@ class Conversations:
         resp = await self.slack.chat_postMessage(channel=pack.slack_channel,
                                                  text=f"Linear {task.source_ref}: {task.title}")
         task = tasks.set_fields(self.conn, task.id, slack_channel=resp["channel"], slack_thread_ts=resp["ts"])
-        convo = self._row(self._new(resp["channel"], resp["ts"], task.project, task.title, task.id))
+        convo = self._row(self._new(resp["channel"], resp["ts"], task.project, task.id))
         task = tasks.transition(self.conn, task.id, Status.working, actor="linear")
         self._enqueue_turn(convo, f"Linear issue {task.source_ref}: {task.title}\n\n{task.description}",
                            task.requester, unattended=True,
@@ -318,10 +295,17 @@ class Conversations:
         convo = self._row(item.conversation_id) if item.conversation_id else None
         if convo is None:
             return
-        outcome = result.get("outcome", "done")
-        text = (result.get("text") or "").strip()
-        failed = outcome in FAILED_OUTCOMES
-        text = scrub(failure_reply(outcome, result.get("error")) if failed else text, self.secret_values)
+        outcome, step = result.get("outcome", "done"), int(item.payload.get("continuation") or 0)
+        continuing = outcome in LIMIT_OUTCOMES and step < self.config.limits.continuations
+        failed = outcome in FAILED_OUTCOMES and not continuing
+        if continuing:
+            text = f"Still on it: that turn hit its {limit_name(outcome, self.config.limits)}, so I'm carrying on " \
+                   "from where I stopped."
+        elif failed:
+            text = failure_reply(outcome, result.get("error"))
+        else:
+            text = (result.get("text") or "").strip()
+        text = scrub(text, self.secret_values)
         # Saved before anything is awaited: the next turn can be claimed as soon as this one completed, and it
         # resumes whatever session the conversation has at that moment
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
@@ -330,6 +314,12 @@ class Conversations:
         else:
             self.conn.execute("UPDATE conversations SET session_id = COALESCE(?, session_id), last_active_at = ? "
                               "WHERE id = ?", (result.get("session_id"), db.utcnow(), convo["id"]))
+        if continuing:  # resumes the session this turn ended with, like any next turn
+            p, limit = item.payload, limit_name(outcome, self.config.limits)
+            self._enqueue_turn(self._row(convo["id"]), f"(Your last turn hit its {limit} before you finished. Carry "
+                               "on from where you stopped.)", p.get("actor"), origin=p.get("origin") or "",
+                               unattended=bool(p.get("unattended")), reply_thread_ts=p.get("reply_thread_ts"),
+                               continuation=step + 1)
         if text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
             reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
             for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):

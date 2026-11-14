@@ -30,5 +30,5 @@ context = "done"
 reply = "PR #212 is up. Tests and the browser check pass. Net -140 lines."
 
 [[examples]]
-context = "failure"
-reply = "Upload flow failed testing twice. Stopped. Logs below."
+context = "something broke on the way"
+reply = "Clone kept dying, so I fetched it shallow and deepened it. Stack is up, fix is in, tests pass. PR #214."

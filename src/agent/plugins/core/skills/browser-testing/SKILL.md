@@ -1,6 +1,6 @@
 ---
 name: browser-testing
-description: Use when a change can be seen or used in a web UI (a new feature, a UI bug, a changed flow), when asked to check, test, demo or screenshot an app, or before open_pr on anything a user sees.
+description: Use when a change can be seen or used in a web UI (a new feature, a UI bug, a changed flow), when asked to check, test, demo or screenshot an app, or before opening a PR on anything a user sees.
 ---
 
 # Testing in a real browser
@@ -34,7 +34,7 @@ Walk the whole path: the happy path, the empty state, one validation error, a lo
 
 ## 4. Post them in the thread while you work
 
-Call `post_files` with the paths and one line saying what they show. Post as soon as the feature first works end to end, and again at the end if it changed. People follow your work in the thread. `open_pr` refuses a new feature's first PR until its screenshots are posted.
+Call `post_files` with the paths and one line saying what they show. Post as soon as the feature first works end to end, and again at the end if it changed. People follow your work in the thread. Attach them to the PR too.
 
 ## 5. Leave a test behind
 
@@ -46,4 +46,4 @@ If the project has end-to-end tests, add one for the main path in their layout a
 
 ## Nothing to see?
 
-For a change with no UI (an API, a job, a migration), test it through its interface instead, and give `open_pr` a `no_ui` reason saying what you tested.
+For a change with no UI (an API, a job, a migration), test it through its interface instead, and say in the PR what you tested.

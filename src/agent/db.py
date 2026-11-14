@@ -126,9 +126,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     waiting INTEGER NOT NULL DEFAULT 0,
     model TEXT,
     created_at TEXT NOT NULL,
-    last_active_at TEXT NOT NULL,
-    branch TEXT,
-    workdir TEXT NOT NULL DEFAULT 'session'
+    last_active_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS conversations_thread ON conversations(channel, thread_ts);
 -- Which conversation each Slack message belongs to, received or posted, so a thread started under any of them

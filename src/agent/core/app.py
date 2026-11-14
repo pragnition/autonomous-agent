@@ -20,11 +20,10 @@ from agent import db, events
 from agent.config import load_agent_config, load_packs
 from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
-from agent.core.agent_tools import NOT_AVAILABLE, AgentToolRouter
+from agent.core.agent_tools import AgentToolRouter
 from agent.core.bundles import build_bundle
 from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
-from agent.core.conversations import BindRefused, Conversations, bind_project
-from agent.core.gitserve import GitHost, tokens_auth
+from agent.core.conversations import Conversations
 from agent.core.kpis import compute_kpis, format_kpis, register_kpi_tools
 from agent.core.linear_app import INSTALL_DM_KEY, LinearAppAuth, register_linear_tools
 from agent.core.linear_sessions import LinearAgentSessions
@@ -35,8 +34,7 @@ from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
 from agent.core.runner_tokens import sync_runner_token
-from agent.core.prs import register_pr_tools
-from agent.core.sessions import Gate, WorkItem, WorkQueue, resolve_token
+from agent.core.sessions import Gate, WorkItem, WorkQueue
 from agent.core.tracker_tools import register_tracker_tools
 from agent.dashboard.app import make_dashboard_app
 from agent.dashboard.names import NAMES_FILE, AccountNames
@@ -95,7 +93,7 @@ class LinearNotifier:
 
 class CoreApp:
     def __init__(self, *, config_dir: Path, data_dir: Path, secrets: dict[str, str], slack, proxy,
-                 linear_client=None, github_reader=None, github_writer=None, bot_user_id: str | None = None,
+                 linear_client=None, github_reader=None, bot_user_id: str | None = None,
                  cli_exec=asyncio.create_subprocess_exec):
         self.config_dir, self.data_dir, self.secrets = Path(config_dir), Path(data_dir), secrets
         self.slack = slack
@@ -113,16 +111,10 @@ class CoreApp:
         persona = render_persona(load_persona(self.config_dir / "persona.toml"), name=self.config.name)
         self.payloads = Payloads(self.conn, config=self.config, packs=self.packs, persona_text=persona,
                                  config_dir=self.config_dir, secrets=secrets)
-        self.githost = GitHost(self.data_dir / "git", agent_name=self.config.name,
-                               read_token=secrets.get("GITHUB_READ_TOKEN"),
-                               auth=tokens_auth(lambda token: resolve_token(self.conn, token)))
 
         self.router = AgentToolRouter(self.conn, config=self.config, packs=self.packs, queue=self.queue,
                                       slack=slack, notifier=self.notifier, secret_values=self.secret_values,
                                       turn_payload=self._turn_payload)
-        if github_writer is not None:
-            register_pr_tools(self.router, githost=self.githost, writer=github_writer,
-                              write_token=secrets.get("GITHUB_WRITE_TOKEN", ""))
         if github_reader is not None or linear_client is not None:
             register_tracker_tools(self.router, reader=github_reader, linear=linear_client)
         register_kpi_tools(self.router)
@@ -160,10 +152,9 @@ class CoreApp:
             conn=self.conn, queue=self.queue, gate=Gate(self.conn, self.config, proxy), tools=self.router,
             context_for=self.router.context_for,
             bundles=lambda: build_bundle(self.config_dir),
-            on_result=self.on_result, on_files=self.on_files, bind=self.bind, refresh=self._refresh_turn,
+            on_result=self.on_result, on_files=self.on_files, refresh=self._refresh_turn,
             runs_dir=self.data_dir / "runs",
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
-        self.agent_app.router.add_route("*", "/git/{project}.git/{tail:.*}", self.githost.aiohttp_handler)
         self.account_names = AccountNames(self.config_dir / NAMES_FILE)
         self.dashboard_app = make_dashboard_app(
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
@@ -228,21 +219,6 @@ class CoreApp:
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
         return self.payloads.refresh_turn(convo, payload) if convo is not None else payload
 
-    def bind(self, work_item_id: str, project: str, title: str) -> dict:
-        """work_on, core's half: bind the session's conversation to the project and hand the runner what its
-        checkout needs, the test keys included. The branch is named from `title`, or else from the first line of
-        the message the session is answering."""
-        ctx = self.router.context_for(work_item_id)
-        if not self.router.offers(ctx, "work_on"):
-            raise BindRefused(NOT_AVAILABLE)
-        if ctx.conversation_id is None:
-            raise BindRefused("this session has no conversation to bind")
-        text = (self.queue.get(work_item_id).payload.get("text") or "").strip()
-        title = title.strip() or (text.splitlines()[0] if text else "")
-        row = bind_project(self.conn, ctx.conversation_id, project, packs=self.packs, agent_name=self.config.name,
-                           title=title)
-        return {**self.payloads.checkout(row), "test_secrets": self.payloads.test_secrets(project)}
-
     # results from the runner
 
     def _record_run(self, item: WorkItem, result: dict) -> None:
@@ -267,8 +243,8 @@ class CoreApp:
         await self.conversations.on_result(item, result)
 
     async def on_files(self, item_id: str, files: list[tuple[str, bytes]], text: str) -> bool:
-        """Post files to the conversation's Slack thread. Every post is logged as evidence (open_pr looks for
-        screenshots); returns whether it reached Slack."""
+        """Post files to the conversation's Slack thread. Every post is logged as evidence; returns whether it
+        reached Slack."""
         ctx = self.router.context_for(item_id)
         if not files:
             return False
@@ -325,11 +301,6 @@ class CoreApp:
         return sync_runner_token(self.conn, self.runner_token_path, owner_uid=self._agent_owner())
 
     # loops
-
-    async def refresh_git(self) -> None:
-        for name, pack in self.packs.items():
-            await asyncio.to_thread(self.githost.ensure, name, pack.project.repo)
-            await asyncio.to_thread(self.githost.refresh, name)
 
     async def maintenance(self) -> None:
         self.sync_runner_token()
@@ -395,7 +366,7 @@ class CoreApp:
             meter = web.AppRunner(self.meter_app)
             await meter.setup()
             await web.TCPSite(meter, "0.0.0.0", self.config.llm_meter.port).start()
-        loops = [self._every(300, self.refresh_git), self._every(60, self.conversations.intake_linear),
+        loops = [self._every(60, self.conversations.intake_linear),
                  self._every(3600, self.maintenance),
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token)]
         if self.pr_stats:
@@ -408,7 +379,6 @@ def main() -> int:
 
     from agent import paths
     from agent.connectors.github_read import GitHubReader
-    from agent.connectors.github_write import GitHubWriter
     from agent.connectors.slack_app import build_app
     from agent.proxy import ProxyClient
     from agent.secrets import load_secrets
@@ -424,7 +394,6 @@ def main() -> int:
             proxy=ProxyClient(os.environ.get("PROXY_URL", "http://172.30.0.1:28090")),
             linear_client=LinearClient(secrets["LINEAR_API_KEY"]) if secrets.get("LINEAR_API_KEY") else None,
             github_reader=GitHubReader(secrets["GITHUB_READ_TOKEN"]) if secrets.get("GITHUB_READ_TOKEN") else None,
-            github_writer=GitHubWriter(secrets["GITHUB_WRITE_TOKEN"]) if secrets.get("GITHUB_WRITE_TOKEN") else None,
             bot_user_id=bot_user_id)
         await app.serve(build_app(secrets["SLACK_BOT_TOKEN"], app.conversations), secrets["SLACK_APP_TOKEN"])
 

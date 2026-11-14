@@ -9,7 +9,6 @@ from aiohttp.test_utils import TestClient, TestServer
 from agent.core.agent_tools import ToolContext
 from agent.core.app import CoreApp
 from agent.core.sessions import mint_token, resolve_token
-from agent.gitutil import branch_name
 from agent.proxy import AccountUsage, Usage
 from agent_fixtures import FakeSlack
 
@@ -22,16 +21,11 @@ class Proxy:
         return Usage({"maple": AccountUsage("allowed", 1, True)})
 
 
-class Writer:
-    async def find_open_pr(self, repo, branch):
-        return None
-
-
 def make_app(tmp_path):
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
     return CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={},
-                   slack=FakeSlack(), proxy=Proxy(), github_writer=Writer(), bot_user_id="UBOT")
+                   slack=FakeSlack(), proxy=Proxy(), bot_user_id="UBOT")
 
 
 def test_pr_stats_knows_the_agent_by_its_github_login(tmp_path):
@@ -101,7 +95,7 @@ async def test_dm_turn_names_the_sender_and_links_the_message(app):
     app.slack.users_info, app.slack.chat_getPermalink = users_info, get_permalink
     await app.conversations.handle_slack(dm_event("5.1", "what's running?"))
     payload = app.queue.get(last_item_id(app)).payload
-    assert payload["origin"] == "[from Sam Taylor (sam) · DM · https://x.slack.com/archives/D1/p51]"
+    assert payload["origin"] == "[from Sam Taylor (sam, GitHub @sam-example) · DM · https://x.slack.com/archives/D1/p51]"
 
 
 async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
@@ -145,7 +139,7 @@ def last_item_id(app):
 
 
 def keyed_app(tmp_path):
-    """The example config with the sample pack's test key, SAMPLE_TEST_USER, given to sessions with its checkout."""
+    """The example config with the sample pack's test key, SAMPLE_TEST_USER, which every session gets."""
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
     project = config / "packs" / "sample" / "project.toml"
@@ -170,65 +164,23 @@ async def test_follow_up_queued_during_a_turn_resumes_its_session(app, api):
     assert app.queue.get(follow_up).payload["resume_session_id"] == "S1"  # what later readers of the item see too
 
 
-async def test_follow_up_queued_before_work_on_gets_its_checkout(tmp_path):
-    """A follow-up queued before the running turn's work_on bound the conversation gets the checkout and the test
-    keys when it is claimed after the bind."""
+async def test_a_dm_turn_gets_the_test_keys_and_no_checkout_tools(tmp_path):
+    """Any session can work on any project: it clones the code itself, so every turn carries the packs' test keys,
+    and nothing in core makes or binds a checkout."""
     app = keyed_app(tmp_path)
     client = TestClient(TestServer(app.agent_app))
     await client.start_server()
     try:
         await app.conversations.handle_slack(dm_event("5.1", "run sample locally"))
-        first = await pull(client, app)
-        await app.conversations.handle_slack(dm_event("5.2", "and show me the home page"))
-        follow_up = last_item_id(app)
-        queued = app.queue.get(follow_up).payload
-        assert (queued["worktree"], queued["test_secrets"], queued["project"]) == (None, {}, None)
-        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(first["session_token"]))
-        assert r.status == 200
-        bound = await r.json()
-        await client.post("/agent/result", json={"result": {"outcome": "done", "text": "ok", "session_id": "S1"}},
-                          headers=bearer(first["session_token"]))
-        payload = (await pull(client, app))["work_item"]["payload"]
-        assert payload["worktree"] == {k: bound[k] for k in ("project", "default_branch", "branch", "setup", "checks")}
-        assert payload["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
-        assert (payload["project"], payload["workdir"], payload["resume_session_id"]) == ("sample", "session", "S1")
-        assert app.queue.get(follow_up).payload == payload
-    finally:
-        await client.close()
-
-
-async def test_work_on_binds_a_dm_through_core(tmp_path):
-    """A DM session's work_on: core binds its conversation, names the branch from the message's first line, and
-    hands the runner the real test keys, which a tool reply would have scrubbed."""
-    app = keyed_app(tmp_path)
-    client = TestClient(TestServer(app.agent_app))
-    await client.start_server()
-    try:
-        await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1",
-                                              "user": "U00000001", "ts": "5.1",
-                                              "text": "run sample locally\nand show me the home page"})
-        stranger = app.queue.enqueue(None, "turn", {"text": "x", "actor": "stranger"})
-        tok = mint_token(app.conn, "runner", ttl_s=60)
-        pulled = [await (await client.post("/agent/pull", headers=bearer(tok))).json()
-                  for _ in range(2)]
-        dm = next(b for b in pulled if b["work_item"]["id"] != stranger)
-        assert "work_on" in {t["name"] for t in dm["tools"]}
-        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(dm["session_token"]))
-        assert r.status == 200
-        convo = app.conn.execute("SELECT * FROM conversations WHERE id = ?",
-                                 (dm["work_item"]["conversation_id"],)).fetchone()
-        assert await r.json() == {"project": "sample", "default_branch": "main",
-                                  "branch": branch_name(app.config.name, convo["id"], "run sample locally"),
-                                  "setup": ["python -m pip install -q -r requirements.txt"],
-                                  "checks": ["python -m pytest -q"],
-                                  "test_secrets": {"SAMPLE_TEST_USER": "tester@example.com"}}
-        assert (convo["project"], convo["workdir"]) == ("sample", "session")
-        assert app.router.context_for(dm["work_item"]["id"]).project == "sample"
-        r = await client.post("/agent/bind", json={"project": "nope"}, headers=bearer(dm["session_token"]))
-        assert r.status == 409 and (await r.json())["error"] == "unknown project 'nope' (known: sample)"
-        theirs = next(b for b in pulled if b["work_item"]["id"] == stranger)
-        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(theirs["session_token"]))
-        assert r.status == 409 and (await r.json())["error"] == "not available here"
+        body = await pull(client, app)
+        payload = body["work_item"]["payload"]
+        assert payload["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"} and payload["project"] is None
+        assert not {"worktree", "workdir"} & set(payload)
+        assert not {"work_on", "open_pr"} & {t["name"] for t in body["tools"]}
+        assert "- sample: https://github.com/" in payload["system_prompt"]
+        tok = bearer(body["session_token"])
+        assert (await client.post("/agent/bind", json={"project": "sample"}, headers=tok)).status in (404, 405)
+        assert (await client.get("/git/sample.git/info/refs?service=git-upload-pack", headers=tok)).status == 404
     finally:
         await client.close()
 
@@ -273,10 +225,6 @@ async def test_on_files_without_a_thread_is_recorded_not_posted(app):
                                        "slack": False}
 
 
-async def test_git_endpoint_needs_a_token(api):
-    assert (await api.get("/git/sample.git/info/refs?service=git-upload-pack")).status == 401
-
-
 
 async def test_session_token_ttl_follows_task_minutes(tmp_path):
     config = tmp_path / "config"
@@ -300,7 +248,7 @@ async def test_session_token_ttl_follows_task_minutes(tmp_path):
 
 async def test_members_get_the_work_tools_and_admins_the_logins(app):
     member = manifest_names(app, tier="act")
-    assert {"open_pr", "post_update", "track_task"} <= member
+    assert {"post_update", "track_task", "finish_task"} <= member and not {"open_pr", "work_on"} & member
     assert "az_login" not in member
     assert "az_login" in manifest_names(app, tier="admin")
 

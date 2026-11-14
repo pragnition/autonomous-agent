@@ -6,7 +6,6 @@ import tomllib
 from pathlib import Path
 
 from agent.config import load_agent_config, load_pack, load_packs
-from agent.doctor import REQUIRED_CORE, run_checks
 from agent.tasks import Status
 
 ROOT = Path(__file__).parent.parent
@@ -27,23 +26,7 @@ def test_chilliclaw_pack_status_keys_valid():
     assert (TEMPLATES / "chilliclaw" / "plugin" / ".claude-plugin" / "plugin.json").is_file()
 
 
-async def test_doctor_flags_pack_without_checks(tmp_path):
-    shutil.copytree(EXAMPLES, tmp_path / "config")
-    pack = tmp_path / "config" / "packs" / "chilliclaw"
-    shutil.copytree(TEMPLATES / "chilliclaw", pack)
-    checks = {c.name: c for c in await run_checks(config_dir=tmp_path / "config",
-                                                   secrets={k: "x" for k in REQUIRED_CORE})}
-    assert checks["checks:sample"].ok is True and checks["checks:chilliclaw"].ok is True
-    toml = pack / "project.toml"
-    toml.write_text(toml.read_text().replace('checks = ["just check"]', "checks = []"))
-    checks = {c.name: c for c in await run_checks(config_dir=tmp_path / "config",
-                                                   secrets={k: "x" for k in REQUIRED_CORE})}
-    assert checks["checks:chilliclaw"].ok is False and "no [build] checks" in checks["checks:chilliclaw"].detail
-
-
 def test_chilliclaw_pack_runs_locally_through_the_meter():
-    pack = load_pack(TEMPLATES / "chilliclaw", load_agent_config(EXAMPLES / "agent.toml"))
-    assert pack.project.build_checks == ["just check"] and any("bun install" in c for c in pack.project.build_setup)
     local = TEMPLATES / "chilliclaw" / "plugin" / "skills" / "chilliclaw-local"
     overlay = tomllib.loads((local / "agent-overlay.toml").read_text())
     for name in ("main", "email_summary", "usecase_classifier"):
@@ -51,9 +34,28 @@ def test_chilliclaw_pack_runs_locally_through_the_meter():
         assert deployment["backend"] == "foundry" and deployment["foundry"]["api_key_env"] == "AGENT_LLM_KEY"
         assert deployment["foundry"]["base_url"] == "http://172.30.0.10:8087/llm/chilliclaw-dev"
     assert "integrations" not in overlay and overlay["workspace"]["generate_image"]["enabled"] is False
-    assert "/run/agent/projects/chilliclaw.env" in pack.project.build_setup[0]
-    assert "AGENT_LLM_KEY=metered" in " ".join(pack.project.build_setup)
-    assert "chilliclaw-dev-user-id" in (local / "SKILL.md").read_text()
+    write_env = (local / "write-env.py").read_text()
+    assert "/run/agent/projects/chilliclaw.env" in write_env and "AGENT_LLM_KEY=metered" in write_env
+    assert "bun install" in (local / "setup.sh").read_text()
+    skill = (local / "SKILL.md").read_text()
+    assert "chilliclaw-dev-user-id" in skill and "gh repo clone pragnition/chilliclaw" in skill
+    assert "bash <skill-dir>/setup.sh" in skill
+
+
+def test_chilliclaw_setup_writes_env_from_the_team_file(tmp_path, monkeypatch):
+    """write-env.py, run in a clone: the team's values win over .env.example's, placeholders get local values, blank
+    generated tokens are left out, and the model key is the meter's stand-in."""
+    local = TEMPLATES / "chilliclaw" / "plugin" / "skills" / "chilliclaw-local"
+    team = tmp_path / "team.env"
+    team.write_text("SLACK_BOT_TOKEN=xoxb-team\n")
+    (tmp_path / ".env.example").write_text("SLACK_BOT_TOKEN=REPLACE_ME\nNEW_KEY=default\nDSL_EXECUTOR_TOKEN=\n"
+                                           "CREDENTIAL_ENCRYPTION_KEY=REPLACE_ME\n")
+    source = (local / "write-env.py").read_text().replace('"/run/agent/projects/chilliclaw.env"', repr(str(team)))
+    monkeypatch.chdir(tmp_path)
+    exec(compile(source, "write-env.py", "exec"), {"__name__": "__main__"})
+    env = dict(line.split("=", 1) for line in (tmp_path / ".env").read_text().splitlines())
+    assert env["SLACK_BOT_TOKEN"] == "xoxb-team" and env["NEW_KEY"] == "default" and "DSL_EXECUTOR_TOKEN" not in env
+    assert len(env["CREDENTIAL_ENCRYPTION_KEY"]) == 64 and env["AGENT_LLM_KEY"] == "metered"
 
 
 def test_smoke_script_queues_its_turn(tmp_path, monkeypatch, capsys):

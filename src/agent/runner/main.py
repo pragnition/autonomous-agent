@@ -67,7 +67,6 @@ def main(argv: list[str] | None = None) -> int:
     from agent.runner.claude import ClaudeRunner
     from agent.runner.link import CoreLink
     from agent.runner.worker import Runner
-    from agent.runner.worktrees import Worktrees
 
     parser = argparse.ArgumentParser(prog="agent runner", description="Run the agent container's runner")
     parser.add_argument("--token-file", default="/run/agent/runner-token")
@@ -81,17 +80,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     root = Path(args.root)
     env = agent_environment(os.environ, args.agent_name, args.git_email)
-    os.environ.update(env)  # the git identity, for setup commands and open_pr's checks in plain shells
+    os.environ.update(env)  # the git identity, for every commit the agent makes
     claude = ClaudeRunner(ProxyClient(args.proxy), args.proxy, root / "transcripts")
     token_file = Path(args.token_file)
     shared = token_file.parent  # what core shares with the container: the token, linear.env, the projects' env files
 
     def make_runner(token: str) -> Runner:
-        return Runner(CoreLink(args.core, token), Worktrees(root, args.core, lambda: token), claude,
-                      bundles_dir=root / "bundles", sessions_root=root / "sessions",
-                      scratch_root=root / "scratch", agent_name=args.agent_name, extra_env=env,
-                      env_files=[shared / "linear.env"], app_env_dir=shared / "projects",
-                      memory_dir=root / "memory")
+        return Runner(CoreLink(args.core, token), claude, bundles_dir=root / "bundles",
+                      sessions_root=root / "sessions", scratch_root=root / "scratch", extra_env=env,
+                      env_files=[shared / "linear.env"], memory_dir=root / "memory")
 
     async def run() -> None:
         keeper = RunnerKeeper(make_runner)

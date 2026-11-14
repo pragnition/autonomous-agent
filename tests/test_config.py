@@ -109,13 +109,18 @@ def test_bad_person_role(tmp_path):
 def test_sample_pack_loads():
     packs = load_packs(EXAMPLES, load_agent_config(EXAMPLES / "agent.toml"))
     assert "sample" in packs
-    assert packs["sample"].project.build_checks
     assert set(packs["sample"].project.linear_status) == {"working", "ready_for_review", "merged", "failed"}
 
 
 def test_valid_custom_pack_loads(tmp_path):
     p = load_pack(make_pack(tmp_path), agent(tmp_path)).project
     assert p.secrets_worker == ["DEMO_TEST_USER"]
+
+
+def test_a_pack_with_a_leftover_build_table_still_loads(tmp_path):
+    """Installs from before the agent set up its own clones still have [build] setup and checks: ignored."""
+    assert "[build]" in PROJECT
+    assert load_pack(make_pack(tmp_path), agent(tmp_path)).project.name == "demo"
 
 
 def test_pack_owner_must_be_a_person(tmp_path):

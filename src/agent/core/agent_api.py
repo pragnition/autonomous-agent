@@ -18,7 +18,6 @@ from aiohttp import web
 
 from agent import db
 from agent import events as event_log
-from agent.core.conversations import BindRefused
 from agent.core.sessions import TokenInfo, WorkItem, WorkQueue, mint_token, resolve_token
 
 log = logging.getLogger(__name__)
@@ -43,7 +42,6 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    bundles: Callable[[], tuple[str, bytes]],
                    on_result: Callable[[WorkItem, dict], Awaitable[None]],
                    on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[bool | None]],
-                   bind: Callable[[str, str, str], dict],
                    refresh: Callable[[str, dict], dict] | None = None,
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
                    runs_dir: Path | None = None) -> web.Application:
@@ -105,17 +103,6 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         reply = await tools.call(context_for(info.work_item_id), body.get("name", ""), body.get("args") or {})
         return web.json_response({"text": reply.text})
 
-    async def bind_project(request: web.Request) -> web.Response:
-        """work_on's binding. Its own route, not a tool: the reply carries the project's test keys, and core strips
-        every secret out of tool replies."""
-        info = resolved(request, "session")
-        body = await request.json()
-        try:
-            return web.json_response(bind(info.work_item_id, str(body.get("project") or ""),
-                                          str(body.get("title") or "")))
-        except BindRefused as e:
-            return web.json_response({"error": str(e)}, status=409)
-
     async def files(request: web.Request) -> web.Response:
         info = resolved(request, "session")
         text, items = "", []
@@ -152,7 +139,6 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
     app[CONN_KEY] = conn
     app.add_routes([web.post("/agent/pull", pull), web.post("/agent/heartbeat", heartbeat),
                     web.post("/agent/events", events), web.post("/agent/tool", tool),
-                    web.post("/agent/bind", bind_project),
                     web.post("/agent/files", files), web.post("/agent/result", result),
                     web.get("/agent/bundle", bundle), web.get("/health", health)])
     return app

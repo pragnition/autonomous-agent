@@ -8,7 +8,6 @@ from agent.core.agent_tools import AgentToolRouter, ToolReply, ToolSpec
 from agent.core.conversations import Conversations, record_message
 from agent.core.notifier import SlackNotifier
 from agent.core.sessions import WorkQueue
-from agent.gitutil import branch_name
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 from test_conversations import reply
@@ -145,27 +144,14 @@ async def test_track_task_creates_working_task_once(router, ctx_member, conn):
                                                                   "kind": "bug"})).text.lower()
 
 
-async def test_track_task_refuses_other_project(router, ctx_member, conn):
-    """A conversation bound to one project (up front or by work_on) can't be rebound to another by track_task."""
+async def test_track_task_may_name_another_project_than_the_channels(router, ctx_member, conn):
+    """A conversation isn't tied to one project: one in #sample can track work on another repo."""
     router.packs["other"] = make_pack("other", repo="o/other")
     reply = await router.call(ctx_member, "track_task", {"project": "other", "title": "t", "kind": "bug"})
-    assert reply.text == "this conversation is bound to sample"
+    assert reply.text.startswith("Tracking ")
     row = conn.execute("SELECT project, task_id FROM conversations WHERE id = ?",
                        (ctx_member.conversation_id,)).fetchone()
-    assert tuple(row) == ("sample", None) and tasks.list_tasks(conn) == []
-
-
-async def test_work_on_lists_the_packs_and_is_handled_by_the_runner(conn, tmp_path):
-    router = AgentToolRouter(conn, config=make_config(tmp_path), queue=WorkQueue(conn),
-                             packs={"sample": make_pack(), "other": make_pack("other", repo="o/other")},
-                             slack=FakeSlack(), notifier=FakeNotifier(),
-                             secret_values=[])
-    ctx = ctx_for(router, actor="bob")
-    spec = next(t for t in router.manifest(ctx) if t["name"] == "work_on")
-    assert "sample (o/r)" in spec["description"] and "other (o/other)" in spec["description"]
-    assert spec["input_schema"]["required"] == ["project"] and "title" in spec["input_schema"]["properties"]
-    assert (await router.call(ctx, "work_on", {"project": "sample"})).text == "work_on is handled by the runner"
-    assert "work_on" not in {t["name"] for t in router.manifest(ctx_for(router, actor="stranger"))}
+    assert row["project"] == "other" and tasks.get_task(conn, row["task_id"]).project == "other"
 
 
 async def test_track_task_unknown_project(router):
@@ -185,8 +171,7 @@ async def test_start_task_queues_code_session(router, ctx_general, conn):
     assert item.payload["text"] == "b"
     row = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
     assert (row["channel"], row["thread_ts"], row["is_primary"]) == ("D-ann", "1.0", 0)
-    assert tasks.get_task(conn, row["task_id"]).title == "fix x"
-    assert row["branch"] == branch_name("agent", row["task_id"], "fix x") and row["workdir"] == "checkout"
+    assert tasks.get_task(conn, row["task_id"]).title == "fix x" and row["project"] == "sample"
 
 
 async def test_start_task_from_dm_posts_its_own_thread(router, conn):
