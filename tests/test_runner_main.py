@@ -68,14 +68,14 @@ async def test_stops_the_runner_when_the_token_is_gone():
 
 def test_agent_environment_takes_the_github_noreply_email():
     from agent.runner.main import agent_environment
-    env = agent_environment({}, "chilli", git_email="7+chilli-bot@users.noreply.github.com")
-    assert env["GIT_AUTHOR_EMAIL"] == env["GIT_COMMITTER_EMAIL"] == "7+chilli-bot@users.noreply.github.com"
-    assert env["GIT_AUTHOR_NAME"] == "chilli"
+    env = agent_environment({}, "jensen", git_email="7+jensen-bot@users.noreply.github.com")
+    assert env["GIT_AUTHOR_EMAIL"] == env["GIT_COMMITTER_EMAIL"] == "7+jensen-bot@users.noreply.github.com"
+    assert env["GIT_AUTHOR_NAME"] == "jensen"
 
 
 def test_agent_environment():
     from agent.runner.main import agent_environment
-    env = agent_environment({"GH_TOKEN": "ghp_abc", "OPENAI_API_KEY": "k", "PATH": "/bin"}, "chilli")
+    env = agent_environment({"GH_TOKEN": "ghp_abc", "OPENAI_API_KEY": "k", "PATH": "/bin"}, "jensen")
     assert env["GH_TOKEN"] == "ghp_abc" and env["OPENAI_API_KEY"] == "k" and "PATH" not in env
-    assert env["GIT_AUTHOR_NAME"] == env["GIT_COMMITTER_NAME"] == "chilli"
-    assert env["GIT_AUTHOR_EMAIL"] == "chilli@users.noreply.github.com"
+    assert env["GIT_AUTHOR_NAME"] == env["GIT_COMMITTER_NAME"] == "jensen"
+    assert env["GIT_AUTHOR_EMAIL"] == "jensen@users.noreply.github.com"

@@ -8,7 +8,7 @@ from agent.config import ConfigError, load_agent_config, load_pack, load_packs
 
 EXAMPLES = Path(__file__).parent.parent / "examples" / "config"
 
-MIN_AGENT = """name = "chilli"
+MIN_AGENT = """name = "jensen"
 
 [people.ann]
 slack = "U1"
@@ -71,11 +71,11 @@ def test_defaults(tmp_path):
 
 
 def test_github_login_defaults_to_name(tmp_path):
-    assert agent(tmp_path).github == "chilli"
+    assert agent(tmp_path).github == "jensen"
 
 
 def test_github_login_can_differ_from_name(tmp_path):
-    assert agent(tmp_path, 'github = "chilli-bot"\n' + MIN_AGENT).github == "chilli-bot"
+    assert agent(tmp_path, 'github = "jensen-bot"\n' + MIN_AGENT).github == "jensen-bot"
 
 
 def test_example_config_loads():
@@ -97,7 +97,7 @@ def test_people_lookups(tmp_path):
 
 
 def test_missing_name_is_reported(tmp_path):
-    probs = problems_of(lambda: agent(tmp_path, MIN_AGENT.replace('name = "chilli"\n', "")))
+    probs = problems_of(lambda: agent(tmp_path, MIN_AGENT.replace('name = "jensen"\n', "")))
     assert any("name" in p for p in probs)
 
 

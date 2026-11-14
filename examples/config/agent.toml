@@ -1,14 +1,14 @@
 # Example install config. Copy it to data/config/agent.toml (core reads /data/config/agent.toml) and edit.
-name = "chilli"                  # the agent's name, branch prefix and Linear label
-# github = "chilli-bot"          # the agent's GitHub login, when it differs from name
+name = "jensen"                  # the agent's name, branch prefix and Linear label
+# github = "jensen-bot"          # the agent's GitHub login, when it differs from name
 timezone = "Asia/Singapore"
 
-[people.parthib]
+[people.sam]
 slack = "U00000001"
-github = "parthib-example"
-linear = "parthib@example.com"
+github = "sam-example"
+linear = "sam@example.com"
 role = "admin"
-tailscale = "parthib@example.com"   # Tailscale login: an admin with one can resume the agent from the dashboard
+tailscale = "sam@example.com"       # Tailscale login: an admin with one can resume the agent from the dashboard
 
 [people.alice]
 slack = "U00000002"

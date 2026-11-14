@@ -7,7 +7,7 @@
 name = "chilliclaw"
 repo = "pragnition/chilliclaw"
 default_branch = "main"
-owner = "parthib"                    # owns PRs from unmapped requesters
+owner = "sam"                        # owns PRs from unmapped requesters
 slack_channel = "#chilliclaw-dev"    # CONFIRM: where task threads for work that starts outside Slack go
 linear_team = "PRA"
 

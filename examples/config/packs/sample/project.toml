@@ -3,8 +3,8 @@
 name = "sample"
 repo = "example-org/agent-sample"
 default_branch = "main"
-owner = "parthib"
-slack_channel = "#chilli"
+owner = "sam"
+slack_channel = "#jensen"
 linear_team = "SAM"
 
 [linear.status]

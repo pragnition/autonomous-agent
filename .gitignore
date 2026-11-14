@@ -5,3 +5,6 @@ __pycache__/
 .superpowers/
 dashboard/node_modules/
 dashboard/dist/
+.env
+*.env
+claude_proxy/

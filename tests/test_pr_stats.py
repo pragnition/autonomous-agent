@@ -64,7 +64,7 @@ def env(tmp_path):
 
 def poller(env, gh, now=datetime(2026, 11, 10, tzinfo=UTC)):
     conn, packs, _ = env
-    return PrStatsPoller(conn, gh.reader(), agent_login="chilli", packs=packs, clock=lambda: now)
+    return PrStatsPoller(conn, gh.reader(), agent_login="jensen", packs=packs, clock=lambda: now)
 
 
 def stats(conn, tid):
@@ -94,7 +94,7 @@ async def test_open_pr_stays_ready_for_review(env):
 
 async def test_human_commits_exclude_agent(env):
     conn, _, tid = env
-    gh = GH(commits=[("s1", "chilli", 50, 5), ("s2", "alice", 3, 2), ("s3", "bob", 1, 0)])
+    gh = GH(commits=[("s1", "jensen", 50, 5), ("s2", "alice", 3, 2), ("s3", "bob", 1, 0)])
     await poller(env, gh).update(tasks.get_task(conn, tid))
     s = stats(conn, tid)
     assert (s["human_commits"], s["human_lines_changed"]) == (2, 6)
@@ -103,7 +103,7 @@ async def test_human_commits_exclude_agent(env):
 
 async def test_first_human_review_ignores_agent_reviews(env):
     conn, _, tid = env
-    gh = GH(reviews=[{"user": {"login": "chilli"}, "state": "COMMENTED", "submitted_at": "2026-11-01T01:00:00Z"},
+    gh = GH(reviews=[{"user": {"login": "jensen"}, "state": "COMMENTED", "submitted_at": "2026-11-01T01:00:00Z"},
                      {"user": {"login": "alice"}, "state": "APPROVED", "submitted_at": "2026-11-02T09:00:00Z"},
                      {"user": {"login": "bob"}, "state": "COMMENTED", "submitted_at": "2026-11-01T05:00:00Z"}])
     await poller(env, gh).update(tasks.get_task(conn, tid))
@@ -158,7 +158,7 @@ async def test_on_change_called_when_task_transitions(env):
     async def on_change(task):
         seen.append(task.status)
 
-    p = PrStatsPoller(conn, GH().reader(), agent_login="chilli", packs=packs, on_change=on_change,
+    p = PrStatsPoller(conn, GH().reader(), agent_login="jensen", packs=packs, on_change=on_change,
                       clock=lambda: datetime(2026, 11, 10, tzinfo=UTC))
     await p.update(tasks.get_task(conn, tid))
     assert seen == [Status.merged]

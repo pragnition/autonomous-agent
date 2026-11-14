@@ -38,7 +38,7 @@ LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the
 
 
 def origin_line(where: str, *, who: str | None = None, link: str | None = None) -> str:
-    """The first line of a turn's prompt, e.g. [from Sam Taylor (carl) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
+    """The first line of a turn's prompt, e.g. [from Sam Taylor (sam) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
     return "[" + " · ".join(p for p in (f"from {who}" if who else None, where, link) if p) + "]"
 
 

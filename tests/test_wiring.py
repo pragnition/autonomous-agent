@@ -38,10 +38,10 @@ def test_pr_stats_knows_the_agent_by_its_github_login(tmp_path):
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
     toml = config / "agent.toml"
-    toml.write_text(toml.read_text().replace('name = "chilli"', 'name = "chilli"\ngithub = "chilli-bot"', 1))
+    toml.write_text(toml.read_text().replace('name = "jensen"', 'name = "jensen"\ngithub = "jensen-bot"', 1))
     app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={}, slack=FakeSlack(), proxy=Proxy(),
                   github_reader=object())
-    assert app.pr_stats.agent_login == "chilli-bot"
+    assert app.pr_stats.agent_login == "jensen-bot"
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def app(tmp_path):
 
 def manifest_names(app, tier="admin"):
     ctx = ToolContext(work_item_id="W", conversation_id=None, project="sample",
-                      actor="parthib", tier=tier, unattended=False, task_id=None, channel="C", thread_ts="1")
+                      actor="sam", tier=tier, unattended=False, task_id=None, channel="C", thread_ts="1")
     return {t["name"] for t in app.router.manifest(ctx)}
 
 
@@ -94,14 +94,14 @@ async def test_dm_turn_end_to_end(app, api):
 async def test_dm_turn_names_the_sender_and_links_the_message(app):
     """core's own Slack lookups (the dashboard's name and permalink helpers) fill the turn's first line."""
     async def users_info(**kw):
-        return {"user": {"real_name": "Parthib Das Gupta"}}
+        return {"user": {"real_name": "Sam Taylor"}}
 
     async def get_permalink(**kw):
         return {"permalink": f"https://x.slack.com/archives/{kw['channel']}/p{kw['message_ts'].replace('.', '')}"}
     app.slack.users_info, app.slack.chat_getPermalink = users_info, get_permalink
     await app.conversations.handle_slack(dm_event("5.1", "what's running?"))
     payload = app.queue.get(last_item_id(app)).payload
-    assert payload["origin"] == "[from Parthib Das Gupta (parthib) · DM · https://x.slack.com/archives/D1/p51]"
+    assert payload["origin"] == "[from Sam Taylor (sam) · DM · https://x.slack.com/archives/D1/p51]"
 
 
 async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
@@ -407,7 +407,7 @@ async def test_core_serves_the_dashboard_behind_its_access_rules(app):
     await client.start_server()
     try:
         # the example config trusts only the Docker gateway; a test client is 127.0.0.1
-        r = await client.get("/api/me", headers={"Tailscale-User-Login": "parthib@example.com"})
+        r = await client.get("/api/me", headers={"Tailscale-User-Login": "sam@example.com"})
         assert r.status == 403
     finally:
         await client.close()
@@ -444,11 +444,11 @@ async def test_person_names_come_from_slack_and_are_cached(app):
 
     async def users_info(**kw):
         calls.append(kw)
-        return {"user": {"real_name": "Parthib Das Gupta", "profile": {"real_name": "Parthib Das Gupta"}}}
+        return {"user": {"real_name": "Sam Taylor", "profile": {"real_name": "Sam Taylor"}}}
 
     app.slack.users_info = users_info
-    assert await app.person_name("parthib") == "Parthib Das Gupta"
-    assert await app.person_name("parthib") == "Parthib Das Gupta"
+    assert await app.person_name("sam") == "Sam Taylor"
+    assert await app.person_name("sam") == "Sam Taylor"
     assert await app.person_name("nobody") is None
     assert calls == [{"user": "U00000001"}]
 

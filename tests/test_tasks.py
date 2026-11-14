@@ -99,8 +99,8 @@ def test_settings_roundtrip(conn):
 
 def test_set_fields_updates_and_rejects_protected(conn):
     t = mk(conn)
-    t2 = tasks.set_fields(conn, t.id, pr_number=7, branch="chilli/T-0001-x")
-    assert (t2.pr_number, t2.branch) == (7, "chilli/T-0001-x")
+    t2 = tasks.set_fields(conn, t.id, pr_number=7, branch="jensen/T-0001-x")
+    assert (t2.pr_number, t2.branch) == (7, "jensen/T-0001-x")
     for bad in ({"status": "merged"}, {"id": "T-9"}, {"nope": 1}):
         with pytest.raises(ValueError):
             tasks.set_fields(conn, t.id, **bad)
