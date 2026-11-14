@@ -115,8 +115,8 @@ class CoreApp:
         self.router = AgentToolRouter(self.conn, config=self.config, packs=self.packs, queue=self.queue,
                                       slack=slack, notifier=self.notifier, secret_values=self.secret_values,
                                       turn_payload=self._turn_payload)
-        if github_reader is not None or linear_client is not None:
-            register_tracker_tools(self.router, reader=github_reader, linear=linear_client)
+        if github_reader is not None:
+            register_tracker_tools(self.router, reader=github_reader)
         register_kpi_tools(self.router)
         self.linear_auth, self.public_app, self.linear_sessions = None, None, None
         if self.config.linear.public_url and secrets.get("LINEAR_CLIENT_ID"):
