@@ -153,6 +153,7 @@ class CoreApp:
             context_for=self.router.context_for,
             bundles=lambda: build_bundle(self.config_dir),
             on_result=self.on_result, on_files=self.on_files, refresh=self._refresh_turn,
+            on_start=self.conversations.on_start,
             runs_dir=self.data_dir / "runs",
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         self.account_names = AccountNames(self.config_dir / NAMES_FILE)

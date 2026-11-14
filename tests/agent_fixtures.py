@@ -48,6 +48,7 @@ class FakeSlack:
     def __init__(self):
         self.posts, self.updates, self.reactions, self.ephemerals, self.uploads, self.opened = [], [], [], [], [], []
         self.replies: list[dict] = []
+        self.unreacted: list[dict] = []
         self.history: list[dict] = []  # a channel's top-level messages, each with a ts
         self._ts = 100
 
@@ -64,7 +65,7 @@ class FakeSlack:
         self.reactions.append(kw)
 
     async def reactions_remove(self, **kw):
-        pass
+        self.unreacted.append(kw)
 
     async def chat_postEphemeral(self, **kw):
         self.ephemerals.append(kw)

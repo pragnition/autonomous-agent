@@ -64,7 +64,11 @@ class SlackNotifier:
                                                   name=previous)
             except Exception:
                 pass  # already removed by someone; not worth failing over
-        await self.slack.reactions_add(channel=task.slack_channel, timestamp=task.slack_thread_ts, name=name)
+        try:
+            await self.slack.reactions_add(channel=task.slack_channel, timestamp=task.slack_thread_ts, name=name)
+        except Exception as e:
+            if "already_reacted" not in str(e):  # a finished chat turn on the same message leaves the same tick
+                raise
         db.set_setting(self.conn, key, name)
 
     async def ask(self, task: Task, question: str) -> None:
