@@ -23,9 +23,8 @@ task_minutes = 90                # wall-time budget per work item
 max_turns = 400
 
 [claude.models]
-default = "claude-opus-5-5"      # all real work
+default = "claude-opus-5-5"      # every session
 hard = "claude-fable-5-1"        # when someone says "use fable" in a conversation
-chores = "claude-sonnet-5"       # memory consolidation
 
 [agent]
 uid = 1001                       # the agent container's user; core hands it the Azure login and runner token

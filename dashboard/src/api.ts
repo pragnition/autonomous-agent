@@ -4,7 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 
 export type Tokens = { in: number; out: number; cache_read: number; cache_write: number }
 export type SessionState = "queued" | "running" | "done" | "failed" | "cancelled"
-export type Source = "slack" | "linear" | "handover" | "chore" | "other"
+export type Source = "slack" | "linear" | "handover" | "other"
 
 export type SessionRow = {
   id: string
@@ -138,7 +138,7 @@ export type KpiView = {
   projects: string[]
 }
 
-export type EventSource = "slack" | "linear" | "automation" | "dashboard" | "command line" | "agent" | "other"
+export type EventSource = "slack" | "linear" | "dashboard" | "command line" | "agent" | "other"
 export type EventRow = { id: number; ts: string; type: string; source: EventSource; sender: string | null }
 export type Events = { rows: EventRow[]; types: string[] }
 

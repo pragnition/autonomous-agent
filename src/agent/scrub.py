@@ -1,4 +1,4 @@
-"""Strip secrets before anything is written to memory: known secret values, then token and key patterns."""
+"""Strip secrets from text that leaves core: known secret values, then token and key patterns."""
 
 from __future__ import annotations
 

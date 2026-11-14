@@ -92,9 +92,7 @@ def _write_private(path: Path, text: str) -> None:
 
 
 def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path, checkout: Checkout, worktrees,
-                     agent_name: str = "agent", structured_sink: dict | None = None,
-                     structured_schema: dict | None = None, shell=run_shell,
-                     app_env_dir: Path | None = None) -> list:
+                     agent_name: str = "agent", shell=run_shell, app_env_dir: Path | None = None) -> list:
     async def forward(name: str, args: dict) -> str:
         try:
             reply = await link.tool(tok, name, args)
@@ -197,11 +195,4 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path,
 
         tools.append(tool(name, entry.get("description", ""), entry.get("input_schema") or
                           {"type": "object", "properties": {}})(handler))
-    if structured_sink is not None:
-        @tool("submit_result", "Return your structured answer. Call it once, last.",
-              structured_schema or {"type": "object", "properties": {}})
-        async def submit_result(args):
-            structured_sink["output"] = args
-            return _text("recorded")
-        tools.append(submit_result)
     return tools

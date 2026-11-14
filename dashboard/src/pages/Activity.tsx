@@ -1,4 +1,4 @@
-import { Bot, CirclePause, CirclePlay, CircleX, Dot, Kanban, LayoutDashboard, MessageSquare, Sparkles, Terminal }
+import { Bot, CirclePause, CirclePlay, CircleX, Dot, Kanban, LayoutDashboard, MessageSquare, Terminal }
   from "lucide-react"
 import { useState } from "react"
 import { type EventRow, type EventSource, useEvents } from "@/api"
@@ -17,12 +17,9 @@ const LABELS: Record<string, string> = {
   resume_all: "Resumed",
   session_cancelled: "Cancelled a session",
   session_started: "Session started",
-  work_started: "Chore started",
   task_created: "Task created",
   project_bound: "Project bound",
   status_changed: "Task status changed",
-  consolidated: "Memory consolidated",
-  consolidation_failed: "Memory consolidation failed",
   llm_caps_changed: "Model-call caps changed",
   llm_cap_reached: "Model-call cap reached",
 }
@@ -37,7 +34,6 @@ const LOUD: Record<string, { icon: typeof Dot; tone: string }> = {
 const SOURCES: Record<EventSource, { label: string; icon: typeof Dot }> = {
   slack: { label: "Slack", icon: MessageSquare },
   linear: { label: "Linear", icon: Kanban },
-  automation: { label: "Automation", icon: Sparkles },
   dashboard: { label: "Dashboard", icon: LayoutDashboard },
   "command line": { label: "Command line", icon: Terminal },
   agent: { label: "Agent", icon: Bot },

@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_runner(argv[1:])
     parser = argparse.ArgumentParser(prog="agent", description="Autonomous engineering agent")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("core", help="run the core service: Slack, the work queue, memory and pollers")
+    sub.add_parser("core", help="run the core service: Slack, the work queue and pollers")
     sub.add_parser("runner", help="run in the agent container: the runner that works on core's queue")
     sub.add_parser("kpis", help="show the KPIs: pickup, PR and merge-queue times, merge rate, cost")
     sub.add_parser("supervisor", help="run the health watchdog")

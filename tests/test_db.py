@@ -21,6 +21,6 @@ def test_fresh_database_has_every_table_and_column(tmp_path):
     assert columns(conn, "tokens") == {"hash", "kind", "work_item_id", "expires_at", "revoked"}
     assert columns(conn, "conversations") == {"id", "channel", "thread_ts", "project", "task_id", "session_id",
                                               "is_primary", "waiting", "model", "created_at", "last_active_at",
-                                              "consolidated_at", "branch", "workdir"}
+                                              "branch", "workdir"}
     assert columns(conn, "slack_messages") == {"channel", "ts", "conversation_id"}
     assert conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0

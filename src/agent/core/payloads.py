@@ -1,8 +1,8 @@
 """What a session starts with: the work item payload a runner turns into a Claude Code session.
 
-A short system prompt from config (or the shipped default), the persona for Slack turns only, a capped memory
-briefing, the model and budgets, the checkout to prepare and the folder to work in. Sessions with a checkout also
-get the pack's test-only secrets; nothing else secret ever goes into a payload.
+A short system prompt from config (or the shipped default) and the persona, the model and budgets, the checkout to
+prepare and the folder to work in. Sessions with a checkout also get the pack's test-only secrets; nothing else
+secret ever goes into a payload.
 """
 
 from __future__ import annotations
@@ -10,37 +10,19 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from agent.core.agent_tools import conversation_scopes
-from agent.memory.briefing import build_briefing
-from agent.memory.store import MemoryStore
-
 DEFAULT_SYSTEM = Path(__file__).parent.parent / "defaults" / "system.md"
-MEMORY_PROMPT = Path(__file__).parent.parent / "prompts" / "memory.md"
 
 
 class Payloads:
-    def __init__(self, conn: sqlite3.Connection, *, config, packs: dict, memory: MemoryStore, persona_text: str,
-                 config_dir: Path, secrets: dict[str, str]):
-        self.conn, self.config, self.packs, self.memory = conn, config, packs, memory
+    def __init__(self, conn: sqlite3.Connection, *, config, packs: dict, persona_text: str, config_dir: Path,
+                 secrets: dict[str, str]):
+        self.conn, self.config, self.packs = conn, config, packs
         self.persona_text, self.config_dir, self.secrets = persona_text, Path(config_dir), secrets
 
     def system_prompt(self) -> str:
         custom = self.config_dir / "agent" / "system.md"
         text = (custom if custom.is_file() else DEFAULT_SYSTEM).read_text()
         return text.replace("{name}", self.config.name).strip()
-
-    def _base(self, *, text: str, actor: str | None, unattended: bool, model: str,
-              system_parts: list[str]) -> dict:
-        return {"text": text, "actor": actor, "unattended": unattended, "model": model,
-                "system_prompt": "\n\n".join(p for p in system_parts if p),
-                "max_turns": self.config.limits.max_turns, "timeout_s": self.config.limits.task_minutes * 60,
-                "resume_session_id": None, "worktree": None, "test_secrets": {},
-                # ${VAR} stays unexpanded: the runner fills it from the session's environment at session start
-                "mcp": {name: {"type": m.type, "url": m.url, "headers": dict(m.headers)}
-                        for name, m in self.config.mcp.items()}}
-
-    def _briefing(self, scopes: list[str], text: str, kind: str) -> str:
-        return build_briefing(self.memory, scopes, text, self.config.memory_budget.briefing.get(kind, 1000)).text
 
     def checkout(self, convo) -> dict | None:
         """The checkout a conversation works on, once it has a branch: the same branch on every turn. A conversation
@@ -59,26 +41,21 @@ class Payloads:
         return {k: self.secrets[k] for k in names if k in self.secrets}
 
     def turn(self, convo, text: str, actor: str | None, *, unattended: bool = False) -> dict:
-        project = convo["project"]
-        scopes = conversation_scopes(convo["channel"], project, actor, self.packs)
-        payload = self._base(text=text, actor=actor, unattended=unattended,
-                             model=convo["model"] or self.config.models.default,
-                             system_parts=[self.system_prompt(), self.persona_text,
-                                           self._briefing(scopes, text, "session")])
-        payload["conversation_id"] = convo["id"]
+        payload = {"text": text, "actor": actor, "unattended": unattended,
+                   "model": convo["model"] or self.config.models.default,
+                   "system_prompt": "\n\n".join(p for p in (self.system_prompt(), self.persona_text) if p),
+                   "max_turns": self.config.limits.max_turns, "timeout_s": self.config.limits.task_minutes * 60,
+                   # ${VAR} stays unexpanded: the runner fills it from the session's environment at session start
+                   "mcp": {name: {"type": m.type, "url": m.url, "headers": dict(m.headers)}
+                           for name, m in self.config.mcp.items()},
+                   "conversation_id": convo["id"]}
         return self.refresh_turn(convo, payload)
 
     def refresh_turn(self, convo, payload: dict) -> dict:
         """The turn with its conversation's state as it is now: the session to resume, the project, the checkout,
         the working folder and the test keys. Done again when a runner claims the turn, because a turn queued while
         the one before it ran must resume the session that turn ended with and get the checkout its work_on made.
-        The text, system prompt and briefing stay as they were when the turn was queued."""
+        The text and system prompt stay as they were when the turn was queued."""
         project, checkout = convo["project"], self.checkout(convo)
         return {**payload, "resume_session_id": convo["session_id"], "project": project, "worktree": checkout,
                 "workdir": convo["workdir"], "test_secrets": self.test_secrets(project) if checkout is not None else {}}
-
-    def chore(self, prompt: str, schema: dict) -> dict:
-        payload = self._base(text=prompt, actor=None, unattended=True,
-                             model=self.config.models.chores, system_parts=[MEMORY_PROMPT.read_text().strip()])
-        payload.update(max_turns=10, timeout_s=300, structured=schema)
-        return payload

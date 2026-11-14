@@ -13,7 +13,6 @@ from agent.core.agent_tools import AgentToolRouter
 from agent.core.linear_app import LinearAppAuth, register_linear_tools
 from agent.core.public_api import make_public_app
 from agent.core.sessions import WorkQueue
-from agent.memory.store import MemoryStore
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 
 SECRET = "whsec"
@@ -116,7 +115,7 @@ async def test_other_paths_404(client):
 async def test_linear_install_is_admin_only_and_dms(conn, tmp_path, auth):
     slack = FakeSlack()
     router = AgentToolRouter(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                             memory=MemoryStore(tmp_path / "memory.db"), slack=slack, notifier=FakeNotifier(),
+                             slack=slack, notifier=FakeNotifier(),
                              secret_values=[])
     register_linear_tools(router, auth)
     cid = add_conversation(conn, channel="D-ann")

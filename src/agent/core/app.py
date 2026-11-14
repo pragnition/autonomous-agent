@@ -23,7 +23,6 @@ from agent.core.agent_api import make_agent_app
 from agent.core.agent_tools import NOT_AVAILABLE, AgentToolRouter
 from agent.core.bundles import build_bundle
 from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
-from agent.core.consolidation import ConsolidationService
 from agent.core.conversations import BindRefused, Conversations, bind_project
 from agent.core.gitserve import GitHost, tokens_auth
 from agent.core.kpis import compute_kpis, format_kpis, register_kpi_tools
@@ -42,7 +41,6 @@ from agent.core.tracker_tools import register_tracker_tools
 from agent.dashboard.app import make_dashboard_app
 from agent.dashboard.names import NAMES_FILE, AccountNames
 from agent.dashboard.transcript import make_scrubber
-from agent.memory.store import MemoryStore
 from agent.persona import load_persona, render_persona
 from agent.tasks import Task
 
@@ -104,7 +102,6 @@ class CoreApp:
         (self.data_dir / "db").mkdir(parents=True, exist_ok=True)
         self.conn = db.connect(self.data_dir / "db" / "agent.db")
         db.create_schema(self.conn)
-        self.memory = MemoryStore(self.data_dir / "db" / "memory.db")
         self.secret_values = [v for v in secrets.values() if v]
         self.queue = WorkQueue(self.conn)
         self.linear_poller = LinearPoller(self.conn, linear_client, config=self.config, packs=self.packs,
@@ -112,15 +109,15 @@ class CoreApp:
         self.notifier = Notifiers(SlackNotifier(slack, self.conn),
                                   LinearNotifier(self.linear_poller) if self.linear_poller else None)
         persona = render_persona(load_persona(self.config_dir / "persona.toml"), name=self.config.name)
-        self.payloads = Payloads(self.conn, config=self.config, packs=self.packs, memory=self.memory,
-                                 persona_text=persona, config_dir=self.config_dir, secrets=secrets)
+        self.payloads = Payloads(self.conn, config=self.config, packs=self.packs, persona_text=persona,
+                                 config_dir=self.config_dir, secrets=secrets)
         self.githost = GitHost(self.data_dir / "git", agent_name=self.config.name,
                                read_token=secrets.get("GITHUB_READ_TOKEN"),
                                auth=tokens_auth(lambda token: resolve_token(self.conn, token)))
 
         self.router = AgentToolRouter(self.conn, config=self.config, packs=self.packs, queue=self.queue,
-                                      memory=self.memory, slack=slack, notifier=self.notifier,
-                                      secret_values=self.secret_values, turn_payload=self._turn_payload)
+                                      slack=slack, notifier=self.notifier, secret_values=self.secret_values,
+                                      turn_payload=self._turn_payload)
         if github_writer is not None:
             register_pr_tools(self.router, githost=self.githost, writer=github_writer,
                               write_token=secrets.get("GITHUB_WRITE_TOKEN", ""))
@@ -154,8 +151,6 @@ class CoreApp:
                                            slack=slack, payloads=self.payloads, notifier=self.notifier,
                                            bot_user_id=bot_user_id, linear_poller=self.linear_poller,
                                            person_name=self.person_name, permalink=self.permalink)
-        self.consolidation = ConsolidationService(self.conn, self.memory, self.queue, self.payloads,
-                                                  secret_values=self.secret_values, mirror_for=self.mirror)
         self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
                                       on_change=self.notifier.task_changed) if github_reader else None
         self.agent_app = make_agent_app(
@@ -242,10 +237,6 @@ class CoreApp:
                            title=title)
         return {**self.payloads.checkout(row), "test_secrets": self.payloads.test_secrets(project)}
 
-    def mirror(self, project: str | None) -> Path | None:
-        path = self.data_dir / "mirrors" / project if project else None
-        return path if path and path.exists() else None
-
     # results from the runner
 
     def _record_run(self, item: WorkItem, result: dict) -> None:
@@ -267,10 +258,7 @@ class CoreApp:
         if item is None:
             return
         self._record_run(item, result)
-        if item.kind == "turn":
-            await self.conversations.on_result(item, result)
-        elif item.kind == "chore":
-            await self.consolidation.on_result(item, result)
+        await self.conversations.on_result(item, result)
 
     async def on_files(self, item_id: str, files: list[tuple[str, bytes]], text: str) -> bool:
         """Post files to the conversation's Slack thread. Every post is logged as evidence (open_pr looks for
@@ -335,15 +323,8 @@ class CoreApp:
         for name, pack in self.packs.items():
             await asyncio.to_thread(self.githost.ensure, name, pack.project.repo)
             await asyncio.to_thread(self.githost.refresh, name)
-            await asyncio.to_thread(self.githost.working_copy, name, pack.project.default_branch)
 
-    async def sweep_memory(self) -> None:
-        self.consolidation.sweep()
-        self.consolidation.sweep_threads(datetime.now(UTC))
-
-    async def maintenance(self, now: datetime | None = None) -> None:
-        now = now or datetime.now(UTC)
-        self.memory.demote_unused(now)
+    async def maintenance(self) -> None:
         self.sync_runner_token()
 
     # Linear app
@@ -408,7 +389,7 @@ class CoreApp:
             await meter.setup()
             await web.TCPSite(meter, "0.0.0.0", self.config.llm_meter.port).start()
         loops = [self._every(300, self.refresh_git), self._every(60, self.conversations.intake_linear),
-                 self._every(300, self.sweep_memory), self._every(3600, self.maintenance),
+                 self._every(3600, self.maintenance),
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token)]
         if self.pr_stats:
             loops.append(self._every(300, self.pr_stats.poll_all))

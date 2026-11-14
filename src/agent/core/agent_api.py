@@ -60,21 +60,19 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         resolved(request, "runner")
         deadline = time.monotonic() + pull_wait_s
         while True:
-            claimable = queue.claimable_kinds()
             item = None
-            if claimable:  # nothing queued (or claimable) means nothing worth asking the Gate about
-                kinds = tuple([k for k in claimable if (await gate.can_start(k))[0]])
-                item = queue.claim(kinds=kinds) if kinds else None
+            # nothing claimable means nothing worth asking the Gate about
+            if queue.has_claimable() and (await gate.can_start())[0]:
+                item = queue.claim()
             if item is not None:
-                if refresh is not None and item.kind == "turn" and item.conversation_id:
+                if refresh is not None and item.conversation_id:
                     # no await since the claim: nothing can change the conversation between the two
                     item.payload = refresh(item.conversation_id, item.payload)
                     queue.set_payload(item.id, item.payload)
                 session = mint_token(conn, "session", work_item_id=item.id, ttl_s=session_ttl_s)
                 ctx = context_for(item.id)
-                # A turn's start is where the KPIs' pickup and queue-wait times begin; other kinds are logged apart
-                # so the dashboard knows when every item started without moving the KPIs.
-                event_log.append(conn, "session_started" if item.kind == "turn" else "work_started",
+                # a turn's start is where the KPIs' pickup and queue-wait times begin
+                event_log.append(conn, "session_started",
                                  task_id=getattr(ctx, "task_id", None), actor=None,
                                  data={"work_item": item.id, "queued_at": item.created_at, "project": ctx.project})
                 return web.json_response({

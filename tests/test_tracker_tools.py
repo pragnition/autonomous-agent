@@ -9,7 +9,6 @@ from agent.connectors.linear import LinearClient
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.sessions import WorkQueue
 from agent.core.tracker_tools import register_tracker_tools
-from agent.memory.store import MemoryStore
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 
 LOG = "x" * 30000 + "ERROR test_export failed"
@@ -64,7 +63,7 @@ def conn(tmp_path):
 @pytest.fixture
 def router(conn, tmp_path):
     r = AgentToolRouter(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                        memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                        slack=FakeSlack(), notifier=FakeNotifier(),
                         secret_values=[])
     reader = GitHubReader("t", http=httpx.AsyncClient(transport=httpx.MockTransport(github_handler)),
                           api="https://api.github.test")

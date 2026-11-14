@@ -1,5 +1,5 @@
 # The autonomous agent's stack. Host data lives under ${AGENT_DATA:-./data}:
-#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos the runner clones)   mirrors/   cli/
+#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos the runner clones)   cli/
 #   runner/ (core's runner token for the agent container)
 #   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
 #   secrets/projects/<project>.env   (a project's app .env; core hands it to the agent as runner/projects/)
@@ -33,7 +33,6 @@ services:
       - ${AGENT_DATA:-./data}/db:/data/db
       - ${AGENT_DATA:-./data}/runs:/data/runs
       - ${AGENT_DATA:-./data}/git:/data/git
-      - ${AGENT_DATA:-./data}/mirrors:/data/mirrors
       - ${AGENT_DATA:-./data}/cli:/data/cli
       - ${AGENT_DATA:-./data}/runner:/data/runner
       - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
@@ -105,5 +104,5 @@ services:
         wait
 
 volumes:
-  agentwork:     # the agent's clones, sessions and caches; survives rebuilds so sessions can resume
+  agentwork:     # the agent's clones, sessions, memory and caches; survives rebuilds so sessions can resume
   agentdocker:   # the agent's Docker images, containers and volumes (the apps it tests)

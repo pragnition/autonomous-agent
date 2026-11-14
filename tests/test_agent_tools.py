@@ -9,7 +9,6 @@ from agent.core.conversations import Conversations, record_message
 from agent.core.notifier import SlackNotifier
 from agent.core.sessions import WorkQueue
 from agent.gitutil import branch_name
-from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 from test_conversations import reply
@@ -25,7 +24,7 @@ def conn(tmp_path):
 @pytest.fixture
 def router(conn, tmp_path):
     return AgentToolRouter(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                           memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                           slack=FakeSlack(), notifier=FakeNotifier(),
                            secret_values=["SUPERSECRETVALUE"])
 
 
@@ -159,7 +158,7 @@ async def test_track_task_refuses_other_project(router, ctx_member, conn):
 async def test_work_on_lists_the_packs_and_is_handled_by_the_runner(conn, tmp_path):
     router = AgentToolRouter(conn, config=make_config(tmp_path), queue=WorkQueue(conn),
                              packs={"sample": make_pack(), "other": make_pack("other", repo="o/other")},
-                             memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                             slack=FakeSlack(), notifier=FakeNotifier(),
                              secret_values=[])
     ctx = ctx_for(router, actor="bob")
     spec = next(t for t in router.manifest(ctx) if t["name"] == "work_on")
@@ -303,11 +302,10 @@ async def test_status_and_tasks(router, ctx_with_task):
 async def test_status_names_each_running_items_project(router, conn):
     bound = add_item(router.queue, add_conversation(conn, project="sample"))
     add_item(router.queue, add_conversation(conn, project=None))
-    router.queue.enqueue(None, "chore", {})
-    for _ in range(3):
+    for _ in range(2):
         router.queue.claim()
     text = (await router.call(router.context_for(bound), "status", {})).text
-    assert "running: 3 (sample/turn, -/turn, -/chore)" in text
+    assert "running: 2 (sample/turn, -/turn)" in text
 
 
 async def test_read_thread(router, ctx_member):
@@ -372,12 +370,6 @@ async def test_slack_read_truncates_big_replies_after_scrubbing(router, ctx_memb
                                                          "params": {"channel": "C9", "ts": "0.5"}})).text
     assert len(text) < 20_500 and "[truncated" in text
     assert "SUPERSECRETVALUE" not in text and "[redacted]" in text
-
-
-async def test_memory_tools(router, ctx_member):
-    assert (await router.call(ctx_member, "remember", {"text": "prefers small PRs", "about": "me"})).text == "noted"
-    assert router.memory.inbox_for(ctx_member.work_item_id)[0]["text"] == "prefers small PRs"
-    assert (await router.call(ctx_member, "read_memory", {"id": "missing"})).text == "not found"
 
 
 async def test_post_files_is_in_the_manifest(router, ctx_member):

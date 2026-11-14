@@ -111,14 +111,6 @@ def test_push_to_github_refuses_other_branches(githost):
         githost.push_to_github("p", "o/r", "main", "a" * 40, "SECRET")
 
 
-def test_working_copy_follows_branch(githost, upstream):
-    path = githost.working_copy("p", "main")
-    assert (path / "a.txt").exists()
-    commit(upstream, "d.txt")
-    githost.refresh("p")
-    assert (githost.working_copy("p", "main") / "d.txt").exists()
-
-
 def test_any_live_agent_token_reaches_every_repo(tmp_path):
     from agent import db
     from agent.core.gitserve import tokens_auth

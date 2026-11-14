@@ -93,11 +93,10 @@ async def test_kpis_tool(conn, tmp_path):
     from agent.core.agent_tools import AgentToolRouter
     from agent.core.kpis import register_kpi_tools
     from agent.core.sessions import WorkQueue
-    from agent.memory.store import MemoryStore
     from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 
     router = AgentToolRouter(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                             memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                             slack=FakeSlack(), notifier=FakeNotifier(),
                              secret_values=[])
     register_kpi_tools(router)
     cid = add_conversation(conn, channel="C1")

@@ -116,14 +116,13 @@ def test_linear_issue_parses_or_none():
     assert linear_issue("Linear agent session event:\n{broken") is None
 
 
-def test_source_slack_linear_handover_chore(conn, queue):
+def test_source_slack_linear_handover_other(conn, queue):
     slack = add_conversation(conn, project=None)
     lin = add_conversation(conn, project=None, channel=None, thread_ts=None)
     db.set_setting(conn, "linear_session:abc", lin)
     hand = add_conversation(conn, is_primary=0, channel=None, thread_ts=None)
     items = {"slack": add_item(queue, slack), "linear": add_item(queue, lin),
-             "handover": add_item(queue, hand),
-             "chore": queue.enqueue(None, "chore", {"text": "consolidate"})}
+             "handover": add_item(queue, hand), "other": queue.enqueue(None, "turn", {"text": "pong?"})}
     for source, item in items.items():
         assert get_session(conn, item)["source"] == source
 
@@ -138,13 +137,10 @@ def test_started_at_from_events_and_null_without(conn, queue):
     cid = add_conversation(conn, project=None)
     a = add_item(queue, cid)
     b = add_item(queue, cid)
-    chore = queue.enqueue(None, "chore", {})
     started(conn, a, "2026-11-13T10:00:00Z")
     started(conn, a, "2026-11-13T11:00:00Z")
-    started(conn, chore, "2026-11-13T12:00:00Z", type="work_started")
     assert get_session(conn, a)["started_at"] == "2026-11-13T10:00:00Z"
     assert get_session(conn, b)["started_at"] is None
-    assert get_session(conn, chore)["started_at"] == "2026-11-13T12:00:00Z"
 
 
 def test_finished_row_has_run_numbers(conn, queue):
@@ -163,10 +159,10 @@ def test_finished_row_has_run_numbers(conn, queue):
 
 
 def test_row_without_conversation_or_run(conn, queue):
-    item = queue.enqueue(None, "chore", {})
+    item = queue.enqueue(None, "turn", {})
     row = get_session(conn, item)
     assert row["conversation_id"] is None and row["tokens"] is None and row["account"] is None
-    assert row["title"] == "chore" and row["live"] is False
+    assert row["title"] == "turn" and row["live"] is False
     assert row["links"] == {"slack": None, "linear": None, "pr": None}
 
 
@@ -212,7 +208,7 @@ def test_kpi_daily_zero_filled_without_cost(conn, queue):
                  (task.id,))
     cid = add_conversation(conn, task_id=task.id)
     add_run(conn, add_item(queue, cid), task_id=task.id, cost=1.25, ended="2026-11-12T05:00:00Z")
-    add_run(conn, queue.enqueue(None, "chore", {}), cost=0.25, ended="2026-11-13T01:00:00Z")
+    add_run(conn, queue.enqueue(None, "turn", {}), cost=0.25, ended="2026-11-13T01:00:00Z")
     view = kpi_view(conn, 3, None, now, "Asia/Singapore")
     assert [d["date"] for d in view["daily"]] == ["2026-11-11", "2026-11-12", "2026-11-13"]
     by_date = {d["date"]: d for d in view["daily"]}
@@ -248,19 +244,16 @@ def test_overview_counts_local_day(conn, queue):
 def test_event_sources(conn, queue):
     slack = add_conversation(conn, project=None)
     item = add_item(queue, slack, actor="ann")
-    chore = queue.enqueue(None, "chore", {})
     lin = add_conversation(conn, project=None, channel=None, thread_ts=None)
     db.set_setting(conn, "linear_session:x", lin)
     lin_item = add_item(queue, lin, actor=None)
     task = make_task(conn, source="linear", requester=None)
     cases = [
         ("session_started", None, {"work_item": item}, None, ("slack", "ann")),
-        ("work_started", None, {"work_item": chore}, None, ("automation", None)),
         ("session_started", None, {"work_item": lin_item}, None, ("linear", None)),
         ("stop_all", "tailscale:x@y", {"via": "dashboard"}, None, ("dashboard", "tailscale:x@y")),
         ("stop_all", "local", {"cancelled": []}, None, ("command line", None)),
         ("status_changed", "agent", {}, task.id, ("linear", None)),
-        ("consolidated", "memory", {}, None, ("automation", None)),
         ("session_started", "ann", {"args": "x"}, None, ("slack", "ann")),
         ("mystery", None, None, None, ("other", None)),
     ]

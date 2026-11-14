@@ -207,7 +207,7 @@ async def test_work_on_binds_a_dm_through_core(tmp_path):
         await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1",
                                               "user": "U00000001", "ts": "5.1",
                                               "text": "run sample locally\nand show me the home page"})
-        stranger = app.queue.enqueue(None, "chore", {"text": "x", "actor": "stranger"})
+        stranger = app.queue.enqueue(None, "turn", {"text": "x", "actor": "stranger"})
         tok = mint_token(app.conn, "runner", ttl_s=60)
         pulled = [await (await client.post("/agent/pull", headers=bearer(tok))).json()
                   for _ in range(2)]
@@ -226,8 +226,8 @@ async def test_work_on_binds_a_dm_through_core(tmp_path):
         assert app.router.context_for(dm["work_item"]["id"]).project == "sample"
         r = await client.post("/agent/bind", json={"project": "nope"}, headers=bearer(dm["session_token"]))
         assert r.status == 409 and (await r.json())["error"] == "unknown project 'nope' (known: sample)"
-        chore = next(b for b in pulled if b["work_item"]["id"] == stranger)
-        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(chore["session_token"]))
+        theirs = next(b for b in pulled if b["work_item"]["id"] == stranger)
+        r = await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(theirs["session_token"]))
         assert r.status == 409 and (await r.json())["error"] == "not available here"
     finally:
         await client.close()
@@ -271,7 +271,7 @@ async def test_session_token_ttl_follows_task_minutes(tmp_path):
     client = TestClient(TestServer(app.agent_app))
     await client.start_server()
     try:
-        app.queue.enqueue("V-1", "chore", {})
+        app.queue.enqueue("V-1", "turn", {})
         tok = mint_token(app.conn, "runner", ttl_s=60)
         body = await (await client.post("/agent/pull", headers=bearer(tok))).json()
         expires = app.conn.execute("SELECT expires_at FROM tokens WHERE work_item_id = ?",

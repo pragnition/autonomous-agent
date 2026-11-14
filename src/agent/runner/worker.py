@@ -151,7 +151,7 @@ class Runner:
         item_id = item["id"]
         convo = item.get("conversation_id") or item_id
         try:
-            spec, sink = await self._prepare(item, tok, manifest, convo)
+            spec = await self._prepare(item, tok, manifest, convo)
         except Exception as e:
             log.exception("preparing %s failed", item_id)
             with contextlib.suppress(SessionRevoked):
@@ -170,26 +170,23 @@ class Runner:
                "cache_read_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens,
                "cost_usd_est": result.cost_usd_est, "account_code": result.account_code, "forks": result.forks,
                "error": result.error}
-        if sink is not None:
-            out["structured"] = sink.get("output")
         with contextlib.suppress(SessionRevoked):
             await self.link.result(tok, out)
 
-    async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> tuple[RunSpec, dict | None]:
+    async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> RunSpec:
         payload, item_id = item["payload"], item["id"]
         plugins = await self._bundle()
         session = self.scratch_root / convo
         cwd, path, note = await self._workdir(session, payload)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)
-        sink = {} if payload.get("structured") else None
         wt = payload.get("worktree") or {}
         # open_pr works in the checkout, which work_on can make partway through; post_files reads from the session
         # folder, the checkout included
         checkout = Checkout(path, wt["branch"] if path is not None else None, list(wt.get("checks") or []))
         tools = remote_sdk_tools(manifest, self.link, tok, session_dir=session, checkout=checkout,
-                                 worktrees=self.worktrees, agent_name=self.agent_name, structured_sink=sink,
-                                 structured_schema=payload.get("structured"), app_env_dir=self.app_env_dir)
+                                 worktrees=self.worktrees, agent_name=self.agent_name,
+                                 app_env_dir=self.app_env_dir)
         env = {**self.extra_env, **read_env_files(self.env_files)}
         settings = {}
         if self.memory_dir is not None:
@@ -208,7 +205,7 @@ class Runner:
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, settings=settings,
                        resume_session_id=payload.get("resume_session_id"), on_message=self._forwarder(tok))
-        return spec, sink
+        return spec
 
     async def run_forever(self) -> None:
         running: set[asyncio.Task] = set()

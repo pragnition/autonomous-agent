@@ -142,16 +142,6 @@ async def test_stale_claims_are_reaped_by_the_gate(conn):
     assert q.claim() is not None
 
 
-async def test_chores_are_not_blocked_by_busy_turns(conn):
-    q = WorkQueue(conn)
-    for i in range(3):
-        q.enqueue(f"c{i}", "turn", {})
-        q.claim()
-    gate = Gate(conn, cfg(sessions=3), FakeProxy())
-    assert (await gate.can_start("turn")) == (False, "busy")
-    assert (await gate.can_start("chore")) == (True, "")
-
-
 def test_cancel_running(conn):
     q = WorkQueue(conn)
     a = q.enqueue("c1", "turn", {})
@@ -160,45 +150,32 @@ def test_cancel_running(conn):
     assert q.cancel_running() == [a] and q.get(b).status == "queued"
 
 
-def test_claim_with_no_kinds_claims_nothing(conn):
+def test_has_claimable(conn):
     q = WorkQueue(conn)
+    assert not q.has_claimable()
     q.enqueue("c1", "turn", {})
-    assert q.claim(kinds=()) is None
-    assert q.claim() is not None
+    q.enqueue("c2", "turn", {})
+    assert q.has_claimable()
+    q.claim()
+    assert q.has_claimable()    # c2's turn is untouched
+    q.claim()
+    assert not q.has_claimable()
 
 
-def test_claim_skips_kinds_not_allowed(conn):
-    q = WorkQueue(conn)
-    q.enqueue("c1", "turn", {})
-    chore = q.enqueue("c2", "chore", {})
-    item = q.claim(kinds=("chore",))
-    assert item.id == chore and item.kind == "chore"
-
-
-def test_claimable_kinds(conn):
-    q = WorkQueue(conn)
-    assert q.claimable_kinds() == set()
-    q.enqueue("c1", "turn", {})
-    q.enqueue("c2", "chore", {})
-    assert q.claimable_kinds() == {"turn", "chore"}
-    q.claim(kinds=("turn",))
-    assert q.claimable_kinds() == {"chore"}    # the turn is claimed; c2's chore is untouched
-
-
-def test_claimable_kinds_excludes_a_conversations_second_turn(conn):
+def test_has_claimable_excludes_a_conversations_second_turn(conn):
     q = WorkQueue(conn)
     q.enqueue("c1", "turn", {})
     q.enqueue("c1", "turn", {})
     q.claim()
-    assert q.claimable_kinds() == set()    # c1 already has a claimed item
+    assert not q.has_claimable()    # c1 already has a claimed item
 
 
-def test_claimable_kinds_includes_an_expired_claim(conn):
+def test_has_claimable_includes_an_expired_claim(conn):
     """An expired claim must not make its conversation invisible forever — only a still-live claim blocks —
     otherwise nothing would ever call claim() (whose own reap requeues it) to free the conversation up again."""
     q = WorkQueue(conn)
     q.enqueue("c1", "turn", {})
     q.claim(now=T0)
     q.enqueue("c1", "turn", {})    # the follow-up, queued behind the still-live claim
-    assert q.claimable_kinds(now=T0 + timedelta(seconds=10)) == set()        # lease (90s) still live
-    assert q.claimable_kinds(now=T0 + timedelta(seconds=100)) == {"turn"}    # lease has expired
+    assert not q.has_claimable(now=T0 + timedelta(seconds=10))    # lease (90s) still live
+    assert q.has_claimable(now=T0 + timedelta(seconds=100))       # lease has expired

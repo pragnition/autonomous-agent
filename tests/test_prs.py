@@ -4,7 +4,6 @@ from agent import db, events, tasks
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.prs import pr_body, register_pr_tools
 from agent.core.sessions import WorkQueue
-from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 
@@ -47,7 +46,7 @@ def conn(tmp_path):
 
 def build(conn, tmp_path, *, writer=None, tips=None):
     router = AgentToolRouter(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                             memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                             slack=FakeSlack(), notifier=FakeNotifier(),
                              secret_values=["WRITE-TOKEN-VALUE"])
     githost = FakeGitHost(tips if tips is not None else {"agent/t1-x": SHA})
     writer = writer or FakeWriter()

@@ -13,9 +13,6 @@ from pathlib import Path
 PERSON_ROLES = ("member", "admin")
 _HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
-DEFAULT_BRIEFING = {"session": 2000}
-DEFAULT_LOOKUPS = {"session": 6000}
-
 # The stack's own credentials: never available to a pack, whatever the pack declares
 RESERVED_SECRETS = {"GITHUB_WRITE_TOKEN", "GITHUB_READ_TOKEN", "INTERNAL_TOKEN", "SLACK_BOT_TOKEN",
                     "SLACK_APP_TOKEN", "SLACK_ALERT_WEBHOOK", "LINEAR_API_KEY"}
@@ -72,13 +69,6 @@ class Limits:
 class Models:
     default: str = "claude-opus-5-5"
     hard: str = "claude-fable-5-1"
-    chores: str = "claude-sonnet-5"
-
-
-@dataclass
-class MemoryBudget:
-    briefing: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_BRIEFING))
-    lookups: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_LOOKUPS))
 
 
 @dataclass
@@ -127,7 +117,6 @@ class AgentConfig:
     people: dict[str, Person]
     limits: Limits
     models: Models
-    memory_budget: MemoryBudget
     agent: AgentSettings = field(default_factory=AgentSettings)
     cli: dict[str, CliRules] = field(default_factory=dict)
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
@@ -315,15 +304,9 @@ def load_agent_config(path: Path) -> AgentConfig:
 
     claude = (data.get("claude") or {}).get("models") or {}
     models = Models()
-    for key in ("default", "hard", "chores"):
+    for key in ("default", "hard"):
         if key in claude:
             setattr(models, key, _str(claude, key, f"{where} [claude.models]", problems))
-
-    mem = (data.get("memory") or {}).get("budget") or {}
-    budget = MemoryBudget()
-    for key, target in (("briefing", budget.briefing), ("lookups", budget.lookups)):
-        for kind, value in (mem.get(key) or {}).items():
-            target[kind] = _int({kind: value}, kind, target.get(kind, 0), f"{where} [memory.budget.{key}]", problems)
 
     ag = data.get("agent") or {}
     aw = f"{where} [agent]"
@@ -365,7 +348,7 @@ def load_agent_config(path: Path) -> AgentConfig:
 
     if problems:
         raise ConfigError(problems)
-    return AgentConfig(name, timezone, people, limits, models, budget, agent_settings, cli, observability, linear,
+    return AgentConfig(name, timezone, people, limits, models, agent_settings, cli, observability, linear,
                        mcp, github_login, dashboard, llm_meter)
 
 

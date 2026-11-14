@@ -22,7 +22,6 @@ TITLE_CHARS = 120
 LINEAR_PREFIX = "Linear agent session event:"
 
 _SOURCE = """CASE
-    WHEN w.kind = 'chore' THEN 'chore'
     WHEN t.source = 'linear' OR EXISTS (SELECT 1 FROM settings s WHERE s.key LIKE 'linear_session:%'
                                         AND s.value = w.conversation_id) THEN 'linear'
     WHEN c.is_primary = 0 THEN 'handover'
@@ -107,7 +106,7 @@ def _started(conn: sqlite3.Connection, ids: list[str]) -> dict[str, str]:
     marks = ",".join("?" * len(ids))
     rows = conn.execute(
         f"SELECT json_extract(data, '$.work_item') AS item, MIN(ts) AS ts FROM events "
-        f"WHERE type IN ('session_started', 'work_started') AND json_extract(data, '$.work_item') IN ({marks}) "
+        f"WHERE type = 'session_started' AND json_extract(data, '$.work_item') IN ({marks}) "
         f"GROUP BY item", ids)
     return {r["item"]: r["ts"] for r in rows}
 
@@ -167,12 +166,12 @@ def paused_by(conn: sqlite3.Connection) -> dict | None:
     return {"actor": row["actor"], "at": row["ts"]} if row else {"actor": None, "at": None}
 
 
-SESSION_SOURCES = {"slack": "slack", "linear": "linear", "chore": "automation", "handover": "agent", "other": "other"}
-SYSTEM_ACTORS = {"local", "memory", "agent", "system"}
+SESSION_SOURCES = {"slack": "slack", "linear": "linear", "handover": "agent", "other": "other"}
+SYSTEM_ACTORS = {"local", "agent", "system"}
 
 
 def _event_sources(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[tuple[str, str | None]]:
-    """Where each event came from (slack, linear, automation, dashboard, command line, agent, other) and, for
+    """Where each event came from (slack, linear, dashboard, command line, agent, other) and, for
     Slack and the dashboard, who: a person key or tailscale:<login>."""
     datas = [d if isinstance(d := _json(r["data"]), dict) else {} for r in rows]
     items = sorted({d["work_item"] for d in datas if isinstance(d.get("work_item"), str)})
@@ -200,10 +199,8 @@ def _event_sources(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[tu
             out.append((source, requester if source == "slack" else None))
         elif r["task_id"] in task_rows:
             source, requester = task_rows[r["task_id"]]
-            source = source if source in ("slack", "linear") else "automation"
+            source = source if source in ("slack", "linear") else "other"
             out.append((source, requester if source == "slack" else None))
-        elif actor == "memory":
-            out.append(("automation", None))
         elif actor and actor not in SYSTEM_ACTORS and not actor.startswith("tailscale:"):
             out.append(("slack", actor))   # a person's request to the agent, made in a Slack conversation
         else:

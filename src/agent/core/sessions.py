@@ -1,6 +1,6 @@
 """The work queue, the tokens the agent container's runner uses, and the gate that decides when work may start.
 
-One queue holds every conversation's turns and every chore, and the runner pulls from it. A conversation never
+One queue holds every conversation's turns, and the runner pulls from it. A conversation never
 has two items running at once, so a second Slack message in a busy thread becomes the next turn of the same
 session. A runner that dies loses its lease; the item is re-queued once, then marked failed.
 
@@ -117,32 +117,23 @@ class WorkQueue:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(_now(now))
 
-    def claimable_kinds(self, now: datetime | None = None) -> set[str]:
-        """The kinds of items claim() could hand out right now, without claiming or reaping anything. A runner
-        asks the Gate only about kinds actually worth asking about, so an idle queue never has to call it (and,
-        through it, the account proxy) on every poll."""
+    def has_claimable(self, now: datetime | None = None) -> bool:
+        """Whether claim() could hand out an item right now, without claiming or reaping anything. A runner asks
+        the Gate only when there is something to start, so an idle queue never has to call it (and, through it,
+        the account proxy) on every poll."""
         now_s = _iso(_now(now))
-        rows = self.conn.execute(f"SELECT DISTINCT w.kind FROM work_items w WHERE {_CLAIMABLE}",
-                                 (now_s, now_s)).fetchall()
-        return {r["kind"] for r in rows}
+        return self.conn.execute(f"SELECT 1 FROM work_items w WHERE {_CLAIMABLE} LIMIT 1",
+                                 (now_s, now_s)).fetchone() is not None
 
-    def claim(self, now: datetime | None = None, kinds: tuple[str, ...] | None = None) -> WorkItem | None:
-        """The oldest claimable item: no other item of its conversation is claimed, and (when `kinds` is given,
-        even empty) its kind is one of them. A runner asks once per kind it may start right now (the Gate decides
-        that), so this is the only place that has to know which kinds share a conversation's turn order."""
+    def claim(self, now: datetime | None = None) -> WorkItem | None:
+        """The oldest claimable item: no other item of its conversation is claimed."""
         now = _now(now)
         now_s = _iso(now)
-        kind_filter, args = "", [now_s, now_s]
-        if kinds is not None:
-            if not kinds:  # no kind may start: nothing to claim
-                return None
-            kind_filter = f" AND w.kind IN ({','.join('?' * len(kinds))})"
-            args += list(kinds)
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(now)
-            row = self.conn.execute(f"SELECT * FROM work_items w WHERE {_CLAIMABLE}{kind_filter} "
-                                    "ORDER BY w.created_at, w.rowid LIMIT 1", args).fetchone()
+            row = self.conn.execute(f"SELECT * FROM work_items w WHERE {_CLAIMABLE} "
+                                    "ORDER BY w.created_at, w.rowid LIMIT 1", (now_s, now_s)).fetchone()
             if row is None:
                 return None
             self.conn.execute("UPDATE work_items SET status = 'claimed', lease_until = ?, updated_at = ? WHERE id = ?",
@@ -177,9 +168,8 @@ class WorkQueue:
             self.cancel(item_id)
         return ids
 
-    def claimed_count(self, kind: str) -> int:
-        return self.conn.execute("SELECT COUNT(*) FROM work_items WHERE status = 'claimed' AND kind = ?",
-                                 (kind,)).fetchone()[0]
+    def claimed_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM work_items WHERE status = 'claimed'").fetchone()[0]
 
 
 class Gate:
@@ -188,8 +178,7 @@ class Gate:
     def __init__(self, conn: sqlite3.Connection, config, proxy):
         self.conn, self.config, self.proxy = conn, config, proxy
 
-    async def can_start(self, kind: str = "turn") -> tuple[bool, str]:
-        """Only turns count toward max_concurrent_sessions; memory chores never wait behind busy turns."""
+    async def can_start(self) -> tuple[bool, str]:
         if db.get_setting(self.conn, "paused", "0") == "1":
             return False, "paused"
         queue = WorkQueue(self.conn)
@@ -199,6 +188,6 @@ class Gate:
                 return False, "waiting for capacity"
         except ProxyUnavailable:
             return False, "waiting for capacity"
-        if kind == "turn" and queue.claimed_count("turn") >= self.config.limits.max_concurrent_sessions:
+        if queue.claimed_count() >= self.config.limits.max_concurrent_sessions:
             return False, "busy"
         return True, ""

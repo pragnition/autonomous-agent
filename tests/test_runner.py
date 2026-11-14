@@ -14,7 +14,6 @@ from agent import db
 from agent.core.conversations import bind_project, create_conversation
 from agent.core.payloads import Payloads
 from agent.gitutil import GitError, branch_name
-from agent.memory.store import MemoryStore
 from agent.runner.base import RunResult
 from agent.runner.link import CoreLink, SessionRevoked
 from agent.runner.tools import Checkout, remote_sdk_tools, run_setup, setup_marker
@@ -462,8 +461,8 @@ async def test_next_turn_after_work_on_resumes_in_session_folder(tmp_path, workt
     conn = db.connect(tmp_path / "agent.db")
     db.create_schema(conn)
     packs = {"sample": make_pack(build_setup=["echo ran >> .setup-count"], build_checks=["true"])}
-    payloads = Payloads(conn, config=make_config(tmp_path), packs=packs, memory=MemoryStore(tmp_path / "memory.db"),
-                        persona_text="", config_dir=tmp_path / "config",
+    payloads = Payloads(conn, config=make_config(tmp_path), packs=packs, persona_text="",
+                        config_dir=tmp_path / "config",
                         secrets={"SAMPLE_TEST_USER": "tester@example.com", "SLACK_BOT_TOKEN": "xoxb-nope"})
     cid = create_conversation(conn, agent_name="agent", channel="D-ann", thread_ts="5.1", project=None, title="hi")
 
@@ -638,24 +637,6 @@ async def test_session_workdir_open_pr_pushes_the_checkout(tmp_path, worktrees, 
     name, args = link.tool_calls[-1]
     assert name == "open_pr" and args["branch"] == "agent/T-0001-fix-export"
     assert args["sha"] == git(server[1], "rev-parse", "refs/heads/agent/T-0001-fix-export")
-
-
-async def test_structured_submit_captured(tmp_path, worktrees):
-    claude = FakeClaude()
-    payload = {"structured": {"type": "object", "properties": {"episode": {"type": "object"}}}, "worktree": None,
-               "test_secrets": {}}
-    runner = make_runner(tmp_path, worktrees, FakeLink(), claude)
-    original = claude.run
-
-    async def run_and_submit(spec):
-        submit = next(t for t in spec.sdk_tools if t.name == "submit_result")
-        await submit.handler({"episode": {"summary": "s"}})
-        return await original(spec)
-
-    claude.run = run_and_submit
-    link = runner.link
-    await runner.handle(item(**payload), "tok", [])
-    assert link.results[-1]["structured"] == {"episode": {"summary": "s"}}
 
 
 async def test_link_maps_401_and_204():

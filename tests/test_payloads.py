@@ -4,8 +4,6 @@ from agent import db
 from agent.core.conversations import create_conversation
 from agent.core.payloads import Payloads
 from agent.gitutil import branch_name
-from agent.memory.store import MemoryStore, NoteInput
-from agent.tokens import estimate_tokens
 from agent_fixtures import add_conversation, make_config, make_pack
 
 PERSONA = "PERSONA-SHEET: dry, calm."
@@ -19,18 +17,9 @@ def conn(tmp_path):
 
 
 @pytest.fixture
-def memory(tmp_path):
-    store = MemoryStore(tmp_path / "memory.db")
-    for i in range(40):
-        store.upsert(NoteInput(scope="projects/sample", kind="fact", summary=f"export fact {i}",
-                               body="The export uses streaming writes. " * 20))
-    return store
-
-
-@pytest.fixture
-def payloads(conn, memory, tmp_path):
+def payloads(conn, tmp_path):
     cfg = make_config(tmp_path)
-    return Payloads(conn, config=cfg, packs={"sample": make_pack()}, memory=memory, persona_text=PERSONA,
+    return Payloads(conn, config=cfg, packs={"sample": make_pack()}, persona_text=PERSONA,
                     config_dir=tmp_path / "config", secrets={"SAMPLE_TEST_USER": "tester@example.com",
                                                               "SLACK_BOT_TOKEN": "xoxb-nope"})
 
@@ -78,14 +67,6 @@ def test_track_task_binding_has_no_checkout(payloads, conn):
     assert p["workdir"] == "session" and payloads.checkout(convo) is None
 
 
-def test_briefing_within_budget(payloads, conn):
-    convo = row(conn, add_conversation(conn))
-    p = payloads.turn(convo, "export", "bob")
-    briefing = p["system_prompt"].split("Notes from memory", 1)[1]
-    assert "export fact" in briefing
-    assert estimate_tokens("Notes from memory" + briefing) <= 2000
-
-
 def test_unbound_conversation_has_no_worktree_or_secrets(payloads, conn):
     convo = row(conn, add_conversation(conn, project=None, channel="D-ann"))
     p = payloads.turn(convo, "hi", "ann")
@@ -97,12 +78,6 @@ def test_use_fable_model(payloads, conn):
     conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9' WHERE id = ?", (cid,))
     p = payloads.turn(row(conn, cid), "x", "bob")
     assert p["model"] == "claude-fable-5-1" and p["resume_session_id"] == "sess-9"
-
-
-def test_chore_payload(payloads):
-    p = payloads.chore("consolidate this", {"type": "object"})
-    assert p["model"] == "claude-sonnet-5" and p["structured"] == {"type": "object"}
-    assert PERSONA not in p["system_prompt"] and p["worktree"] is None
 
 
 def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
@@ -131,10 +106,10 @@ def test_shipped_system_prompt_says_how_memory_and_context_work(payloads):
         assert phrase in text
 
 
-def test_payload_carries_mcp_servers(tmp_path, conn, memory):
+def test_payload_carries_mcp_servers(tmp_path, conn):
     cfg = make_config(tmp_path, '\n[mcp.linear]\ntype = "http"\nurl = "https://mcp.linear.app/mcp"\n'
                                 'headers = { Authorization = "Bearer ${LINEAR_APP_TOKEN}" }\n')
-    p = Payloads(conn, config=cfg, packs={}, memory=memory, persona_text="", config_dir=tmp_path / "c", secrets={})
+    p = Payloads(conn, config=cfg, packs={}, persona_text="", config_dir=tmp_path / "c", secrets={})
     convo = row(conn, add_conversation(conn, project=None))
     assert p.turn(convo, "hi", "ann")["mcp"] == {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
                                                             "headers": {"Authorization": "Bearer ${LINEAR_APP_TOKEN}"}}}

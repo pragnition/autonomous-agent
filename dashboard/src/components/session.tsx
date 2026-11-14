@@ -1,5 +1,5 @@
 import { Ban, Bot, Braces, CheckCircle2, CircleDashed, CircleDot, FilePen, FileText, Gauge, GitFork, Globe,
-  Kanban, ListChecks, Loader2, MessageSquare, Plug, Search, Sparkles, Terminal, Wrench, XCircle } from "lucide-react"
+  Kanban, ListChecks, Loader2, MessageSquare, Plug, Search, Terminal, Wrench, XCircle } from "lucide-react"
 import type { ComponentType } from "react"
 import { Link } from "react-router"
 import type { Entry, SessionRow, SessionState, Source } from "@/api"
@@ -32,7 +32,6 @@ const SOURCES: Record<Source, { label: string; icon: Icon }> = {
   slack: { label: "Slack", icon: MessageSquare },
   linear: { label: "Linear", icon: Kanban },
   handover: { label: "Hand-over", icon: GitFork },
-  chore: { label: "Chore", icon: Sparkles },
   other: { label: "Other", icon: CircleDot },
 }
 

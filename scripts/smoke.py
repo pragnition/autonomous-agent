@@ -19,13 +19,11 @@ def main() -> int:
     from agent.config import load_agent_config, load_packs
     from agent.core.payloads import Payloads
     from agent.core.sessions import WorkQueue
-    from agent.memory.store import MemoryStore
     from agent.secrets import load_secrets
 
     conn = db.connect(paths.DB_DIR / "agent.db")
     config = load_agent_config(paths.CONFIG_DIR / "agent.toml")
-    payloads = Payloads(conn, config=config, packs=load_packs(paths.CONFIG_DIR, config),
-                        memory=MemoryStore(paths.DB_DIR / "memory.db"), persona_text="",
+    payloads = Payloads(conn, config=config, packs=load_packs(paths.CONFIG_DIR, config), persona_text="",
                         config_dir=paths.CONFIG_DIR, secrets=load_secrets(paths.SECRETS_FILE))
     convo_id, now = f"V-smoke-{uuid.uuid4().hex[:8]}", db.utcnow()
     conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, is_primary, created_at, last_active_at) "

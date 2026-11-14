@@ -7,7 +7,6 @@ from agent import db
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.cli_admin import DeviceCodeLogin, parse_device_code, register_login_tools
 from agent.core.sessions import WorkQueue
-from agent.memory.store import MemoryStore
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 
 AZ_TEXT = ("To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code "
@@ -60,7 +59,7 @@ async def test_device_code_dm_goes_to_requesting_admin_only(conn, tmp_path):
 
     login = DeviceCodeLogin(slack, config=cfg, rules=cfg.cli, exec_fn=exec_fn)
     router = AgentToolRouter(conn, config=cfg, packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                             memory=MemoryStore(tmp_path / "memory.db"), slack=slack, notifier=FakeNotifier(),
+                             slack=slack, notifier=FakeNotifier(),
                              secret_values=[])
     register_login_tools(router, login)
     cid = add_conversation(conn, channel="D-ann")
@@ -89,7 +88,7 @@ async def test_login_runs_as_agent_uid(conn, tmp_path, run_as):
 
     login = DeviceCodeLogin(FakeSlack(), config=cfg, rules=cfg.cli, exec_fn=exec_fn, run_as=run_as)
     router = AgentToolRouter(conn, config=cfg, packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                             memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
+                             slack=FakeSlack(), notifier=FakeNotifier(),
                              secret_values=[])
     cid = add_conversation(conn, channel="D-ann")
     await login.start(router.context_for(add_item(router.queue, cid, actor="ann")), "azure")

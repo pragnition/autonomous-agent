@@ -30,4 +30,4 @@ Drop any idea that has no evidence.
 1. Search Linear for each idea first, and add your evidence to an existing issue instead of creating a duplicate.
 2. File the top three to five as Linear issues in the project's team.
 3. Reply in the thread with the ranked list and links to the issues.
-4. `remember` the ideas people turn down, so you don't propose them again.
+4. Save the ideas people turn down in your memory, so you don't propose them again.

@@ -13,7 +13,7 @@ Nobody should have to tell you where to look. Find the cause before you change c
    - The report: the Slack thread (`read_thread`) or the Linear issue (Linear MCP). Exact error, who, when, steps, screenshots.
    - Deployed environments: logs, traces and metrics with `az`. The project's debugging skill says which subscription, resource group, workspace and queries. Narrow the time window around the report, count failures by type, then follow one failing request end to end.
    - Recent changes: `git log -p --since=...` on the failing area, recent deploys, the PRs that touched it.
-   - Memory: `recall` the area. It may have happened before.
+   - Memory: check your notes on the area. It may have happened before.
 
 3. **Reproduce it.** Write the smallest test that fails for the reason the evidence shows, and watch it fail. If the bug only shows in the UI, reproduce it in the browser (browser-testing) and screenshot the broken state. If you can't reproduce it, say what you tried and fix from the evidence.
 

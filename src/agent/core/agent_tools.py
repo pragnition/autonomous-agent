@@ -17,10 +17,7 @@ from typing import Literal
 from agent import db, events, tasks
 from agent.core.conversations import create_conversation, record_message
 from agent.core.slack_markdown import post_markdown
-from agent.memory.scopes import SessionContext, scopes_for
-from agent.memory.scrub import scrub
-from agent.memory.store import MemoryStore
-from agent.memory.tools import MemoryToolbox
+from agent.scrub import scrub
 from agent.tasks import IllegalTransition, Status
 
 log = logging.getLogger(__name__)
@@ -68,29 +65,16 @@ def schema(required: dict[str, str] | None = None, optional: dict[str, str] | No
     return {"type": "object", "properties": props, "required": list(required or {})}
 
 
-def conversation_scopes(channel: str | None, project: str | None, actor: str | None, packs: dict) -> list[str]:
-    """Memory scopes for a conversation: a DM sees the person's notes, a channel its own."""
-    if channel and channel.startswith("D") and actor:
-        sctx = SessionContext(dm_person=actor, person_projects=list(packs))
-    elif channel:
-        sctx = SessionContext(project=project, channel_id=channel,
-                              participants=[actor] if actor else [])
-    else:
-        sctx = SessionContext(project=project, requester=actor)
-    return scopes_for(sctx)
-
-
 class AgentToolRouter:
-    def __init__(self, conn: sqlite3.Connection, *, config, packs: dict, queue, memory: MemoryStore, slack, notifier,
+    def __init__(self, conn: sqlite3.Connection, *, config, packs: dict, queue, slack, notifier,
                  secret_values: list[str],
                  turn_payload: Callable[[str, str, str | None, bool], dict] | None = None):
         self.conn, self.config, self.packs, self.queue = conn, config, packs, queue
-        self.memory, self.slack, self.notifier = memory, slack, notifier
+        self.slack, self.notifier = slack, notifier
         self.secret_values = list(secret_values)
         self.turn_payload = turn_payload or (lambda convo_id, text, actor, unattended:
                                              {"text": text, "actor": actor, "unattended": unattended})
         self._tools: dict[str, tuple[ToolSpec, Handler]] = {}
-        self._boxes: dict[str, MemoryToolbox] = {}
         self._register_builtins()
 
     # registry
@@ -190,14 +174,6 @@ class AgentToolRouter:
         ctx.task_id = task.id
         return task
 
-    def _box(self, ctx: ToolContext) -> MemoryToolbox:
-        if ctx.work_item_id not in self._boxes:
-            self._boxes[ctx.work_item_id] = MemoryToolbox(
-                self.memory, conversation_scopes(ctx.channel, ctx.project, ctx.actor, self.packs),
-                self.config.memory_budget.lookups.get("session", 6000),
-                run_id=ctx.work_item_id, actor=ctx.actor, secret_values=self.secret_values)
-        return self._boxes[ctx.work_item_id]
-
     # built-in tools
 
     def _register_builtins(self) -> None:
@@ -244,11 +220,6 @@ class AgentToolRouter:
                                    f"documents them. Methods: {', '.join(SLACK_READ_METHODS)}. Replies over "
                                    f"{SLACK_READ_CHARS} characters are cut; page with limit and cursor.",
                      s({"method": "string"}, {"params": "object"}), "read"), self._slack_read)
-        reg(ToolSpec("recall", "Search your memory; returns ids and one-line summaries.",
-                     s({"query": "string"}, {"limit": "integer"}), "read"), self._recall)
-        reg(ToolSpec("read_memory", "Read one memory note by id.", s({"id": "string"}), "read"), self._read_memory)
-        reg(ToolSpec("remember", "Note something worth remembering for later. about: me, channel or project.",
-                     s({"text": "string"}, {"about": "string"}), "act"), self._remember)
 
     async def _post_files(self, ctx, args) -> ToolReply:
         return ToolReply("post_files is handled by the runner, which reads the files from your session folder")
@@ -444,13 +415,3 @@ class AgentToolRouter:
             text = (text[:SLACK_READ_CHARS] + f"\n[truncated: {len(text)} characters in all; ask for less with "
                     "limit, or page with cursor]")
         return ToolReply(text)
-
-    async def _recall(self, ctx, args) -> ToolReply:
-        hits = self._box(ctx).recall(args.get("query", ""), int(args.get("limit") or 5))
-        return ToolReply(hits if isinstance(hits, str) else json.dumps(hits))
-
-    async def _read_memory(self, ctx, args) -> ToolReply:
-        return ToolReply(self._box(ctx).read_memory(args.get("id", "")))
-
-    async def _remember(self, ctx, args) -> ToolReply:
-        return ToolReply(self._box(ctx).remember(args.get("text", ""), args.get("about")))

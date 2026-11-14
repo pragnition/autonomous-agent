@@ -75,16 +75,6 @@ class GitHost:
         except GitError:
             return None
 
-    def working_copy(self, project: str, branch: str) -> Path:
-        """A read-only checkout of `branch` next to the bare repos, for memory's citation checks."""
-        path = self.root.parent / "mirrors" / project
-        if (path / ".git").exists():
-            git(path, "checkout", "-q", "--detach", f"refs/heads/{branch}")
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            git(self.path(project), "worktree", "add", "-q", "--detach", str(path), f"refs/heads/{branch}")
-        return path
-
     def push_to_github(self, project: str, repo: str, branch: str, sha: str, write_token: str) -> None:
         if not branch.startswith(f"{self.agent_name}/"):
             raise GitError(f"refusing to push {branch!r}: only {self.agent_name}/* branches go to GitHub")

@@ -25,7 +25,7 @@ class FakeGate:
     def __init__(self, ok=True):
         self.ok = ok
 
-    async def can_start(self, kind="turn"):
+    async def can_start(self):
         return (True, "") if self.ok else (False, "paused")
 
 
@@ -118,7 +118,7 @@ async def test_pull_hands_out_item_token_and_tools(api):
 
 async def test_pull_resolves_a_turn_from_its_conversation_when_claimed(conn, queue, parts):
     """A turn's conversation-derived fields are re-read when it is claimed, not when it was queued, and the item
-    keeps what was handed out. Only turns of a conversation are refreshed."""
+    keeps what was handed out. Only items of a conversation are refreshed."""
     seen = []
 
     def refresh(conversation_id, payload):
@@ -127,10 +127,10 @@ async def test_pull_resolves_a_turn_from_its_conversation_when_claimed(conn, que
 
     client = await _client(conn, queue, parts, refresh=refresh)
     try:
-        queue.enqueue(None, "chore", {"text": "consolidate"})
+        queue.enqueue(None, "turn", {"text": "no conversation"})
         tok = mint_token(conn, "runner", ttl_s=3600)
-        chore = (await (await client.post("/agent/pull", headers=bearer(tok))).json())
-        assert chore["work_item"]["payload"] == {"text": "consolidate"} and seen == []
+        alone = (await (await client.post("/agent/pull", headers=bearer(tok))).json())
+        assert alone["work_item"]["payload"] == {"text": "no conversation"} and seen == []
         item, _ = await pull_one(client, {"text": "hi", "resume_session_id": None})
         assert item["payload"] == {"text": "hi", "resume_session_id": "S1"} and seen == ["c1"]
         assert queue.get(item["id"]).payload == item["payload"]
@@ -261,15 +261,15 @@ class CountingGate(FakeGate):
         super().__init__()
         self.calls = []
 
-    async def can_start(self, kind="turn"):
-        self.calls.append(kind)
+    async def can_start(self):
+        self.calls.append("asked")
         return True, ""
 
 
 async def test_idle_pull_never_asks_the_gate(conn, queue, parts):
-    """pull() asks queue.claimable_kinds() first — a plain read, no transaction — and only calls the Gate (and
-    through it the account proxy) about kinds that are actually claimable. An idle queue must not pay for an
-    HTTP round trip to the proxy on every 0.5 s poll."""
+    """pull() asks queue.has_claimable() first — a plain read, no transaction — and only calls the Gate (and
+    through it the account proxy) when something is claimable. An idle queue must not pay for an HTTP round trip
+    to the proxy on every 0.5 s poll."""
     gate = CountingGate()
 
     async def noop(*a):
@@ -284,29 +284,9 @@ async def test_idle_pull_never_asks_the_gate(conn, queue, parts):
         tok = mint_token(conn, "runner", ttl_s=60)
         assert (await client.post("/agent/pull", headers=bearer(tok))).status == 204
         assert gate.calls == []
-        queue.enqueue("c1", "chore", {})
-        assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
-        assert gate.calls == ["chore"]
-    finally:
-        await client.close()
-
-
-async def test_queued_turn_consults_the_gate(conn, queue, parts):
-    gate = CountingGate()
-
-    async def noop(*a):
-        pass
-
-    app = make_agent_app(conn=conn, queue=queue, gate=gate, tools=parts.router,
-                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, bind=no_bind, pull_wait_s=0.2)
-    client = TestClient(TestServer(app))
-    await client.start_server()
-    try:
         queue.enqueue("c1", "turn", {})
-        tok = mint_token(conn, "runner", ttl_s=60)
         assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
-        assert gate.calls == ["turn"]
+        assert gate.calls == ["asked"]
     finally:
         await client.close()
 
@@ -346,37 +326,13 @@ async def test_pull_records_session_started(conn):
     await client.start_server()
     try:
         turn = queue.enqueue("c1", "turn", {})
-        queue.enqueue(None, "chore", {})
         tok = mint_token(conn, "runner", ttl_s=60)
-        for _ in range(2):
-            assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
+        assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
         rows = conn.execute("SELECT task_id, data FROM events WHERE type = 'session_started'").fetchall()
         assert len(rows) == 1 and rows[0]["task_id"] == "T-1"
         data = json.loads(rows[0]["data"])
         assert data["work_item"] == turn and data["queued_at"] and data["project"] == "sample"
         assert set(data) == {"work_item", "queued_at", "project"}
-    finally:
-        await client.close()
-
-
-async def test_chore_claim_logs_work_started(conn):
-    queue = WorkQueue(conn)
-
-    async def noop(*a):
-        return None
-
-    app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(), tools=FakeRouter(),
-                         context_for=lambda i: SimpleNamespace(task_id=None, project=None),
-                         bundles=lambda: ("v", b""), on_result=noop, on_files=noop, bind=no_bind, pull_wait_s=0.1)
-    client = TestClient(TestServer(app))
-    await client.start_server()
-    try:
-        chore = queue.enqueue(None, "chore", {})
-        tok = mint_token(conn, "runner", ttl_s=60)
-        assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
-        rows = conn.execute("SELECT type, data FROM events WHERE type IN ('session_started', 'work_started')").fetchall()
-        assert [r["type"] for r in rows] == ["work_started"]
-        assert json.loads(rows[0]["data"])["work_item"] == chore
     finally:
         await client.close()
 
@@ -444,7 +400,7 @@ async def test_second_turn_of_running_conversation_waits(conn, parts):
 
 async def test_pull_reaps_an_expired_claim_blocking_its_conversation(conn, parts):
     """A dead runner's stale claim must not leave its conversation invisible to pull() forever: once its lease
-    is in the past, claimable_kinds() surfaces the conversation again, so claim() gets the chance to reap it (or
+    is in the past, has_claimable() surfaces the conversation again, so claim() gets the chance to reap it (or
     the follow-up queued behind it) and hand something out — the agent container restarting mid-session, and
     the person replying "hello?", must not stall there until unrelated work arrives."""
     queue = WorkQueue(conn)

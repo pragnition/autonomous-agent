@@ -127,7 +127,6 @@ CREATE TABLE IF NOT EXISTS conversations (
     model TEXT,
     created_at TEXT NOT NULL,
     last_active_at TEXT NOT NULL,
-    consolidated_at TEXT,
     branch TEXT,
     workdir TEXT NOT NULL DEFAULT 'session'
 );
