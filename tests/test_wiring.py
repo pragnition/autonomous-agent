@@ -79,7 +79,7 @@ async def test_dm_turn_end_to_end(app, api):
     await api.post("/agent/result", json={"result": {"outcome": "done", "text": "Nothing else is running.",
                                                      "session_id": "sess-1", "turns": 2, "cost_usd_est": 0.1}},
                    headers=bearer(session))
-    assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": None, "text": "Nothing else is running.",
+    assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": "5.1", "text": "Nothing else is running.",
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
     run = app.conn.execute("SELECT kind, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
     assert tuple(run) == ("turn", 2, "done")
@@ -99,8 +99,8 @@ async def test_dm_turn_names_the_sender_and_links_the_message(app):
 
 
 async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
-    """track_task in a DM posts the task's status at the DM's top level and asks in that message's thread. A reply
-    there reaches the DM conversation, with its context, and answers the question."""
+    """track_task in a DM posts the task's status and its question in the DM message's thread. A reply there
+    reaches the DM conversation, with its context, and answers the question."""
     await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
                                           "ts": "7.1", "text": "the export is broken in sample"})
     tok = mint_token(app.conn, "runner", ttl_s=60)
@@ -111,11 +111,10 @@ async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
         assert (await api.post("/agent/tool", json={"name": name, "args": args}, headers=bearer(session))).status == 200
     task = app.conn.execute("SELECT id, status_message_ts FROM tasks").fetchone()
     status, question = app.slack.posts[-2], app.slack.posts[-1]
-    assert status["channel"] == "D1" and "thread_ts" not in status
-    assert question["thread_ts"] == task["status_message_ts"]
+    assert (status["channel"], status["thread_ts"], question["thread_ts"]) == ("D1", "7.1", "7.1")
 
     await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
-                                          "ts": "7.5", "thread_ts": task["status_message_ts"], "text": "export.py"})
+                                          "ts": "7.5", "thread_ts": "7.1", "text": "export.py"})
 
     last = app.conn.execute("SELECT conversation_id FROM work_items ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     assert last == convo_id
@@ -149,11 +148,11 @@ def keyed_app(tmp_path):
 
 
 async def test_follow_up_queued_during_a_turn_resumes_its_session(app, api):
-    """A DM's second message arrives while its first turn runs, before that turn has a session. The follow-up is
-    queued then, but resolved when it is claimed: it resumes the session the first turn ended with."""
+    """A reply in a DM's thread arrives while its first turn runs, before that turn has a session. The follow-up
+    is queued then, but resolved when it is claimed: it resumes the session the first turn ended with."""
     await app.conversations.handle_slack(dm_event("5.1", "run the tests"))
     first = await pull(api, app)
-    await app.conversations.handle_slack(dm_event("5.2", "and the linter"))
+    await app.conversations.handle_slack({**dm_event("5.2", "and the linter"), "thread_ts": "5.1"})
     follow_up = last_item_id(app)
     assert app.queue.get(follow_up).payload["resume_session_id"] is None  # all that was known when it was queued
     await api.post("/agent/result", json={"result": {"outcome": "done", "text": "ok", "session_id": "S1"}},
@@ -191,7 +190,7 @@ async def test_on_files_uploads_to_the_conversation(app):
     item_id = app.conn.execute("SELECT id FROM work_items ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     await app.on_files(item_id, [("a.png", b"png")], "screenshots")
     upload = app.slack.uploads[-1]
-    assert upload["channel"] == "D1" and upload["thread_ts"] is None  # a DM is one chat: its top level
+    assert upload["channel"] == "D1" and upload["thread_ts"] == "6.1"  # the DM message's thread
     assert upload["file_uploads"] == [{"file": b"png", "filename": "a.png"}]
     row = app.conn.execute("SELECT data FROM events WHERE type = 'files_posted'").fetchone()
     assert json.loads(row["data"])["files"] == ["a.png"] and json.loads(row["data"])["slack"] is True

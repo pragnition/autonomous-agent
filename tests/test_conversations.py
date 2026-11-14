@@ -1,11 +1,10 @@
 import asyncio
 import itertools
-from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from agent import db, tasks
-from agent.core.conversations import DM_IDLE, NOT_AUTHORISED, Conversations, record_message
+from agent.core.conversations import NOT_AUTHORISED, Conversations, record_message
 from agent.core.sessions import WorkQueue
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, make_config, make_pack
@@ -90,10 +89,6 @@ def last_item(queue):
 def dm_reply(thread, text, user="U1"):
     """A reply in a DM thread: under one of the person's messages or one of the bot's."""
     return {**reply(thread, text, user=user, channel="D-1"), "channel_type": "im"}
-
-
-def hours_ago(hours: float) -> str:
-    return (datetime.now(UTC) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def sent_ts(slack) -> list[str]:
@@ -500,49 +495,26 @@ async def test_linear_task_is_reattached_after_a_slack_failure(convos, fake_line
     assert item is not None and item.payload["text"].startswith("Linear issue SAM-7")
 
 
-async def test_two_top_level_dms_share_conversation(convos, conn, queue):
-    await convos.handle_slack(dm("login yourself to azure cli"))
+async def test_each_top_level_dm_starts_its_own_thread(convos, conn, queue):
+    first_event, second_event = dm("login yourself to azure cli"), dm("what's on staging?")
+    await convos.handle_slack(first_event)
     first = last_item(queue)
-    await convos.handle_slack(dm("done"))
-    assert last_item(queue).conversation_id == first.conversation_id
-    assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?",
-                        (first.conversation_id,)).fetchone()[0] is None
+    await convos.handle_slack(second_event)
+    second = last_item(queue)
+    assert first.conversation_id != second.conversation_id
+    threads = dict(conn.execute("SELECT id, thread_ts FROM conversations").fetchall())
+    assert (threads[first.conversation_id], threads[second.conversation_id]) == (first_event["ts"], second_event["ts"])
 
 
-async def test_dm_after_idle_starts_new_conversation(convos, conn, queue):
-    assert DM_IDLE == timedelta(hours=12)
-    await convos.handle_slack(dm("first"))
-    first = last_item(queue).conversation_id
-    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(11), first))
-    await convos.handle_slack(dm("still the same chat"))
-    assert last_item(queue).conversation_id == first
-    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), first))
-    await convos.handle_slack(dm("a new day"))
-    second = last_item(queue).conversation_id
-    assert second != first
-    assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (second,)).fetchone()[0] is None
-
-
-async def test_dm_continues_the_chat_active_most_recently(convos, conn, queue):
-    """Two DM chats inside the idle window (a reply in a thread under one of its messages woke the older one): a
-    top-level message continues the one that was really active last, not the one made last."""
-    older = add_conversation(conn, project=None, channel="D-1", thread_ts=None)
-    newer = add_conversation(conn, project=None, channel="D-1", thread_ts=None)
-    for cid, made, active in ((older, 20, 1), (newer, 10, 5)):
-        conn.execute("UPDATE conversations SET created_at = ?, last_active_at = ? WHERE id = ?",
-                     (hours_ago(made), hours_ago(active), cid))
-    await convos.handle_slack(dm("where were we?"))
-    assert last_item(queue).conversation_id == older
-
-
-async def test_dm_message_during_running_turn_queues_on_same_conversation(convos, queue):
-    await convos.handle_slack(dm("run the tests"))
+async def test_dm_thread_reply_during_running_turn_queues_on_same_conversation(convos, queue):
+    event = dm("run the tests")
+    await convos.handle_slack(event)
     first = queue.claim()
-    await convos.handle_slack(dm("and the linter"))
+    await convos.handle_slack(dm_reply(event["ts"], "and the linter"))
     assert last_item(queue).conversation_id == first.conversation_id
     assert queue.claim() is None
     queue.complete(first.id, {"text": "ok"})
-    assert queue.claim().payload["text"] == "and the linter"
+    assert queue.claim().payload["text"].endswith("and the linter")
 
 
 async def test_session_is_saved_before_the_reply_is_posted(convos, conn, queue, slack):
@@ -563,11 +535,12 @@ async def test_session_is_saved_before_the_reply_is_posted(convos, conn, queue, 
     assert seen == ["S1"]
 
 
-async def test_dm_reply_is_posted_top_level(convos, queue, slack):
-    await convos.handle_slack(dm("hi"))
+async def test_dm_reply_is_posted_in_its_thread(convos, queue, slack):
+    event = dm("hi")
+    await convos.handle_slack(event)
     await finish_turn(convos, queue, "hello")
     assert (slack.posts[-1]["channel"], slack.posts[-1]["thread_ts"], slack.posts[-1]["text"]) == \
-        ("D-1", None, "hello")
+        ("D-1", event["ts"], "hello")
 
 
 async def test_thread_reply_under_bot_message_routes_back(convos, conn, queue, slack):
@@ -608,23 +581,19 @@ async def test_channel_thread_reply_without_mention_continues(convos, queue, sla
 
 async def test_top_level_dm_does_not_continue_a_threaded_dm_conversation(convos, conn, queue):
     old = add_conversation(conn, project=None, channel="D-1", thread_ts="5.1")
-    await convos.handle_slack(dm("hello again"))
+    event = dm("hello again")
+    await convos.handle_slack(event)
     new = last_item(queue).conversation_id
     assert new != old
-    assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (new,)).fetchone()[0] is None
+    assert conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (new,)).fetchone()[0] == event["ts"]
     await convos.handle_slack(dm_reply("5.1", "about that thread"))
     assert last_item(queue).conversation_id == old
 
 
 async def test_dm_answer_clears_waiting(convos, conn, queue):
-    """A question asked in the DM chat is answered at the top level or in a thread under the question."""
+    """A question asked in a DM thread is answered in that thread."""
     await convos.handle_slack(dm("deploy it"))
     cid = last_item(queue).conversation_id
-    conn.execute("UPDATE conversations SET waiting = 1 WHERE id = ?", (cid,))
-    await convos.handle_slack(dm("staging"))
-    assert last_item(queue).conversation_id == cid
-    assert conn.execute("SELECT waiting FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == 0
-
     task_id = task_waiting_on(conn, cid)
     record_message(conn, "D-1", "900.0", cid)  # the bot's question
     await convos.handle_slack(dm_reply("900.0", "prod, actually"))
@@ -633,27 +602,15 @@ async def test_dm_answer_clears_waiting(convos, conn, queue):
     assert tasks.get_task(conn, task_id).status == Status.working
 
 
-async def test_waiting_dm_chat_expires_after_idle(convos, conn, queue):
-    """A chat that ended on an unanswered question still expires: a new top-level DM after DM_IDLE starts a new
-    conversation and leaves the old question open."""
+async def test_top_level_dm_leaves_an_open_question_open(convos, conn, queue):
+    """A new top-level DM is a new request, not the answer to a question waiting in another thread."""
     await convos.handle_slack(dm("deploy it"))
     old = last_item(queue).conversation_id
     task_id = task_waiting_on(conn, old)
-    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), old))
     await convos.handle_slack(dm("something new"))
     assert last_item(queue).conversation_id != old
     assert conn.execute("SELECT waiting FROM conversations WHERE id = ?", (old,)).fetchone()[0] == 1
     assert tasks.get_task(conn, task_id).status == Status.needs_input
-
-
-async def test_waiting_split_session_does_not_take_top_level_dms(convos, conn, queue):
-    await convos.handle_slack(dm("fix two bugs"))
-    chat = last_item(queue).conversation_id
-    child = add_conversation(conn, project="sample", channel="D-1", thread_ts=None,
-                             is_primary=0)
-    conn.execute("UPDATE conversations SET waiting = 1 WHERE id = ?", (child,))
-    await convos.handle_slack(dm("and a third"))
-    assert last_item(queue).conversation_id == chat
 
 
 class SlowNotifier(FakeNotifier):
@@ -670,17 +627,16 @@ class SlowNotifier(FakeNotifier):
 
 
 async def test_messages_during_the_notifier_call_stay_together(convos, conn, queue):
-    """Routing settles before the notifier is awaited: a top-level DM that arrives while a thread answer to an
-    idle chat is still being handled lands where it would have landed a moment later."""
+    """Routing settles before the notifier is awaited: a second reply that arrives while the thread's answer is
+    still being handled lands where it would have landed a moment later."""
     await convos.handle_slack(dm("deploy it"))
     old = last_item(queue).conversation_id
     task_waiting_on(conn, old)
     record_message(conn, "D-1", "900.0", old)  # the bot's question
-    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), old))
     convos.notifier = SlowNotifier()
     answer = asyncio.create_task(convos.handle_slack(dm_reply("900.0", "staging")))
     await convos.notifier.entered.wait()
-    await convos.handle_slack(dm("and run the smoke tests"))
+    await convos.handle_slack(dm_reply("900.0", "and run the smoke tests"))
     convos.notifier.release.set()
     await answer
     items = conn.execute("SELECT conversation_id FROM work_items ORDER BY rowid").fetchall()
@@ -691,7 +647,6 @@ async def test_thread_reply_to_an_old_dm_chat_is_answered_in_its_thread(convos, 
     sent = sent_ts(slack)
     await convos.handle_slack(dm("first chat"))
     old = (await finish_turn(convos, queue, "answer one")).conversation_id
-    conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (hours_ago(13), old))
     await convos.handle_slack(dm_reply(sent[0], "one more thing about that"))
     item = last_item(queue)
     assert item.conversation_id == old and item.payload["reply_thread_ts"] == sent[0]
