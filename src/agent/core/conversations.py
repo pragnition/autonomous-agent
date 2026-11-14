@@ -38,7 +38,7 @@ LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the
 
 
 def origin_line(where: str, *, who: str | None = None, link: str | None = None) -> str:
-    """The first line of a turn's prompt, e.g. [from Sam Taylor (sam) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
+    """A turn's first line, e.g. [from Sam Taylor (sam) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
     return "[" + " · ".join(p for p in (f"from {who}" if who else None, where, link) if p) + "]"
 
 
@@ -186,7 +186,8 @@ class Conversations:
 
     def _rolling_dm(self, channel: str) -> sqlite3.Row | None:
         """The DM's current chat: the top-level conversation active most recently, unless it has been quiet for
-        DM_IDLE. DM conversations from before the rolling chat have a thread_ts, so they're never picked."""
+        DM_IDLE. A conversation in one of the DM's threads (a start_task hand-over's, say) has a thread_ts, so it is
+        never picked."""
         since = (datetime.now(UTC) - DM_IDLE).strftime("%Y-%m-%dT%H:%M:%SZ")
         return self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS NULL AND "
                                  "is_primary = 1 AND last_active_at >= ? "

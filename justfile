@@ -37,7 +37,7 @@ stop:
 resume:
     docker compose exec core python -m agent resume
 
-# Run one real task against the sample pack (needs the full install)
+# One unattended turn end to end (core, runner, proxy, Claude), with no pack and no Slack; prints `smoke ok`
 smoke:
     docker compose exec core python /app/scripts/smoke.py
 

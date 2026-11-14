@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
-// Shapes of core's dashboard API (docs/superpowers/plans/2026-11-13-dashboard.md, "API contract").
+// Shapes of core's dashboard API (src/agent/dashboard/app.py and queries.py).
 
 export type Tokens = { in: number; out: number; cache_read: number; cache_write: number }
 export type SessionState = "queued" | "running" | "done" | "failed" | "cancelled"

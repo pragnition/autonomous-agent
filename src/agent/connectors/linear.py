@@ -126,7 +126,7 @@ class LinearPoller:
             project = pack.project
             for issue in await self.client.labelled_issues(self.label, project.linear_team):
                 if self._known(issue["id"]):
-                    continue  # one task per issue; follow-ups go through Slack (retry_task, amend_task)
+                    continue  # one task per issue; follow-ups go through the task's Slack thread
                 person = self.config.person_by_linear(issue["creator_email"])
                 kind = "bug" if any(l.lower() == "bug" for l in issue["labels"]) else "feature"
                 description = f"{issue['description']}\n\nLinear: {issue['url']}".strip()

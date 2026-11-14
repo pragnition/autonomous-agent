@@ -14,8 +14,8 @@ PERSON_ROLES = ("member", "admin")
 _HHMM = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 
 # The stack's own credentials: never available to a pack, whatever the pack declares
-RESERVED_SECRETS = {"GITHUB_WRITE_TOKEN", "GITHUB_READ_TOKEN", "INTERNAL_TOKEN", "SLACK_BOT_TOKEN",
-                    "SLACK_APP_TOKEN", "SLACK_ALERT_WEBHOOK", "LINEAR_API_KEY"}
+RESERVED_SECRETS = {"GITHUB_WRITE_TOKEN", "GITHUB_READ_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
+                    "SLACK_ALERT_WEBHOOK", "LINEAR_API_KEY"}
 
 
 class ConfigError(Exception):

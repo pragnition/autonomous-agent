@@ -1,7 +1,8 @@
 """core's git endpoint: a bare mirror of each project that the agent container clones from and pushes to.
 
-The agent container never reaches GitHub. It pushes only to refs/heads/<agent>/* here (a pre-receive hook refuses
-everything else, including deletes and tags), and core pushes to GitHub from here when open_pr is called.
+The agent clones and pushes pack repos through this endpoint. It may push only to refs/heads/<agent>/* here (a
+pre-receive hook refuses everything else, including deletes and tags), and core pushes to GitHub from here when
+open_pr is called.
 """
 
 from __future__ import annotations
