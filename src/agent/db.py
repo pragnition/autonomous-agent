@@ -137,6 +137,38 @@ CREATE TABLE IF NOT EXISTS slack_messages (
     conversation_id TEXT NOT NULL,
     PRIMARY KEY(channel, ts)
 );
+-- Linear issues handed to the agent, recorded from the webhook; Linear's own state is polled into them (KPIs)
+CREATE TABLE IF NOT EXISTS linear_issues (
+    issue_id TEXT PRIMARY KEY,
+    identifier TEXT NOT NULL,
+    title TEXT,
+    url TEXT,
+    handed_at TEXT NOT NULL,
+    state_type TEXT,
+    completed_at TEXT,
+    canceled_at TEXT,
+    checked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS linear_issue_conversations (
+    issue_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    PRIMARY KEY(issue_id, conversation_id)
+);
+-- The agent's own PRs, found and kept current by polling GitHub (KPIs)
+CREATE TABLE IF NOT EXISTS agent_prs (
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    url TEXT,
+    title TEXT,
+    head TEXT,
+    base TEXT,
+    opened_at TEXT NOT NULL,
+    merged_at TEXT,
+    closed_at TEXT,
+    issue_identifier TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(repo, number)
+);
 """
 
 

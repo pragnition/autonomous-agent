@@ -64,6 +64,23 @@ async def test_turns_start_with_the_issue_and_its_link(sessions, conn):
         ["[Linear]"]
 
 
+async def test_webhook_records_the_issue(sessions, conn):
+    issue = {"id": "i7", "identifier": "SAM-7", "title": "Export", "url": "https://linear.app/x/issue/SAM-7"}
+    await sessions.on_event(event("created", agentSession={"id": "S1", "issue": issue,
+                                                           "createdAt": "2026-11-14T10:00:00.123Z"}))
+    await sessions.on_event(event("created", session="S2"))  # no issue: nothing to record
+    [row] = conn.execute("SELECT * FROM linear_issues").fetchall()
+    assert (row["identifier"], row["handed_at"]) == ("SAM-7", "2026-11-14T10:00:00Z")
+    [link] = conn.execute("SELECT conversation_id FROM linear_issue_conversations").fetchall()
+    assert link[0] == turns(conn)[0]["conversation_id"]
+
+
+async def test_a_bad_issue_record_never_drops_the_turn(sessions, conn):
+    issue = {"id": "i7", "identifier": "SAM-7"}
+    await sessions.on_event(event("created", agentSession={"id": "S1", "issue": issue, "createdAt": "not a time"}))
+    assert len(turns(conn)) == 1
+
+
 async def test_prompted_resumes_the_same_conversation(sessions, conn):
     await sessions.on_event(event("created"))
     await sessions.on_event(event("created"))                 # Linear redelivers: ignored

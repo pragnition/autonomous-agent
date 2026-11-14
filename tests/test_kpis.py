@@ -5,6 +5,7 @@ import pytest
 
 from agent import db
 from agent.core.kpis import Stat, compute_kpis, format_duration, format_kpis
+from agent.core.linear_issues import record_issue
 
 SINCE, UNTIL = datetime(2026, 11, 13, tzinfo=UTC), datetime(2026, 11, 14, tzinfo=UTC)
 
@@ -20,43 +21,56 @@ def at(hhmm):
     return f"2026-11-13T{hhmm}:00Z"
 
 
-def task(conn, tid, *, source="linear", project="sample", status="working", created="10:00"):
-    conn.execute("INSERT INTO tasks(id, project, title, kind, source, status, created_at, updated_at) "
-                 "VALUES (?, ?, 't', 'bug', ?, ?, ?, ?)", (tid, project, source, status, at(created), at(created)))
+def issue(conn, n, handed, *, completed=None, canceled=None):
+    record_issue(conn, {"createdAt": at(handed), "issue": {"id": f"i{n}", "identifier": f"PRA-{n}"}}, f"V-{n}")
+    conn.execute("UPDATE linear_issues SET completed_at = ?, canceled_at = ? WHERE issue_id = ?",
+                 (at(completed) if completed else None, at(canceled) if canceled else None, f"i{n}"))
 
 
-def started(conn, tid, hhmm, queued="09:59", project="sample"):
-    conn.execute("INSERT INTO events(ts, task_id, type, data) VALUES (?, ?, 'session_started', ?)",
-                 (at(hhmm), tid, json.dumps({"work_item": "W", "queued_at": at(queued), "project": project})))
+def started(conn, convo, hhmm, queued, item):
+    conn.execute("INSERT INTO work_items(id, conversation_id, kind, payload, created_at, updated_at) "
+                 "VALUES (?, ?, 'turn', '{}', ?, ?)", (item, convo, at(queued), at(queued)))
+    conn.execute("INSERT INTO events(ts, type, data) VALUES (?, 'session_started', ?)",
+                 (at(hhmm), json.dumps({"work_item": item, "queued_at": at(queued), "project": None})))
 
 
-def pr(conn, tid, opened, merged=None):
-    conn.execute("INSERT INTO pr_stats(task_id, repo, pr_number, opened_at, merged_at, updated_at) "
-                 "VALUES (?, 'o/r', 1, ?, ?, ?)", (tid, at(opened), at(merged) if merged else None, at(opened)))
+def pr(conn, n, opened, merged=None, closed=None, issue=None):
+    conn.execute("INSERT INTO agent_prs(repo, number, opened_at, merged_at, closed_at, issue_identifier, updated_at) "
+                 "VALUES ('o/r', ?, ?, ?, ?, ?, ?)", (n, at(opened), at(merged) if merged else None,
+                                                     at(closed or merged) if (closed or merged) else None, issue,
+                                                     at(opened)))
 
 
 @pytest.fixture
 def seeded(conn):
-    task(conn, "T1"), started(conn, "T1", "10:05", queued="10:04"), pr(conn, "T1", "11:05", merged="13:05")
-    task(conn, "T2"), started(conn, "T2", "10:15", queued="10:14"), pr(conn, "T2", "12:15")
-    task(conn, "T3", source="slack", status="failed"), started(conn, "T3", "10:01", queued="10:00")
+    issue(conn, 1, "10:00", completed="13:30")
+    started(conn, "V-1", "10:05", "10:04", "W1")
+    started(conn, "V-1", "12:00", "12:00", "W1b")         # a follow-up turn: pickup stays the first
+    pr(conn, 1, "11:05", merged="13:05", issue="PRA-1")
+    issue(conn, 2, "10:00", completed="11:00")             # a report: no PR
+    started(conn, "V-2", "10:15", "10:14", "W2")
+    pr(conn, 2, "12:00")                                   # a PR that names no tracked issue
     return conn
 
 
-def test_kpis_from_seeded_history(seeded):
+def test_kpis_from_observed_history(seeded):
     k = compute_kpis(seeded, since=SINCE, until=UNTIL)
     assert k.pickup == Stat(2, 600, 900)
-    assert k.to_pr == Stat(2, 5400, 7200)
+    assert k.to_pr == Stat(1, 3600, 3600)
     assert k.to_merge == Stat(1, 7200, 7200)
+    assert k.to_done_pr == Stat(1, 12600, 12600)
+    assert k.to_done_other == Stat(1, 3600, 3600)
     assert k.queue_wait == Stat(3, 60, 60)
-    assert (k.tasks, k.prs, k.merged, k.closed, k.reverted, k.failed, k.cancelled) == (3, 2, 1, 0, 0, 1, 0)
+    assert (k.issues, k.done, k.canceled, k.prs, k.merged, k.closed, k.unmatched) == (2, 2, 0, 2, 1, 0, 1)
     assert k.merge_rate == 0.5
 
 
-def test_project_filter(seeded):
-    seeded.execute("UPDATE tasks SET project = 'other' WHERE id = 'T2'")
-    k = compute_kpis(seeded, since=SINCE, until=UNTIL, project="sample")
-    assert k.prs == 1 and k.tasks == 2 and k.merged == 1
+def test_canceled_and_closed_unmerged(conn):
+    issue(conn, 3, "10:00", canceled="10:30")
+    pr(conn, 9, "10:10", closed="10:20", issue="PRA-3")
+    k = compute_kpis(conn, since=SINCE, until=UNTIL)
+    assert (k.issues, k.done, k.canceled, k.closed, k.merged) == (1, 0, 1, 1, 0)
+    assert k.to_done_pr == Stat(0, None, None)
 
 
 def test_empty_window_reports_na(conn):
@@ -99,7 +113,10 @@ def test_format_duration():
 def test_format_kpis(seeded):
     text = format_kpis(compute_kpis(seeded, since=SINCE, until=UNTIL))
     assert "Ticket → pickup: median 10m, p90 15m (n=2)" in text and "Merge rate: 50%" in text
-    assert "last 1 days" in text or "last 1 day" in text
+    assert "Ticket → done (with PR): median 3h 30m" in text and "Ticket → done (no PR): median 1h 0m" in text
+    assert "Issues: 2 · done: 2 · canceled: 0" in text
+    assert "PRs: 2 · merged: 1 · closed unmerged: 0 · not linked to an issue: 1" in text
+    assert "last 1 day" in text
 
 
 async def test_kpis_tool(conn, tmp_path):
@@ -115,21 +132,4 @@ async def test_kpis_tool(conn, tmp_path):
     cid = add_conversation(conn, channel="C1")
     ctx = router.context_for(add_item(router.queue, cid, actor="bob"))
     assert "Ticket → pickup" in (await router.call(ctx, "kpis", {"days": 7})).text
-    assert "sample" in (await router.call(ctx, "kpis", {"project": "nope"})).text
-
-
-def test_kpi_queue_wait_filters_by_project(conn):
-    """One queue serves every project, so the queue-wait filter goes by the event's own "project" field."""
-    task(conn, "T1", project="sample")
-    started(conn, "T1", "10:05", queued="10:04", project="sample")
-    task(conn, "T2", project="other")
-    started(conn, "T2", "10:15", queued="10:00", project="other")
-    k = compute_kpis(conn, since=SINCE, until=UNTIL, project="sample")
-    assert k.queue_wait == Stat(1, 60, 60)
-
-
-def test_pickup_to_pr_for_slack_tasks_starts_at_creation(conn):
-    task(conn, "T5", source="slack", created="10:00")
-    pr(conn, "T5", "11:00")
-    started(conn, "T5", "14:00", queued="13:59")          # a follow-up turn in the thread, after the PR
-    assert compute_kpis(conn, since=SINCE, until=UNTIL).to_pr == Stat(1, 3600, 3600)
+    assert "whole number" in (await router.call(ctx, "kpis", {"days": 0})).text

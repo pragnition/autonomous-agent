@@ -21,6 +21,10 @@ class GitHubReader:
     async def pr(self, repo: str, n: int) -> dict:
         return await self._get(f"/repos/{repo}/pulls/{n}")
 
+    async def search_prs(self, query: str) -> list[dict]:
+        return (await self._get("/search/issues", {"q": query, "sort": "created", "order": "desc",
+                                                    "per_page": 100})).get("items", [])
+
     async def reviews(self, repo: str, n: int) -> list[dict]:
         return await self._get(f"/repos/{repo}/pulls/{n}/reviews", {"per_page": 100})
 

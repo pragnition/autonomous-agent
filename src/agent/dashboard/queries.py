@@ -334,27 +334,22 @@ def _kpis_dict(k) -> dict:
     return out
 
 
-def kpi_view(conn: sqlite3.Connection, days: int, project: str | None, now: datetime, tz: str) -> dict:
+def kpi_view(conn: sqlite3.Connection, days: int, now: datetime, tz: str) -> dict:
     zone = ZoneInfo(tz)
     today = now.astimezone(zone).date()
     dates = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
     lo = datetime.combine(dates[0], time(), zone).astimezone(UTC).strftime(FMT)
     hi = now.astimezone(UTC).strftime(FMT)
-    daily = {d.isoformat(): {"date": d.isoformat(), "tasks": 0, "prs": 0, "merged": 0} for d in dates}
-    by_project = " AND t.project = ?" if project else ""
-    p = [project] if project else []
+    daily = {d.isoformat(): {"date": d.isoformat(), "issues": 0, "prs": 0, "merged": 0} for d in dates}
 
     def bucket(sql: str, key: str) -> None:
-        for r in conn.execute(sql, (lo, hi, *p)):
+        for r in conn.execute(sql, (lo, hi)):
             day = datetime.strptime(r["ts"], FMT).replace(tzinfo=UTC).astimezone(zone).date().isoformat()
             if day in daily:
                 daily[day][key] += 1
 
-    bucket(f"SELECT t.created_at AS ts FROM tasks t WHERE t.created_at >= ? AND t.created_at < ?{by_project}", "tasks")
-    bucket(f"SELECT s.opened_at AS ts FROM pr_stats s JOIN tasks t ON t.id = s.task_id "
-           f"WHERE s.opened_at >= ? AND s.opened_at < ?{by_project}", "prs")
-    bucket(f"SELECT s.merged_at AS ts FROM pr_stats s JOIN tasks t ON t.id = s.task_id "
-           f"WHERE s.merged_at >= ? AND s.merged_at < ?{by_project}", "merged")
-    projects = [r[0] for r in conn.execute("SELECT DISTINCT project FROM tasks ORDER BY project")]
-    kpis = compute_kpis(conn, since=now - timedelta(days=days), until=now, project=project)
-    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values()), "projects": projects}
+    bucket("SELECT handed_at AS ts FROM linear_issues WHERE handed_at >= ? AND handed_at < ?", "issues")
+    bucket("SELECT opened_at AS ts FROM agent_prs WHERE opened_at >= ? AND opened_at < ?", "prs")
+    bucket("SELECT merged_at AS ts FROM agent_prs WHERE merged_at >= ? AND merged_at < ?", "merged")
+    kpis = compute_kpis(conn, since=now - timedelta(days=days), until=now)
+    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values())}

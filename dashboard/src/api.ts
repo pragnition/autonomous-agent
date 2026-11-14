@@ -140,13 +140,13 @@ export type Stat = { n: number; median_s: number | null; p90_s: number | null }
 
 export type KpiView = {
   kpis: {
-    since: string; until: string; project: string | null
-    pickup: Stat; to_pr: Stat; to_merge: Stat; queue_wait: Stat
-    tasks: number; prs: number; merged: number; closed: number; reverted: number; failed: number; cancelled: number
+    since: string; until: string
+    pickup: Stat; to_pr: Stat; to_merge: Stat; to_done_pr: Stat; to_done_other: Stat; queue_wait: Stat
+    issues: number; done: number; canceled: number
+    prs: number; merged: number; closed: number; unmatched: number
     merge_rate: number | null
   }
-  daily: { date: string; tasks: number; prs: number; merged: number }[]
-  projects: string[]
+  daily: { date: string; issues: number; prs: number; merged: number }[]
 }
 
 export type EventSource = "slack" | "linear" | "dashboard" | "command line" | "agent" | "other"
@@ -241,10 +241,10 @@ export const useHistory = (hours: number) =>
     refetchIntervalInBackground: false,
   })
 
-export const useKpis = (days: number, project?: string) =>
+export const useKpis = (days: number) =>
   useQuery({
-    queryKey: ["kpis", days, project ?? ""],
-    queryFn: () => api.get<KpiView>(`/api/kpis${query({ days, project })}`),
+    queryKey: ["kpis", days],
+    queryFn: () => api.get<KpiView>(`/api/kpis${query({ days })}`),
     placeholderData: keepPreviousData,
     refetchInterval: SLOW,
     refetchIntervalInBackground: false,

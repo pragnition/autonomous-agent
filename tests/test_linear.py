@@ -122,3 +122,15 @@ async def test_graphql_errors_raise(env):
 async def test_team_state_names(env):
     names = await Linear([]).client().team_state_names("SAM")
     assert names == {"In Progress", "In Review"}
+
+
+async def test_issue_state_reads_the_state_type_and_close_times():
+    def handler(req):
+        body = json.loads(req.content)
+        assert body["operationName"] == "IssueState" and body["variables"] == {"id": "iss-1"}
+        return httpx.Response(200, json={"data": {"issue": {"state": {"type": "completed"},
+                                                            "completedAt": "2026-11-15T09:30:00.500Z",
+                                                            "canceledAt": None}}})
+    client = LinearClient("k", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert await client.issue_state("iss-1") == {"state_type": "completed",
+                                                 "completed_at": "2026-11-15T09:30:00.500Z", "canceled_at": None}

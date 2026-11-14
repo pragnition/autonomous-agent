@@ -20,12 +20,14 @@ from agent import db, events
 from agent.config import load_agent_config, load_packs
 from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
+from agent.core.agent_prs import AgentPrPoller
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.bundles import build_bundle
 from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
 from agent.core.conversations import Conversations
 from agent.core.kpis import compute_kpis, format_kpis, register_kpi_tools
 from agent.core.linear_app import INSTALL_DM_KEY, LinearAppAuth, register_linear_tools
+from agent.core.linear_issues import LinearIssuePoller
 from agent.core.linear_sessions import LinearAgentSessions
 from agent.core import llm_meter
 from agent.core.llm_meter import make_meter_app
@@ -134,6 +136,10 @@ class CoreApp:
             self.public_app = make_public_app(webhook_secret=secrets.get("LINEAR_WEBHOOK_SECRET", ""),
                                               on_event=self.on_linear_event, auth=self.linear_auth,
                                               on_installed=self.on_linear_installed)
+        # KPIs: Linear's own state for each handed-over issue, GitHub's for each of the agent's PRs
+        self.issue_poller = LinearIssuePoller(self.conn, self.linear_sessions.client) if self.linear_sessions else None
+        self.agent_prs = AgentPrPoller(self.conn, github_reader, login=self.config.github) \
+            if github_reader is not None and self.config.github else None
         self.runner_token_path = self.data_dir / "runner" / "runner-token"
         self.login = DeviceCodeLogin(slack, config=self.config, rules=self.config.cli, exec_fn=cli_exec,
                                      run_as=self.config.agent.uid)
@@ -372,6 +378,10 @@ class CoreApp:
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token)]
         if self.pr_stats:
             loops.append(self._every(300, self.pr_stats.poll_all))
+        if self.issue_poller:
+            loops.append(self._every(300, self.issue_poller.poll))
+        if self.agent_prs:
+            loops.append(self._every(300, self.agent_prs.poll))
         await asyncio.gather(run_socket_mode(slack_app, app_token), *loops)
 
 

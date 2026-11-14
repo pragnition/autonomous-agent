@@ -1,7 +1,8 @@
-"""KPIs: how fast tickets get picked up, turned into PRs and merged, and how many of them get merged.
+"""KPIs: how fast handed-over Linear issues get picked up, turned into PRs, merged and closed.
 
-Everything comes from what core already records: tasks, pr_stats (the PR poller) and the `session_started` event
-a pull appends when a runner claims a turn. No Claude cost is computed or shown here.
+Everything comes from what core observes itself: linear_issues (the webhook, then Linear's own close times),
+agent_prs (GitHub's own PR times, tied to an issue by its key) and the `session_started` event a pull appends when a
+runner claims a turn. Nothing depends on the agent recording anything.
 """
 
 from __future__ import annotations
@@ -29,18 +30,19 @@ class Stat:
 class Kpis:
     since: datetime
     until: datetime
-    project: str | None
     pickup: Stat
     to_pr: Stat
     to_merge: Stat
+    to_done_pr: Stat
+    to_done_other: Stat
     queue_wait: Stat
-    tasks: int
+    issues: int
+    done: int
+    canceled: int
     prs: int
     merged: int
     closed: int
-    reverted: int
-    failed: int
-    cancelled: int
+    unmatched: int
 
     @property
     def merge_rate(self) -> float | None:
@@ -62,52 +64,52 @@ def _stat(values: list[float]) -> Stat:
     return Stat(len(ordered), statistics.median(ordered), ordered[math.ceil(0.9 * len(ordered)) - 1])
 
 
-def compute_kpis(conn: sqlite3.Connection, *, since: datetime, until: datetime, project: str | None = None) -> Kpis:
+# When work on an issue first started: the first turn of any of its conversations a runner claimed
+FIRST_START = ("(SELECT MIN(e.ts) FROM events e JOIN work_items w ON w.id = json_extract(e.data, '$.work_item') "
+               "JOIN linear_issue_conversations c ON c.conversation_id = w.conversation_id "
+               "WHERE e.type = 'session_started' AND c.issue_id = i.issue_id)")
+FIRST_PR = "(SELECT MIN(p.opened_at) FROM agent_prs p WHERE p.issue_identifier = i.identifier)"
+
+
+def compute_kpis(conn: sqlite3.Connection, *, since: datetime, until: datetime) -> Kpis:
     lo, hi = since.astimezone(UTC).strftime(FMT), until.astimezone(UTC).strftime(FMT)
-    by_project = " AND t.project = ?" if project else ""
-    p = [project] if project else []
 
-    def rows(sql: str, *args) -> list[sqlite3.Row]:
-        return conn.execute(sql, (*args, *p)).fetchall()
+    def rows(sql: str) -> list[sqlite3.Row]:
+        return conn.execute(sql, (lo, hi)).fetchall()
 
-    def count(sql: str, *args) -> int:
-        return conn.execute(sql, (*args, *p)).fetchone()[0]
+    def count(sql: str) -> int:
+        return conn.execute(sql, (lo, hi)).fetchone()[0]
 
-    first_start = "(SELECT MIN(e.ts) FROM events e WHERE e.task_id = t.id AND e.type = 'session_started')"
-    pickup = [_secs(r["created_at"], r["started"]) for r in rows(
-        f"SELECT t.created_at, {first_start} AS started FROM tasks t WHERE t.source = 'linear' "
-        f"AND t.created_at >= ? AND t.created_at < ?{by_project}", lo, hi) if r["started"]]
-    # A Linear task waits for its first session; any other task was created by the session that works on it
-    # (its first session_started carries no task id), so a later turn in the thread must not move the start.
-    to_pr = []
-    for r in rows(f"SELECT t.source, s.opened_at, t.created_at, {first_start} AS started FROM pr_stats s "
-                  f"JOIN tasks t ON t.id = s.task_id WHERE s.opened_at >= ? AND s.opened_at < ?{by_project}", lo, hi):
-        origin = (r["started"] or r["created_at"]) if r["source"] == "linear" else r["created_at"]
-        if origin <= r["opened_at"]:
-            to_pr.append(_secs(origin, r["opened_at"]))
+    pickup = [_secs(r["handed_at"], r["started"]) for r in rows(
+        f"SELECT i.handed_at, {FIRST_START} AS started FROM linear_issues i "
+        "WHERE i.handed_at >= ? AND i.handed_at < ?") if r["started"] and r["started"] >= r["handed_at"]]
+    to_pr = [_secs(r["started"], r["first_pr"]) for r in rows(
+        f"SELECT {FIRST_START} AS started, {FIRST_PR} AS first_pr FROM linear_issues i "
+        f"WHERE {FIRST_PR} >= ? AND {FIRST_PR} < ?") if r["started"] and r["started"] <= r["first_pr"]]
     to_merge = [_secs(r["opened_at"], r["merged_at"]) for r in rows(
-        f"SELECT s.opened_at, s.merged_at FROM pr_stats s JOIN tasks t ON t.id = s.task_id "
-        f"WHERE s.merged_at >= ? AND s.merged_at < ? AND s.opened_at IS NOT NULL{by_project}", lo, hi)]
+        "SELECT opened_at, merged_at FROM agent_prs WHERE merged_at >= ? AND merged_at < ?")]
+    to_done_pr, to_done_other = [], []
+    for r in rows(f"SELECT i.handed_at, i.completed_at, {FIRST_PR} AS first_pr FROM linear_issues i "
+                  "WHERE i.completed_at >= ? AND i.completed_at < ?"):
+        (to_done_pr if r["first_pr"] else to_done_other).append(_secs(r["handed_at"], r["completed_at"]))
 
-    started = conn.execute("SELECT ts, data FROM events WHERE type = 'session_started' AND ts >= ? AND ts < ?",
-                           (lo, hi)).fetchall()
     queue_wait = []
-    for r in started:
+    for r in rows("SELECT ts, data FROM events WHERE type = 'session_started' AND ts >= ? AND ts < ?"):
         data = json.loads(r["data"] or "{}")
-        if data.get("queued_at") and (not project or data.get("project") == project):
+        if data.get("queued_at"):
             queue_wait.append(_secs(data["queued_at"], r["ts"]))
 
-    pr_base = "SELECT COUNT(*) FROM pr_stats s JOIN tasks t ON t.id = s.task_id WHERE "
-    task_base = "SELECT COUNT(*) FROM tasks t WHERE t.created_at >= ? AND t.created_at < ?"
-    tasks = count(task_base + by_project, lo, hi)
-    prs = count(pr_base + f"s.opened_at >= ? AND s.opened_at < ?{by_project}", lo, hi)
-    merged = count(pr_base + f"s.merged_at >= ? AND s.merged_at < ?{by_project}", lo, hi)
-    closed = count(pr_base + f"s.closed_at >= ? AND s.closed_at < ? AND s.merged_at IS NULL{by_project}", lo, hi)
-    reverted = count(pr_base + f"s.reverted_at >= ? AND s.reverted_at < ?{by_project}", lo, hi)
-    failed = count(task_base + f" AND t.status = 'failed'{by_project}", lo, hi)
-    cancelled = count(task_base + f" AND t.status = 'cancelled'{by_project}", lo, hi)
-    return Kpis(since, until, project, _stat(pickup), _stat(to_pr), _stat(to_merge), _stat(queue_wait),
-                tasks, prs, merged, closed, reverted, failed, cancelled)
+    return Kpis(
+        since, until, _stat(pickup), _stat(to_pr), _stat(to_merge), _stat(to_done_pr), _stat(to_done_other),
+        _stat(queue_wait),
+        issues=count("SELECT COUNT(*) FROM linear_issues WHERE handed_at >= ? AND handed_at < ?"),
+        done=count("SELECT COUNT(*) FROM linear_issues WHERE completed_at >= ? AND completed_at < ?"),
+        canceled=count("SELECT COUNT(*) FROM linear_issues WHERE canceled_at >= ? AND canceled_at < ?"),
+        prs=count("SELECT COUNT(*) FROM agent_prs WHERE opened_at >= ? AND opened_at < ?"),
+        merged=count("SELECT COUNT(*) FROM agent_prs WHERE merged_at >= ? AND merged_at < ?"),
+        closed=count("SELECT COUNT(*) FROM agent_prs WHERE closed_at >= ? AND closed_at < ? AND merged_at IS NULL"),
+        unmatched=count("SELECT COUNT(*) FROM agent_prs WHERE opened_at >= ? AND opened_at < ? "
+                        "AND issue_identifier IS NULL"))
 
 
 def format_duration(seconds: float) -> str:
@@ -129,33 +131,31 @@ def format_kpis(k: Kpis) -> str:
     days = max(1, round((k.until - k.since) / timedelta(days=1)))
     rate = "n/a" if k.merge_rate is None else f"{k.merge_rate:.0%}"
     return "\n".join([
-        f"Agent KPIs, last {days} day{'s' if days != 1 else ''}" + (f" ({k.project})" if k.project else ""),
+        f"Agent KPIs, last {days} day{'s' if days != 1 else ''}",
         _line("Ticket → pickup", k.pickup),
         _line("Pickup → PR", k.to_pr),
         _line("PR → merge", k.to_merge),
+        _line("Ticket → done (with PR)", k.to_done_pr),
+        _line("Ticket → done (no PR)", k.to_done_other),
         _line("Queue wait", k.queue_wait),
-        f"Tasks: {k.tasks} · PRs: {k.prs} · merged: {k.merged} · closed unmerged: {k.closed} · "
-        f"reverted: {k.reverted} · failed: {k.failed} · cancelled: {k.cancelled}",
+        f"Issues: {k.issues} · done: {k.done} · canceled: {k.canceled}",
+        f"PRs: {k.prs} · merged: {k.merged} · closed unmerged: {k.closed} · not linked to an issue: {k.unmatched}",
         f"Merge rate: {rate}",
     ])
 
 
 def register_kpi_tools(router: AgentToolRouter) -> None:
     async def kpis(ctx: ToolContext, args: dict) -> ToolReply:
-        project = args.get("project") or None
-        if project is not None and project not in router.packs:
-            return ToolReply(f"unknown project {project!r}; the projects are {', '.join(sorted(router.packs))}")
         days = args.get("days", 7)
         if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 365:
             return ToolReply("days must be a whole number from 1 to 365")
         until = datetime.now(UTC)
-        return ToolReply(format_kpis(compute_kpis(router.conn, since=until - timedelta(days=days), until=until,
-                                                  project=project)))
+        return ToolReply(format_kpis(compute_kpis(router.conn, since=until - timedelta(days=days), until=until)))
 
     router.register(ToolSpec(
-        "kpis", "The agent's own KPIs: ticket-to-pickup, pickup-to-PR and PR-to-merge times, queue wait and merge "
-                "rate, over the last `days` days (default 7), for one project or all.",
-        schema({}, {"days": "integer", "project": "string"}), "read"), kpis)
+        "kpis", "The agent's own KPIs for Linear issues handed to it: ticket-to-pickup, pickup-to-PR, PR-to-merge "
+                "and ticket-to-done times, queue wait and merge rate, over the last `days` days (default 7).",
+        schema({}, {"days": "integer"}), "read"), kpis)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,10 +165,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="agent kpis", description="Show the agent's KPIs")
     parser.add_argument("--days", type=int, default=7)
-    parser.add_argument("--project")
     parser.add_argument("--db", default=str(paths.DB_DIR / "agent.db"))
     args = parser.parse_args(argv)
     until = datetime.now(UTC)
-    print(format_kpis(compute_kpis(db.connect(args.db), since=until - timedelta(days=args.days), until=until,
-                                   project=args.project)))
+    print(format_kpis(compute_kpis(db.connect(args.db), since=until - timedelta(days=args.days), until=until)))
     return 0

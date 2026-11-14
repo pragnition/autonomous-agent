@@ -233,7 +233,7 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
 
     async def kpis(request: web.Request) -> web.Response:
         days = _int(request, "days", 7, 1, 365)
-        return web.json_response(kpi_view(conn, days, request.query.get("project") or None, clock(), config.timezone))
+        return web.json_response(kpi_view(conn, days, clock(), config.timezone))
 
     async def event_log(request: web.Request) -> web.Response:
         page = list_events(conn, request.query.get("type") or None, _int(request, "limit", 100, 1, 500),
