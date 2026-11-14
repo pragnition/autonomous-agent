@@ -1,9 +1,8 @@
 """Conversations: Slack and Linear messages become work items on the work queue.
 
 Code only routes. A Slack thread, a DM or a Linear issue is a conversation mapped to one agent session; each new
-message is the next turn of that session (the work queue never runs two turns of one conversation at once). A DM
-is one rolling chat: its top-level messages continue the latest conversation until it has been quiet for DM_IDLE.
-A reply in a thread goes to a session that asked a question there, otherwise to the thread's primary conversation,
+message is the next turn of that session (the work queue never runs two turns of one conversation at once). Every
+top-level message, in a DM or a channel, starts its own thread and its own conversation. A reply in a thread goes to a session that asked a question there, otherwise to the thread's primary conversation,
 otherwise to the conversation of the message the thread hangs off (every message core receives or posts is
 recorded in slack_messages). Each turn carries a line for the top of its prompt: who sent the message, where,
 and its link.
@@ -17,7 +16,6 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable, Iterable
-from datetime import UTC, datetime, timedelta
 
 from agent import db, tasks
 from agent.connectors.linear import issue_link
@@ -32,7 +30,6 @@ FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 LIMIT_OUTCOMES = {"timeout", "max_turns"}  # a turn that ran out of time or steps carries on in a new one
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
-DM_IDLE = timedelta(hours=12)  # a DM quiet this long starts a fresh conversation on its next top-level message
 LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the line goes without it after that
 
 
@@ -172,16 +169,6 @@ class Conversations:
             if self._arrivals.get(channel) is mine:
                 del self._arrivals[channel]
 
-    def _rolling_dm(self, channel: str) -> sqlite3.Row | None:
-        """The DM's current chat: the top-level conversation active most recently, unless it has been quiet for
-        DM_IDLE. A conversation in one of the DM's threads (a start_task hand-over's, say) has a thread_ts, so it is
-        never picked."""
-        since = (datetime.now(UTC) - DM_IDLE).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS NULL AND "
-                                 "is_primary = 1 AND last_active_at >= ? "
-                                 "ORDER BY last_active_at DESC, created_at DESC, rowid DESC LIMIT 1",
-                                 (channel, since)).fetchone()
-
     def _in_thread(self, channel: str, thread_ts: str) -> sqlite3.Row | None:
         """A thread's own primary conversation, otherwise the conversation of the message it hangs off."""
         return (self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS ? AND "
@@ -190,16 +177,13 @@ class Conversations:
                                      "m.conversation_id WHERE m.channel = ? AND m.ts = ?",
                                      (channel, thread_ts)).fetchone())
 
-    async def _route(self, channel: str, thread_ts: str | None, is_dm: bool) -> sqlite3.Row:
-        """thread_ts is None for a top-level DM message, which goes to the DM's current chat. In a thread, a session
-        waiting on an answer there takes it first. The conversation is settled (and marked active) before the
-        notifier is awaited, so a message arriving meanwhile routes as it would a moment later."""
-        if thread_ts is None:
-            convo = self._rolling_dm(channel)
-        else:
-            convo = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS ? AND "
-                                      "waiting = 1 ORDER BY last_active_at DESC LIMIT 1",
-                                      (channel, thread_ts)).fetchone() or self._in_thread(channel, thread_ts)
+    async def _route(self, channel: str, thread_ts: str, is_dm: bool) -> sqlite3.Row:
+        """A session waiting on an answer in the thread takes the message first. The conversation is settled (and
+        marked active) before the notifier is awaited, so a message arriving meanwhile routes as it would a moment
+        later."""
+        convo = self.conn.execute("SELECT * FROM conversations WHERE channel = ? AND thread_ts IS ? AND "
+                                  "waiting = 1 ORDER BY last_active_at DESC LIMIT 1",
+                                  (channel, thread_ts)).fetchone() or self._in_thread(channel, thread_ts)
         if convo is None:
             project = None if is_dm else await self._project_for_channel(channel)
             return self._row(self._new(channel, thread_ts, project))
@@ -231,7 +215,7 @@ class Conversations:
         if not user or not channel or event.get("bot_id") or event.get("subtype") or user == self.bot_user_id:
             return
         is_dm = event.get("channel_type") == "im"
-        thread_ts = event.get("thread_ts") or (None if is_dm else event["ts"])  # a DM's top level is one chat
+        thread_ts = event.get("thread_ts") or event["ts"]  # a top-level message starts its own thread
         mentioned = self._mentioned(event)
         if not (is_dm or mentioned or (event.get("thread_ts") and self._known_thread(channel, thread_ts))):
             return

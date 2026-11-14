@@ -150,8 +150,8 @@ mentions. Each accepted message gets an `eyes` reaction.
 
 Routing picks the message's conversation (one row in `conversations`, one Claude Code session):
 
-- **DM, top level**: a DM is one rolling chat. A top-level message continues the DM's latest conversation unless it
-  has been quiet for 12 hours, in which case it starts a new one.
+- **DM, top level**: starts its own thread and conversation, like a mention in a channel. The reply goes in the thread
+  under the message.
 - **Thread** (in a channel or a DM): a conversation waiting for an answer in that thread (it called `ask`) takes the
   message first; otherwise the thread's primary conversation; otherwise the conversation of the message the thread
   hangs off. Every message core receives or posts is recorded in `slack_messages`, so a thread under any of them
