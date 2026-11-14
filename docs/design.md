@@ -124,13 +124,14 @@ and forwards 28090 to the proxy's 127.0.0.1:18090 and 28091 to 127.0.0.1:18091. 
 
 ### The Claude account proxy
 
-A separate program on the host (`claude_proxy/claude-fallback-proxy.py` in the checkout, not tracked in this
-repository), installed as a systemd user service by `just proxy-install` (`deploy/claude-fallback-proxy.service`).
-It holds the team's Claude accounts, pins each session to one account and replaces the placeholder token that
-sessions send. Each origin has its own port; `deploy/proxy-origins.example.toml` lists the two this stack uses.
-core (origin `agent-core`) reads `/proxy/usage` for the queue's gate and `/proxy/usage`, `/proxy/perf` and
-`/proxy/whoami` for the dashboard. The runner (origin `agent-sandbox`) reads `/proxy/usage` and `/proxy/whoami` to
-decide when to fork a session.
+A separate program on the host, not part of this repository. Place it at `claude_proxy/claude-fallback-proxy.py`
+in the checkout (ignored by git) before running `just proxy-install`, which installs a systemd user service
+(`deploy/claude-fallback-proxy.service`) that runs it from there. It spreads sessions across the team's Claude
+accounts and reports their usage: it holds the accounts, pins each session to one account and replaces the
+placeholder token that sessions send. Each origin has its own port; `deploy/proxy-origins.example.toml` lists the
+two this stack uses. core (origin `agent-core`) reads `/proxy/usage` for the queue's gate and `/proxy/usage`,
+`/proxy/perf` and `/proxy/whoami` for the dashboard. The runner (origin `agent-sandbox`) reads `/proxy/usage` and
+`/proxy/whoami` to decide when to fork a session.
 
 ### The dashboard
 
@@ -441,7 +442,7 @@ account's noreply address.
 | `just kpis [--days N] [--project P]` | prints the KPIs |
 | `just stop`, `just resume` | the kill switch from the host, for when Slack isn't an option |
 | `just account-names` | writes the proxy's account holders' names for the dashboard (run on the host) |
-| `just proxy-install` | installs the account proxy as a systemd user service (once) |
+| `just proxy-install` | installs the account proxy, placed at `claude_proxy/claude-fallback-proxy.py` first, as a systemd user service (once) |
 | `just test`, `just dashboard-test` | the Python tests in the dev image; the dashboard's tests and build |
 | `just dashboard-dev` | the dashboard's dev server against a running core |
 

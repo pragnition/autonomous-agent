@@ -59,7 +59,8 @@ dashboard-dev:
 dashboard-test:
     cd dashboard && npm ci && npx vitest run && npm run build
 
-# Install the Claude account proxy as a systemd user service (run by a person, once)
+# Install the Claude account proxy as a systemd user service (run by a person, once). The proxy is a separate
+# program: put it at claude_proxy/claude-fallback-proxy.py first.
 proxy-install:
     mkdir -p ~/.config/systemd/user
     sed "s#@REPO@#{{justfile_directory()}}#g" deploy/claude-fallback-proxy.service > ~/.config/systemd/user/claude-fallback-proxy.service

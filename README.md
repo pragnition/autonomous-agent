@@ -10,8 +10,11 @@ Claude account proxy on the host. The whole stack runs with Docker Compose on on
 ## Quick start
 
 You need Docker with Compose, [just](https://github.com/casey/just) and Tailscale on the host, and the Claude
-account proxy running there: `just proxy-install`, then add the origins in `deploy/proxy-origins.example.toml` to
-`~/.claude/accounts/proxy.toml` and start the service.
+account proxy running there. The account proxy is a separate program and is not in this repository: it spreads
+sessions across the team's Claude accounts and reports their usage. Put it at
+`claude_proxy/claude-fallback-proxy.py` in this checkout (the folder is ignored by git), then run
+`just proxy-install`, which installs a systemd user service that runs it from there. Add the origins in
+`deploy/proxy-origins.example.toml` to `~/.claude/accounts/proxy.toml` and start the service.
 
 1. **Create the Slack app** from `deploy/slack-app-manifest.yaml` (api.slack.com/apps, Create New App, From an app
    manifest), with the name set to your agent's name. Install it in the workspace, keep its bot token (`xoxb-…`)
