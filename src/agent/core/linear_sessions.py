@@ -12,6 +12,7 @@ import logging
 
 from agent import db
 from agent.core.conversations import create_conversation, origin_line
+from agent.core.linear_issues import record_issue
 
 log = logging.getLogger(__name__)
 SESSION_KEY = "linear_session:{}"
@@ -39,6 +40,7 @@ class LinearAgentSessions:
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
         text = f"Linear agent session event:\n{json.dumps(body, indent=2)}"
         payload = self.payloads.turn(convo, text, None, unattended=True)
+        record_issue(self.conn, body["agentSession"], convo_id)
         issue = body["agentSession"].get("issue") or {}
         payload["origin"] = origin_line(f"Linear {issue['identifier']}" if issue.get("identifier") else "Linear",
                                         link=issue.get("url"))
