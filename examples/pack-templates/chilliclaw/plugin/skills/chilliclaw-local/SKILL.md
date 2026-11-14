@@ -11,7 +11,7 @@ The stack runs with the team's real integration credentials (Slack, Microsoft, T
 
 ## Start it
 
-Your worktree's setup already wrote `.env` from the team's own ChilliClaw `.env` and ran `bun install`.
+Your worktree's setup already wrote `.env` from the team's own ChilliClaw `.env` (`/run/agent/projects/chilliclaw.env`) and ran `bun install`. If your `.env` still has placeholders where that file has values, copy those values in from it. Never put the Foundry key in `.env`: the meter adds it (see Model calls).
 
 1. **Make sure nobody else's ChilliClaw is up.** Ports are fixed, so only one stack runs at a time:
    ```bash
