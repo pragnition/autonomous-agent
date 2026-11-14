@@ -81,3 +81,19 @@ async def test_floor_is_set_on_first_poll(tmp_path):
     await AgentPrPoller(c, gh, login="bot").poll()
     floor = db.get_setting(c, "kpi_floor")
     assert floor and gh.queries == [f"is:pr author:bot created:>={floor}"]
+
+
+def test_branch_then_title_then_body_decides_the_issue():
+    assert match_issue(["jensen/pra-423-x", "title", "Implements PRA-423, see PRA-400"], ["PRA-400", "PRA-423"]) \
+        == "PRA-423"
+    assert match_issue(["cleanup", "PRA-400: tidy", "also PRA-423"], ["PRA-423", "PRA-400"]) == "PRA-400"
+
+
+async def test_open_prs_off_the_search_page_are_still_refreshed(conn):
+    gh = FakeGitHub([hit(1)], {1: pull(1, "a")})
+    poller = AgentPrPoller(conn, gh, login="pragnitionlabs")
+    await poller.poll()
+    gh.hits = []                                           # pushed off the first page by newer PRs
+    gh.pulls[1] = pull(1, "a", merged="2026-11-16T05:00:00Z", closed="2026-11-16T05:00:00Z")
+    await poller.poll()
+    assert prs(conn)[1]["merged_at"] == "2026-11-16T05:00:00Z"

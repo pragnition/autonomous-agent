@@ -75,6 +75,12 @@ async def test_webhook_records_the_issue(sessions, conn):
     assert link[0] == turns(conn)[0]["conversation_id"]
 
 
+async def test_a_bad_issue_record_never_drops_the_turn(sessions, conn):
+    issue = {"id": "i7", "identifier": "SAM-7"}
+    await sessions.on_event(event("created", agentSession={"id": "S1", "issue": issue, "createdAt": "not a time"}))
+    assert len(turns(conn)) == 1
+
+
 async def test_prompted_resumes_the_same_conversation(sessions, conn):
     await sessions.on_event(event("created"))
     await sessions.on_event(event("created"))                 # Linear redelivers: ignored

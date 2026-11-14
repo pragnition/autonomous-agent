@@ -24,11 +24,14 @@ def kpi_floor(conn: sqlite3.Connection) -> str:
 
 
 def match_issue(texts: list[str | None], identifiers: list[str]) -> str | None:
-    """The first identifier that appears as a whole token: `pra-423-x` mentions PRA-423, `PRA-4230` doesn't."""
-    for ident in sorted(identifiers, key=len, reverse=True):
-        pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(ident)}(?![0-9])", re.I)
-        if any(t and pattern.search(t) for t in texts):
-            return ident
+    """The identifier the texts mention as a whole token, earlier texts first (branch, then title, then body, so a
+    body that also cites another issue doesn't win): `pra-423-x` mentions PRA-423, `PRA-4230` doesn't."""
+    patterns = [(ident, re.compile(rf"(?<![A-Za-z0-9]){re.escape(ident)}(?![0-9])", re.I))
+                for ident in sorted(identifiers, key=len, reverse=True)]
+    for text in texts:
+        for ident, pattern in patterns:
+            if text and pattern.search(text):
+                return ident
     return None
 
 
@@ -37,11 +40,16 @@ class AgentPrPoller:
         self.conn, self.reader, self.login = conn, reader, login
 
     async def poll(self) -> int:
+        """New PRs come from the search; ones already stored and still open are refreshed directly, so a PR pushed
+        off the search's first page still gets its merge recorded."""
         hits = await self.reader.search_prs(f"is:pr author:{self.login} created:>={kpi_floor(self.conn)}")
-        identifiers = [r[0] for r in self.conn.execute("SELECT identifier FROM linear_issues")]
+        todo = {}
         for h in hits:
-            repo = "/".join(h["repository_url"].rstrip("/").split("/")[-2:])
-            n = h["number"]
+            todo["/".join(h["repository_url"].rstrip("/").split("/")[-2:]), h["number"]] = True
+        for r in self.conn.execute("SELECT repo, number FROM agent_prs WHERE merged_at IS NULL AND closed_at IS NULL"):
+            todo[r["repo"], r["number"]] = True
+        identifiers = [r[0] for r in self.conn.execute("SELECT identifier FROM linear_issues")]
+        for repo, n in todo:
             known = self.conn.execute("SELECT * FROM agent_prs WHERE repo = ? AND number = ?", (repo, n)).fetchone()
             if known and (known["merged_at"] or known["closed_at"]):
                 continue
@@ -52,7 +60,7 @@ class AgentPrPoller:
                 continue
             head = (pr.get("head") or {}).get("ref")
             issue = (known["issue_identifier"] if known else None) or \
-                match_issue([pr.get("title"), pr.get("body"), head], identifiers)
+                match_issue([head, pr.get("title"), pr.get("body")], identifiers)
             self.conn.execute(
                 "INSERT INTO agent_prs(repo, number, url, title, head, base, opened_at, merged_at, closed_at, "
                 "issue_identifier, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -63,4 +71,4 @@ class AgentPrPoller:
                 (repo, n, pr.get("html_url"), pr.get("title"), head, (pr.get("base") or {}).get("ref"),
                  _iso(pr.get("created_at")), _iso(pr.get("merged_at")), _iso(pr.get("closed_at")), issue,
                  db.utcnow()))
-        return len(hits)
+        return len(todo)

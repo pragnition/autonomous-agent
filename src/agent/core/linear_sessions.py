@@ -40,7 +40,10 @@ class LinearAgentSessions:
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
         text = f"Linear agent session event:\n{json.dumps(body, indent=2)}"
         payload = self.payloads.turn(convo, text, None, unattended=True)
-        record_issue(self.conn, body["agentSession"], convo_id)
+        try:
+            record_issue(self.conn, body["agentSession"], convo_id)   # for the KPIs; never at the turn's expense
+        except Exception:
+            log.exception("couldn't record the issue of Linear session %s", sid)
         issue = body["agentSession"].get("issue") or {}
         payload["origin"] = origin_line(f"Linear {issue['identifier']}" if issue.get("identifier") else "Linear",
                                         link=issue.get("url"))
