@@ -1,5 +1,6 @@
 """The dashboard's HTTP app: JSON read models, a live stream per session, the kill switch, and the built
-web app with an index.html fallback for its client-side routes."""
+web app with an index.html fallback for its client-side routes. The web app lists conversations, each with its
+turns (work items, here called sessions)."""
 
 from __future__ import annotations
 
@@ -19,8 +20,8 @@ from agent.config import AgentConfig
 from agent.core.sessions import WorkQueue
 from agent.dashboard.access import access_middleware, viewer
 from agent.dashboard.accounts import HOURS, accounts_view, bucket_seconds, history_view
-from agent.dashboard.queries import (SessionFilter, get_session, kpi_view, list_events, list_sessions,
-                                     overview_counts, paused_by)
+from agent.dashboard.queries import (SessionFilter, conversation_row, get_conversation, get_session, kpi_view,
+                                     list_conversations, list_events, list_sessions, overview_counts, paused_by)
 from agent.dashboard.names import AccountNames
 from agent.dashboard.transcript import TranscriptCache, lines_before, read_from
 
@@ -89,14 +90,20 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
                 pinned[session_id] = account
         return pinned.get(session_id)
 
+    async def slack_link(row: dict) -> str | None:
+        if not (permalink and row.get("_channel") and row.get("_thread_ts")):
+            return None
+        try:
+            return await permalink(row["_channel"], row["_thread_ts"])
+        except Exception:
+            log.debug("no permalink for %s", row["id"], exc_info=True)
+            return None
+
     async def fill(row: dict, *, links: bool = False, recent: bool = False) -> dict:
-        """Add what needs I/O: the Slack permalink (detail page only), and the numbers a running session has so far
+        """Add what needs I/O: the Slack permalink (detail pages only), and the numbers a running session has so far
         (or a finished one that never reported), read incrementally from its transcript."""
-        if links and permalink and row.get("_channel") and row.get("_thread_ts"):
-            try:
-                row["links"]["slack"] = await permalink(row["_channel"], row["_thread_ts"])
-            except Exception:
-                log.debug("no permalink for %s", row["id"], exc_info=True)
+        if links:
+            row["links"]["slack"] = await slack_link(row)
         last: list[dict] = []
         running = row["state"] == "running"
         if running or (row["tokens"] is None and row["state"] != "queued" and transcript(row["id"]).exists()):
@@ -125,14 +132,28 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
             "queued": await asyncio.gather(*(fill(r) for r in queued)),
             "counts": overview_counts(conn, clock(), config.timezone)})
 
-    async def sessions(request: web.Request) -> web.Response:
+    async def conversations(request: web.Request) -> web.Response:
         q = request.query
         f = SessionFilter(state=q.get("state") or None, project=q.get("project") or None,
                           source=q.get("source") or None, account=q.get("account") or None, q=q.get("q") or None,
                           limit=min(_int(request, "limit", 50, 1, 100_000), MAX_ROWS),
                           offset=_int(request, "offset", 0, 0, 10**9))
-        rows, total = list_sessions(conn, f)
-        return web.json_response({"rows": await asyncio.gather(*(fill(r) for r in rows)), "total": total})
+        groups, total = list_conversations(conn, f)
+        filled = await asyncio.gather(*(asyncio.gather(*(fill(t) for t in turns)) for turns in groups))
+        return web.json_response({"rows": [conversation_row(turns, clock()) for turns in filled], "total": total})
+
+    async def conversation(request: web.Request) -> web.Response:
+        """A conversation and its turns (`items`; a row's `turns` counts model calls), named by its id or by one of
+        its turns' (then `focus`)."""
+        found = get_conversation(conn, request.match_info["id"])
+        if found is None:
+            return web.json_response({"error": "no such conversation"}, status=404)
+        turns, focus = found
+        link = await slack_link(turns[-1])
+        filled = await asyncio.gather(*(fill(t) for t in turns))
+        row = conversation_row(filled, clock())
+        row["links"]["slack"] = link
+        return web.json_response({**row, "items": filled, "focus": focus})
 
     async def session(request: web.Request) -> web.Response:
         row = get_session(conn, request.match_info["id"])
@@ -307,8 +328,8 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
 
     app = web.Application(middlewares=[access_middleware(config), bad_requests])
     app.add_routes([
-        web.get("/api/me", me), web.get("/api/overview", overview), web.get("/api/sessions", sessions),
-        web.get("/api/sessions/{id}", session), web.get("/api/sessions/{id}/stream", stream),
+        web.get("/api/me", me), web.get("/api/overview", overview), web.get("/api/conversations", conversations),
+        web.get("/api/conversations/{id}", conversation), web.get("/api/sessions/{id}", session), web.get("/api/sessions/{id}/stream", stream),
         web.post("/api/sessions/{id}/cancel", cancel), web.get("/api/accounts", accounts),
         web.get("/api/accounts/history", history), web.get("/api/kpis", kpis), web.get("/api/events", event_log),
         web.post("/api/stop", stop), web.post("/api/resume", resume),

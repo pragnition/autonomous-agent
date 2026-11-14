@@ -228,16 +228,40 @@ async def test_overview_survives_proxy_down(tmp_path, api, conn, proxy):
     assert r.status == 200 and (await r.json())["running"][0]["account"] is None
 
 
-async def test_sessions_route_filters_and_limit_cap(api, conn):
+async def test_conversations_route_one_row_per_conversation(api, conn):
     queue = WorkQueue(conn)
     cid = add_conversation(conn, project=None)
     for i in range(3):
         add_item(queue, cid, text=f"task {i}")
-    body = await (await api.get("/api/sessions?limit=1000&q=task", headers=ANN)).json()
-    assert body["total"] == 3 and len(body["rows"]) == 3
-    body = await (await api.get("/api/sessions?limit=2&offset=2", headers=ANN)).json()
-    assert len(body["rows"]) == 1
-    assert (await api.get("/api/sessions?limit=x", headers=ANN)).status == 400
+    add_item(queue, add_conversation(conn, project=None), text="other")
+    body = await (await api.get("/api/conversations?limit=1000&q=task", headers=ANN)).json()
+    assert body["total"] == 1 and [r["id"] for r in body["rows"]] == [cid] and body["rows"][0]["messages"] == 3
+    body = await (await api.get("/api/conversations?limit=1&offset=1", headers=ANN)).json()
+    assert [r["id"] for r in body["rows"]] == [cid]   # the other conversation has the latest message
+    assert (await api.get("/api/conversations?limit=x", headers=ANN)).status == 400
+
+
+async def test_conversation_detail_has_its_turns_and_live_numbers(tmp_path, api, conn, proxy):
+    queue = WorkQueue(conn)
+    cid = add_conversation(conn, project=None)
+    first = add_item(queue, cid, text="hello")
+    queue.claim()
+    conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (first,))
+    second = add_item(queue, cid, text="what can you do")
+    queue.claim()
+    write_transcript(tmp_path, first, [INIT, say("hi")])
+    write_transcript(tmp_path, second, [INIT, say("lots")])
+    proxy.pins["sid-1"] = "badger"
+    body = await (await api.get(f"/api/conversations/{second}", headers=ANN)).json()
+    assert body["id"] == cid and body["focus"] == second and body["messages"] == 2
+    assert [t["id"] for t in body["items"]] == [first, second]
+    assert [t["message"] for t in body["items"]] == ["hello", "what can you do"]
+    assert body["state"] == "running" and body["live"] is True and body["account"] == "badger"
+    assert body["tokens"] == {"in": 6, "out": 8, "cache_read": 10, "cache_write": 12} and body["turns"] == 2
+    assert not any(k.startswith("_") for k in body) and not any(k.startswith("_") for t in body["items"] for k in t)
+    assert "entries" not in body["items"][0]
+    assert (await (await api.get(f"/api/conversations/{cid}", headers=ANN)).json())["focus"] is None
+    assert (await api.get("/api/conversations/V-nope", headers=ANN)).status == 404
 
 
 async def test_session_detail_entries_and_offset(tmp_path, api, conn):
@@ -392,9 +416,10 @@ async def test_payload_secrets_never_in_any_response(tmp_path, conn, proxy):
         queue.claim()
         write_transcript(tmp_path, item, [INIT, say("the key is s3cr3t-value")])
         bodies = [await (await client.get(path, headers=ANN)).text()
-                  for path in ("/api/overview", "/api/sessions", f"/api/sessions/{item}")]
+                  for path in ("/api/overview", "/api/conversations", f"/api/conversations/{cid}",
+                               f"/api/sessions/{item}")]
         assert all("s3cr3t-value" not in b for b in bodies)
-        assert "[secret]" in bodies[2]
+        assert "[secret]" in bodies[3]
     finally:
         await client.close()
 
@@ -498,11 +523,13 @@ async def test_only_the_detail_page_asks_slack_for_permalinks(tmp_path, conn, pr
     client = await make_client(tmp_path, conn, proxy, permalink=permalink)
     try:
         item = running_item(conn)
-        for path in ("/api/overview", "/api/sessions"):
+        for path in ("/api/overview", "/api/conversations"):
             assert (await client.get(path, headers=ANN)).status == 200
         assert asked == []
         body = await (await client.get(f"/api/sessions/{item}?entries=0", headers=ANN)).json()
         assert body["links"]["slack"] == "https://x.slack.com/archives/C1/p10" and len(asked) == 1
+        body = await (await client.get(f"/api/conversations/{item}", headers=ANN)).json()
+        assert body["links"]["slack"] == "https://x.slack.com/archives/C1/p10" and len(asked) == 2
     finally:
         await client.close()
 
@@ -521,8 +548,8 @@ async def test_no_claude_cost_in_any_response(tmp_path, api, conn):
     live = running_item(conn)
     write_transcript(tmp_path, live, [INIT, {"type": "ResultMessage", "num_turns": 1, "total_cost_usd": 0.5,
                                              "usage": USAGE}])
-    for path in ("/api/overview", "/api/sessions", f"/api/sessions/{done}", f"/api/sessions/{live}?entries=0",
-                 "/api/kpis?days=7"):
+    for path in ("/api/overview", "/api/conversations", f"/api/conversations/{cid}", f"/api/sessions/{done}",
+                 f"/api/sessions/{live}?entries=0", "/api/kpis?days=7"):
         text = await (await api.get(path, headers=ANN)).text()
         assert "cost" not in text, path
 

@@ -353,8 +353,9 @@ The dashboard has these pages:
 
 - **Overview**: running and queued sessions, today's finished and failed, the account pool, today's Foundry
   spend, and who paused the agent.
-- **Sessions**: every work item with its source, project, task, account and tokens; a session's page streams its
-  transcript live and can cancel it.
+- **Sessions**: one row per conversation (every message in one resumes the same Claude session), with its source,
+  project, task, message count, work time, account and tokens. A session's page lists each message as a turn whose
+  transcript it streams live and can cancel; a link to a single turn opens its conversation at that turn.
 - **Accounts**: the Claude account pool from the proxy (usage windows, tokens, errors, history), with account
   holders' names from `data/config/account-names.toml`.
 - **Foundry spend**: the model-call meter.

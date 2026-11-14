@@ -14,6 +14,7 @@ export type SessionRow = {
   conversation_id: string | null
   task_id: string | null
   title: string
+  message: string
   source: Source
   requester: string | null
   created_at: string
@@ -58,6 +59,16 @@ export type Overview = {
 }
 
 export type SessionDetail = SessionRow & { entries: Entry[]; offset: number; line: number }
+
+/** A conversation: every message in it is a turn (a SessionRow) that resumes the same Claude session. */
+export type ConversationRow = Omit<SessionRow, "message"> & {
+  messages: number
+  busy_s: number
+  last_active_at: string
+}
+
+/** `items` are its turns, oldest first (a row's own `turns` counts model calls). */
+export type Conversation = ConversationRow & { items: SessionRow[]; focus: string | null }
 
 export type Pace = "ahead" | "on" | "behind"
 
@@ -197,17 +208,18 @@ export const useOverview = () =>
 export type SessionFilter = { state?: string; project?: string; source?: string; account?: string; q?: string;
   limit?: number; offset?: number }
 
-export const useSessions = (f: SessionFilter) =>
+export const useConversations = (f: SessionFilter) =>
   useQuery({
-    queryKey: ["sessions", f],
-    queryFn: () => api.get<{ rows: SessionRow[]; total: number }>(`/api/sessions${query(f)}`),
+    queryKey: ["conversations", f],
+    queryFn: () => api.get<{ rows: ConversationRow[]; total: number }>(`/api/conversations${query(f)}`),
     placeholderData: keepPreviousData,
     ...live,
   })
 
-/** The session's header, polled; its timeline is loaded once by useSessionEntries and then streamed. */
-export const useSession = (id: string) =>
-  useQuery({ queryKey: ["session", id], queryFn: () => api.get<SessionRow>(`/api/sessions/${id}?entries=0`), ...live })
+/** A conversation named by its id or one of its turns', polled; each turn's timeline is loaded once by
+ * useSessionEntries and then streamed. */
+export const useConversation = (id: string) =>
+  useQuery({ queryKey: ["conversation", id], queryFn: () => api.get<Conversation>(`/api/conversations/${id}`), ...live })
 
 export const useSessionEntries = (id: string) =>
   useQuery({
@@ -264,7 +276,7 @@ export function useAction<T = unknown>(path: string) {
   return useMutation({
     mutationFn: () => api.post<T>(path),
     onSettled: () => {
-      for (const key of ["overview", "sessions", "session", "events"]) client.invalidateQueries({ queryKey: [key] })
+      for (const key of ["overview", "conversations", "conversation", "events"]) client.invalidateQueries({ queryKey: [key] })
     },
   })
 }

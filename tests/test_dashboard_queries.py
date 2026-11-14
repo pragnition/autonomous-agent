@@ -5,8 +5,9 @@ import pytest
 
 from agent import db, events, tasks
 from agent.core.sessions import WorkQueue
-from agent.dashboard.queries import (SessionFilter, get_session, kpi_view, linear_issue, list_events, list_sessions,
-                                     overview_counts, paused_by)
+from agent.dashboard.queries import (SessionFilter, conversation_row, get_conversation, get_session, kpi_view,
+                                     linear_issue, list_conversations, list_events, list_sessions, overview_counts,
+                                     paused_by)
 from agent_fixtures import add_conversation, add_item
 
 LINEAR_TEXT = "Linear agent session event:\n" + json.dumps(
@@ -174,8 +175,96 @@ def test_payload_never_in_row(conn, queue):
     cid = add_conversation(conn)
     item = add_item(queue, cid, text="go", test_secrets={"K": "s3cr3t-value"},
                     system_parts=["SYSTEM PROMPT"])
-    text = json.dumps(get_session(conn, item)) + json.dumps(list_sessions(conn, SessionFilter())[0])
+    text = (json.dumps(get_session(conn, item)) + json.dumps(list_sessions(conn, SessionFilter())[0])
+            + json.dumps(list_conversations(conn, SessionFilter())[0]))
     assert "s3cr3t-value" not in text and "SYSTEM PROMPT" not in text and "payload" not in text
+
+
+# conversations: every message in one is a turn of the same session
+
+def ids(groups):
+    return [[t["id"] for t in turns] for turns in groups]
+
+
+def test_conversations_one_entry_each_latest_message_first(conn, queue):
+    a, b = add_conversation(conn, project=None), add_conversation(conn, project=None)
+    a1, b1, a2 = add_item(queue, a, text="hello"), add_item(queue, b, text="other"), add_item(queue, a, text="and?")
+    lone = queue.enqueue(None, "turn", {"text": "pong?"})
+    for item, ts in ((lone, "2026-11-13T08:00:00Z"), (a1, "2026-11-13T09:00:00Z"), (b1, "2026-11-13T10:00:00Z"),
+                     (a2, "2026-11-13T11:00:00Z")):
+        set_created(conn, item, ts)
+    groups, total = list_conversations(conn, SessionFilter())
+    assert total == 3 and ids(groups) == [[a1, a2], [b1], [lone]]
+    assert ids(list_conversations(conn, SessionFilter(limit=1, offset=1))[0]) == [[b1]]
+
+
+def test_conversation_filters_match_any_turn_and_state_is_the_conversations(conn, queue):
+    cid = add_conversation(conn, project="sample")
+    first, second = add_item(queue, cid, text="Fix the flaky login test"), add_item(queue, cid, text="and signup")
+    add_run(conn, first, account="onyx")
+    conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (first,))
+    conn.execute("UPDATE work_items SET status = 'claimed' WHERE id = ?", (second,))
+    other = add_conversation(conn, project=None, channel=None, thread_ts=None)
+    waiting = add_item(queue, other, text="Summarise yesterday")
+
+    def found(**f):
+        return ids(list_conversations(conn, SessionFilter(**f))[0])
+
+    assert found(q="FLAKY") == found(account="onyx") == found(project="sample") == [[first, second]]
+    assert found(state="running") == [[first, second]] and found(state="done") == []
+    assert found(state="queued") == found(source="other") == [[waiting]]
+
+
+def test_conversation_row_rolls_up_its_turns(conn, queue):
+    task = make_task(conn)
+    cid = add_conversation(conn, task_id=task.id)
+    a, b, c = (add_item(queue, cid, text=t) for t in ("hello", "what can you do", "so?"))
+    for item, ts in ((a, "2026-11-13T10:00:00Z"), (b, "2026-11-13T10:10:00Z"), (c, "2026-11-13T10:20:00Z")):
+        set_created(conn, item, ts)
+        started(conn, item, ts)
+    add_run(conn, a, account="badger", ended="2026-11-13T10:01:00Z")
+    add_run(conn, b, account="onyx", ended="2026-11-13T10:12:00Z")
+    conn.execute("UPDATE work_items SET status = 'done' WHERE id IN (?, ?)", (a, b))
+    conn.execute("UPDATE work_items SET status = 'claimed' WHERE id = ?", (c,))
+    turns, _ = get_conversation(conn, cid)
+    assert [t["message"] for t in turns] == ["hello", "what can you do", "so?"]
+    row = conversation_row(turns, datetime(2026, 11, 13, 10, 25, tzinfo=UTC))
+    assert row["id"] == cid and row["conversation_id"] == cid and row["messages"] == 3
+    assert row["state"] == "running" and row["ended_at"] is None and row["outcome"] is None
+    assert row["title"] == "Fix the login" and row["requester"] == "ann" and row["project"] == "sample"
+    assert row["created_at"] == row["started_at"] == "2026-11-13T10:00:00Z"
+    assert row["last_active_at"] == "2026-11-13T10:20:00Z"
+    assert row["account"] == "onyx" and row["turns"] == 14
+    assert row["tokens"] == {"in": 20, "out": 40, "cache_read": 60, "cache_write": 80}
+    assert row["busy_s"] == 60 + 120 + 300   # the running turn counts up to now
+    assert not any(k.startswith("_") for k in row)
+
+
+def test_finished_conversation_takes_the_last_turns_outcome(conn, queue):
+    cid = add_conversation(conn, project=None)
+    a, b = add_item(queue, cid), add_item(queue, cid)
+    set_created(conn, a, "2026-11-13T10:00:00Z")
+    set_created(conn, b, "2026-11-13T11:00:00Z")
+    add_run(conn, a, ended="2026-11-13T10:05:00Z")
+    add_run(conn, b, ended="2026-11-13T11:05:00Z")
+    conn.execute("UPDATE runs SET outcome = 'error', error = 'boom' WHERE id = ?", (b,))
+    conn.execute("UPDATE work_items SET status = CASE id WHEN ? THEN 'done' ELSE 'failed' END", (a,))
+    row = conversation_row(get_conversation(conn, cid)[0], datetime.now(UTC))
+    assert row["state"] == "failed" and row["outcome"] == "error" and row["error"] == "boom"
+    assert row["ended_at"] == row["last_active_at"] == "2026-11-13T11:05:00Z"
+
+
+def test_get_conversation_by_its_id_or_a_turns_id(conn, queue):
+    cid = add_conversation(conn, project=None)
+    a, b = add_item(queue, cid), add_item(queue, cid)
+    lone = queue.enqueue(None, "turn", {"text": "pong?"})
+    turns, focus = get_conversation(conn, cid)
+    assert [t["id"] for t in turns] == [a, b] and focus is None
+    turns, focus = get_conversation(conn, b)
+    assert [t["id"] for t in turns] == [a, b] and focus == b
+    turns, focus = get_conversation(conn, lone)
+    assert [t["id"] for t in turns] == [lone] and conversation_row(turns, datetime.now(UTC))["id"] == lone
+    assert get_conversation(conn, "V-nope") is None and get_conversation(conn, "W-nope") is None
 
 
 def test_paused_by_latest_stop(conn):

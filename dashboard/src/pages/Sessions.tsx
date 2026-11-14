@@ -1,10 +1,10 @@
 import { ChevronLeft, ChevronRight, Search, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Link, useSearchParams } from "react-router"
-import { useSessions } from "@/api"
+import { useConversations } from "@/api"
 import { Page } from "@/components/Page"
 import { QueryState } from "@/components/QueryState"
-import { SOURCE_LABELS, SourceBadge, StateBadge, elapsed } from "@/components/session"
+import { SOURCE_LABELS, SourceBadge, StateBadge } from "@/components/session"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -58,12 +58,12 @@ export function Sessions() {
     return () => clearTimeout(id)
   })  // debounced search; runs after every render, cancels on the next keystroke
 
-  const sessions = useSessions({ state: get("state"), source: get("source"), project: get("project"),
+  const sessions = useConversations({ state: get("state"), source: get("source"), project: get("project"),
     account: get("account"), q: get("q"), limit: PAGE, offset })
   const filtered = ["state", "source", "project", "account", "q"].some((k) => params.has(k))
 
   return (
-    <Page title="Sessions" subtitle="Every piece of work the agent has picked up, newest first.">
+    <Page title="Sessions" subtitle="Every conversation with the agent, latest message first. Each message continues the same session.">
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -94,8 +94,8 @@ export function Sessions() {
                     <TableHead className="w-28">State</TableHead>
                     <TableHead>Session</TableHead>
                     <TableHead>Asked by</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead className="text-right">Duration</TableHead>
+                    <TableHead>Last message</TableHead>
+                    <TableHead className="text-right">Work time</TableHead>
                     <TableHead>Account</TableHead>
                     <TableHead className="text-right">Tokens</TableHead>
                     <TableHead>Outcome</TableHead>
@@ -117,11 +117,12 @@ export function Sessions() {
                         <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                           <SourceBadge source={r.source} />
                           {r.project && <span className="font-mono">{r.project}</span>}
+                          <span className="tabular">{r.messages === 1 ? "1 message" : `${r.messages} messages`}</span>
                         </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{r.requester ?? "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{fmtAgo(r.created_at, now)}</TableCell>
-                      <TableCell className="tabular text-right">{fmtDuration(elapsed(r, now))}</TableCell>
+                      <TableCell className="text-muted-foreground">{fmtAgo(r.last_active_at, now)}</TableCell>
+                      <TableCell className="tabular text-right">{fmtDuration(r.busy_s)}</TableCell>
                       <TableCell>
                         {r.account
                           ? <button type="button" className="hover:underline" onClick={() => set({ account: r.account! })}>{r.account_name ?? r.account}</button>

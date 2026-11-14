@@ -1,5 +1,5 @@
-"""The dashboard's read models over agent.db: sessions (work items with their conversation, task and run), the event
-log, today's counts and the KPIs with daily series.
+"""The dashboard's read models over agent.db: sessions (work items with their conversation, task and run), the
+conversations they are turns of, the event log, today's counts and the KPIs with daily series.
 
 A work item's payload carries system prompts and test secrets: only its `text` and `actor` are ever read here.
 """
@@ -63,9 +63,8 @@ def linear_issue(text: str | None) -> dict | None:
     return issue if isinstance(issue, dict) else None
 
 
-def _title(r: sqlite3.Row, issue: dict | None) -> str:
-    if r["task_title"]:
-        return r["task_title"]
+def _message(r: sqlite3.Row, issue: dict | None) -> str:
+    """The turn's own message: the Linear issue it was started with, else its first line."""
     if issue and issue.get("identifier"):
         return f"{issue['identifier']} — {issue.get('title') or ''}".strip(" —")
     for line in (r["text"] or "").splitlines():
@@ -73,6 +72,10 @@ def _title(r: sqlite3.Row, issue: dict | None) -> str:
             line = line.strip()
             return line if len(line) <= TITLE_CHARS else line[:TITLE_CHARS - 1] + "…"
     return r["kind"]
+
+
+def _title(r: sqlite3.Row, issue: dict | None) -> str:
+    return r["task_title"] or _message(r, issue)
 
 
 def _state(status: str) -> str:
@@ -86,6 +89,7 @@ def _row(r: sqlite3.Row, started_at: str | None) -> dict:
     return {
         "id": r["id"], "kind": r["kind"], "state": state, "project": r["project"],
         "conversation_id": r["conversation_id"], "task_id": r["task_id"], "title": _title(r, issue),
+        "message": _message(r, issue),
         "source": r["source"], "requester": r["task_requester"] or r["actor"],
         "created_at": r["created_at"], "started_at": started_at,
         "ended_at": r["ended_at"] if has_run else (r["updated_at"] if state in TERMINAL else None),
@@ -111,7 +115,7 @@ def _started(conn: sqlite3.Connection, ids: list[str]) -> dict[str, str]:
     return {r["item"]: r["ts"] for r in rows}
 
 
-def list_sessions(conn: sqlite3.Connection, f: SessionFilter) -> tuple[list[dict], int]:
+def _where(f: SessionFilter) -> tuple[str, list]:
     where, args = [], []
     if f.state:
         where.append("w.status = ?")
@@ -128,12 +132,98 @@ def list_sessions(conn: sqlite3.Connection, f: SessionFilter) -> tuple[list[dict
     if f.q:
         where.append("(t.title LIKE ? OR json_extract(w.payload, '$.text') LIKE ?)")
         args += [f"%{f.q}%"] * 2
-    clause = f" WHERE {' AND '.join(where)}" if where else ""
+    return (f" WHERE {' AND '.join(where)}" if where else ""), args
+
+
+def list_sessions(conn: sqlite3.Connection, f: SessionFilter) -> tuple[list[dict], int]:
+    clause, args = _where(f)
     total = conn.execute(f"SELECT COUNT(*) FROM ({_SELECT}{clause})", args).fetchone()[0]
     rows = conn.execute(f"{_SELECT}{clause} ORDER BY w.created_at DESC, w.rowid DESC LIMIT ? OFFSET ?",
                         [*args, f.limit, f.offset]).fetchall()
     started = _started(conn, [r["id"] for r in rows])
     return [_row(r, started.get(r["id"])) for r in rows], total
+
+
+_KEY = "COALESCE(w.conversation_id, w.id)"   # a work item outside any conversation stands on its own
+# Per conversation: its latest message and its state (running or queued while any turn is, else its latest turn's)
+_GROUPS = f"""SELECT g.key, g.last_at, g.last_rowid,
+    CASE WHEN g.running THEN 'claimed' WHEN g.queued THEN 'queued' ELSE l.status END AS status
+FROM (SELECT {_KEY} AS key, MAX(w.created_at) AS last_at, MAX(w.rowid) AS last_rowid,
+             SUM(w.status = 'claimed') AS running, SUM(w.status = 'queued') AS queued
+      FROM work_items w GROUP BY key) g
+JOIN work_items l ON l.rowid = g.last_rowid"""
+
+
+def _turns(conn: sqlite3.Connection, keys: list[str]) -> dict[str, list[dict]]:
+    if not keys:
+        return {}
+    marks = ",".join("?" * len(keys))
+    rows = conn.execute(f"{_SELECT} WHERE {_KEY} IN ({marks}) ORDER BY w.created_at, w.rowid", keys).fetchall()
+    started = _started(conn, [r["id"] for r in rows])
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["conversation_id"] or r["id"], []).append(_row(r, started.get(r["id"])))
+    return out
+
+
+def list_conversations(conn: sqlite3.Connection, f: SessionFilter) -> tuple[list[list[dict]], int]:
+    """A page of conversations, latest message first, each as its turns (oldest first). A conversation matches the
+    filters when any of its turns does; the state filter is on the conversation's own state."""
+    clause, args = _where(dataclasses.replace(f, state=None))
+    where, params = [], []
+    if f.state:
+        where.append("status = ?")
+        params.append(STATES.get(f.state, f.state))
+    if clause:
+        where.append(f"key IN (SELECT COALESCE(conversation_id, id) FROM ({_SELECT}{clause}))")
+        params += args
+    groups = f"SELECT * FROM ({_GROUPS})" + (f" WHERE {' AND '.join(where)}" if where else "")
+    total = conn.execute(f"SELECT COUNT(*) FROM ({groups})", params).fetchone()[0]
+    keys = [r["key"] for r in conn.execute(f"{groups} ORDER BY last_at DESC, last_rowid DESC LIMIT ? OFFSET ?",
+                                           [*params, f.limit, f.offset])]
+    turns = _turns(conn, keys)
+    return [turns[k] for k in keys], total
+
+
+def get_conversation(conn: sqlite3.Connection, ref: str) -> tuple[list[dict], str | None] | None:
+    """The turns of the conversation `ref` names, and the turn it named when it is a work item's id."""
+    item = conn.execute("SELECT id, conversation_id FROM work_items WHERE id = ?", (ref,)).fetchone()
+    key = (item["conversation_id"] or item["id"]) if item else ref
+    turns = _turns(conn, [key]).get(key)
+    return (turns, item["id"] if item else None) if turns else None
+
+
+def _at(ts: str) -> datetime:
+    return datetime.strptime(ts, FMT).replace(tzinfo=UTC)
+
+
+def conversation_row(turns: list[dict], now: datetime) -> dict:
+    """One row for a conversation from its turns, oldest first: the first says what it is and who asked, the latest
+    how it went, and the numbers add up over every turn. busy_s is the time spent working, not waiting for people."""
+    first, last = turns[0], turns[-1]
+    states = {t["state"] for t in turns}
+    state = "running" if "running" in states else "queued" if "queued" in states else last["state"]
+    counted = [t["tokens"] for t in turns if t["tokens"]]
+    calls = [t["turns"] for t in turns if t["turns"] is not None]
+    accounts = [t for t in turns if t["account"]]
+    busy = sum(((_at(t["ended_at"]) if t["ended_at"] else now) - _at(t["started_at"] or t["created_at"])).total_seconds()
+               for t in turns if t["state"] != "queued")
+    return {
+        "id": first["conversation_id"] or first["id"], "kind": first["kind"], "state": state,
+        "project": last["project"], "conversation_id": first["conversation_id"], "task_id": last["task_id"],
+        "title": first["title"], "source": first["source"], "requester": first["requester"],
+        "created_at": first["created_at"], "started_at": first["started_at"],
+        "ended_at": None if state in ("running", "queued") else last["ended_at"],
+        "last_active_at": max(ts for t in turns for ts in (t["created_at"], t["started_at"], t["ended_at"]) if ts),
+        "messages": len(turns), "busy_s": round(busy),
+        "account": accounts[-1]["account"] if accounts else None,
+        "account_name": accounts[-1].get("account_name") if accounts else None,
+        "turns": sum(calls) if calls else None,
+        "tokens": {k: sum(c[k] for c in counted) for k in ("in", "out", "cache_read", "cache_write")} if counted else None,
+        "outcome": last["outcome"], "error": last["error"], "live": any(t["live"] for t in turns),
+        "links": {"slack": None, "linear": next((t["links"]["linear"] for t in turns if t["links"]["linear"]), None),
+                  "pr": next((t["links"]["pr"] for t in reversed(turns) if t["links"]["pr"]), None)},
+    }
 
 
 def get_session(conn: sqlite3.Connection, item_id: str) -> dict | None:
