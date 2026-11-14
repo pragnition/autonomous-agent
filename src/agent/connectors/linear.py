@@ -42,6 +42,12 @@ query Issue($id: String!) {
 }"""
 
 
+ISSUE_STATE = """
+query IssueState($id: String!) {
+  issue(id: $id) { state { type } completedAt canceledAt }
+}"""
+
+
 class LinearClient:
     """Core's Linear calls. With the agent's Linear app installed, `token` returns its OAuth token and calls show as
     the agent; until then (token returns None) they use the personal API key."""
@@ -93,6 +99,11 @@ class LinearClient:
                 "url": node.get("url"), "state": (node.get("state") or {}).get("name"),
                 "comments": [{"author": (c.get("user") or {}).get("name", "someone"), "body": c["body"],
                               "at": c.get("createdAt")} for c in (node.get("comments") or {}).get("nodes", [])]}
+
+    async def issue_state(self, issue_id: str) -> dict:
+        node = (await self._gql("IssueState", ISSUE_STATE, {"id": issue_id}))["issue"]
+        return {"state_type": (node.get("state") or {}).get("type"), "completed_at": node.get("completedAt"),
+                "canceled_at": node.get("canceledAt")}
 
     async def comment(self, issue_id: str, body: str) -> None:
         await self._gql("CommentCreate", COMMENT_CREATE, {"issueId": issue_id, "body": body})
