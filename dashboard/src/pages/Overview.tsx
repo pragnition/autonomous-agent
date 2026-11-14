@@ -39,7 +39,7 @@ function WeekCard() {
                 ["Pickup → PR", fmtDuration(k.to_pr.median_s)],
                 ["PR → merge", fmtDuration(k.to_merge.median_s)],
                 ["Merge rate", fmtPct(k.merge_rate)],
-                ["Tasks", String(k.tasks)],
+                ["Issues · done", `${k.issues} · ${k.done}`],
                 ["PRs · merged", `${k.prs} · ${k.merged}`],
               ].map(([label, value]) => (
                 <div key={label}>

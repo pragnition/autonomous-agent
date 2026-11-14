@@ -289,34 +289,22 @@ def test_events_paging_and_types(conn):
 
 
 def test_kpi_daily_zero_filled_without_cost(conn, queue):
+    from agent.core.linear_issues import record_issue
     now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
-    task = make_task(conn)
-    conn.execute("UPDATE tasks SET created_at = '2026-11-12T03:00:00Z' WHERE id = ?", (task.id,))
-    conn.execute("INSERT INTO pr_stats(task_id, repo, pr_number, opened_at, merged_at, updated_at) "
-                 "VALUES (?, 'o/r', 1, '2026-11-12T04:00:00Z', '2026-11-13T02:00:00Z', '2026-11-13T02:00:00Z')",
-                 (task.id,))
-    cid = add_conversation(conn, task_id=task.id)
-    add_run(conn, add_item(queue, cid), task_id=task.id, cost=1.25, ended="2026-11-12T05:00:00Z")
-    add_run(conn, queue.enqueue(None, "turn", {}), cost=0.25, ended="2026-11-13T01:00:00Z")
-    view = kpi_view(conn, 3, None, now, "Asia/Singapore")
+    record_issue(conn, {"createdAt": "2026-11-12T03:00:00Z", "issue": {"id": "i1", "identifier": "PRA-1"}}, "V-1")
+    conn.execute("INSERT INTO agent_prs(repo, number, opened_at, merged_at, closed_at, issue_identifier, updated_at) "
+                 "VALUES ('o/r', 1, '2026-11-12T04:00:00Z', '2026-11-13T02:00:00Z', '2026-11-13T02:00:00Z', "
+                 "'PRA-1', '2026-11-13T02:00:00Z')")
+    view = kpi_view(conn, 3, now, "Asia/Singapore")
     assert [d["date"] for d in view["daily"]] == ["2026-11-11", "2026-11-12", "2026-11-13"]
     by_date = {d["date"]: d for d in view["daily"]}
-    assert by_date["2026-11-11"] == {"date": "2026-11-11", "tasks": 0, "prs": 0, "merged": 0}
-    assert by_date["2026-11-12"]["tasks"] == 1 and by_date["2026-11-12"]["prs"] == 1
+    assert by_date["2026-11-11"] == {"date": "2026-11-11", "issues": 0, "prs": 0, "merged": 0}
+    assert by_date["2026-11-12"]["issues"] == 1 and by_date["2026-11-12"]["prs"] == 1
     assert by_date["2026-11-13"]["merged"] == 1
-    assert "cost_by_project" not in view and view["projects"] == ["sample"]
+    assert "projects" not in view
     assert not {"cost_usd", "cost_per_task", "cost_per_merged"} & set(view["kpis"])
     assert view["kpis"]["merged"] == 1 and view["kpis"]["merge_rate"] == 1.0
     assert view["kpis"]["to_merge"]["n"] == 1
-
-
-def test_kpi_view_project_filter(conn, queue):
-    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
-    make_task(conn)
-    make_task(conn, project="other")
-    conn.execute("UPDATE tasks SET created_at = '2026-11-13T01:00:00Z'")
-    view = kpi_view(conn, 7, "other", now, "UTC")
-    assert view["kpis"]["tasks"] == 1 and sum(d["tasks"] for d in view["daily"]) == 1
 
 
 def test_overview_counts_local_day(conn, queue):
