@@ -11,7 +11,7 @@ import json
 import logging
 
 from agent import db
-from agent.core.conversations import create_conversation
+from agent.core.conversations import create_conversation, origin_line
 
 log = logging.getLogger(__name__)
 SESSION_KEY = "linear_session:{}"
@@ -38,4 +38,8 @@ class LinearAgentSessions:
             return  # a redelivered `created`, or an event for a session we never saw
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
         text = f"Linear agent session event:\n{json.dumps(body, indent=2)}"
-        self.queue.enqueue(convo_id, "turn", self.payloads.turn(convo, text, None, unattended=True))
+        payload = self.payloads.turn(convo, text, None, unattended=True)
+        issue = body["agentSession"].get("issue") or {}
+        payload["origin"] = origin_line(f"Linear {issue['identifier']}" if issue.get("identifier") else "Linear",
+                                        link=issue.get("url"))
+        self.queue.enqueue(convo_id, "turn", payload)

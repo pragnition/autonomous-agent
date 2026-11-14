@@ -91,6 +91,19 @@ async def test_dm_turn_end_to_end(app, api):
     assert tuple(run) == ("turn", 2, "done")
 
 
+async def test_dm_turn_names_the_sender_and_links_the_message(app):
+    """core's own Slack lookups (the dashboard's name and permalink helpers) fill the turn's first line."""
+    async def users_info(**kw):
+        return {"user": {"real_name": "Parthib Das Gupta"}}
+
+    async def get_permalink(**kw):
+        return {"permalink": f"https://x.slack.com/archives/{kw['channel']}/p{kw['message_ts'].replace('.', '')}"}
+    app.slack.users_info, app.slack.chat_getPermalink = users_info, get_permalink
+    await app.conversations.handle_slack(dm_event("5.1", "what's running?"))
+    payload = app.queue.get(last_item_id(app)).payload
+    assert payload["origin"] == "[from Parthib Das Gupta (parthib) · DM · https://x.slack.com/archives/D1/p51]"
+
+
 async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
     """track_task in a DM posts the task's status at the DM's top level and asks in that message's thread. A reply
     there reaches the DM conversation, with its context, and answers the question."""

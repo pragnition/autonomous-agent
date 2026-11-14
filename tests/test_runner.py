@@ -160,6 +160,16 @@ async def test_every_session_shares_one_claude_code_memory(tmp_path, worktrees):
     assert (tmp_path / "memory").is_dir()
 
 
+async def test_prompt_starts_with_the_messages_origin(tmp_path, worktrees):
+    claude = FakeClaude()
+    runner = make_runner(tmp_path, worktrees, FakeLink(), claude)
+    await runner.handle(item("V-1", worktree=None, workdir="session",
+                             origin="[from Ann Lee (ann) · DM · https://team.slack.com/archives/D1/p51]"), "tok", [])
+    await runner.handle(item("V-2", worktree=None, workdir="session"), "tok", [])
+    assert claude.specs[0].prompt == "[from Ann Lee (ann) · DM · https://team.slack.com/archives/D1/p51]\nfix the export"
+    assert claude.specs[1].prompt == "fix the export"
+
+
 async def test_runner_loads_core_effortless_and_all_pack_plugins(tmp_path, worktrees):
     runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
     plugins = await runner._bundle()

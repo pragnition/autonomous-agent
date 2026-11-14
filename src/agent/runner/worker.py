@@ -195,7 +195,9 @@ class Runner:
         if self.memory_dir is not None:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             settings["autoMemoryDirectory"] = str(self.memory_dir)
-        spec = RunSpec(run_id=item_id, prompt=note + payload["text"], cwd=cwd, model=payload["model"],
+        # the message's origin (who, where, link) comes first, then what the runner has to say, then the message
+        origin = f"{payload['origin']}\n" if payload.get("origin") else ""
+        spec = RunSpec(run_id=item_id, prompt=origin + note + payload["text"], cwd=cwd, model=payload["model"],
                        system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,

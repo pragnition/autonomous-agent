@@ -148,9 +148,12 @@ class CoreApp:
                                      run_as=self.config.agent.uid)
         register_login_tools(self.router, self.login)
 
+        self._permalinks: dict[tuple[str, str], tuple[float, str | None]] = {}
+        self._names: dict[str, tuple[float, str | None]] = {}
         self.conversations = Conversations(self.conn, config=self.config, packs=self.packs, queue=self.queue,
                                            slack=slack, payloads=self.payloads, notifier=self.notifier,
-                                           bot_user_id=bot_user_id, linear_poller=self.linear_poller)
+                                           bot_user_id=bot_user_id, linear_poller=self.linear_poller,
+                                           person_name=self.person_name, permalink=self.permalink)
         self.consolidation = ConsolidationService(self.conn, self.memory, self.queue, self.payloads,
                                                   secret_values=self.secret_values, mirror_for=self.mirror)
         self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
@@ -163,8 +166,6 @@ class CoreApp:
             runs_dir=self.data_dir / "runs",
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         self.agent_app.router.add_route("*", "/git/{project}.git/{tail:.*}", self.githost.aiohttp_handler)
-        self._permalinks: dict[tuple[str, str], tuple[float, str | None]] = {}
-        self._names: dict[str, tuple[float, str | None]] = {}
         self.account_names = AccountNames(self.config_dir / NAMES_FILE)
         self.dashboard_app = make_dashboard_app(
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
@@ -185,7 +186,8 @@ class CoreApp:
                     self.conn, actor=actor, daily_usd=daily_usd, monthly_usd=monthly_usd))
 
     async def person_name(self, key: str) -> str | None:
-        """A person's name as Slack has it, for the dashboard; failures are remembered like permalinks'."""
+        """A person's name as Slack has it, for the dashboard and each turn's first line; failures are remembered
+        like permalinks'."""
         person = self.config.people.get(key)
         if person is None or not person.slack:
             return None
@@ -202,8 +204,9 @@ class CoreApp:
         return name
 
     async def permalink(self, channel: str, thread_ts: str) -> str | None:
-        """A Slack thread's link for the dashboard. A failure (the bot left the channel, a rate limit) is remembered
-        for PERMALINK_RETRY_S, so a page that polls doesn't ask Slack again every few seconds."""
+        """A Slack message's link: a thread's for the dashboard, each message's for its turn's first line. A failure
+        (the bot left the channel, a rate limit) is remembered for PERMALINK_RETRY_S, so a page that polls doesn't
+        ask Slack again every few seconds."""
         key, now = (channel, thread_ts), time.monotonic()
         cached = self._permalinks.get(key)
         if cached and (cached[1] is not None or now - cached[0] < PERMALINK_RETRY_S):

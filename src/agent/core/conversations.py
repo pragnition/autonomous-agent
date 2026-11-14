@@ -5,18 +5,22 @@ message is the next turn of that session (the work queue never runs two turns of
 is one rolling chat: its top-level messages continue the latest conversation until it has been quiet for DM_IDLE.
 A reply in a thread goes to a session that asked a question there, otherwise to the thread's primary conversation,
 otherwise to the conversation of the message the thread hangs off (every message core receives or posts is
-recorded in slack_messages).
+recorded in slack_messages). Each turn carries a line for the top of its prompt: who sent the message, where,
+and its link.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import sqlite3
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from agent import db, events, tasks
+from agent.connectors.linear import issue_link
 from agent.core.sessions import WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
 from agent.gitutil import branch_name
@@ -29,6 +33,24 @@ FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
 DM_IDLE = timedelta(hours=12)  # a DM quiet this long starts a fresh conversation on its next top-level message
+LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the line goes without it after that
+
+
+def origin_line(where: str, *, who: str | None = None, link: str | None = None) -> str:
+    """The first line of a turn's prompt, e.g. [from Sam Taylor (carl) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
+    return "[" + " · ".join(p for p in (f"from {who}" if who else None, where, link) if p) + "]"
+
+
+async def _nothing(*args) -> None:
+    return None
+
+
+async def _answer(lookup: Awaitable):
+    """A lookup's answer, or None when it fails or takes longer than LOOKUP_S."""
+    try:
+        return await asyncio.wait_for(lookup, LOOKUP_S)
+    except Exception:
+        return None
 
 
 def record_message(conn: sqlite3.Connection, channel: str, ts: str, conversation_id: str) -> None:
@@ -76,11 +98,16 @@ def bind_project(conn: sqlite3.Connection, convo_id: str, project: str, *, packs
 
 class Conversations:
     def __init__(self, conn: sqlite3.Connection, *, config, packs: dict, queue: WorkQueue, slack, payloads,
-                 notifier, bot_user_id: str | None, linear_poller=None):
+                 notifier, bot_user_id: str | None, linear_poller=None,
+                 person_name: Callable[[str], Awaitable[str | None]] = _nothing,
+                 permalink: Callable[[str, str], Awaitable[str | None]] = _nothing):
+        """person_name(key) and permalink(channel, ts) are core's cached Slack lookups, for each turn's first line."""
         self.conn, self.config, self.packs, self.queue = conn, config, packs, queue
         self.slack, self.payloads, self.notifier = slack, payloads, notifier
         self.bot_user_id, self.linear_poller = bot_user_id, linear_poller
+        self.person_name, self.permalink = person_name, permalink
         self._channel_names: dict[str, str] = {}
+        self._arrivals: dict[str, asyncio.Future] = {}  # each channel's latest message, until its lookups are done
 
     # helpers
 
@@ -106,6 +133,16 @@ class Conversations:
         return create_conversation(self.conn, agent_name=self.config.name, channel=channel, thread_ts=thread_ts,
                                    project=project, title=title, task_id=task_id)
 
+    async def _channel_name(self, channel: str) -> str:
+        """The channel's name, or "" when Slack won't say."""
+        if channel not in self._channel_names:
+            try:
+                info = await self.slack.conversations_info(channel=channel)
+                self._channel_names[channel] = info["channel"]["name"]
+            except Exception:
+                self._channel_names[channel] = ""
+        return self._channel_names[channel]
+
     async def _project_for_channel(self, channel: str) -> str | None:
         for name, pack in self.packs.items():
             if pack.project.slack_channel == channel:
@@ -114,13 +151,34 @@ class Conversations:
                  if p.project.slack_channel.startswith("#")}
         if not named:
             return None
-        if channel not in self._channel_names:
-            try:
-                info = await self.slack.conversations_info(channel=channel)
-                self._channel_names[channel] = info["channel"]["name"]
-            except Exception:
-                self._channel_names[channel] = ""
-        return named.get(self._channel_names[channel])
+        return named.get(await self._channel_name(channel))
+
+    async def _slack_origin(self, person_key: str, event: dict, is_dm: bool) -> str:
+        """Who sent the message, where, and its link. A lookup that fails or is slow is left out (a channel
+        without a name shows its id); the turn never waits on it for more than LOOKUP_S."""
+        channel = event["channel"]
+        lookups = [self.person_name(person_key), self.permalink(channel, event["ts"])]
+        if not is_dm:
+            lookups.append(self._channel_name(channel))
+        name, link, *channel_name = await asyncio.gather(*map(_answer, lookups))
+        where = "DM" if is_dm else f"#{channel_name[0] or channel}" + (" thread" if event.get("thread_ts") else "")
+        return origin_line(where, who=f"{name} ({person_key})" if name else person_key, link=link)
+
+    async def _in_order(self, channel: str, lookup: Awaitable[str]) -> str:
+        """`lookup`'s answer, once every message that arrived earlier in this channel is past its own lookups.
+        From there routing is settled before anything else is awaited, so the lookups of several messages run side
+        by side and a quick one never lets its message overtake an earlier one."""
+        earlier = self._arrivals.get(channel)
+        mine = self._arrivals[channel] = asyncio.get_running_loop().create_future()
+        try:
+            answer = await lookup
+            if earlier is not None:
+                await earlier
+            return answer
+        finally:
+            mine.set_result(None)
+            if self._arrivals.get(channel) is mine:
+                del self._arrivals[channel]
 
     def _rolling_dm(self, channel: str) -> sqlite3.Row | None:
         """The DM's current chat: the top-level conversation active most recently, unless it has been quiet for
@@ -161,9 +219,10 @@ class Conversations:
                 await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.working, actor="human"))
         return self._row(convo["id"])
 
-    def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, unattended: bool = False,
+    def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
+        payload["origin"] = origin  # the runner puts it at the top of the prompt
         if message_ts:
             payload["message_ts"] = message_ts
         if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
@@ -190,13 +249,14 @@ class Conversations:
                 await self.slack.chat_postEphemeral(channel=channel, user=user, text=NOT_AUTHORISED)
             return
         text = _MENTION.sub("", event.get("text") or "").strip()
+        origin = await self._in_order(channel, self._slack_origin(person.key, event, is_dm))
         convo = await self._route(channel, thread_ts, is_dm, text)
         record_message(self.conn, channel, event["ts"], convo["id"])
         if _FABLE.search(text):
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
         came_from = event.get("thread_ts")
-        self._enqueue_turn(convo, text, person.key, message_ts=event["ts"],
+        self._enqueue_turn(convo, text, person.key, origin=origin, message_ts=event["ts"],
                            reply_thread_ts=came_from if came_from != convo["thread_ts"] else None)
         try:  # the acknowledgement: the person sees it landed long before the session replies
             await self.slack.reactions_add(channel=channel, timestamp=event["ts"], name="eyes")
@@ -229,7 +289,8 @@ class Conversations:
         convo = self._row(self._new(resp["channel"], resp["ts"], task.project, task.title, task.id))
         task = tasks.transition(self.conn, task.id, Status.working, actor="linear")
         self._enqueue_turn(convo, f"Linear issue {task.source_ref}: {task.title}\n\n{task.description}",
-                           task.requester, unattended=True)
+                           task.requester, unattended=True,
+                           origin=origin_line(f"Linear {task.source_ref}", link=issue_link(task.description)))
         await self.notifier.task_changed(task)
 
     # results

@@ -55,6 +55,15 @@ async def test_created_acks_and_passes_the_event_to_the_agent(sessions, client, 
     assert "fix the login bug" in turn["text"]
 
 
+async def test_turns_start_with_the_issue_and_its_link(sessions, conn):
+    issue = {"id": "i7", "identifier": "SAM-7", "title": "Export", "url": "https://linear.app/x/issue/SAM-7"}
+    await sessions.on_event(event("created", agentSession={"id": "S1", "issue": issue}))
+    await sessions.on_event(event("prompted", agentSession={"id": "S1", "issue": issue}))
+    await sessions.on_event(event("created", session="S2"))  # an event without its issue
+    assert [t["origin"] for t in turns(conn)] == ["[Linear SAM-7 · https://linear.app/x/issue/SAM-7]"] * 2 + \
+        ["[Linear]"]
+
+
 async def test_prompted_resumes_the_same_conversation(sessions, conn):
     await sessions.on_event(event("created"))
     await sessions.on_event(event("created"))                 # Linear redelivers: ignored

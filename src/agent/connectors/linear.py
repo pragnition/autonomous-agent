@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Awaitable, Callable
 
@@ -100,6 +101,15 @@ class LinearClient:
         """An activity on an agent session: thought, response, error or elicitation."""
         await self._gql("AgentActivityCreate", AGENT_ACTIVITY,
                         {"input": {"agentSessionId": session_id, "content": {"type": type, "body": body}}})
+
+
+_LINK = re.compile(r"^Linear: (https?://\S+)\s*\Z", re.M)
+
+
+def issue_link(description: str) -> str | None:
+    """The issue's URL, from the last line the poller adds to a task's description."""
+    found = _LINK.search(description or "")
+    return found.group(1) if found else None
 
 
 class LinearPoller:

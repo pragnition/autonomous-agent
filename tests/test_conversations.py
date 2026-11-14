@@ -28,7 +28,8 @@ class FakeLinearPoller:
     async def poll(self):
         created = []
         for title in self.new:
-            t = tasks.create_task(self.conn, project="sample", title=title, description="Steps to reproduce",
+            t = tasks.create_task(self.conn, project="sample", title=title,
+                                  description="Steps to reproduce\n\nLinear: https://linear.app/x/issue/SAM-7",
                                   kind="bug", source="linear", source_ref="SAM-7", requester=None, owner="ann",
                                   slack_channel="C-SAMPLE", linear_issue_id="iss-7")
             created.append(t.id)
@@ -262,6 +263,99 @@ async def test_failed_eyes_still_queues_the_turn(convos, slack, queue):
     slack.reactions_add = down
     await convos.handle_slack(mention("t10", "hi"))
     assert queue.claim().payload["text"] == "hi"
+
+
+def permalink_of(channel, ts):
+    return f"https://team.slack.com/archives/{channel}/p{ts.replace('.', '')}"
+
+
+class Lookups:
+    """What core's Slack lookups answer: people's names, channel names and message permalinks."""
+
+    def __init__(self, slack, names=None, channels=None):
+        self.names, self.channels, self.calls = names or {}, channels or {}, []
+        slack.conversations_info = self.conversations_info
+
+    async def person_name(self, key):
+        return self.names.get(key)
+
+    async def permalink(self, channel, ts):
+        self.calls.append(ts)
+        return permalink_of(channel, ts)
+
+    async def conversations_info(self, channel):
+        return {"channel": {"name": self.channels[channel]}}
+
+
+@pytest.fixture
+def lookups(convos, slack):
+    found = Lookups(slack, names={"ann": "Ann Lee"}, channels={"C-SAMPLE": "chilliclaw"})
+    convos.person_name, convos.permalink = found.person_name, found.permalink
+    return found
+
+
+async def test_dm_turn_starts_with_who_where_and_link(convos, queue, lookups):
+    event = dm("deploy it")
+    await convos.handle_slack(event)
+    item = queue.claim()
+    assert item.payload["origin"] == f"[from Ann Lee (ann) · DM · {permalink_of('D-1', event['ts'])}]"
+    assert item.payload["text"] == "deploy it"
+
+
+async def test_channel_mention_and_thread_reply_each_carry_their_own_link(convos, queue, lookups):
+    await convos.handle_slack(mention("t1", "fix the export"))
+    answer = reply("t1", "the csv one")
+    await convos.handle_slack(answer)
+    first = queue.claim()
+    queue.complete(first.id, {"text": "ok"})
+    second = queue.claim()
+    assert first.payload["origin"] == f"[from Ann Lee (ann) · #chilliclaw · {permalink_of('C-SAMPLE', 't1')}]"
+    assert second.payload["origin"] == (f"[from Ann Lee (ann) · #chilliclaw thread · "
+                                        f"{permalink_of('C-SAMPLE', answer['ts'])}]")
+
+
+async def test_failed_lookups_leave_out_what_is_unknown(convos, queue, slack):
+    async def broken(**kw):
+        raise RuntimeError("channel_not_found")
+    slack.conversations_info = broken
+    await convos.handle_slack(mention("t1", "fix the export", user="U2"))
+    assert queue.claim().payload["origin"] == "[from bob · #C-SAMPLE]"
+
+
+async def test_slow_lookups_never_hold_the_turn(convos, queue, lookups, monkeypatch):
+    monkeypatch.setattr("agent.core.conversations.LOOKUP_S", 0.05)
+
+    async def stuck(channel, ts):
+        await asyncio.sleep(10)
+    convos.permalink = stuck
+    await asyncio.wait_for(convos.handle_slack(dm("deploy it")), 2)
+    assert queue.claim().payload["origin"] == "[from Ann Lee (ann) · DM]"
+
+
+async def test_messages_keep_their_order_while_lookups_run(convos, queue, lookups):
+    """A first message whose lookups are slow is still queued before a second that arrives a moment later."""
+    first, second = dm("fix the login"), dm("and the logout")
+    release = asyncio.Event()
+    fast = lookups.permalink
+
+    async def permalink(channel, ts):
+        if ts == first["ts"]:
+            await release.wait()
+        return await fast(channel, ts)
+    convos.permalink = permalink
+    a = asyncio.create_task(convos.handle_slack(first))
+    b = asyncio.create_task(convos.handle_slack(second))
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.gather(a, b)
+    texts = [r[0] for r in queue.conn.execute("SELECT json_extract(payload, '$.text') FROM work_items ORDER BY rowid")]
+    assert texts == ["fix the login", "and the logout"]
+
+
+async def test_linear_issue_turn_starts_with_the_issue_and_its_link(convos, fake_linear, queue):
+    fake_linear.new = ["Export broken"]
+    await convos.intake_linear()
+    assert queue.claim().payload["origin"] == "[Linear SAM-7 · https://linear.app/x/issue/SAM-7]"
 
 
 async def test_linear_issue_is_unattended(convos, fake_linear, queue, slack, conn):
