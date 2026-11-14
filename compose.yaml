@@ -58,8 +58,8 @@ services:
       - agentdocker:/var/lib/docker
       - agentwork:/var/agent
 
-  # Claude Code sessions with a full development environment (spec v3). It pulls work from core, reads its runner
-  # tokens from data/runner and shares core's Azure login in data/cli/azure. It runs in the docker service's network
+  # Claude Code sessions with a full development environment. It pulls work from core, reads its runner token
+  # from data/runner and shares core's Azure login in data/cli/azure. It runs in the docker service's network
   # namespace: same stack network, and the apps it starts are on its localhost.
   agent:
     build: {context: ., target: agent}
@@ -67,7 +67,7 @@ services:
     restart: unless-stopped
     network_mode: service:docker
     depends_on: [docker]
-    command: [python, -m, agent, runners, --tokens, /run/agent/runner-tokens.json, --core, "http://core:8080",
+    command: [python, -m, agent, runners, --token-file, /run/agent/runner-token, --core, "http://core:8080",
               --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
               --git-email, "${AGENT_GIT_EMAIL:-}"]
     # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables (spec v3 O4). Compose reads

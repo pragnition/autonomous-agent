@@ -1,8 +1,10 @@
-"""Work items for sandbox runners, the tokens they use, and the gate that decides when work may start.
+"""The work queue, the tokens the agent container's runner uses, and the gate that decides when work may start.
 
-Runners pull work (spec v2 G6). A conversation never has two items running at once, so a second Slack message
-in a busy thread becomes the next turn of the same session. A runner that dies loses its lease; the item is
-re-queued once, then marked failed.
+One queue holds every conversation's turns and every chore, and the runner pulls from it. A conversation never
+has two items running at once, so a second Slack message in a busy thread becomes the next turn of the same
+session. A runner that dies loses its lease; the item is re-queued once, then marked failed.
+
+Two kinds of token: the long-lived runner token (pull work, fetch bundles) and a session token per work item.
 """
 
 from __future__ import annotations
@@ -18,8 +20,6 @@ from typing import Literal
 
 from agent import db
 from agent.proxy import ProxyUnavailable
-
-AGENT_QUEUE = db.AGENT_QUEUE  # re-exported: this is the queue everything (every conversation, every chore) uses
 
 _FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -39,24 +39,23 @@ def _hash(token: str) -> str:
 @dataclass(frozen=True)
 class TokenInfo:
     kind: str
-    sandbox: str
     work_item_id: str | None
 
 
-def mint_token(conn: sqlite3.Connection, kind: Literal["sandbox", "session"], *, sandbox: str,
-               work_item_id: str | None, ttl_s: int) -> str:
+def mint_token(conn: sqlite3.Connection, kind: Literal["runner", "session"], *, work_item_id: str | None = None,
+               ttl_s: int) -> str:
     token = secrets.token_urlsafe(32)
-    conn.execute("INSERT INTO tokens(hash, kind, sandbox, work_item_id, expires_at) VALUES (?, ?, ?, ?, ?)",
-                 (_hash(token), kind, sandbox, work_item_id, _iso(datetime.now(UTC) + timedelta(seconds=ttl_s))))
+    conn.execute("INSERT INTO tokens(hash, kind, work_item_id, expires_at) VALUES (?, ?, ?, ?)",
+                 (_hash(token), kind, work_item_id, _iso(datetime.now(UTC) + timedelta(seconds=ttl_s))))
     return token
 
 
 def resolve_token(conn: sqlite3.Connection, token: str, now: datetime | None = None) -> TokenInfo | None:
-    row = conn.execute("SELECT kind, sandbox, work_item_id, expires_at, revoked FROM tokens WHERE hash = ?",
+    row = conn.execute("SELECT kind, work_item_id, expires_at, revoked FROM tokens WHERE hash = ?",
                        (_hash(token),)).fetchone()
     if row is None or row["revoked"] or row["expires_at"] <= _iso(_now(now)):
         return None
-    return TokenInfo(row["kind"], row["sandbox"], row["work_item_id"])
+    return TokenInfo(row["kind"], row["work_item_id"])
 
 
 def revoke_for_work_item(conn: sqlite3.Connection, work_item_id: str) -> None:
@@ -67,7 +66,6 @@ def revoke_for_work_item(conn: sqlite3.Connection, work_item_id: str) -> None:
 class WorkItem:
     id: str
     conversation_id: str | None
-    sandbox: str
     kind: str
     payload: dict
     status: str
@@ -77,20 +75,26 @@ class WorkItem:
 
 
 def _item(row: sqlite3.Row) -> WorkItem:
-    return WorkItem(row["id"], row["conversation_id"], row["sandbox"], row["kind"], json.loads(row["payload"]),
-                    row["status"], row["attempts"], json.loads(row["result"]) if row["result"] else None,
-                    row["created_at"])
+    return WorkItem(row["id"], row["conversation_id"], row["kind"], json.loads(row["payload"]), row["status"],
+                    row["attempts"], json.loads(row["result"]) if row["result"] else None, row["created_at"])
+
+
+# The items claim() may hand out: queued ones, plus claimed ones whose lease has run out (claim()'s own reap
+# re-queues those first), whose conversation holds no live claim. Only a live claim blocks a conversation, so a
+# dead runner's stale claim never hides the turns queued behind it. Both parameters are the current time.
+_CLAIMABLE = ("(w.status = 'queued' OR (w.status = 'claimed' AND w.lease_until < ?)) AND "
+              "(w.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM work_items o WHERE "
+              "o.conversation_id = w.conversation_id AND o.status = 'claimed' AND o.lease_until >= ?))")
 
 
 class WorkQueue:
     def __init__(self, conn: sqlite3.Connection, lease_s: int = 90, max_attempts: int = 2):
         self.conn, self.lease_s, self.max_attempts = conn, lease_s, max_attempts
 
-    def enqueue(self, conversation_id: str | None, sandbox: str, kind: str, payload: dict) -> str:
+    def enqueue(self, conversation_id: str | None, kind: str, payload: dict) -> str:
         item_id, now = f"W-{uuid.uuid4().hex[:12]}", db.utcnow()
-        self.conn.execute("INSERT INTO work_items(id, conversation_id, sandbox, kind, payload, created_at, updated_at) "
-                          "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                          (item_id, conversation_id, sandbox, kind, json.dumps(payload), now, now))
+        self.conn.execute("INSERT INTO work_items(id, conversation_id, kind, payload, created_at, updated_at) "
+                          "VALUES (?, ?, ?, ?, ?, ?)", (item_id, conversation_id, kind, json.dumps(payload), now, now))
         return item_id
 
     def get(self, item_id: str) -> WorkItem | None:
@@ -113,30 +117,22 @@ class WorkQueue:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(_now(now))
 
-    def claimable_kinds(self, sandbox: str, now: datetime | None = None) -> set[str]:
-        """The kinds of items in `sandbox` that claim() could hand out right now, without claiming or reaping
-        anything: queued items, plus claimed items whose lease has already expired (claim()'s own reap will
-        requeue those), as long as their conversation holds no *unexpired* claim. A dead runner's stale claim
-        must never make its conversation invisible to this check forever — only a still-live claim blocks —
-        otherwise a conversation stuck behind one would need unrelated work to arrive before anything reaps it.
-        A runner asks the Gate only about kinds actually worth asking about, so an idle sandbox never has to
-        call it (and, through it, the account proxy) on every poll."""
+    def claimable_kinds(self, now: datetime | None = None) -> set[str]:
+        """The kinds of items claim() could hand out right now, without claiming or reaping anything. A runner
+        asks the Gate only about kinds actually worth asking about, so an idle queue never has to call it (and,
+        through it, the account proxy) on every poll."""
         now_s = _iso(_now(now))
-        rows = self.conn.execute(
-            "SELECT DISTINCT w.kind FROM work_items w WHERE w.sandbox = ? AND "
-            "(w.status = 'queued' OR (w.status = 'claimed' AND w.lease_until < ?)) AND "
-            "(w.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM work_items o WHERE "
-            "o.conversation_id = w.conversation_id AND o.status = 'claimed' AND o.lease_until >= ?))",
-            (sandbox, now_s, now_s)).fetchall()
+        rows = self.conn.execute(f"SELECT DISTINCT w.kind FROM work_items w WHERE {_CLAIMABLE}",
+                                 (now_s, now_s)).fetchall()
         return {r["kind"] for r in rows}
 
-    def claim(self, sandbox: str, now: datetime | None = None, kinds: tuple[str, ...] | None = None) -> WorkItem | None:
-        """The oldest eligible queued item for `sandbox`: no other item of its conversation is claimed, and (when
-        `kinds` is given, even empty) its kind is one of them. A runner asks once per kind it may start right now
-        (the Gate decides that), so this is the only place that has to know which kinds share a conversation's turn
-        order."""
+    def claim(self, now: datetime | None = None, kinds: tuple[str, ...] | None = None) -> WorkItem | None:
+        """The oldest claimable item: no other item of its conversation is claimed, and (when `kinds` is given,
+        even empty) its kind is one of them. A runner asks once per kind it may start right now (the Gate decides
+        that), so this is the only place that has to know which kinds share a conversation's turn order."""
         now = _now(now)
-        kind_filter, args = "", [sandbox]
+        now_s = _iso(now)
+        kind_filter, args = "", [now_s, now_s]
         if kinds is not None:
             if not kinds:  # no kind may start: nothing to claim
                 return None
@@ -145,11 +141,8 @@ class WorkQueue:
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(now)
-            row = self.conn.execute(
-                f"SELECT * FROM work_items w WHERE w.sandbox = ? AND w.status = 'queued'{kind_filter} AND "
-                "(w.conversation_id IS NULL OR NOT EXISTS (SELECT 1 FROM work_items o WHERE "
-                "o.conversation_id = w.conversation_id AND o.status = 'claimed')) ORDER BY w.created_at, w.rowid "
-                "LIMIT 1", args).fetchone()
+            row = self.conn.execute(f"SELECT * FROM work_items w WHERE {_CLAIMABLE}{kind_filter} "
+                                    "ORDER BY w.created_at, w.rowid LIMIT 1", args).fetchone()
             if row is None:
                 return None
             self.conn.execute("UPDATE work_items SET status = 'claimed', lease_until = ?, updated_at = ? WHERE id = ?",
@@ -192,7 +185,7 @@ class WorkQueue:
 
 
 class Gate:
-    """Whether a runner may start another item now (spec v2 §9)."""
+    """Whether the runner may start another item now."""
 
     def __init__(self, conn: sqlite3.Connection, config, proxy):
         self.conn, self.config, self.proxy = conn, config, proxy

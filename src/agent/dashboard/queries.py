@@ -29,7 +29,7 @@ _SOURCE = """CASE
     WHEN c.channel IS NOT NULL THEN 'slack'
     ELSE 'other' END"""
 
-_SELECT = f"""SELECT w.id, w.kind, w.status, w.sandbox, w.conversation_id, w.created_at, w.updated_at,
+_SELECT = f"""SELECT w.id, w.kind, w.status, w.conversation_id, w.created_at, w.updated_at,
     json_extract(w.payload, '$.text') AS text, json_extract(w.payload, '$.actor') AS actor,
     COALESCE(c.project, t.project) AS project, c.channel, c.thread_ts,
     t.id AS task_id, t.title AS task_title, t.requester AS task_requester, t.pr_url,

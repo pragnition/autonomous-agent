@@ -27,16 +27,15 @@ class Check:
     detail: str = ""
 
 
-def check_runner_tokens(conn, path: Path, names: list[str]) -> Check:
-    """Open mode: every queue has a live token in the file the agent container reads."""
+def check_runner_token(conn, path: Path) -> Check:
+    """The file the agent container reads holds a live runner token."""
+    from agent.core.runner_tokens import read_runner_token
     from agent.core.sessions import resolve_token
-    from agent.sandbox.runners import read_tokens
 
-    tokens = read_tokens(path)
-    bad = [n for n in names if not (tokens.get(n) and (info := resolve_token(conn, tokens[n])) is not None
-                                    and info.sandbox == n)]
-    return Check("runner tokens", not bad, f"missing or invalid: {', '.join(bad)}" if bad
-                 else f"{len(names)} queue(s): {', '.join(names)}")
+    token = read_runner_token(path)
+    info = resolve_token(conn, token) if token else None
+    ok = info is not None and info.kind == "runner"
+    return Check("runner token", ok, "live" if ok else f"missing or invalid in {path}")
 
 
 async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, github=None, linear=None,
@@ -86,8 +85,8 @@ async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, g
 
 
 def _proxy_relay() -> str | None:
-    """core's container sets PROXY_URL (compose.yaml); ANTHROPIC_BASE_URL is the older fallback."""
-    return os.environ.get("PROXY_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+    """The account proxy's relay for core, from PROXY_URL (compose.yaml sets it)."""
+    return os.environ.get("PROXY_URL")
 
 
 def _config_or_none(config_dir: Path):
@@ -113,10 +112,9 @@ def main() -> int:
     config = _config_or_none(paths.CONFIG_DIR)
     if config is not None:
         from agent import db
-        from agent.core.sessions import AGENT_QUEUE
 
         conn = db.connect(paths.DB_DIR / "agent.db")
-        checks.append(check_runner_tokens(conn, paths.DATA / "runner" / "runner-tokens.json", [AGENT_QUEUE]))
+        checks.append(check_runner_token(conn, paths.DATA / "runner" / "runner-token"))
     for c in checks:
         print(f"{'ok  ' if c.ok else 'FAIL'}  {c.name}: {c.detail}")
     return 0 if all(c.ok for c in checks) else 1

@@ -39,4 +39,4 @@ class LinearAgentSessions:
             return  # a redelivered `created`, or an event for a session we never saw
         convo = self.conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
         text = f"Linear agent session event:\n{json.dumps(body, indent=2)}"
-        self.queue.enqueue(convo_id, convo["sandbox"], "turn", self.payloads.turn(convo, text, None, unattended=True))
+        self.queue.enqueue(convo_id, "turn", self.payloads.turn(convo, text, None, unattended=True))

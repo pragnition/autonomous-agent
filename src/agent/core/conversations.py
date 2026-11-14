@@ -1,4 +1,4 @@
-"""Conversations (spec v2 §6, §8): Slack and Linear messages become work items for the right sandbox.
+"""Conversations: Slack and Linear messages become work items on the one work queue.
 
 Code only routes. A Slack thread, a DM or a Linear issue is a conversation mapped to one agent session; each new
 message is the next turn of that session (the work queue never runs two turns of one conversation at once). A DM
@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from agent import db, events, tasks
-from agent.core.sessions import AGENT_QUEUE, WorkItem, WorkQueue
+from agent.core.sessions import WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
 from agent.gitutil import branch_name
 from agent.tasks import Status
@@ -39,15 +39,14 @@ def record_message(conn: sqlite3.Connection, channel: str, ts: str, conversation
 
 def create_conversation(conn: sqlite3.Connection, *, agent_name: str, channel: str | None, thread_ts: str | None,
                         project: str | None, title: str, task_id: str | None = None, is_primary: int = 1) -> str:
-    """A new conversation on the one queue. One bound to its project up front gets its branch now, named from
-    `title`, and works in its checkout; any other works in its session folder. The working folder never changes,
-    so --resume always finds the session, and a branch once set never does either, so every turn and every open_pr
-    use the same one."""
+    """A new conversation. One bound to its project up front gets its branch now, named from `title`, and works in
+    its checkout; any other works in its session folder. The working folder never changes, so --resume always finds
+    the session, and a branch once set never does either, so every turn and every open_pr use the same one."""
     convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
     branch = branch_name(agent_name, task_id or convo_id, title) if project else None
-    conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, task_id, is_primary, branch, "
-                 "workdir, created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 (convo_id, channel, thread_ts, AGENT_QUEUE, project, task_id, is_primary, branch,
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, branch, workdir, "
+                 "created_at, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (convo_id, channel, thread_ts, project, task_id, is_primary, branch,
                   "checkout" if project else "session", now, now))
     return convo_id
 
@@ -170,7 +169,7 @@ class Conversations:
         if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
             payload["reply_thread_ts"] = reply_thread_ts
         self.conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (db.utcnow(), convo["id"]))
-        return self.queue.enqueue(convo["id"], convo["sandbox"], "turn", payload)
+        return self.queue.enqueue(convo["id"], "turn", payload)
 
     # intake
 

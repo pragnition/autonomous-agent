@@ -1,6 +1,6 @@
-"""core's git endpoint (spec v2 §5): a bare mirror of each project that sandboxes clone from and push to.
+"""core's git endpoint: a bare mirror of each project that the agent container clones from and pushes to.
 
-Sandboxes never reach GitHub. They push only to refs/heads/<agent>/* here (a pre-receive hook refuses
+The agent container never reaches GitHub. It pushes only to refs/heads/<agent>/* here (a pre-receive hook refuses
 everything else, including deletes and tags), and core pushes to GitHub from here when open_pr is called.
 """
 
@@ -13,7 +13,6 @@ from pathlib import Path
 
 from aiohttp import web
 
-from agent.core.sessions import AGENT_QUEUE
 from agent.gitutil import GitError, credential_args, git
 
 PRE_RECEIVE = """#!/bin/sh
@@ -93,7 +92,7 @@ class GitHost:
         git(self.path(project), *cred, "push", "-q", self.upstream_url(repo), f"{sha}:refs/heads/{branch}", env=env)
 
     async def aiohttp_handler(self, request: web.Request) -> web.StreamResponse:
-        """Serve `git http-backend` for /git/<project>.git/<tail>, for sandbox or session tokens."""
+        """Serve `git http-backend` for /git/<project>.git/<tail>, for runner or session tokens."""
         token = _bearer_or_basic(request.headers.get("Authorization", ""))
         project = request.match_info["project"]
         if not self.auth(token, project):
@@ -124,10 +123,10 @@ class GitHost:
 
 
 def tokens_auth(resolve: Callable[[str], object]) -> Callable[[str | None, str], bool]:
-    """A live token for the one agent queue (resolve returns None for unknown, expired or revoked tokens); open
-    mode has one runner for every project, so any such token reaches every repo this install knows."""
+    """Any live runner or session token (resolve returns None for unknown, expired or revoked tokens). One runner
+    works on every project, so such a token reaches every repo this install knows."""
     def check(token: str | None, project: str) -> bool:
         info = resolve(token) if token else None
-        return info is not None and info.sandbox == AGENT_QUEUE
+        return info is not None and info.kind in ("runner", "session")
     return check
 

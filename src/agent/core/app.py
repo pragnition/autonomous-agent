@@ -35,9 +35,9 @@ from agent.core.public_api import make_public_app
 from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
-from agent.core.runner_tokens import sync_runner_tokens
+from agent.core.runner_tokens import sync_runner_token
 from agent.core.prs import register_pr_tools
-from agent.core.sessions import AGENT_QUEUE, Gate, WorkItem, WorkQueue, resolve_token
+from agent.core.sessions import Gate, WorkItem, WorkQueue, resolve_token
 from agent.core.tracker_tools import register_tracker_tools
 from agent.dashboard.app import make_dashboard_app
 from agent.dashboard.names import NAMES_FILE, AccountNames
@@ -103,7 +103,7 @@ class CoreApp:
         self.packs = load_packs(self.config_dir, self.config)
         (self.data_dir / "db").mkdir(parents=True, exist_ok=True)
         self.conn = db.connect(self.data_dir / "db" / "agent.db")
-        db.migrate(self.conn)
+        db.create_schema(self.conn)
         self.memory = MemoryStore(self.data_dir / "db" / "memory.db")
         self.secret_values = [v for v in secrets.values() if v]
         self.queue = WorkQueue(self.conn)
@@ -143,7 +143,7 @@ class CoreApp:
             self.public_app = make_public_app(webhook_secret=secrets.get("LINEAR_WEBHOOK_SECRET", ""),
                                               on_event=self.on_linear_event, auth=self.linear_auth,
                                               on_installed=self.on_linear_installed)
-        self.runner_tokens_path = self.data_dir / "runner" / "runner-tokens.json"
+        self.runner_token_path = self.data_dir / "runner" / "runner-token"
         self.login = DeviceCodeLogin(slack, config=self.config, rules=self.config.cli, exec_fn=cli_exec,
                                      run_as=self.config.sandbox.agent_uid)
         register_login_tools(self.router, self.login)
@@ -291,7 +291,7 @@ class CoreApp:
         return self.config.sandbox.agent_uid if core_is_root() else None
 
     def prepare_agent_dirs(self) -> None:
-        """The agent container owns what core shares with it (the CLI logins, its runner tokens)."""
+        """The agent container owns what core shares with it (the CLI logins, its runner token)."""
         cli, runner = self.data_dir / "cli", self.data_dir / "runner"
         for path in (cli, runner):
             path.mkdir(parents=True, exist_ok=True)
@@ -323,9 +323,8 @@ class CoreApp:
         if owner is not None:
             os.chown(dest, owner, -1)
 
-    def sync_runners(self) -> dict[str, str]:
-        return sync_runner_tokens(self.conn, self.runner_tokens_path, [AGENT_QUEUE],
-                                  owner_uid=self._agent_owner())
+    def sync_runner_token(self) -> str:
+        return sync_runner_token(self.conn, self.runner_token_path, owner_uid=self._agent_owner())
 
     # loops
 
@@ -342,7 +341,7 @@ class CoreApp:
     async def maintenance(self, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)
         self.memory.demote_unused(now)
-        self.sync_runners()
+        self.sync_runner_token()
 
     # Linear app
 
@@ -390,7 +389,7 @@ class CoreApp:
 
         self.prepare_agent_dirs()
         self.share_project_envs()
-        self.sync_runners()
+        self.sync_runner_token()
         runner = web.AppRunner(self.agent_app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()

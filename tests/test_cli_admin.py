@@ -40,7 +40,7 @@ class FakeStream:
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -63,8 +63,8 @@ async def test_device_code_dm_goes_to_requesting_admin_only(conn, tmp_path):
                              memory=MemoryStore(tmp_path / "memory.db"), slack=slack, notifier=FakeNotifier(),
                              secret_values=[])
     register_login_tools(router, login)
-    cid = add_conversation(conn, sandbox="general", channel="D-ann")
-    admin_ctx = router.context_for(add_item(router.queue, cid, "general", actor="ann"))
+    cid = add_conversation(conn, channel="D-ann")
+    admin_ctx = router.context_for(add_item(router.queue, cid, actor="ann"))
     text = (await router.call(admin_ctx, "az_login", {})).text
     assert "DM" in text
     assert slack.opened == [{"users": "U1"}]
@@ -72,7 +72,7 @@ async def test_device_code_dm_goes_to_requesting_admin_only(conn, tmp_path):
     assert "https://microsoft.com/devicelogin" in dm["text"] and "ABCD1234" in dm["text"]
     await asyncio.gather(*login.pending)
     assert "Logged in as ann@x.com (Dev Sub)" in slack.posts[-1]["text"]
-    member_ctx = router.context_for(add_item(router.queue, cid, "general", actor="bob"))
+    member_ctx = router.context_for(add_item(router.queue, cid, actor="bob"))
     assert (await router.call(member_ctx, "az_login", {})).text == "not available here"
 
 
@@ -91,8 +91,8 @@ async def test_login_runs_as_agent_uid(conn, tmp_path, run_as):
     router = AgentToolRouter(conn, config=cfg, packs={"sample": make_pack()}, queue=WorkQueue(conn),
                              memory=MemoryStore(tmp_path / "memory.db"), slack=FakeSlack(), notifier=FakeNotifier(),
                              secret_values=[])
-    cid = add_conversation(conn, sandbox="general", channel="D-ann")
-    await login.start(router.context_for(add_item(router.queue, cid, "general", actor="ann")), "azure")
+    cid = add_conversation(conn, channel="D-ann")
+    await login.start(router.context_for(add_item(router.queue, cid, actor="ann")), "azure")
     await asyncio.gather(*login.pending)
     assert len(calls) == 2
     for kw in calls:

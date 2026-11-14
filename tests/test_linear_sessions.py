@@ -6,7 +6,7 @@ import pytest
 from agent import db
 from agent.connectors.linear import LinearClient
 from agent.core.linear_sessions import LinearAgentSessions
-from agent.core.sessions import AGENT_QUEUE, WorkQueue
+from agent.core.sessions import WorkQueue
 
 
 class FakePayloads:
@@ -25,7 +25,7 @@ class FakeClient:
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -44,7 +44,7 @@ def event(action, session="S1", **extra):
 
 
 def turns(conn):
-    return [json.loads(r["payload"]) | {"conversation_id": r["conversation_id"], "sandbox": r["sandbox"]}
+    return [json.loads(r["payload"]) | {"conversation_id": r["conversation_id"]}
             for r in conn.execute("SELECT * FROM work_items WHERE kind = 'turn' ORDER BY rowid")]
 
 
@@ -52,7 +52,7 @@ async def test_created_acks_and_passes_the_event_to_the_agent(sessions, client, 
     await sessions.on_event(event("created", promptContext="fix the login bug"))
     assert client.activities == [("S1", "thought", "On it.")]
     [turn] = turns(conn)
-    assert "fix the login bug" in turn["text"] and turn["sandbox"] == AGENT_QUEUE
+    assert "fix the login bug" in turn["text"]
 
 
 async def test_prompted_resumes_the_same_conversation(sessions, conn):

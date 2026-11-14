@@ -1,5 +1,5 @@
-"""End-to-end smoke test on a real install (spec v3): queue one turn on the agent queue and wait for the
-agent container to answer it. It proves core → runner → Claude (through the account proxy) → result.
+"""End-to-end smoke test on a real install: queue one turn and wait for the agent container to answer it. It
+proves core → runner → Claude (through the account proxy) → result.
 
 Run inside the core container with the stack up: `just smoke`. Posts nothing to Slack (the conversation has no thread).
 """
@@ -18,7 +18,7 @@ def main() -> int:
     from agent import db, paths
     from agent.config import load_agent_config, load_packs
     from agent.core.payloads import Payloads
-    from agent.core.sessions import AGENT_QUEUE, WorkQueue
+    from agent.core.sessions import WorkQueue
     from agent.memory.store import MemoryStore
     from agent.secrets import load_secrets
 
@@ -28,11 +28,11 @@ def main() -> int:
                         memory=MemoryStore(paths.DB_DIR / "memory.db"), persona_text="",
                         config_dir=paths.CONFIG_DIR, secrets=load_secrets(paths.SECRETS_FILE))
     convo_id, now = f"V-smoke-{uuid.uuid4().hex[:8]}", db.utcnow()
-    conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, is_primary, created_at, "
-                 "last_active_at) VALUES (?, NULL, NULL, ?, NULL, 0, ?, ?)", (convo_id, AGENT_QUEUE, now, now))
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, is_primary, created_at, last_active_at) "
+                 "VALUES (?, NULL, NULL, NULL, 0, ?, ?)", (convo_id, now, now))
     convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
     queue = WorkQueue(conn)
-    item_id = queue.enqueue(convo_id, AGENT_QUEUE, "turn", payloads.turn(convo, PROMPT, None, unattended=True))
+    item_id = queue.enqueue(convo_id, "turn", payloads.turn(convo, PROMPT, None, unattended=True))
     print(f"queued {item_id}; waiting for the agent container (up to {TIMEOUT_S // 60} min)", flush=True)
     deadline, last = time.time() + TIMEOUT_S, None
     while time.time() < deadline:

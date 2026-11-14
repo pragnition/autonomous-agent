@@ -1,4 +1,4 @@
-"""Shared fakes and builders for the v2 core tests (tools, conversations, payloads)."""
+"""Shared fakes and builders for the core tests (tools, conversations, payloads)."""
 
 from __future__ import annotations
 
@@ -103,18 +103,17 @@ class FakeNotifier:
         self.asked.append((task.id, question))
 
 
-def add_conversation(conn, *, sandbox: str, project: str | None = "sample", channel: str | None = "C1",
+def add_conversation(conn, *, project: str | None = "sample", channel: str | None = "C1",
                      thread_ts: str | None = "1.0", task_id: str | None = None, is_primary: int = 1,
                      conversation_id: str | None = None) -> str:
     cid = conversation_id or f"V-{uuid.uuid4().hex[:10]}"
     now = db.utcnow()
-    conn.execute("INSERT INTO conversations(id, channel, thread_ts, sandbox, project, task_id, is_primary, created_at, "
-                 "last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 (cid, channel, thread_ts, sandbox, project, task_id, is_primary, now, now))
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, created_at, "
+                 "last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (cid, channel, thread_ts, project, task_id, is_primary, now, now))
     return cid
 
 
-def add_item(queue, conversation_id: str, sandbox: str, *, actor: str | None = "ann", unattended: bool = False,
+def add_item(queue, conversation_id: str, *, actor: str | None = "ann", unattended: bool = False,
              kind: str = "turn", text: str = "hi", **extra) -> str:
-    return queue.enqueue(conversation_id, sandbox, kind, {"text": text, "actor": actor, "unattended": unattended,
-                                                         **extra})
+    return queue.enqueue(conversation_id, kind, {"text": text, "actor": actor, "unattended": unattended, **extra})

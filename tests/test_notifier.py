@@ -1,6 +1,5 @@
 from agent import db, tasks
 from agent.core.notifier import SlackNotifier
-from agent.core.sessions import AGENT_QUEUE
 from agent.tasks import Status
 from agent_fixtures import FakeSlack, add_conversation
 
@@ -17,11 +16,11 @@ def new_task(conn, title="t"):
 
 async def test_status_and_question_are_recorded_against_the_tasks_conversation(tmp_path):
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
+    db.create_schema(conn)
     notifier = SlackNotifier(FakeSlack(), conn)
     task = new_task(conn)
-    add_conversation(conn, sandbox=AGENT_QUEUE, channel="D-1", thread_ts=None, task_id=task.id, is_primary=0)
-    primary = add_conversation(conn, sandbox=AGENT_QUEUE, channel="D-1", thread_ts=None, task_id=task.id)
+    add_conversation(conn, channel="D-1", thread_ts=None, task_id=task.id, is_primary=0)
+    primary = add_conversation(conn, channel="D-1", thread_ts=None, task_id=task.id)
     await notifier.task_changed(task)              # posts the status message at the top level: 101.0
     task = tasks.get_task(conn, task.id)
     await notifier.ask(task, "which env?")         # asks in the status message's thread: 102.0
@@ -31,7 +30,7 @@ async def test_status_and_question_are_recorded_against_the_tasks_conversation(t
 
 async def test_a_task_without_a_conversation_records_nothing(tmp_path):
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
+    db.create_schema(conn)
     notifier = SlackNotifier(FakeSlack(), conn)
     task = new_task(conn)
     await notifier.task_changed(task)

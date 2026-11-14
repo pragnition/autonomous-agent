@@ -1,6 +1,6 @@
-"""The API sandbox runners talk to (spec v2 §4, §5). Runners pull; core never connects into a sandbox.
+"""The API the agent container's runner talks to. The runner pulls; core never connects into the container.
 
-Two kinds of token: a sandbox token (pull work, fetch bundles) and a per-item session token (everything a
+Two kinds of token: the runner token (pull work, fetch bundles) and a per-item session token (everything a
 running session does). Finishing, cancelling or losing an item revokes its session token.
 """
 
@@ -53,30 +53,26 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         return info
 
     async def pull(request: web.Request) -> web.Response:
-        info = resolved(request, "sandbox")
-        sandbox = (await request.json()).get("sandbox")
-        if sandbox != info.sandbox:
-            return web.json_response({"error": "token is for another sandbox"}, status=403)
+        resolved(request, "runner")
         deadline = time.monotonic() + pull_wait_s
         while True:
-            claimable = queue.claimable_kinds(sandbox)
+            claimable = queue.claimable_kinds()
             item = None
             if claimable:  # nothing queued (or claimable) means nothing worth asking the Gate about
                 kinds = tuple([k for k in claimable if (await gate.can_start(k))[0]])
-                item = queue.claim(sandbox, kinds=kinds) if kinds else None
+                item = queue.claim(kinds=kinds) if kinds else None
             if item is not None:
                 if refresh is not None and item.kind == "turn" and item.conversation_id:
                     # no await since the claim: nothing can change the conversation between the two
                     item.payload = refresh(item.conversation_id, item.payload)
                     queue.set_payload(item.id, item.payload)
-                session = mint_token(conn, "session", sandbox=sandbox, work_item_id=item.id, ttl_s=session_ttl_s)
+                session = mint_token(conn, "session", work_item_id=item.id, ttl_s=session_ttl_s)
                 ctx = context_for(item.id)
                 # A turn's start is where the KPIs' pickup and queue-wait times begin; other kinds are logged apart
                 # so the dashboard knows when every item started without moving the KPIs.
                 event_log.append(conn, "session_started" if item.kind == "turn" else "work_started",
                                  task_id=getattr(ctx, "task_id", None), actor=None,
-                                 data={"work_item": item.id, "sandbox": sandbox, "queued_at": item.created_at,
-                                       "project": ctx.project})
+                                 data={"work_item": item.id, "queued_at": item.created_at, "project": ctx.project})
                 return web.json_response({
                     "work_item": {"id": item.id, "conversation_id": item.conversation_id, "kind": item.kind,
                                   "payload": item.payload, "attempts": item.attempts},
@@ -146,7 +142,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         return web.json_response({"ok": True})
 
     async def bundle(request: web.Request) -> web.Response:
-        resolved(request, "sandbox")
+        resolved(request, "runner")
         version, data = bundles()
         return web.Response(body=data, content_type="application/gzip", headers={"X-Bundle-Version": version})
 

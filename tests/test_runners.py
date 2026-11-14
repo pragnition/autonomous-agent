@@ -1,11 +1,11 @@
 import asyncio
 
-from agent.sandbox.runners import RunnerSet, read_tokens
+from agent.sandbox.runners import RunnerKeeper
 
 
 class FakeRunner:
-    def __init__(self, name, token, finish=False):
-        self.name, self.token, self.finish = name, token, finish
+    def __init__(self, token, finish=False):
+        self.token, self.finish = token, finish
         self.started = asyncio.Event()
 
     async def run_forever(self):
@@ -14,62 +14,56 @@ class FakeRunner:
             await asyncio.Event().wait()
 
 
-def runner_set(finish=False):
+def keeper(finish=False):
     made = []
 
-    def make(name, token):
-        made.append(FakeRunner(name, token, finish))
+    def make(token):
+        made.append(FakeRunner(token, finish))
         return made[-1]
 
-    return RunnerSet(make), made
+    return RunnerKeeper(make), made
 
 
-async def test_starts_one_runner_per_queue():
-    runners, made = runner_set()
-    await runners.reconcile({"code-sample": "a", "general": "b"})
-    assert sorted((r.name, r.token) for r in made) == [("code-sample", "a"), ("general", "b")]
-    await asyncio.wait_for(asyncio.gather(*(r.started.wait() for r in made)), 1)
-    await runners.stop()
+async def test_starts_the_runner_when_a_token_appears():
+    runner, made = keeper()
+    await runner.reconcile("")
+    assert made == [] and runner.task is None
+    await runner.reconcile("a")
+    assert [r.token for r in made] == ["a"]
+    await asyncio.wait_for(made[0].started.wait(), 1)
+    await runner.stop()
 
 
-async def test_restarts_a_runner_when_its_token_changes():
-    runners, made = runner_set()
-    await runners.reconcile({"general": "b"})
-    old = runners.tasks["general"]
-    await runners.reconcile({"general": "c"})
+async def test_restarts_the_runner_when_its_token_changes():
+    runner, made = keeper()
+    await runner.reconcile("b")
+    first = runner.task
+    await runner.reconcile("b")
+    assert runner.task is first and len(made) == 1
+    await runner.reconcile("c")
     await asyncio.sleep(0)
-    assert old.cancelled() and [(r.name, r.token) for r in made] == [("general", "b"), ("general", "c")]
-    await runners.stop()
+    assert first.cancelled() and [r.token for r in made] == ["b", "c"]
+    await runner.stop()
 
 
 async def test_finished_runner_restarts_only_with_a_new_token():
-    runners, made = runner_set(finish=True)
-    await runners.reconcile({"general": "b"})
+    runner, made = keeper(finish=True)
+    await runner.reconcile("b")
     await asyncio.sleep(0.01)
-    await runners.reconcile({"general": "b"})
+    await runner.reconcile("b")
     assert len(made) == 1
-    await runners.reconcile({"general": "c"})
+    await runner.reconcile("c")
     assert [r.token for r in made] == ["b", "c"]
-    await runners.stop()
+    await runner.stop()
 
 
-async def test_stops_runners_for_removed_queues():
-    runners, made = runner_set()
-    await runners.reconcile({"code-sample": "a"})
-    task = runners.tasks["code-sample"]
-    await runners.reconcile({})
+async def test_stops_the_runner_when_the_token_is_gone():
+    runner, made = keeper()
+    await runner.reconcile("a")
+    task = runner.task
+    await runner.reconcile("")
     await asyncio.sleep(0)
-    assert task.cancelled() and runners.tasks == {}
-
-
-def test_read_tokens_missing_or_bad_file(tmp_path):
-    path = tmp_path / "runner-tokens.json"
-    assert read_tokens(path) == {}
-    for bad in ("[]", "x"):
-        path.write_text(bad)
-        assert read_tokens(path) == {}
-    path.write_text('{"general": "t"}')
-    assert read_tokens(path) == {"general": "t"}
+    assert task.cancelled() and runner.task is None
 
 
 def test_agent_environment_takes_the_github_noreply_email():

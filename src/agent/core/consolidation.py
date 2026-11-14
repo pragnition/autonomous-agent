@@ -16,7 +16,7 @@ from pathlib import Path
 
 from agent import events, tasks
 from agent.core.agent_tools import conversation_scopes
-from agent.core.sessions import AGENT_QUEUE, WorkItem, WorkQueue
+from agent.core.sessions import WorkItem, WorkQueue
 from agent.memory.consolidate import (CONSOLIDATION_SCHEMA, ConsolidationError, apply_consolidation,
                                       consolidation_prompt)
 from agent.memory.store import MemoryStore
@@ -56,7 +56,7 @@ class ConsolidationService:
     def _enqueue(self, prompt: str, ref: dict) -> None:
         payload = self.payloads.chore(prompt, CONSOLIDATION_SCHEMA)
         payload["consolidate"] = ref
-        self.queue.enqueue(None, AGENT_QUEUE, "chore", payload)
+        self.queue.enqueue(None, "chore", payload)
 
     # tasks
 

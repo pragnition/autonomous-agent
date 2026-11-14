@@ -1,7 +1,7 @@
 """core's tools for the general agent (spec v2 §7): where the guarantees live.
 
-Every call arrives with a session token; core resolves it to a ToolContext (conversation, project, sandbox
-and the actor whose message started the turn). Tiers come from the actor, never from the model's arguments,
+Every call arrives with a session token; core resolves it to a ToolContext (conversation, project and the actor
+whose message started the turn). Tiers come from the actor, never from the model's arguments,
 and a tool is offered only by tier. Every reply is stripped of secrets.
 """
 
@@ -16,7 +16,6 @@ from typing import Literal
 
 from agent import db, events, tasks
 from agent.core.conversations import create_conversation, record_message
-from agent.core.sessions import AGENT_QUEUE
 from agent.core.slack_markdown import post_markdown
 from agent.memory.scopes import SessionContext, scopes_for
 from agent.memory.scrub import scrub
@@ -35,7 +34,6 @@ NOT_AVAILABLE = "not available here"
 class ToolContext:
     work_item_id: str
     conversation_id: str | None
-    sandbox: str
     project: str | None
     actor: str | None
     tier: Literal["read", "act", "admin"]
@@ -131,7 +129,7 @@ class AgentToolRouter:
             tier = "admin" if person.role == "admin" else "act"
         else:
             tier = "act" if unattended and actor is None else "read"
-        return ToolContext(work_item_id=work_item_id, conversation_id=row["conversation_id"], sandbox=row["sandbox"],
+        return ToolContext(work_item_id=work_item_id, conversation_id=row["conversation_id"],
                            project=(convo["project"] if convo else None) or payload.get("project"),
                            actor=actor, tier=tier, unattended=unattended,
                            task_id=convo["task_id"] if convo else payload.get("task_id"),
@@ -329,8 +327,7 @@ class AgentToolRouter:
                                        is_primary=is_primary)
         if is_primary:
             record_message(self.conn, ctx.channel, thread_ts, convo_id)
-        self.queue.enqueue(convo_id, AGENT_QUEUE, "turn",
-                           self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended))
+        self.queue.enqueue(convo_id, "turn", self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended))
         await self.notifier.task_changed(task)
         return ToolReply(f"Started {task.id} ({task.title}) in a new session for {project}.")
 

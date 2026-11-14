@@ -9,7 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from agent.core.agent_tools import ToolContext
 from agent.core.app import CoreApp
-from agent.core.sessions import AGENT_QUEUE, mint_token, resolve_token
+from agent.core.sessions import mint_token, resolve_token
 from agent.gitutil import branch_name
 from agent.proxy import AccountUsage, Usage
 from agent_fixtures import FakeSlack
@@ -50,8 +50,8 @@ def app(tmp_path):
     return make_app(tmp_path)
 
 
-def manifest_names(app, sandbox, tier="admin"):
-    ctx = ToolContext(work_item_id="W", conversation_id=None, sandbox=sandbox, project="sample",
+def manifest_names(app, tier="admin"):
+    ctx = ToolContext(work_item_id="W", conversation_id=None, project="sample",
                       actor="parthib", tier=tier, unattended=False, task_id=None, channel="C", thread_ts="1")
     return {t["name"] for t in app.router.manifest(ctx)}
 
@@ -75,8 +75,8 @@ async def test_health(api):
 async def test_dm_turn_end_to_end(app, api):
     await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
                                           "ts": "5.1", "text": "what's running?"})
-    tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
-    body = await (await api.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json()
+    tok = mint_token(app.conn, "runner", ttl_s=60)
+    body = await (await api.post("/agent/pull", headers=bearer(tok))).json()
     item, session = body["work_item"], body["session_token"]
     # A DM has no project, but with profiles gone every session gets the full tool set by tier alone, so it
     # isn't missing anything a project-bound session would have.
@@ -97,8 +97,8 @@ async def test_reply_under_a_dm_status_message_reaches_the_chat(app, api):
     there reaches the DM conversation, with its context, and answers the question."""
     await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
                                           "ts": "7.1", "text": "the export is broken in sample"})
-    tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
-    body = await (await api.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json()
+    tok = mint_token(app.conn, "runner", ttl_s=60)
+    body = await (await api.post("/agent/pull", headers=bearer(tok))).json()
     convo_id, session = body["work_item"]["conversation_id"], body["session_token"]
     for name, args in (("track_task", {"project": "sample", "title": "Fix export", "kind": "bug"}),
                        ("ask", {"question": "which file?"})):
@@ -122,8 +122,8 @@ def dm_event(ts, text):
 
 
 async def pull(client, app):
-    tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
-    r = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+    tok = mint_token(app.conn, "runner", ttl_s=60)
+    r = await client.post("/agent/pull", headers=bearer(tok))
     assert r.status == 200
     return await r.json()
 
@@ -195,9 +195,9 @@ async def test_work_on_binds_a_dm_through_core(tmp_path):
         await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1",
                                               "user": "U00000001", "ts": "5.1",
                                               "text": "run sample locally\nand show me the home page"})
-        stranger = app.queue.enqueue(None, AGENT_QUEUE, "chore", {"text": "x", "actor": "stranger"})
-        tok = mint_token(app.conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
-        pulled = [await (await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json()
+        stranger = app.queue.enqueue(None, "chore", {"text": "x", "actor": "stranger"})
+        tok = mint_token(app.conn, "runner", ttl_s=60)
+        pulled = [await (await client.post("/agent/pull", headers=bearer(tok))).json()
                   for _ in range(2)]
         dm = next(b for b in pulled if b["work_item"]["id"] != stranger)
         assert "work_on" in {t["name"] for t in dm["tools"]}
@@ -234,9 +234,9 @@ async def test_on_files_uploads_to_the_conversation(app):
 
 
 async def test_on_files_without_a_thread_is_recorded_not_posted(app):
-    app.conn.execute("INSERT INTO conversations(id, sandbox, is_primary, created_at, last_active_at) "
-                     "VALUES ('V-linear', 'general', 1, 'now', 'now')")
-    item_id = app.queue.enqueue("V-linear", "general", "turn", {"text": "x", "actor": None})
+    app.conn.execute("INSERT INTO conversations(id, is_primary, created_at, last_active_at) "
+                     "VALUES ('V-linear', 1, 'now', 'now')")
+    item_id = app.queue.enqueue("V-linear", "turn", {"text": "x", "actor": None})
     uploads = len(app.slack.uploads)
     assert await app.on_files(item_id, [("a.png", b"png")], "after") is False
     assert len(app.slack.uploads) == uploads
@@ -267,9 +267,9 @@ async def test_session_token_ttl_follows_task_minutes(tmp_path):
     client = TestClient(TestServer(app.agent_app))
     await client.start_server()
     try:
-        app.queue.enqueue("V-1", "general", "chore", {})
-        tok = mint_token(app.conn, "sandbox", sandbox="general", work_item_id=None, ttl_s=60)
-        body = await (await client.post("/agent/pull", json={"sandbox": "general"}, headers=bearer(tok))).json()
+        app.queue.enqueue("V-1", "chore", {})
+        tok = mint_token(app.conn, "runner", ttl_s=60)
+        body = await (await client.post("/agent/pull", headers=bearer(tok))).json()
         expires = app.conn.execute("SELECT expires_at FROM tokens WHERE work_item_id = ?",
                                    (body["work_item"]["id"],)).fetchone()[0]
         from datetime import UTC, datetime, timedelta
@@ -279,17 +279,16 @@ async def test_session_token_ttl_follows_task_minutes(tmp_path):
 
 
 async def test_open_mode_tools(app):
-    member = manifest_names(app, "code-sample", tier="act")
+    member = manifest_names(app, tier="act")
     assert {"open_pr", "post_update", "track_task"} <= member
     assert not ({"ask_production", "az"} & member)
-    assert "az_login" in manifest_names(app, "code-sample", tier="admin")
+    assert "az_login" in manifest_names(app, tier="admin")
 
 
-async def test_open_mode_writes_runner_tokens(app):
-    tokens = app.sync_runners()
-    assert json.loads(app.runner_tokens_path.read_text()) == tokens
-    assert sorted(tokens) == [AGENT_QUEUE]
-    assert all(resolve_token(app.conn, tok).sandbox == name for name, tok in tokens.items())
+async def test_core_writes_the_runner_token(app):
+    token = app.sync_runner_token()
+    assert app.runner_token_path.read_text().strip() == token
+    assert resolve_token(app.conn, token).kind == "runner"
 
 
 def test_prepare_agent_dirs_hands_them_to_the_agent(app, monkeypatch):
@@ -299,15 +298,15 @@ def test_prepare_agent_dirs_hands_them_to_the_agent(app, monkeypatch):
     (app.data_dir / "cli" / "azure" / "msal_token_cache.json").write_text("{}")
     monkeypatch.setattr("agent.core.app.core_is_root", lambda: False)
     app.prepare_agent_dirs()
-    app.sync_runners()
+    app.sync_runner_token()
     assert calls == [] and (app.data_dir / "runner").is_dir()
     monkeypatch.setattr("agent.core.app.core_is_root", lambda: True)
     app.prepare_agent_dirs()
-    app.sync_runners()
+    app.sync_runner_token()
     owned = {path for path, uid in calls if uid == 1001}
     assert {str(app.data_dir / "cli"), str(app.data_dir / "cli" / "azure"),
             str(app.data_dir / "cli" / "azure" / "msal_token_cache.json"), str(app.data_dir / "runner")} <= owned
-    assert any(path.endswith("runner-tokens.json.tmp") for path, _ in calls)
+    assert any(path.endswith(".runner-token.tmp") for path, _ in calls)
 
 
 def test_project_envs_go_to_the_agent_readable_only_by_it(app, monkeypatch):
@@ -358,7 +357,7 @@ async def test_linear_app_wiring(tmp_path):
     assert app.public_app is not None
     assert app.linear_auth.redirect_uri == "https://jensen.example.ts.net/linear/oauth/callback"
     assert app.linear_auth.token_path == app.data_dir / "runner" / "linear.env"
-    assert "linear_install" in manifest_names(app, "general")
+    assert "linear_install" in manifest_names(app)
     assert await app.refresh_linear_token() is None          # not installed yet: nothing to refresh
     assert make_app(tmp_path / "plain").public_app is None
 
@@ -379,8 +378,8 @@ async def test_linear_session_event_becomes_a_turn(tmp_path):
                                "agentSession": {"id": "S1", "issue": {"id": "i1", "identifier": "SAM-1",
                                                                       "team": {"key": "SAM"}}}})
     assert acts == [("S1", "thought")]
-    row = app.conn.execute("SELECT sandbox, payload FROM work_items WHERE kind = 'turn'").fetchone()
-    assert row["sandbox"] == AGENT_QUEUE and "fix it" in json.loads(row["payload"])["text"]
+    row = app.conn.execute("SELECT payload FROM work_items WHERE kind = 'turn'").fetchone()
+    assert "fix it" in json.loads(row["payload"])["text"]
 
 
 async def test_core_serves_the_dashboard_behind_its_access_rules(app):

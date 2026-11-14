@@ -105,10 +105,10 @@ async def test_ops_stop_and_resume(tmp_path):
     from agent.core.sessions import WorkQueue
 
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
+    db.create_schema(conn)
     queue = WorkQueue(conn)
-    item = queue.enqueue("V-1", "code-sample", "turn", {})
-    queue.claim("code-sample")
+    item = queue.enqueue("V-1", "turn", {})
+    queue.claim()
     assert stop(tmp_path / "agent.db") == [item]
     assert db.get_setting(conn, "paused") == "1" and queue.get(item).status == "cancelled"
     resume(tmp_path / "agent.db")
@@ -144,7 +144,7 @@ def test_agent_service(compose):
     assert "agentwork:/var/agent" in vols and "agentwork" in compose["volumes"]
     command = " ".join(agent["command"])
     for part in ("agent runners", "--core http://core:8080", "--proxy http://172.30.0.1:28091",
-                 "--tokens /run/agent/runner-tokens.json"):
+                 "--token-file /run/agent/runner-token"):
         assert part in command, part
     assert "${AGENT_DATA:-./data}/runner:/data/runner" in volumes(compose, "core")
 

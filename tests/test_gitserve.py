@@ -119,26 +119,25 @@ def test_working_copy_follows_branch(githost, upstream):
     assert (githost.working_copy("p", "main") / "d.txt").exists()
 
 
-def test_any_agent_token_reaches_every_repo(tmp_path):
+def test_any_live_agent_token_reaches_every_repo(tmp_path):
     from agent import db
     from agent.core.gitserve import tokens_auth
-    from agent.core.sessions import AGENT_QUEUE, mint_token, resolve_token, revoke_for_work_item
+    from agent.core.sessions import mint_token, resolve_token, revoke_for_work_item
 
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
+    db.create_schema(conn)
     check = tokens_auth(lambda token: resolve_token(conn, token))
 
-    good = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
-    assert check(good, "sample") and check(good, "other")         # one queue, every repo
+    runner = mint_token(conn, "runner", ttl_s=3600)
+    assert check(runner, "sample") and check(runner, "other")     # one runner, every repo
 
-    other_queue = mint_token(conn, "sandbox", sandbox="general", work_item_id=None, ttl_s=3600)
-    assert not check(other_queue, "sample")                       # a live token, but not for AGENT_QUEUE
-
-    revoked = mint_token(conn, "session", sandbox=AGENT_QUEUE, work_item_id="w1", ttl_s=3600)
+    session = mint_token(conn, "session", work_item_id="w1", ttl_s=3600)
+    assert check(session, "sample") and check(session, "other")
     revoke_for_work_item(conn, "w1")
-    assert not check(revoked, "sample")
+    assert not check(session, "sample")
 
-    expired = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=-1)
+    expired = mint_token(conn, "runner", ttl_s=-1)
     assert not check(expired, "sample")
 
+    assert not check("not-a-token", "sample")
     assert not check(None, "sample")

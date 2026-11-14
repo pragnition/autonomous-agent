@@ -18,7 +18,7 @@ LINEAR_TEXT = "Linear agent session event:\n" + json.dumps(
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -51,9 +51,9 @@ def make_task(conn, **over):
 
 
 def test_rows_newest_first_with_total(conn, queue):
-    cid = add_conversation(conn, sandbox="general", project=None)
-    a = add_item(queue, cid, "general", text="first")
-    b = add_item(queue, cid, "general", text="second")
+    cid = add_conversation(conn, project=None)
+    a = add_item(queue, cid, text="first")
+    b = add_item(queue, cid, text="second")
     set_created(conn, a, "2026-11-13T09:00:00Z")
     set_created(conn, b, "2026-11-13T10:00:00Z")
     rows, total = list_sessions(conn, SessionFilter(limit=1))
@@ -62,26 +62,19 @@ def test_rows_newest_first_with_total(conn, queue):
     assert [r["id"] for r in rows] == [a]
 
 
-def test_session_row_has_no_sandbox_field(conn, queue):
-    cid = add_conversation(conn, sandbox="general", project="sample")
-    add_item(queue, cid, "general")
-    rows, _ = list_sessions(conn, SessionFilter())
-    assert "sandbox" not in rows[0]
-
-
 def test_state_maps_claimed_to_running(conn, queue):
-    cid = add_conversation(conn, sandbox="general", project=None)
-    item = add_item(queue, cid, "general")
-    queue.claim("general")
+    cid = add_conversation(conn, project=None)
+    item = add_item(queue, cid)
+    queue.claim()
     assert get_session(conn, item)["state"] == "running"
 
 
 def test_filter_by_state_project_source_account_q(conn, queue):
-    slack = add_conversation(conn, sandbox="code-sample", project="sample")
-    other = add_conversation(conn, sandbox="general", project=None, channel=None, thread_ts=None)
-    a = add_item(queue, slack, "code-sample", text="Fix the flaky login test")
-    b = add_item(queue, other, "general", text="Summarise yesterday")
-    queue.claim("code-sample")
+    slack = add_conversation(conn, project="sample")
+    other = add_conversation(conn, project=None, channel=None, thread_ts=None)
+    a = add_item(queue, slack, text="Fix the flaky login test")
+    b = add_item(queue, other, text="Summarise yesterday")
+    queue.claim()
     add_run(conn, b, account="onyx")
     conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (b,))
 
@@ -99,12 +92,12 @@ def test_filter_by_state_project_source_account_q(conn, queue):
 
 def test_title_from_task_then_payload_then_linear_issue(conn, queue):
     task = make_task(conn)
-    with_task = add_conversation(conn, sandbox="code-sample", task_id=task.id)
-    plain = add_conversation(conn, sandbox="general", project=None)
-    linear = add_conversation(conn, sandbox="general", project=None, channel=None, thread_ts=None)
-    a = add_item(queue, with_task, "code-sample", text="whatever")
-    b = add_item(queue, plain, "general", text="\n  why is staging slow?\nmore detail " + "x" * 300)
-    c = add_item(queue, linear, "general", text=LINEAR_TEXT)
+    with_task = add_conversation(conn, task_id=task.id)
+    plain = add_conversation(conn, project=None)
+    linear = add_conversation(conn, project=None, channel=None, thread_ts=None)
+    a = add_item(queue, with_task, text="whatever")
+    b = add_item(queue, plain, text="\n  why is staging slow?\nmore detail " + "x" * 300)
+    c = add_item(queue, linear, text=LINEAR_TEXT)
     assert get_session(conn, a)["title"] == "Fix the login"
     assert get_session(conn, b)["title"] == "why is staging slow?"
     assert get_session(conn, c)["title"] == "ENG-12 — Login times out"
@@ -112,8 +105,8 @@ def test_title_from_task_then_payload_then_linear_issue(conn, queue):
 
 
 def test_long_first_line_cut(conn, queue):
-    cid = add_conversation(conn, sandbox="general", project=None)
-    item = add_item(queue, cid, "general", text="y" * 500)
+    cid = add_conversation(conn, project=None)
+    item = add_item(queue, cid, text="y" * 500)
     assert len(get_session(conn, item)["title"]) <= 120
 
 
@@ -124,28 +117,28 @@ def test_linear_issue_parses_or_none():
 
 
 def test_source_slack_linear_handover_chore(conn, queue):
-    slack = add_conversation(conn, sandbox="general", project=None)
-    lin = add_conversation(conn, sandbox="general", project=None, channel=None, thread_ts=None)
+    slack = add_conversation(conn, project=None)
+    lin = add_conversation(conn, project=None, channel=None, thread_ts=None)
     db.set_setting(conn, "linear_session:abc", lin)
-    hand = add_conversation(conn, sandbox="code-sample", is_primary=0, channel=None, thread_ts=None)
-    items = {"slack": add_item(queue, slack, "general"), "linear": add_item(queue, lin, "general"),
-             "handover": add_item(queue, hand, "code-sample"),
-             "chore": queue.enqueue(None, "general", "chore", {"text": "consolidate"})}
+    hand = add_conversation(conn, is_primary=0, channel=None, thread_ts=None)
+    items = {"slack": add_item(queue, slack), "linear": add_item(queue, lin),
+             "handover": add_item(queue, hand),
+             "chore": queue.enqueue(None, "chore", {"text": "consolidate"})}
     for source, item in items.items():
         assert get_session(conn, item)["source"] == source
 
 
 def test_task_from_linear_is_linear(conn, queue):
     task = make_task(conn, source="linear")
-    cid = add_conversation(conn, sandbox="code-sample", task_id=task.id, channel=None, thread_ts=None)
-    assert get_session(conn, add_item(queue, cid, "code-sample"))["source"] == "linear"
+    cid = add_conversation(conn, task_id=task.id, channel=None, thread_ts=None)
+    assert get_session(conn, add_item(queue, cid))["source"] == "linear"
 
 
 def test_started_at_from_events_and_null_without(conn, queue):
-    cid = add_conversation(conn, sandbox="general", project=None)
-    a = add_item(queue, cid, "general")
-    b = add_item(queue, cid, "general")
-    chore = queue.enqueue(None, "general", "chore", {})
+    cid = add_conversation(conn, project=None)
+    a = add_item(queue, cid)
+    b = add_item(queue, cid)
+    chore = queue.enqueue(None, "chore", {})
     started(conn, a, "2026-11-13T10:00:00Z")
     started(conn, a, "2026-11-13T11:00:00Z")
     started(conn, chore, "2026-11-13T12:00:00Z", type="work_started")
@@ -157,8 +150,8 @@ def test_started_at_from_events_and_null_without(conn, queue):
 def test_finished_row_has_run_numbers(conn, queue):
     task = make_task(conn)
     tasks.set_fields(conn, task.id, pr_url="https://github.com/o/r/pull/3")
-    cid = add_conversation(conn, sandbox="code-sample", task_id=task.id)
-    item = add_item(queue, cid, "code-sample")
+    cid = add_conversation(conn, task_id=task.id)
+    item = add_item(queue, cid)
     add_run(conn, item, task_id=task.id)
     conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (item,))
     row = get_session(conn, item)
@@ -170,7 +163,7 @@ def test_finished_row_has_run_numbers(conn, queue):
 
 
 def test_row_without_conversation_or_run(conn, queue):
-    item = queue.enqueue(None, "general", "chore", {})
+    item = queue.enqueue(None, "chore", {})
     row = get_session(conn, item)
     assert row["conversation_id"] is None and row["tokens"] is None and row["account"] is None
     assert row["title"] == "chore" and row["live"] is False
@@ -182,8 +175,8 @@ def test_unknown_session_is_none(conn):
 
 
 def test_payload_never_in_row(conn, queue):
-    cid = add_conversation(conn, sandbox="code-sample")
-    item = add_item(queue, cid, "code-sample", text="go", test_secrets={"K": "s3cr3t-value"},
+    cid = add_conversation(conn)
+    item = add_item(queue, cid, text="go", test_secrets={"K": "s3cr3t-value"},
                     system_parts=["SYSTEM PROMPT"])
     text = json.dumps(get_session(conn, item)) + json.dumps(list_sessions(conn, SessionFilter())[0])
     assert "s3cr3t-value" not in text and "SYSTEM PROMPT" not in text and "payload" not in text
@@ -217,9 +210,9 @@ def test_kpi_daily_zero_filled_without_cost(conn, queue):
     conn.execute("INSERT INTO pr_stats(task_id, repo, pr_number, opened_at, merged_at, updated_at) "
                  "VALUES (?, 'o/r', 1, '2026-11-12T04:00:00Z', '2026-11-13T02:00:00Z', '2026-11-13T02:00:00Z')",
                  (task.id,))
-    cid = add_conversation(conn, sandbox="code-sample", task_id=task.id)
-    add_run(conn, add_item(queue, cid, "code-sample"), task_id=task.id, cost=1.25, ended="2026-11-12T05:00:00Z")
-    add_run(conn, queue.enqueue(None, "general", "chore", {}), cost=0.25, ended="2026-11-13T01:00:00Z")
+    cid = add_conversation(conn, task_id=task.id)
+    add_run(conn, add_item(queue, cid), task_id=task.id, cost=1.25, ended="2026-11-12T05:00:00Z")
+    add_run(conn, queue.enqueue(None, "chore", {}), cost=0.25, ended="2026-11-13T01:00:00Z")
     view = kpi_view(conn, 3, None, now, "Asia/Singapore")
     assert [d["date"] for d in view["daily"]] == ["2026-11-11", "2026-11-12", "2026-11-13"]
     by_date = {d["date"]: d for d in view["daily"]}
@@ -243,8 +236,8 @@ def test_kpi_view_project_filter(conn, queue):
 
 def test_overview_counts_local_day(conn, queue):
     now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)   # 20:00 in Singapore; the local day began 2026-11-12T16:00Z
-    cid = add_conversation(conn, sandbox="general", project=None)
-    done_today, done_before, failed, running, queued = (add_item(queue, cid, "general") for _ in range(5))
+    cid = add_conversation(conn, project=None)
+    done_today, done_before, failed, running, queued = (add_item(queue, cid) for _ in range(5))
     for item, status, ts in ((done_today, "done", "2026-11-12T17:00:00Z"), (done_before, "done", "2026-11-12T15:00:00Z"),
                              (failed, "failed", "2026-11-13T01:00:00Z"), (running, "claimed", "2026-11-13T11:00:00Z")):
         conn.execute("UPDATE work_items SET status = ?, updated_at = ? WHERE id = ?", (status, ts, item))
@@ -253,12 +246,12 @@ def test_overview_counts_local_day(conn, queue):
 
 
 def test_event_sources(conn, queue):
-    slack = add_conversation(conn, sandbox="general", project=None)
-    item = add_item(queue, slack, "general", actor="ann")
-    chore = queue.enqueue(None, "general", "chore", {})
-    lin = add_conversation(conn, sandbox="general", project=None, channel=None, thread_ts=None)
+    slack = add_conversation(conn, project=None)
+    item = add_item(queue, slack, actor="ann")
+    chore = queue.enqueue(None, "chore", {})
+    lin = add_conversation(conn, project=None, channel=None, thread_ts=None)
     db.set_setting(conn, "linear_session:x", lin)
-    lin_item = add_item(queue, lin, "general", actor=None)
+    lin_item = add_item(queue, lin, actor=None)
     task = make_task(conn, source="linear", requester=None)
     cases = [
         ("session_started", None, {"work_item": item}, None, ("slack", "ann")),

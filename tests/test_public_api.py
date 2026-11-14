@@ -22,7 +22,7 @@ SECRET = "whsec"
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -119,10 +119,10 @@ async def test_linear_install_is_admin_only_and_dms(conn, tmp_path, auth):
                              memory=MemoryStore(tmp_path / "memory.db"), slack=slack, notifier=FakeNotifier(),
                              secret_values=[])
     register_linear_tools(router, auth)
-    cid = add_conversation(conn, sandbox="general", channel="D-ann")
-    admin = router.context_for(add_item(router.queue, cid, "general", actor="ann"))
+    cid = add_conversation(conn, channel="D-ann")
+    admin = router.context_for(add_item(router.queue, cid, actor="ann"))
     assert "DM" in (await router.call(admin, "linear_install", {})).text
     dm = [p for p in slack.posts if p["channel"] == "D-U1"][0]
     assert "https://linear.app/oauth/authorize?" in dm["text"]
-    member = router.context_for(add_item(router.queue, cid, "general", actor="bob"))
+    member = router.context_for(add_item(router.queue, cid, actor="bob"))
     assert (await router.call(member, "linear_install", {})).text == "not available here"

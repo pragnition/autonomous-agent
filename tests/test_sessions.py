@@ -5,7 +5,7 @@ import pytest
 
 from agent import db
 from agent.config import Limits
-from agent.core.sessions import AGENT_QUEUE, Gate, WorkQueue, mint_token, resolve_token, revoke_for_work_item
+from agent.core.sessions import Gate, WorkQueue, mint_token, resolve_token, revoke_for_work_item
 from agent.proxy import ProxyUnavailable
 
 T0 = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
@@ -14,7 +14,7 @@ T0 = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -42,62 +42,55 @@ def cfg(sessions=3):
 
 def test_one_claimed_item_per_conversation(conn):
     q = WorkQueue(conn)
-    a = q.enqueue("c1", "code-p", "turn", {"text": "1"})
-    q.enqueue("c1", "code-p", "turn", {"text": "2"})
-    assert q.claim("code-p").id == a
-    assert q.claim("code-p") is None          # the second message waits for the first
+    a = q.enqueue("c1", "turn", {"text": "1"})
+    q.enqueue("c1", "turn", {"text": "2"})
+    assert q.claim().id == a
+    assert q.claim() is None                  # the second message waits for the first
     q.complete(a, {"text": "ok"})
-    assert q.claim("code-p").payload["text"] == "2"
+    assert q.claim().payload["text"] == "2"
 
 
 def test_other_conversations_are_not_blocked(conn):
     q = WorkQueue(conn)
-    q.enqueue("c1", "code-p", "turn", {"text": "1"})
-    b = q.enqueue("c2", "code-p", "turn", {"text": "x"})
-    q.claim("code-p")
-    assert q.claim("code-p").id == b
-
-
-def test_claim_is_per_sandbox(conn):
-    q = WorkQueue(conn)
-    q.enqueue("c1", "debug-p", "chore", {})
-    assert q.claim("code-p") is None
-    assert q.claim("debug-p").kind == "chore"
+    q.enqueue("c1", "turn", {"text": "1"})
+    b = q.enqueue("c2", "turn", {"text": "x"})
+    q.claim()
+    assert q.claim().id == b
 
 
 def test_expired_lease_requeues_then_fails(conn):
     q = WorkQueue(conn, lease_s=1, max_attempts=2)
-    i = q.enqueue("c", "code-p", "turn", {})
-    q.claim("code-p", now=T0)
-    assert q.claim("code-p", now=T0 + timedelta(seconds=5)).attempts == 1
-    assert q.claim("code-p", now=T0 + timedelta(seconds=10)) is None
+    i = q.enqueue("c", "turn", {})
+    q.claim(now=T0)
+    assert q.claim(now=T0 + timedelta(seconds=5)).attempts == 1
+    assert q.claim(now=T0 + timedelta(seconds=10)) is None
     assert status_of(conn, i) == "failed"
 
 
 def test_heartbeat_extends_lease_and_reports_cancel(conn):
     q = WorkQueue(conn, lease_s=10)
-    i = q.enqueue("c", "code-p", "turn", {})
-    q.claim("code-p", now=T0)
+    i = q.enqueue("c", "turn", {})
+    q.claim(now=T0)
     assert q.heartbeat(i, now=T0 + timedelta(seconds=8)) is True
-    assert q.claim("code-p", now=T0 + timedelta(seconds=15)) is None     # still leased after the heartbeat
+    assert q.claim(now=T0 + timedelta(seconds=15)) is None    # still leased after the heartbeat
     q.cancel(i)
     assert q.heartbeat(i) is False
 
 
 def test_lost_lease_revokes_the_session_token(conn):
     q = WorkQueue(conn, lease_s=1)
-    i = q.enqueue("c", "code-p", "turn", {})
-    q.claim("code-p", now=T0)
-    tok = mint_token(conn, "session", sandbox="code-p", work_item_id=i, ttl_s=3600)
-    q.claim("code-p", now=T0 + timedelta(seconds=5))
+    i = q.enqueue("c", "turn", {})
+    q.claim(now=T0)
+    tok = mint_token(conn, "session", work_item_id=i, ttl_s=3600)
+    q.claim(now=T0 + timedelta(seconds=5))
     assert resolve_token(conn, tok) is None
 
 
 def test_complete_and_cancel(conn):
     q = WorkQueue(conn)
-    a = q.enqueue("c1", "code-p", "turn", {})
-    b = q.enqueue("c2", "code-p", "turn", {})
-    q.claim("code-p")
+    a = q.enqueue("c1", "turn", {})
+    b = q.enqueue("c2", "turn", {})
+    q.claim()
     q.complete(a, {"text": "done"})
     assert q.get(a).status == "done" and q.get(a).result == {"text": "done"}
     q.cancel(b)
@@ -107,18 +100,18 @@ def test_complete_and_cancel(conn):
 
 
 def test_token_revoked_and_expired(conn):
-    t = mint_token(conn, "session", sandbox="code-p", work_item_id="w1", ttl_s=60)
+    t = mint_token(conn, "session", work_item_id="w1", ttl_s=60)
     assert resolve_token(conn, t).work_item_id == "w1"
-    assert resolve_token(conn, t).kind == "session" and resolve_token(conn, t).sandbox == "code-p"
+    assert resolve_token(conn, t).kind == "session"
     revoke_for_work_item(conn, "w1")
     assert resolve_token(conn, t) is None
-    t2 = mint_token(conn, "session", sandbox="code-p", work_item_id="w2", ttl_s=1)
+    t2 = mint_token(conn, "session", work_item_id="w2", ttl_s=1)
     assert resolve_token(conn, t2, now=utc_in(5)) is None
     assert resolve_token(conn, "not-a-token") is None
 
 
 def test_tokens_are_stored_hashed(conn):
-    t = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
+    t = mint_token(conn, "runner", ttl_s=60)
     assert conn.execute("SELECT COUNT(*) FROM tokens WHERE hash = ?", (t,)).fetchone()[0] == 0
 
 
@@ -133,8 +126,8 @@ async def test_gate(conn):
 
 async def test_gate_busy(conn):
     q = WorkQueue(conn)
-    q.enqueue("c1", "code-p", "turn", {})
-    q.claim("code-p")
+    q.enqueue("c1", "turn", {})
+    q.claim()
     assert (await Gate(conn, cfg(sessions=1), FakeProxy()).can_start()) == (False, "busy")
 
 
@@ -142,18 +135,18 @@ async def test_stale_claims_are_reaped_by_the_gate(conn):
     q = WorkQueue(conn, lease_s=1)
     long_ago = datetime(2020, 1, 1, tzinfo=UTC)
     for i in range(3):
-        q.enqueue(f"c{i}", "code-p", "turn", {})
-        q.claim("code-p", now=long_ago)
-    q.enqueue("c9", "code-p", "turn", {})
+        q.enqueue(f"c{i}", "turn", {})
+        q.claim(now=long_ago)
+    q.enqueue("c9", "turn", {})
     assert (await Gate(conn, cfg(sessions=3), FakeProxy()).can_start()) == (True, "")
-    assert q.claim("code-p") is not None
+    assert q.claim() is not None
 
 
 async def test_production_and_chores_are_not_blocked_by_busy_turns(conn):
     q = WorkQueue(conn)
     for i in range(3):
-        q.enqueue(f"c{i}", "code-p", "turn", {})
-        q.claim("code-p")
+        q.enqueue(f"c{i}", "turn", {})
+        q.claim()
     gate = Gate(conn, cfg(sessions=3), FakeProxy())
     assert (await gate.can_start("turn")) == (False, "busy")
     assert (await gate.can_start("production")) == (True, "")
@@ -162,51 +155,51 @@ async def test_production_and_chores_are_not_blocked_by_busy_turns(conn):
 
 def test_cancel_running(conn):
     q = WorkQueue(conn)
-    a = q.enqueue("c1", "code-p", "turn", {})
-    b = q.enqueue("c2", "code-p", "turn", {})
-    q.claim("code-p")
+    a = q.enqueue("c1", "turn", {})
+    b = q.enqueue("c2", "turn", {})
+    q.claim()
     assert q.cancel_running() == [a] and q.get(b).status == "queued"
 
 
 def test_claim_with_no_kinds_claims_nothing(conn):
     q = WorkQueue(conn)
-    q.enqueue("c1", AGENT_QUEUE, "turn", {})
-    assert q.claim(AGENT_QUEUE, kinds=()) is None
-    assert q.claim(AGENT_QUEUE) is not None
+    q.enqueue("c1", "turn", {})
+    assert q.claim(kinds=()) is None
+    assert q.claim() is not None
 
 
 def test_claim_skips_kinds_not_allowed(conn):
     q = WorkQueue(conn)
-    q.enqueue("c1", AGENT_QUEUE, "turn", {})
-    chore = q.enqueue("c2", AGENT_QUEUE, "chore", {})
-    item = q.claim(AGENT_QUEUE, kinds=("chore",))
+    q.enqueue("c1", "turn", {})
+    chore = q.enqueue("c2", "chore", {})
+    item = q.claim(kinds=("chore",))
     assert item.id == chore and item.kind == "chore"
 
 
 def test_claimable_kinds(conn):
     q = WorkQueue(conn)
-    assert q.claimable_kinds("code-p") == set()
-    q.enqueue("c1", "code-p", "turn", {})
-    q.enqueue("c2", "code-p", "chore", {})
-    assert q.claimable_kinds("code-p") == {"turn", "chore"}
-    q.claim("code-p", kinds=("turn",))
-    assert q.claimable_kinds("code-p") == {"chore"}      # the turn is claimed; c2's chore is untouched
+    assert q.claimable_kinds() == set()
+    q.enqueue("c1", "turn", {})
+    q.enqueue("c2", "chore", {})
+    assert q.claimable_kinds() == {"turn", "chore"}
+    q.claim(kinds=("turn",))
+    assert q.claimable_kinds() == {"chore"}    # the turn is claimed; c2's chore is untouched
 
 
 def test_claimable_kinds_excludes_a_conversations_second_turn(conn):
     q = WorkQueue(conn)
-    q.enqueue("c1", "code-p", "turn", {})
-    q.enqueue("c1", "code-p", "turn", {})
-    q.claim("code-p")
-    assert q.claimable_kinds("code-p") == set()           # c1 already has a claimed item
+    q.enqueue("c1", "turn", {})
+    q.enqueue("c1", "turn", {})
+    q.claim()
+    assert q.claimable_kinds() == set()    # c1 already has a claimed item
 
 
 def test_claimable_kinds_includes_an_expired_claim(conn):
     """An expired claim must not make its conversation invisible forever — only a still-live claim blocks —
     otherwise nothing would ever call claim() (whose own reap requeues it) to free the conversation up again."""
     q = WorkQueue(conn)
-    q.enqueue("c1", "code-p", "turn", {})
-    q.claim("code-p", now=T0)
-    q.enqueue("c1", "code-p", "turn", {})          # the follow-up, queued behind the still-live claim
-    assert q.claimable_kinds("code-p", now=T0 + timedelta(seconds=10)) == set()        # lease (90s) still live
-    assert q.claimable_kinds("code-p", now=T0 + timedelta(seconds=100)) == {"turn"}    # lease has expired
+    q.enqueue("c1", "turn", {})
+    q.claim(now=T0)
+    q.enqueue("c1", "turn", {})    # the follow-up, queued behind the still-live claim
+    assert q.claimable_kinds(now=T0 + timedelta(seconds=10)) == set()        # lease (90s) still live
+    assert q.claimable_kinds(now=T0 + timedelta(seconds=100)) == {"turn"}    # lease has expired

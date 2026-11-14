@@ -40,7 +40,7 @@ class Linear:
 @pytest.fixture
 def env(tmp_path):
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
+    db.create_schema(conn)
     config = load_agent_config(EXAMPLES / "agent.toml")
     return conn, config, load_packs(EXAMPLES, config)
 

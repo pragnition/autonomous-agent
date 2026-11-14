@@ -3,7 +3,7 @@ import pytest
 from agent import db, events, tasks
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.prs import pr_body, register_pr_tools
-from agent.core.sessions import AGENT_QUEUE, WorkQueue
+from agent.core.sessions import WorkQueue
 from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
@@ -41,7 +41,7 @@ class FakeWriter:
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -52,8 +52,8 @@ def build(conn, tmp_path, *, writer=None, tips=None):
     githost = FakeGitHost(tips if tips is not None else {"agent/t1-x": SHA})
     writer = writer or FakeWriter()
     register_pr_tools(router, githost=githost, writer=writer, write_token="WRITE-TOKEN-VALUE")
-    cid = add_conversation(conn, sandbox="code-sample")
-    ctx = router.context_for(add_item(router.queue, cid, "code-sample", actor="bob"))
+    cid = add_conversation(conn)
+    ctx = router.context_for(add_item(router.queue, cid, actor="bob"))
     return router, ctx, githost, writer
 
 
@@ -105,8 +105,8 @@ async def test_opens_draft_assigned_to_requester(conn, tmp_path):
 
 async def test_owner_is_assignee_for_unmapped_requester(conn, tmp_path):
     router, _, _, writer = build(conn, tmp_path)
-    cid = add_conversation(conn, sandbox="code-sample", thread_ts="2.0")
-    ctx = router.context_for(add_item(router.queue, cid, "code-sample", actor=None, unattended=True))
+    cid = add_conversation(conn, thread_ts="2.0")
+    ctx = router.context_for(add_item(router.queue, cid, actor=None, unattended=True))
     await router.call(ctx, "open_pr", pr_args())
     assert writer.assignee == "ann-gh"
 
@@ -121,8 +121,8 @@ async def test_manifest_includes_open_pr_for_unbound_dm(conn, tmp_path):
     """Every tool is offered by tier only now: a DM with no project still lists open_pr, start_task and
     track_task (open_pr itself refuses to run without a project; it just isn't hidden from the manifest)."""
     router, _, _, _ = build(conn, tmp_path)
-    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts="3.0")
-    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE, actor="bob"))
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts="3.0")
+    ctx = router.context_for(add_item(router.queue, cid, actor="bob"))
     names = {t["name"] for t in router.manifest(ctx)}
     assert {"open_pr", "start_task", "track_task"} <= names
 

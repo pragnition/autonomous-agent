@@ -9,7 +9,7 @@ from agent import db
 from agent.config import Limits
 from agent.core.agent_api import CONN_KEY, make_agent_app
 from agent.core.conversations import BindRefused
-from agent.core.sessions import AGENT_QUEUE, Gate, WorkQueue, mint_token
+from agent.core.sessions import Gate, WorkQueue, mint_token
 from agent_fixtures import add_conversation
 
 
@@ -44,7 +44,7 @@ class FakeRouter:
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -89,30 +89,30 @@ async def api_paused(conn, queue, parts):
     await client.close()
 
 
-async def pull_one(api, sandbox, payload=None):
+async def pull_one(api, payload=None):
     conn = api.server.app[CONN_KEY]
-    WorkQueue(conn).enqueue("c1", sandbox, "turn", payload or {"text": "hi"})
-    tok = mint_token(conn, "sandbox", sandbox=sandbox, work_item_id=None, ttl_s=3600)
-    r = await api.post("/agent/pull", json={"sandbox": sandbox}, headers=bearer(tok))
+    WorkQueue(conn).enqueue("c1", "turn", payload or {"text": "hi"})
+    tok = mint_token(conn, "runner", ttl_s=3600)
+    r = await api.post("/agent/pull", headers=bearer(tok))
     assert r.status == 200
     body = await r.json()
     return body["work_item"], body["session_token"]
 
 
-async def pull_status(api, sandbox):
+async def pull_status(api):
     conn = api.server.app[CONN_KEY]
-    WorkQueue(conn).enqueue("c1", sandbox, "turn", {})
-    tok = mint_token(conn, "sandbox", sandbox=sandbox, work_item_id=None, ttl_s=3600)
-    return (await api.post("/agent/pull", json={"sandbox": sandbox}, headers=bearer(tok))).status
+    WorkQueue(conn).enqueue("c1", "turn", {})
+    tok = mint_token(conn, "runner", ttl_s=3600)
+    return (await api.post("/agent/pull", headers=bearer(tok))).status
 
 
 async def test_pull_hands_out_item_token_and_tools(api):
-    item, tok = await pull_one(api, "code-p", {"text": "fix it"})
+    item, tok = await pull_one(api, {"text": "fix it"})
     assert item["payload"] == {"text": "fix it"} and item["kind"] == "turn" and tok
     conn = api.server.app[CONN_KEY]
-    WorkQueue(conn).enqueue("c2", "code-p", "turn", {})
-    stok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=3600)
-    body = await (await api.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(stok))).json()
+    WorkQueue(conn).enqueue("c2", "turn", {})
+    stok = mint_token(conn, "runner", ttl_s=3600)
+    body = await (await api.post("/agent/pull", headers=bearer(stok))).json()
     assert body["tools"][0]["name"] == "status"
 
 
@@ -127,11 +127,11 @@ async def test_pull_resolves_a_turn_from_its_conversation_when_claimed(conn, que
 
     client = await _client(conn, queue, parts, refresh=refresh)
     try:
-        queue.enqueue(None, AGENT_QUEUE, "chore", {"text": "consolidate"})
-        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
-        chore = (await (await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).json())
+        queue.enqueue(None, "chore", {"text": "consolidate"})
+        tok = mint_token(conn, "runner", ttl_s=3600)
+        chore = (await (await client.post("/agent/pull", headers=bearer(tok))).json())
         assert chore["work_item"]["payload"] == {"text": "consolidate"} and seen == []
-        item, _ = await pull_one(client, AGENT_QUEUE, {"text": "hi", "resume_session_id": None})
+        item, _ = await pull_one(client, {"text": "hi", "resume_session_id": None})
         assert item["payload"] == {"text": "hi", "resume_session_id": "S1"} and seen == ["c1"]
         assert queue.get(item["id"]).payload == item["payload"]
     finally:
@@ -139,41 +139,35 @@ async def test_pull_resolves_a_turn_from_its_conversation_when_claimed(conn, que
 
 
 async def test_pull_returns_204_when_nothing_queued(api, conn):
-    tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=3600)
-    assert (await api.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).status == 204
+    tok = mint_token(conn, "runner", ttl_s=3600)
+    assert (await api.post("/agent/pull", headers=bearer(tok))).status == 204
 
 
 async def test_revoked_session_token_is_401(api, conn, queue):
-    item, tok = await pull_one(api, "code-p")
+    item, tok = await pull_one(api)
     await api.post("/agent/result", json={"result": {"text": "done"}}, headers=bearer(tok))
     r = await api.post("/agent/tool", json={"name": "status", "args": {}}, headers=bearer(tok))
     assert r.status == 401
 
 
-async def test_sandbox_token_bound_to_its_sandbox(api, conn):
-    tok = mint_token(conn, "sandbox", sandbox="code-a", work_item_id=None, ttl_s=3600)
-    r = await api.post("/agent/pull", json={"sandbox": "code-b"}, headers=bearer(tok))
-    assert r.status == 403
-
-
 async def test_session_token_cannot_pull(api):
-    _, tok = await pull_one(api, "code-p")
-    assert (await api.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).status == 401
+    _, tok = await pull_one(api)
+    assert (await api.post("/agent/pull", headers=bearer(tok))).status == 401
 
 
 async def test_missing_token_is_401(api):
-    assert (await api.post("/agent/pull", json={"sandbox": "code-p"})).status == 401
+    assert (await api.post("/agent/pull")).status == 401
 
 
 async def test_heartbeat_reports_cancel(api, queue):
-    item, tok = await pull_one(api, "code-p")
+    item, tok = await pull_one(api)
     assert (await (await api.post("/agent/heartbeat", json={}, headers=bearer(tok))).json())["cancel"] is False
     queue.cancel(item["id"])
     assert (await api.post("/agent/heartbeat", json={}, headers=bearer(tok))).status == 401
 
 
 async def test_pull_respects_gate(api_paused):
-    assert (await pull_status(api_paused, "code-p")) == 204
+    assert (await pull_status(api_paused)) == 204
 
 
 async def test_bind_endpoint_returns_test_secrets_unscrubbed(conn, queue, parts):
@@ -190,7 +184,7 @@ async def test_bind_endpoint_returns_test_secrets_unscrubbed(conn, queue, parts)
 
     client = await _client(conn, queue, parts, bind=bind)
     try:
-        item, tok = await pull_one(client, AGENT_QUEUE)
+        item, tok = await pull_one(client)
         r = await client.post("/agent/bind", json={"project": "sample", "title": "run it"}, headers=bearer(tok))
         assert r.status == 200
         body = await r.json()
@@ -199,14 +193,14 @@ async def test_bind_endpoint_returns_test_secrets_unscrubbed(conn, queue, parts)
         r = await client.post("/agent/bind", json={"project": "nope"}, headers=bearer(tok))
         assert r.status == 409 and await r.json() == {"error": "unknown project 'nope' (known: sample)"}
         assert calls[-1] == (item["id"], "nope", "")
-        sandbox_tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=60)
-        assert (await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(sandbox_tok))).status == 401
+        runner_tok = mint_token(conn, "runner", ttl_s=60)
+        assert (await client.post("/agent/bind", json={"project": "sample"}, headers=bearer(runner_tok))).status == 401
     finally:
         await client.close()
 
 
 async def test_tool_call_resolves_context(api, parts):
-    item, tok = await pull_one(api, "debug-p")
+    item, tok = await pull_one(api)
     r = await (await api.post("/agent/tool", json={"name": "status", "args": {"x": 1}}, headers=bearer(tok))).json()
     assert parts.router.calls[-1] == (SimpleNamespace(work_item_id=item["id"], task_id=None, project=None),
                                       "status", {"x": 1})
@@ -214,14 +208,14 @@ async def test_tool_call_resolves_context(api, parts):
 
 
 async def test_result_completes_and_calls_back(api, parts, queue):
-    item, tok = await pull_one(api, "code-p")
+    item, tok = await pull_one(api)
     await api.post("/agent/result", json={"result": {"text": "all done"}}, headers=bearer(tok))
     assert parts.results == [(item["id"], {"text": "all done"})]
     assert queue.get(item["id"]).status == "done"
 
 
 async def test_events_append_to_transcript(api, parts):
-    item, tok = await pull_one(api, "code-p")
+    item, tok = await pull_one(api)
     body = await (await api.post("/agent/events", json={"event": {"type": "assistant", "n": 1}},
                                  headers=bearer(tok))).json()
     assert body == {"cancel": False}
@@ -231,14 +225,14 @@ async def test_events_append_to_transcript(api, parts):
 
 
 async def test_events_are_stamped(api, parts):
-    item, tok = await pull_one(api, "code-p")
+    item, tok = await pull_one(api)
     await api.post("/agent/events", json={"event": {"type": "AssistantMessage"}}, headers=bearer(tok))
     stored = json.loads((parts.runs / f"{item['id']}.jsonl").read_text())
     assert stored["_ts"].endswith("Z") and stored["type"] == "AssistantMessage"
 
 
 async def test_files_upload_and_limit(api, parts):
-    item, tok = await pull_one(api, "code-p")
+    item, tok = await pull_one(api)
     form = aiohttp.FormData()
     form.add_field("text", "screenshots")
     form.add_field("file", b"png-bytes", filename="a.png")
@@ -250,11 +244,11 @@ async def test_files_upload_and_limit(api, parts):
     assert (await api.post("/agent/files", data=many, headers=bearer(tok))).status == 413
 
 
-async def test_bundle_needs_sandbox_token(api, conn):
-    tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=3600)
+async def test_bundle_needs_runner_token(api, conn):
+    tok = mint_token(conn, "runner", ttl_s=3600)
     r = await api.get("/agent/bundle", headers=bearer(tok))
     assert r.status == 200 and r.headers["X-Bundle-Version"] == "v1" and await r.read() == b"bundle-bytes"
-    _, stok = await pull_one(api, "code-p")
+    _, stok = await pull_one(api)
     assert (await api.get("/agent/bundle", headers=bearer(stok))).status == 401
 
 
@@ -274,7 +268,7 @@ class CountingGate(FakeGate):
 
 async def test_idle_pull_never_asks_the_gate(conn, queue, parts):
     """pull() asks queue.claimable_kinds() first — a plain read, no transaction — and only calls the Gate (and
-    through it the account proxy) about kinds that are actually claimable. An idle sandbox must not pay for an
+    through it the account proxy) about kinds that are actually claimable. An idle queue must not pay for an
     HTTP round trip to the proxy on every 0.5 s poll."""
     gate = CountingGate()
 
@@ -287,11 +281,11 @@ async def test_idle_pull_never_asks_the_gate(conn, queue, parts):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        tok = mint_token(conn, "sandbox", sandbox="debug-p", work_item_id=None, ttl_s=60)
-        assert (await client.post("/agent/pull", json={"sandbox": "debug-p"}, headers=bearer(tok))).status == 204
+        tok = mint_token(conn, "runner", ttl_s=60)
+        assert (await client.post("/agent/pull", headers=bearer(tok))).status == 204
         assert gate.calls == []
-        queue.enqueue("c1", "debug-p", "chore", {})
-        assert (await client.post("/agent/pull", json={"sandbox": "debug-p"}, headers=bearer(tok))).status == 200
+        queue.enqueue("c1", "chore", {})
+        assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
         assert gate.calls == ["chore"]
     finally:
         await client.close()
@@ -309,9 +303,9 @@ async def test_queued_turn_consults_the_gate(conn, queue, parts):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        queue.enqueue("c1", "code-p", "turn", {})
-        tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
-        assert (await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).status == 200
+        queue.enqueue("c1", "turn", {})
+        tok = mint_token(conn, "runner", ttl_s=60)
+        assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
         assert gate.calls == ["turn"]
     finally:
         await client.close()
@@ -330,9 +324,9 @@ async def test_result_survives_a_failing_callback(conn, queue, parts):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        queue.enqueue("c1", "code-p", "turn", {})
-        tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
-        session = (await (await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).json())
+        queue.enqueue("c1", "turn", {})
+        tok = mint_token(conn, "runner", ttl_s=60)
+        session = (await (await client.post("/agent/pull", headers=bearer(tok))).json())
         r = await client.post("/agent/result", json={"result": {"text": "x"}}, headers=bearer(session["session_token"]))
         assert r.status == 200
     finally:
@@ -351,16 +345,16 @@ async def test_pull_records_session_started(conn):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        turn = queue.enqueue("c1", "code-p", "turn", {})
-        queue.enqueue(None, "code-p", "chore", {})
-        tok = mint_token(conn, "sandbox", sandbox="code-p", work_item_id=None, ttl_s=60)
+        turn = queue.enqueue("c1", "turn", {})
+        queue.enqueue(None, "chore", {})
+        tok = mint_token(conn, "runner", ttl_s=60)
         for _ in range(2):
-            assert (await client.post("/agent/pull", json={"sandbox": "code-p"}, headers=bearer(tok))).status == 200
+            assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
         rows = conn.execute("SELECT task_id, data FROM events WHERE type = 'session_started'").fetchall()
         assert len(rows) == 1 and rows[0]["task_id"] == "T-1"
         data = json.loads(rows[0]["data"])
-        assert data["work_item"] == turn and data["sandbox"] == "code-p" and data["queued_at"]
-        assert data["project"] == "sample"
+        assert data["work_item"] == turn and data["queued_at"] and data["project"] == "sample"
+        assert set(data) == {"work_item", "queued_at", "project"}
     finally:
         await client.close()
 
@@ -377,9 +371,9 @@ async def test_chore_claim_logs_work_started(conn):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        chore = queue.enqueue(None, "general", "chore", {})
-        tok = mint_token(conn, "sandbox", sandbox="general", work_item_id=None, ttl_s=60)
-        assert (await client.post("/agent/pull", json={"sandbox": "general"}, headers=bearer(tok))).status == 200
+        chore = queue.enqueue(None, "chore", {})
+        tok = mint_token(conn, "runner", ttl_s=60)
+        assert (await client.post("/agent/pull", headers=bearer(tok))).status == 200
         rows = conn.execute("SELECT type, data FROM events WHERE type IN ('session_started', 'work_started')").fetchall()
         assert [r["type"] for r in rows] == ["work_started"]
         assert json.loads(rows[0]["data"])["work_item"] == chore
@@ -413,12 +407,10 @@ async def test_ten_conversations_run_at_once_eleventh_waits(conn, parts):
     await client.start_server()
     try:
         for i in range(11):
-            cid = add_conversation(conn, sandbox=AGENT_QUEUE, project="sample" if i < 3 else None,
-                                   conversation_id=f"c{i}")
-            queue.enqueue(cid, AGENT_QUEUE, "turn", {"text": f"t{i}"})
-        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
-        statuses = [(await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))).status
-                   for _ in range(11)]
+            cid = add_conversation(conn, project="sample" if i < 3 else None, conversation_id=f"c{i}")
+            queue.enqueue(cid, "turn", {"text": f"t{i}"})
+        tok = mint_token(conn, "runner", ttl_s=3600)
+        statuses = [(await client.post("/agent/pull", headers=bearer(tok))).status for _ in range(11)]
         assert statuses.count(200) == 10 and statuses.count(204) == 1
     finally:
         await client.close()
@@ -439,12 +431,12 @@ async def test_second_turn_of_running_conversation_waits(conn, parts):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "first"})
-        queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "second"})
-        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
-        first = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+        queue.enqueue("c1", "turn", {"text": "first"})
+        queue.enqueue("c1", "turn", {"text": "second"})
+        tok = mint_token(conn, "runner", ttl_s=3600)
+        first = await client.post("/agent/pull", headers=bearer(tok))
         assert first.status == 200
-        second = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+        second = await client.post("/agent/pull", headers=bearer(tok))
         assert second.status == 204
     finally:
         await client.close()
@@ -467,13 +459,13 @@ async def test_pull_reaps_an_expired_claim_blocking_its_conversation(conn, parts
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        stale = queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "first"})
-        queue.claim(AGENT_QUEUE)                   # a runner claimed it, then died before finishing or heartbeating
+        stale = queue.enqueue("c1", "turn", {"text": "first"})
+        queue.claim()    # a runner claimed it, then died before finishing or heartbeating
         conn.execute("UPDATE work_items SET lease_until = '2000-01-01T00:00:00Z' WHERE id = ?", (stale,))
-        followup = queue.enqueue("c1", AGENT_QUEUE, "turn", {"text": "hello?"})
+        followup = queue.enqueue("c1", "turn", {"text": "hello?"})
 
-        tok = mint_token(conn, "sandbox", sandbox=AGENT_QUEUE, work_item_id=None, ttl_s=3600)
-        r = await client.post("/agent/pull", json={"sandbox": AGENT_QUEUE}, headers=bearer(tok))
+        tok = mint_token(conn, "runner", ttl_s=3600)
+        r = await client.post("/agent/pull", headers=bearer(tok))
         assert r.status == 200
         item = (await r.json())["work_item"]
         assert item["id"] in (stale, followup) and item["conversation_id"] == "c1"

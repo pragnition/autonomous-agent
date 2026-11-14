@@ -17,7 +17,7 @@ PRICES = {"gpt-5.6-terra": LlmPrice(2.0, 0.2, 12.0), "default": LlmPrice(5.0, 0.
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 

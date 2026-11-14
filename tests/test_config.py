@@ -136,12 +136,6 @@ def test_agent_uid_must_be_positive_int(tmp_path, value):
     assert any("agent_uid" in p for p in probs)
 
 
-def test_old_sandbox_keys_still_load(tmp_path):
-    cfg = load_agent_config(write_agent(tmp_path, '[sandbox]\nisolation = "open"\n[sandbox.resources.code]\n'
-                                                   'cpus = 4\nmemory_gb = 8\ndisk_gb = 30\n'))
-    assert cfg.sandbox.agent_uid == 1001
-
-
 def test_observability_settings(tmp_path):
     cfg = load_agent_config(write_agent(tmp_path, '[observability]\ndigest_channel = "#agent-ops"\ndigest_time = "08:30"'))
     assert (cfg.observability.digest_channel, cfg.observability.digest_time) == ("#agent-ops", "08:30")

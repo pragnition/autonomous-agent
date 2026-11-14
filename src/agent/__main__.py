@@ -11,13 +11,13 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["kpis"]:  # pickup, PR, merge-queue and cost numbers
         from agent.core.kpis import main as show_kpis
         return show_kpis(argv[1:])
-    if argv[:1] == ["runners"]:  # the open agent container: a runner per queue
+    if argv[:1] == ["runners"]:  # the agent container's runner
         from agent.sandbox.runners import main as run_runners
         return run_runners(argv[1:])
     parser = argparse.ArgumentParser(prog="agent", description="Autonomous engineering agent")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("core", help="run the core service: Slack, dispatch, memory and pollers")
-    sub.add_parser("runners", help="run in the agent container: a runner for every queue core lists")
+    sub.add_parser("runners", help="run in the agent container: the runner that works on core's queue")
     sub.add_parser("kpis", help="show the KPIs: pickup, PR and merge-queue times, merge rate, cost")
     sub.add_parser("supervisor", help="run the health watchdog")
     sub.add_parser("doctor", help="check config, secrets, the proxy, GitHub and Linear")

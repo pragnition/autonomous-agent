@@ -1,5 +1,5 @@
-"""The runner's connection to core's agent API (spec v2 §4). The sandbox token pulls work and bundles; each
-work item's session token does everything else. A 401 means the item was finished, cancelled or lost."""
+"""The runner's connection to core's agent API. The runner token pulls work and bundles; each work item's session
+token does everything else. A 401 means the item was finished, cancelled or lost."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ class SessionRevoked(Exception):
 
 
 class CoreLink:
-    def __init__(self, base_url: str, sandbox_token: str, http: httpx.AsyncClient | None = None):
+    def __init__(self, base_url: str, runner_token: str, http: httpx.AsyncClient | None = None):
         self.base = base_url.rstrip("/")
-        self.sandbox_token = sandbox_token
+        self.runner_token = runner_token
         self.http = http or httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10))
 
     @staticmethod
@@ -29,9 +29,9 @@ class CoreLink:
     async def _post(self, path: str, tok: str, body: dict) -> dict:
         return self._check(await self.http.post(f"{self.base}{path}", headers=self._auth(tok), json=body)).json()
 
-    async def pull(self, sandbox: str) -> dict | None:
-        resp = self._check(await self.http.post(f"{self.base}/agent/pull", headers=self._auth(self.sandbox_token),
-                                                json={"sandbox": sandbox}, timeout=40))
+    async def pull(self) -> dict | None:
+        resp = self._check(await self.http.post(f"{self.base}/agent/pull", headers=self._auth(self.runner_token),
+                                                timeout=40))
         return None if resp.status_code == 204 else resp.json()
 
     async def heartbeat(self, tok: str) -> bool:
@@ -65,5 +65,5 @@ class CoreLink:
         await self._post("/agent/result", tok, {"result": result})
 
     async def bundle(self) -> tuple[str, bytes]:
-        resp = self._check(await self.http.get(f"{self.base}/agent/bundle", headers=self._auth(self.sandbox_token)))
+        resp = self._check(await self.http.get(f"{self.base}/agent/bundle", headers=self._auth(self.runner_token)))
         return resp.headers["X-Bundle-Version"], resp.content

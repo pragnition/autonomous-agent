@@ -9,7 +9,7 @@ from agent.tasks import IllegalTransition, Status
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 

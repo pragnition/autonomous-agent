@@ -53,7 +53,7 @@ class FakeProxy:
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -79,9 +79,9 @@ async def api(tmp_path, conn, proxy):
 
 def running_item(conn):
     queue = WorkQueue(conn)
-    cid = add_conversation(conn, sandbox="general", project=None)
-    item = add_item(queue, cid, "general", text="fix the build")
-    queue.claim("general")
+    cid = add_conversation(conn, project=None)
+    item = add_item(queue, cid, text="fix the build")
+    queue.claim()
     return item
 
 
@@ -206,7 +206,7 @@ def write_transcript(tmp_path, item, records):
 
 async def test_overview_running_has_recent_and_live_tokens(tmp_path, api, conn, proxy):
     item = running_item(conn)
-    queued = add_item(WorkQueue(conn), add_conversation(conn, sandbox="general", project=None), "general")
+    queued = add_item(WorkQueue(conn), add_conversation(conn, project=None))
     write_transcript(tmp_path, item, [INIT] + [say(f"step {i}", f"m{i}") for i in range(7)])
     proxy.pins["sid-1"] = "badger"
     body = await (await api.get("/api/overview", headers=ANN)).json()
@@ -230,9 +230,9 @@ async def test_overview_survives_proxy_down(tmp_path, api, conn, proxy):
 
 async def test_sessions_route_filters_and_limit_cap(api, conn):
     queue = WorkQueue(conn)
-    cid = add_conversation(conn, sandbox="general", project=None)
+    cid = add_conversation(conn, project=None)
     for i in range(3):
-        add_item(queue, cid, "general", text=f"task {i}")
+        add_item(queue, cid, text=f"task {i}")
     body = await (await api.get("/api/sessions?limit=1000&q=task", headers=ANN)).json()
     assert body["total"] == 3 and len(body["rows"]) == 3
     body = await (await api.get("/api/sessions?limit=2&offset=2", headers=ANN)).json()
@@ -387,9 +387,9 @@ async def test_payload_secrets_never_in_any_response(tmp_path, conn, proxy):
     client = await make_client(tmp_path, conn, proxy, scrub=make_scrubber(["s3cr3t-value"]))
     try:
         queue = WorkQueue(conn)
-        cid = add_conversation(conn, sandbox="code-sample")
-        item = add_item(queue, cid, "code-sample", text="go", test_secrets={"K": "s3cr3t-value"})
-        queue.claim("code-sample")
+        cid = add_conversation(conn)
+        item = add_item(queue, cid, text="go", test_secrets={"K": "s3cr3t-value"})
+        queue.claim()
         write_transcript(tmp_path, item, [INIT, say("the key is s3cr3t-value")])
         bodies = [await (await client.get(path, headers=ANN)).text()
                   for path in ("/api/overview", "/api/sessions", f"/api/sessions/{item}")]
@@ -416,7 +416,7 @@ async def test_finished_session_without_run_row_uses_its_transcript(tmp_path, ap
 
 
 async def test_queued_session_has_no_numbers(api, conn):
-    item = add_item(WorkQueue(conn), add_conversation(conn, sandbox="general", project=None), "general")
+    item = add_item(WorkQueue(conn), add_conversation(conn, project=None))
     body = await (await api.get(f"/api/sessions/{item}?entries=0", headers=ANN)).json()
     assert body["tokens"] is None and body["turns"] is None
 
@@ -443,9 +443,9 @@ def running_items(conn, n):
     queue = WorkQueue(conn)
     items = []
     for i in range(n):
-        cid = add_conversation(conn, sandbox=f"code-p{i}", project=None)
-        items.append(add_item(queue, cid, f"code-p{i}", text=f"task {i}"))
-        queue.claim(f"code-p{i}")
+        cid = add_conversation(conn, project=None)
+        items.append(add_item(queue, cid, text=f"task {i}"))
+        queue.claim()
     return items
 
 
@@ -511,8 +511,8 @@ async def test_no_claude_cost_in_any_response(tmp_path, api, conn):
     from agent import tasks as task_store
     task = task_store.create_task(conn, project="sample", title="t", description="", kind="bug", source="slack",
                                   source_ref=None, requester="ann", owner="ann")
-    cid = add_conversation(conn, sandbox="code-sample", task_id=task.id)
-    done = add_item(WorkQueue(conn), cid, "code-sample")
+    cid = add_conversation(conn, task_id=task.id)
+    done = add_item(WorkQueue(conn), cid)
     conn.execute("INSERT INTO runs(id, task_id, role, status, cost_usd_est, started_at, ended_at) "
                  "VALUES (?, ?, 'code', 'finished', 1.25, '2026-11-13T01:00:00Z', ?)", (done, task.id, db.utcnow()))
     conn.execute("UPDATE work_items SET status = 'done' WHERE id = ?", (done,))

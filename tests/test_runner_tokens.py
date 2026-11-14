@@ -1,63 +1,67 @@
-import json
 import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from agent import db
-from agent.core.runner_tokens import sync_runner_tokens
-from agent.core.sessions import resolve_token
-
-NAMES = ["code-sample", "general"]
+from agent.core.runner_tokens import read_runner_token, sync_runner_token
+from agent.core.sessions import mint_token, resolve_token
 
 
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
 @pytest.fixture
 def path(tmp_path):
-    return tmp_path / "runner" / "runner-tokens.json"
+    return tmp_path / "runner" / "runner-token"
 
 
-def test_writes_a_token_per_queue(conn, path):
-    tokens = sync_runner_tokens(conn, path, NAMES)
-    assert json.loads(path.read_text()) == tokens and sorted(tokens) == NAMES
-    for name, tok in tokens.items():
-        info = resolve_token(conn, tok)
-        assert (info.kind, info.sandbox) == ("sandbox", name)
+def test_writes_a_runner_token(conn, path):
+    token = sync_runner_token(conn, path)
+    assert path.read_text() == token + "\n" and read_runner_token(path) == token
+    assert resolve_token(conn, token).kind == "runner"
 
 
-def test_keeps_valid_tokens(conn, path):
-    assert sync_runner_tokens(conn, path, NAMES) == sync_runner_tokens(conn, path, NAMES)
+def test_keeps_a_valid_token(conn, path):
+    assert sync_runner_token(conn, path) == sync_runner_token(conn, path)
 
 
 def test_replaces_revoked_or_expiring(conn, path):
-    first = sync_runner_tokens(conn, path, NAMES)
-    conn.execute("UPDATE tokens SET revoked = 1 WHERE sandbox = 'general'")
-    second = sync_runner_tokens(conn, path, NAMES)
-    assert second["code-sample"] == first["code-sample"] and second["general"] != first["general"]
-    assert resolve_token(conn, second["general"]).sandbox == "general"
-    later = sync_runner_tokens(conn, path, NAMES, now=datetime.now(UTC) + timedelta(days=55))
-    assert all(later[n] != second[n] for n in NAMES)
+    first = sync_runner_token(conn, path)
+    conn.execute("UPDATE tokens SET revoked = 1")
+    second = sync_runner_token(conn, path)
+    assert second != first and resolve_token(conn, second).kind == "runner"
+    later = sync_runner_token(conn, path, now=datetime.now(UTC) + timedelta(days=55))
+    assert later != second
 
 
-def test_drops_unknown_names(conn, path):
+def test_replaces_a_token_of_another_kind(conn, path):
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"code-gone": "x"}))
-    sync_runner_tokens(conn, path, ["general"])
-    assert list(json.loads(path.read_text())) == ["general"]
+    session = mint_token(conn, "session", work_item_id="w1", ttl_s=3600)
+    path.write_text(session)
+    token = sync_runner_token(conn, path)
+    assert token != session and resolve_token(conn, token).kind == "runner"
 
 
 def test_file_is_private(conn, path):
-    sync_runner_tokens(conn, path, NAMES)
+    sync_runner_token(conn, path)
     assert os.stat(path).st_mode & 0o777 == 0o600
 
 
-def test_unreadable_file_is_rebuilt(conn, path):
+def test_unknown_token_is_replaced(conn, path):
     path.parent.mkdir(parents=True)
-    path.write_text("not json")
-    assert sorted(sync_runner_tokens(conn, path, NAMES)) == NAMES
+    path.write_text("not a token")
+    assert resolve_token(conn, sync_runner_token(conn, path)).kind == "runner"
+
+
+def test_read_runner_token_missing_or_empty_file(tmp_path):
+    path = tmp_path / "runner-token"
+    assert read_runner_token(path) == ""
+    path.write_text("\n")
+    assert read_runner_token(path) == ""
+    path.write_text("t\n")
+    assert read_runner_token(path) == "t"

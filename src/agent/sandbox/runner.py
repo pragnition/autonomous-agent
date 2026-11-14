@@ -59,13 +59,12 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
 
 
 class SandboxRunner:
-    def __init__(self, link, worktrees, claude, *, sandbox: str,
-                 bundles_dir: Path, sessions_root: Path, scratch_root: Path, agent_name: str = "agent",
-                 heartbeat_s: float = 15, max_parallel: int = 32,
+    def __init__(self, link, worktrees, claude, *, bundles_dir: Path, sessions_root: Path, scratch_root: Path,
+                 agent_name: str = "agent", heartbeat_s: float = 15, max_parallel: int = 32,
                  extra_env: dict[str, str] | None = None, env_files: list[Path] = (),
                  app_env_dir: Path | None = None):
         self.link, self.worktrees, self.claude = link, worktrees, claude
-        self.sandbox, self.agent_name = sandbox, agent_name
+        self.agent_name = agent_name
         self.bundles_dir, self.sessions_root, self.scratch_root = Path(bundles_dir), Path(sessions_root), Path(scratch_root)
         self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel  # core's Gate is the real limit; this is a safety bound
         self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
@@ -94,7 +93,7 @@ class SandboxRunner:
         session = self.scratch_root / convo
         session.mkdir(parents=True, exist_ok=True)
         wt, checkout, note = payload.get("worktree"), None, ""
-        if wt and wt.get("branch"):  # an item queued before branches were fixed has none: no checkout
+        if wt:
             project = wt["project"]
             try:
                 checkout, created = await asyncio.to_thread(self.worktrees.prepare, session / project, project,
@@ -207,12 +206,11 @@ class SandboxRunner:
                 await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
                 continue
             try:
-                got = await self.link.pull(self.sandbox)
+                got = await self.link.pull()
                 backoff = 1.0
             except SessionRevoked:
-                # Our sandbox token expired or was replaced: exit, and the next reconcile starts a runner with the
-                # new one
-                log.error("core no longer accepts this sandbox's token; exiting")
+                # The runner token expired or was replaced: exit, and the process starts a runner on the new one
+                log.error("core refused the runner token; exiting")
                 if running:
                     await asyncio.wait(running)
                 return

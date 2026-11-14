@@ -45,7 +45,7 @@ def server(tmp_path, git_env):
 
 @pytest.fixture
 def worktrees(tmp_path, server):
-    return Worktrees(tmp_path / "var", server[0], token_for_git=lambda: "sandbox-token")
+    return Worktrees(tmp_path / "var", server[0], token_for_git=lambda: "runner-token")
 
 
 def bundle_bytes() -> bytes:
@@ -131,9 +131,8 @@ def item(conversation_id="V-1", **payload_over):
     return {"id": f"W-{conversation_id}", "conversation_id": conversation_id, "kind": "turn", "payload": payload}
 
 
-def make_runner(tmp_path, worktrees, link, claude, sandbox="sample"):
-    return SandboxRunner(link, worktrees, claude, sandbox=sandbox,
-                         bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
+def make_runner(tmp_path, worktrees, link, claude):
+    return SandboxRunner(link, worktrees, claude, bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
                          scratch_root=tmp_path / "scratch", heartbeat_s=0.05)
 
 
@@ -212,14 +211,6 @@ async def test_no_checkout_runs_in_session_folder(tmp_path, worktrees):
     cwd, checkout, note = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir(
         "V-1", item(worktree=None, workdir="session")["payload"])
     assert (cwd, checkout, note) == (tmp_path / "scratch" / "V-1", None, "") and cwd.is_dir()
-
-
-async def test_item_queued_before_fixed_branches_runs_without_a_checkout(tmp_path, worktrees):
-    old = item()["payload"]
-    old.pop("workdir")
-    old["worktree"]["branch_hint"] = old["worktree"].pop("branch")
-    cwd, checkout, note = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir("V-1", old)
-    assert (cwd, checkout, note) == (tmp_path / "scratch" / "V-1", None, "")
 
 
 async def test_switched_branch_checkout_is_reused_next_turn(tmp_path, worktrees):
@@ -449,7 +440,7 @@ async def test_next_turn_after_work_on_resumes_in_session_folder(tmp_path, workt
     """A DM conversation calls work_on in its first turn. Its next turn is bound: it gets the checkout and the test
     keys, and it runs in the same session folder as the first turn, so --resume finds the session."""
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
+    db.create_schema(conn)
     packs = {"sample": make_pack(build_setup=["echo ran >> .setup-count"], build_checks=["true"])}
     payloads = Payloads(conn, config=make_config(tmp_path), packs=packs, memory=MemoryStore(tmp_path / "memory.db"),
                         persona_text="", config_dir=tmp_path / "config",
@@ -507,7 +498,7 @@ def test_prepare_trusts_its_checkout_after_a_branch_switch_or_a_new_core_url(wor
     path, _ = worktrees.prepare(tmp_path / "scratch" / "V-7" / "sample", "sample", "agent/T-7-x", "main")
     git(path, "checkout", "-q", "-b", "experiment")
     assert worktrees.prepare(path, "sample", "agent/T-7-x", "main") == (path, False)
-    moved = Worktrees(tmp_path / "var", "http://core.elsewhere:8080", token_for_git=lambda: "sandbox-token")
+    moved = Worktrees(tmp_path / "var", "http://core.elsewhere:8080", token_for_git=lambda: "runner-token")
     assert moved.prepare(path, "sample", "agent/T-7-x", "main") == (path, False)
     assert git(path, "rev-parse", "--abbrev-ref", "HEAD") == "experiment"
 
@@ -653,8 +644,8 @@ async def test_link_maps_401_and_204():
             return httpx.Response(204)
         return httpx.Response(401, json={"error": "unauthorized"})
 
-    link = CoreLink("http://core.test", "sbx-token", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    assert await link.pull("code-sample") is None
+    link = CoreLink("http://core.test", "runner-token", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert await link.pull() is None
     with pytest.raises(SessionRevoked):
         await link.heartbeat("tok")
 
@@ -667,7 +658,7 @@ async def test_link_bind_returns_cores_refusal():
             return httpx.Response(409, json={"error": "unknown project 'nope' (known: sample)"})
         return httpx.Response(200, json={"project": "sample", "test_secrets": {"K": "v"}})
 
-    link = CoreLink("http://core.test", "sbx-token", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    link = CoreLink("http://core.test", "runner-token", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     assert await link.bind("tok", "sample", "t") == {"project": "sample", "test_secrets": {"K": "v"}}
     assert await link.bind("tok", "nope", "t") == {"error": "unknown project 'nope' (known: sample)"}
     with pytest.raises(SessionRevoked):
@@ -700,7 +691,7 @@ async def test_preparation_failure_reports_an_error(tmp_path, worktrees):
 
 async def test_runner_exits_when_its_token_is_revoked(tmp_path, worktrees):
     class RevokedLink(FakeLink):
-        async def pull(self, sandbox):
+        async def pull(self):
             raise SessionRevoked()
 
     runner = make_runner(tmp_path, worktrees, RevokedLink(), FakeClaude())
@@ -757,7 +748,7 @@ async def test_open_pr_commit_uses_configured_email(worktrees, worktree, monkeyp
     assert commit_env["GIT_AUTHOR_EMAIL"] == "bot@example.com"
 
 
-async def test_commit_step_never_sees_the_sandbox_token(worktrees, worktree):
+async def test_commit_step_never_sees_the_runner_token(worktrees, worktree):
     seen = []
 
     async def shell(cmd, cwd, timeout_s=0, env=None):
@@ -768,7 +759,7 @@ async def test_commit_step_never_sees_the_sandbox_token(worktrees, worktree):
                              checkout=Checkout(worktree, "agent/T-0009-x", []), worktrees=worktrees, shell=shell)
     await call(tools, "open_pr", {"title": "t", "body": "b"})
     commit_env = seen[0][1]
-    assert "commit" in seen[0][0] and not any("sandbox-token" in str(v) for v in commit_env.values())
+    assert "commit" in seen[0][0] and not any("runner-token" in str(v) for v in commit_env.values())
 
 
 async def test_extra_env_reaches_the_session(tmp_path, worktrees):
@@ -785,9 +776,9 @@ LINEAR_MCP = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp",
 
 
 def env_runner(tmp_path, worktrees, claude, env_file):
-    return SandboxRunner(FakeLink(), worktrees, claude, sandbox="general",
-                         bundles_dir=tmp_path / "bundles", sessions_root=tmp_path / "sessions",
-                         scratch_root=tmp_path / "scratch", heartbeat_s=0.05, env_files=[env_file])
+    return SandboxRunner(FakeLink(), worktrees, claude, bundles_dir=tmp_path / "bundles",
+                         sessions_root=tmp_path / "sessions", scratch_root=tmp_path / "scratch", heartbeat_s=0.05,
+                         env_files=[env_file])
 
 
 async def test_mcp_headers_use_current_linear_token(tmp_path, worktrees):

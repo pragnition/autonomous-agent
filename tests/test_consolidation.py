@@ -5,7 +5,7 @@ import pytest
 
 from agent import db, tasks
 from agent.core.consolidation import ConsolidationService
-from agent.core.sessions import AGENT_QUEUE, WorkQueue
+from agent.core.sessions import WorkQueue
 from agent.memory.store import MemoryStore
 from agent.tasks import Status
 from agent_fixtures import add_conversation
@@ -23,7 +23,7 @@ class FakePayloads:
 @pytest.fixture
 def env(tmp_path):
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
+    db.create_schema(conn)
     memory = MemoryStore(tmp_path / "memory.db")
     queue = WorkQueue(conn)
     svc = ConsolidationService(conn, memory, queue, FakePayloads(), secret_values=[])
@@ -35,8 +35,8 @@ def merged_task(conn, memory, source="slack"):
                           kind="feature", source=source, source_ref="C1/1", requester="alice", owner="alice")
     for s in (Status.working, Status.ready_for_review, Status.merged):
         tasks.transition(conn, t.id, s, actor="x")
-    cid = add_conversation(conn, sandbox="code-sample", task_id=t.id)
-    item = WorkQueue(conn).enqueue(cid, "code-sample", "turn", {"text": "add a copy button"})
+    cid = add_conversation(conn, task_id=t.id)
+    item = WorkQueue(conn).enqueue(cid, "turn", {"text": "add a copy button"})
     memory.add_inbox(item, "alice", "project", "Citations live in src/cite.ts")
     return tasks.get_task(conn, t.id)
 
@@ -57,7 +57,7 @@ async def test_terminal_task_enqueues_one_chore(env):
     assert svc.sweep() == []
     [chore] = chores(conn)
     payload = json.loads(chore["payload"])
-    assert chore["sandbox"] == AGENT_QUEUE and "Citations live in src/cite.ts" in payload["text"]
+    assert chore["conversation_id"] is None and "Citations live in src/cite.ts" in payload["text"]
     assert payload["consolidate"] == {"task_id": task.id}
 
 
@@ -115,9 +115,9 @@ async def test_open_tasks_not_consolidated(env):
 
 
 def idle_thread(conn, memory, last_active, with_note=True):
-    cid = add_conversation(conn, sandbox="code-sample", channel="C1", thread_ts="1.1")
+    cid = add_conversation(conn, channel="C1", thread_ts="1.1")
     conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (last_active, cid))
-    item = WorkQueue(conn).enqueue(cid, "code-sample", "turn", {"text": "x"})
+    item = WorkQueue(conn).enqueue(cid, "turn", {"text": "x"})
     if with_note:
         memory.add_inbox(item, "alice", "channel", "We agreed to drop the v1 upload API")
     return cid

@@ -6,7 +6,7 @@ from agent import db, tasks
 from agent.core.agent_tools import AgentToolRouter, ToolReply, ToolSpec
 from agent.core.conversations import Conversations, record_message
 from agent.core.notifier import SlackNotifier
-from agent.core.sessions import AGENT_QUEUE, WorkQueue
+from agent.core.sessions import WorkQueue
 from agent.gitutil import branch_name
 from agent.memory.store import MemoryStore
 from agent.tasks import Status
@@ -17,7 +17,7 @@ from test_conversations import reply
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -28,9 +28,9 @@ def router(conn, tmp_path):
                            secret_values=["SUPERSECRETVALUE"])
 
 
-def ctx_for(router, *, sandbox=AGENT_QUEUE, actor="ann", task_id=None, unattended=False, channel="C1"):
-    cid = add_conversation(router.conn, sandbox=sandbox, task_id=task_id, channel=channel)
-    return router.context_for(add_item(router.queue, cid, sandbox, actor=actor, unattended=unattended))
+def ctx_for(router, *, actor="ann", task_id=None, unattended=False, channel="C1"):
+    cid = add_conversation(router.conn, task_id=task_id, channel=channel)
+    return router.context_for(add_item(router.queue, cid, actor=actor, unattended=unattended))
 
 
 def new_task(conn, status=Status.working):
@@ -82,14 +82,14 @@ async def test_tiers_from_actor(router):
 
 
 async def test_context_fields(router, ctx_member):
-    assert (ctx_member.project, ctx_member.sandbox) == ("sample", AGENT_QUEUE)
+    assert ctx_member.project == "sample"
     assert (ctx_member.channel, ctx_member.thread_ts) == ("C1", "1.0")
 
 
-async def test_manifest_has_no_sandbox_filtering(router):
-    """Every tool is offered by tier only now (no profiles): an arbitrary sandbox label still gets the full
-    act-tier tool set, track_task included."""
-    ctx = ctx_for(router, sandbox="anything-goes")
+async def test_manifest_offers_tools_by_tier_only(router):
+    """Every tool is offered by tier only: the session gets the full tool set for its tier, track_task included,
+    and each entry has a name, a description and an input schema."""
+    ctx = ctx_for(router)
     names = {t["name"] for t in router.manifest(ctx)}
     assert "track_task" in names
     assert all({"name", "description", "input_schema"} <= set(t) for t in router.manifest(ctx))
@@ -169,8 +169,7 @@ async def test_work_on_lists_the_packs_and_is_handled_by_the_runner(conn, tmp_pa
 
 
 async def test_track_task_unknown_project(router):
-    ctx = router.context_for(add_item(router.queue, add_conversation(router.conn, sandbox=AGENT_QUEUE, project=None),
-                                      AGENT_QUEUE, actor="bob"))
+    ctx = router.context_for(add_item(router.queue, add_conversation(router.conn, project=None), actor="bob"))
     assert "unknown project" in (await router.call(ctx, "track_task", {"project": "nope", "title": "t",
                                                                        "kind": "bug"})).text
 
@@ -183,7 +182,7 @@ async def test_finish_task(router, ctx_with_task, conn):
 async def test_start_task_queues_code_session(router, ctx_general, conn):
     await router.call(ctx_general, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
     item = latest_item(router)
-    assert item.sandbox == AGENT_QUEUE and item.payload["text"] == "b"
+    assert item.payload["text"] == "b"
     row = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
     assert (row["channel"], row["thread_ts"], row["is_primary"]) == ("D-ann", "1.0", 0)
     assert tasks.get_task(conn, row["task_id"]).title == "fix x"
@@ -192,8 +191,8 @@ async def test_start_task_queues_code_session(router, ctx_general, conn):
 
 async def test_start_task_from_dm_posts_its_own_thread(router, conn):
     """From a DM (thread_ts is None), start_task posts one top-level line and the child lives in its thread."""
-    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
-    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid))
     await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
     assert router.slack.posts == [{"channel": "D-ann", "text": "Working on fix x"}]
     child = conn.execute("SELECT * FROM conversations WHERE id = ?", (latest_item(router).conversation_id,)).fetchone()
@@ -204,8 +203,8 @@ async def test_start_task_from_dm_posts_its_own_thread(router, conn):
 
 async def test_reply_in_child_thread_reaches_child(router, conn, tmp_path):
     """Routing finds the child by its own thread_ts, the way any primary conversation's thread does."""
-    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
-    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid))
     await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
     child = latest_item(router).conversation_id
     thread_ts = conn.execute("SELECT thread_ts FROM conversations WHERE id = ?", (child,)).fetchone()[0]
@@ -221,8 +220,8 @@ async def test_reply_in_child_thread_reaches_child(router, conn, tmp_path):
 async def test_start_task_from_dm_status_stays_in_its_thread(router, conn):
     """With the real SlackNotifier: the task's status message threads under the child's own opening line, never
     a second top-level DM message."""
-    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
-    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid))
     router.notifier = SlackNotifier(router.slack, conn)
     await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
 
@@ -241,8 +240,8 @@ async def test_start_task_from_dm_status_stays_in_its_thread(router, conn):
 async def test_start_task_failed_post_creates_nothing(router, conn):
     """A chat_postMessage that raises (posting the thread-opening line) leaves no task, conversation or work item,
     and the router reports the failure instead of crashing."""
-    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
-    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid))
 
     async def boom(**kw):
         raise RuntimeError("slack is down")
@@ -266,8 +265,9 @@ async def test_daily_task_limit(router, ctx_general, conn):
 
 
 async def test_stop_all_and_resume(router, ctx_member, ctx_with_task, conn):
-    other = add_item(router.queue, "V-x", "debug-sample")
-    router.queue.claim("debug-sample")
+    other = add_item(router.queue, "V-x")
+    for _ in range(3):  # the two contexts' items, then this one
+        router.queue.claim()
     r = await router.call(ctx_member, "stop_all", {})
     assert db.get_setting(conn, "paused") == "1" and router.queue.get(other).status == "cancelled"
     assert "admin" in r.text
@@ -276,11 +276,11 @@ async def test_stop_all_and_resume(router, ctx_member, ctx_with_task, conn):
 
 
 async def test_start_task_and_stop_all_posts_are_scrubbed(router, conn):
-    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
-    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid))
     await router.call(ctx, "start_task", {"project": "sample", "title": "rotate SUPERSECRETVALUE", "kind": "chore",
                                           "brief": "b"})
-    router.queue.claim(AGENT_QUEUE)
+    router.queue.claim()
     await router.call(dataclasses.replace(ctx, actor="SUPERSECRETVALUE"), "stop_all", {})
     texts = [p["text"] for p in router.slack.posts]
     assert any(t.startswith("Working on rotate") for t in texts) and any(t.startswith("Stopped by") for t in texts)
@@ -300,11 +300,11 @@ async def test_status_and_tasks(router, ctx_with_task):
 
 
 async def test_status_names_each_running_items_project(router, conn):
-    bound = add_item(router.queue, add_conversation(conn, sandbox=AGENT_QUEUE, project="sample"), AGENT_QUEUE)
-    add_item(router.queue, add_conversation(conn, sandbox=AGENT_QUEUE, project=None), AGENT_QUEUE)
-    router.queue.enqueue(None, AGENT_QUEUE, "chore", {})
+    bound = add_item(router.queue, add_conversation(conn, project="sample"))
+    add_item(router.queue, add_conversation(conn, project=None))
+    router.queue.enqueue(None, "chore", {})
     for _ in range(3):
-        router.queue.claim(AGENT_QUEUE)
+        router.queue.claim()
     text = (await router.call(router.context_for(bound), "status", {})).text
     assert "running: 3 (sample/turn, -/turn, -/chore)" in text
 
@@ -317,8 +317,8 @@ async def test_read_thread(router, ctx_member):
 
 async def test_read_thread_in_a_dm_reads_the_chat_since_it_started(router, conn):
     """A DM chat has no thread: read_thread gives its top-level messages from its first recorded one on."""
-    cid = add_conversation(conn, sandbox=AGENT_QUEUE, project=None, channel="D-ann", thread_ts=None)
-    ctx = router.context_for(add_item(router.queue, cid, AGENT_QUEUE))
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts=None)
+    ctx = router.context_for(add_item(router.queue, cid))
     assert (await router.call(ctx, "read_thread", {})).text == "no Slack messages in this conversation yet"
     for ts in ("10.0", "11.0", "12.0", "13.0"):  # two turns: the person's message and the reply, twice
         record_message(conn, "D-ann", ts, cid)
@@ -345,11 +345,11 @@ async def test_post_files_is_in_the_manifest(router, ctx_member):
 
 
 async def test_stop_all_keeps_queued_turns_and_tells_the_thread(router, ctx_member, conn):
-    running = add_item(router.queue, add_conversation(conn, sandbox="code-sample", thread_ts="8.0"), "code-sample")
-    router.queue.claim("code-sample")
-    queued = add_item(router.queue, add_conversation(conn, sandbox="code-sample", thread_ts="9.0"), "code-sample")
+    running = add_item(router.queue, add_conversation(conn, thread_ts="8.0"))
+    for _ in range(2):  # ctx_member's item, then this one
+        router.queue.claim()
+    queued = add_item(router.queue, add_conversation(conn, thread_ts="9.0"))
     await router.call(ctx_member, "stop_all", {})
-    assert router.queue.get(queued).status == "queued"
+    assert router.queue.get(queued).status == "queued" and router.queue.get(running).status == "cancelled"
     stopped = [p for p in router.slack.posts if "Stopped" in p["text"]]
-    assert stopped and stopped[0]["thread_ts"] in ("1.0", "8.0")
-    assert running
+    assert sorted(p["thread_ts"] for p in stopped) == ["1.0", "8.0"]

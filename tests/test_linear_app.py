@@ -14,7 +14,7 @@ REDIRECT = "https://jensen.example.ts.net/linear/oauth/callback"
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 

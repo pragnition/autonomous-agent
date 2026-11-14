@@ -57,7 +57,7 @@ linear_handler.calls = []
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "agent.db")
-    db.migrate(c)
+    db.create_schema(c)
     return c
 
 
@@ -79,8 +79,8 @@ def router(conn, tmp_path):
 def ctx(router, conn):
     t = tasks.create_task(conn, project="sample", title="t", description="", kind="bug", source="linear",
                           source_ref=None, requester="bob", owner="ann", linear_issue_id="iss-7")
-    cid = add_conversation(conn, sandbox="code-sample", task_id=t.id)
-    return router.context_for(add_item(router.queue, cid, "code-sample", actor="bob"))
+    cid = add_conversation(conn, task_id=t.id)
+    return router.context_for(add_item(router.queue, cid, actor="bob"))
 
 
 async def call(router, ctx, name, **args):

@@ -93,8 +93,9 @@ def test_open_mode_requirements(tmp_path):
 
     from agent import db
     from agent.config import load_agent_config
-    from agent.core.runner_tokens import sync_runner_tokens
-    from agent.doctor import check_runner_tokens, required_core
+    from agent.core.runner_tokens import sync_runner_token
+    from agent.core.sessions import mint_token
+    from agent.doctor import check_runner_token, required_core
 
     config = tmp_path / "config"
     shutil.copytree(EXAMPLES, config)
@@ -102,15 +103,15 @@ def test_open_mode_requirements(tmp_path):
     assert "SLACK_BOT_TOKEN" in required_core(cfg)
 
     conn = db.connect(tmp_path / "agent.db")
-    db.migrate(conn)
-    path, names = tmp_path / "runner-tokens.json", ["code-sample", "general"]
-    assert not check_runner_tokens(conn, path, names).ok
-    sync_runner_tokens(conn, path, names[:1])
-    assert "general" in check_runner_tokens(conn, path, names).detail
-    sync_runner_tokens(conn, path, names)
-    assert check_runner_tokens(conn, path, names).ok
+    db.create_schema(conn)
+    path = tmp_path / "runner-token"
+    assert not check_runner_token(conn, path).ok
+    path.write_text(mint_token(conn, "session", work_item_id="w1", ttl_s=3600))
+    assert not check_runner_token(conn, path).ok         # a live token, but not the runner's
+    sync_runner_token(conn, path)
+    assert check_runner_token(conn, path).ok
     conn.execute("UPDATE tokens SET revoked = 1")
-    assert not check_runner_tokens(conn, path, names).ok
+    assert not check_runner_token(conn, path).ok
 
 
 def test_linear_app_secrets_required_with_public_url(tmp_path):
@@ -146,5 +147,4 @@ def test_proxy_check_uses_proxy_url(monkeypatch):
     from agent.doctor import _proxy_relay
 
     monkeypatch.setenv("PROXY_URL", "http://p:1")
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     assert _proxy_relay() == "http://p:1"
