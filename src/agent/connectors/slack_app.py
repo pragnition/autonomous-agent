@@ -10,11 +10,11 @@ def build_app(bot_token: str, intake) -> AsyncApp:
     app = AsyncApp(token=bot_token)
 
     @app.event("app_mention")
-    async def on_mention(event, ack=None):
+    async def on_mention(event):
         await intake.handle_slack({**event, "type": "app_mention"})
 
     @app.event("message")
-    async def on_message(event, ack=None):
+    async def on_message(event):
         await intake.handle_slack({**event, "type": "message"})
 
     return app

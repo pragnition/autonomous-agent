@@ -21,8 +21,7 @@ async def test_usage_parses_accounts_and_ranks():
     assert usage.status_of("maple") == "allowed"
     assert usage.status_of("nope") is None
     assert usage.accounts["maple"].rank == 1 and usage.accounts["cedar"].rank is None
-    assert usage.accounts["cedar"].util_7d == 0.8
-    assert usage.pool_state == "behind"
+    assert usage.accounts["maple"].verified is True
 
 
 async def test_no_rank_means_no_capacity():

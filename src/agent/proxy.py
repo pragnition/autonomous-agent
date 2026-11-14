@@ -19,19 +19,14 @@ class ProxyUnavailable(Exception):
 
 @dataclass(frozen=True)
 class AccountUsage:
-    code: str
     status: str
     rank: int | None
     verified: bool
-    util_5h: float
-    util_7d: float
-    active: int
 
 
 @dataclass(frozen=True)
 class Usage:
     accounts: dict[str, AccountUsage]
-    pool_state: str | None
 
     def has_capacity(self) -> bool:
         return any(a.rank is not None for a in self.accounts.values())
@@ -39,11 +34,6 @@ class Usage:
     def status_of(self, code: str | None) -> str | None:
         account = self.accounts.get(code) if code else None
         return account.status if account else None
-
-
-def _util(rec: dict, window: str) -> float:
-    value = rec.get(window)
-    return float(value[0]) if isinstance(value, list) and value else 0.0
 
 
 class ProxyClient:
@@ -72,14 +62,9 @@ class ProxyClient:
 
     async def usage(self) -> Usage:
         data = await self.raw_usage()
-        accounts = {
-            code: AccountUsage(code=code, status=rec.get("status", ""), rank=rec.get("rank"),
-                               verified=bool(rec.get("verified")), util_5h=_util(rec, "5h"),
-                               util_7d=_util(rec, "7d"), active=int(rec.get("active") or 0))
-            for code, rec in data.items() if code != "_all" and isinstance(rec, dict)
-        }
-        pace = (data.get("_all") or {}).get("pace") or {}
-        return Usage(accounts=accounts, pool_state=pace.get("state"))
+        return Usage({code: AccountUsage(status=rec.get("status", ""), rank=rec.get("rank"),
+                                         verified=bool(rec.get("verified")))
+                      for code, rec in data.items() if code != "_all" and isinstance(rec, dict)})
 
     async def whoami(self, sid: str) -> str | None:
         resp = await self._get("/proxy/whoami", params={"sid": sid})

@@ -22,7 +22,7 @@ def test_all_example_packs_load():
 def test_chilliclaw_pack_status_keys_valid():
     pack = load_pack(TEMPLATES / "chilliclaw", load_agent_config(EXAMPLES / "agent.toml"))
     assert set(pack.project.linear_status) <= {s.value for s in Status}
-    assert (pack.plugin_dir / ".claude-plugin" / "plugin.json").is_file()
+    assert (TEMPLATES / "chilliclaw" / "plugin" / ".claude-plugin" / "plugin.json").is_file()
 
 
 async def test_doctor_flags_pack_without_checks(tmp_path):
@@ -42,7 +42,7 @@ async def test_doctor_flags_pack_without_checks(tmp_path):
 def test_chilliclaw_pack_runs_locally_through_the_meter():
     pack = load_pack(TEMPLATES / "chilliclaw", load_agent_config(EXAMPLES / "agent.toml"))
     assert pack.project.build_checks == ["just check"] and any("bun install" in c for c in pack.project.build_setup)
-    local = pack.plugin_dir / "skills" / "chilliclaw-local"
+    local = TEMPLATES / "chilliclaw" / "plugin" / "skills" / "chilliclaw-local"
     overlay = tomllib.loads((local / "agent-overlay.toml").read_text())
     for name in ("main", "email_summary", "usecase_classifier"):
         deployment = overlay["llm"]["deployments"][name]

@@ -1,11 +1,11 @@
-"""What a run is asked to do (RunSpec), what it reports (RunResult), and the Runner interface."""
+"""What a run is asked to do (RunSpec) and what it reports (RunResult)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 RunOutcome = Literal["done", "error", "max_turns", "interrupted", "timeout"]
 
@@ -42,9 +42,3 @@ class RunResult:
     account_code: str | None = None
     forks: int = 0
     error: str | None = None
-
-
-class Runner(Protocol):
-    async def run(self, spec: RunSpec) -> RunResult: ...
-
-    async def interrupt(self, run_id: str) -> None: ...

@@ -6,7 +6,6 @@ import subprocess
 import tarfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import httpx
 import pytest
@@ -195,7 +194,7 @@ async def test_setup_runs_once_per_worktree(tmp_path, worktrees):
 
 async def test_session_workdir_checkout_lives_inside_session_folder(tmp_path, worktrees):
     runner = make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())
-    cwd, checkout, note = await runner._workdir("V-1", item(workdir="session")["payload"])
+    cwd, checkout, note = await runner._workdir(tmp_path / "scratch" / "V-1", item(workdir="session")["payload"])
     assert cwd == tmp_path / "scratch" / "V-1" and note == ""
     assert checkout == tmp_path / "scratch" / "V-1" / "sample"
     assert git(checkout, "rev-parse", "--abbrev-ref", "HEAD") == "agent/T-0001-fix-export"
@@ -210,7 +209,7 @@ async def test_checkout_workdir_runs_in_checkout(tmp_path, worktrees):
 
 async def test_no_checkout_runs_in_session_folder(tmp_path, worktrees):
     cwd, checkout, note = await make_runner(tmp_path, worktrees, FakeLink(), FakeClaude())._workdir(
-        "V-1", item(worktree=None, workdir="session")["payload"])
+        tmp_path / "scratch" / "V-1", item(worktree=None, workdir="session")["payload"])
     assert (cwd, checkout, note) == (tmp_path / "scratch" / "V-1", None, "") and cwd.is_dir()
 
 
@@ -474,7 +473,7 @@ async def test_next_turn_after_work_on_resumes_in_session_folder(tmp_path, workt
     assert convo()["branch"] == branch_name("agent", cid, "run sample locally") and convo()["workdir"] == "session"
     assert second["worktree"]["branch"] == convo()["branch"] and second["workdir"] == "session"
     assert second["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
-    cwd, checkout, note = await runner._workdir(cid, second)
+    cwd, checkout, note = await runner._workdir(session, second)
     assert (cwd, checkout, note) == (session, session / "sample", "")
     assert [s.cwd for s in claude.specs] == [session, session]
     assert claude.specs[1].env["SAMPLE_TEST_USER"] == "tester@example.com"

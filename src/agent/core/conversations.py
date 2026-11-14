@@ -257,7 +257,7 @@ class Conversations:
             reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
             for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
                 record_message(self.conn, convo["channel"], ts, convo["id"])
-        task =tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
+        task = tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
         if failed and task is not None and task.status == Status.working:
             await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.failed, actor="agent",
                                                               data={"outcome": outcome}))

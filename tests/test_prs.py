@@ -160,7 +160,7 @@ async def test_bugs_and_pr_updates_skip_the_evidence_check(conn, tmp_path):
     await router.call(ctx, "track_task", {"project": "sample", "title": "Export crash", "kind": "bug"})
     ctx = router.context_for(ctx.work_item_id)  # each call gets a fresh context, as in a session
     assert "pull/42" in (await router.call(ctx, "open_pr", pr_args(no_ui=""))).text
-    router2, ctx2, githost2, _ = build(conn, tmp_path)
+    router2, ctx2, _, _ = build(conn, tmp_path)
     task = router2.ensure_task(ctx2, "Copy button")
     tasks.set_fields(conn, task.id, pr_number=41)
     assert "pull/42" in (await router2.call(ctx2, "open_pr", pr_args(no_ui=""))).text

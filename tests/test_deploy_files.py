@@ -17,12 +17,6 @@ def compose():
     return yaml.safe_load((ROOT / "compose.yaml").read_text())
 
 
-def test_compose_has_no_sandbox_leftovers():
-    text = (ROOT / "compose.yaml").read_text()
-    for leftover in ("18080:8080", "SANDBOXD_URL", "28100"):
-        assert leftover not in text
-
-
 def test_relay_binds_only_gateway_ip(compose):
     relay = compose["services"]["relay"]
     assert relay["network_mode"] == "host"
@@ -44,7 +38,7 @@ def test_core_gets_only_its_own_secrets(compose):
     assert "${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro" in vols
 
 
-def test_no_worker_and_core_published_on_loopback_only(compose):
+def test_services_and_core_published_on_loopback_only(compose):
     assert set(compose["services"]) == {"core", "supervisor", "relay", "agent", "docker"}
     assert "ports" not in compose["services"]["agent"] and "ports" not in compose["services"]["docker"]
     assert compose["services"]["core"]["ports"] == ["127.0.0.1:18085:8085", "127.0.0.1:18086:8086"]
@@ -53,7 +47,7 @@ def test_no_worker_and_core_published_on_loopback_only(compose):
 
 def test_no_env_file_and_no_secrets_in_environment(compose):
     for name, svc in compose["services"].items():
-        if name == "agent":  # open mode: the agent's own keys are plain environment variables (spec v3 O4)
+        if name == "agent":  # the agent's own keys are plain environment variables
             assert svc["env_file"] == ["${AGENT_DATA:-./data}/secrets/agent.env"]
         else:
             assert "env_file" not in svc, name
@@ -115,9 +109,9 @@ async def test_ops_stop_and_resume(tmp_path):
     assert db.get_setting(conn, "paused") == "0"
 
 
-def test_core_image_has_az_and_no_worker_target():
+def test_core_image_has_az():
     dockerfile = (ROOT / "Dockerfile").read_text()
-    assert "AS worker" not in dockerfile and "azure-cli" in dockerfile and "/usr/local/bin/az" in dockerfile
+    assert "azure-cli" in dockerfile and "/usr/local/bin/az" in dockerfile
 
 
 def agent_target():

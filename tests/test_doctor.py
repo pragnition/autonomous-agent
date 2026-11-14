@@ -25,7 +25,7 @@ class Proxy:
     async def usage(self):
         if self.down:
             raise ProxyUnavailable("down")
-        return Usage({"maple": AccountUsage("maple", "allowed", 1, self.verified, 0, 0, 0)}, "on")
+        return Usage({"maple": AccountUsage("allowed", 1, self.verified)})
 
 
 class GitHub:
@@ -88,7 +88,7 @@ def test_cli_help_lists_commands():
         assert command in out.stdout
 
 
-def test_open_mode_requirements(tmp_path):
+def test_linear_app_secrets_and_runner_token(tmp_path):
     import shutil
 
     from agent import db

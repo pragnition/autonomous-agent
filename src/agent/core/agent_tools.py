@@ -165,12 +165,10 @@ class AgentToolRouter:
             return f"daily task limit reached ({self.config.limits.max_tasks_per_day}); try again tomorrow"
         return None
 
-    def _create_task(self, ctx: ToolContext, project: str, title: str, kind: str, description: str, *,
-                     thread_ts: str | None = ...):
-        """thread_ts overrides ctx.thread_ts: start_task's DM case gives the task the child's own thread before
-        the task exists, so the status notifier never has to guess one."""
-        if thread_ts is ...:
-            thread_ts = ctx.thread_ts
+    def _create_task(self, ctx: ToolContext, project: str, title: str, kind: str, description: str,
+                     thread_ts: str | None):
+        """thread_ts is the task's Slack thread: ctx.thread_ts, except in start_task's DM case, which gives the task
+        the child's own thread before the task exists, so the status notifier never has to guess one."""
         return tasks.create_task(self.conn, project=project, title=title, description=description, kind=kind,
                                  source="linear" if ctx.unattended else "slack",
                                  source_ref=f"{ctx.channel}/{thread_ts}" if ctx.channel else None,
@@ -181,7 +179,8 @@ class AgentToolRouter:
         """The conversation's task, created (and linked) when the agent didn't call track_task first."""
         if ctx.task_id:
             return tasks.get_task(self.conn, ctx.task_id)
-        task = self._create_task(ctx, ctx.project, title or "Untitled", kind, self._payload(ctx).get("text", ""))
+        task = self._create_task(ctx, ctx.project, title or "Untitled", kind, self._payload(ctx).get("text", ""),
+                                 ctx.thread_ts)
         task = tasks.transition(self.conn, task.id, Status.working, actor=ctx.actor or "agent")
         if ctx.conversation_id:
             self.conn.execute("UPDATE conversations SET task_id = ? WHERE id = ?", (task.id, ctx.conversation_id))
@@ -284,7 +283,7 @@ class AgentToolRouter:
         if problem := self._new_task_problem(project, kind):
             return ToolReply(problem)
         task = self._create_task(ctx, project, args.get("title", "").strip() or "Untitled", kind,
-                                 self._payload(ctx).get("text", ""))
+                                 self._payload(ctx).get("text", ""), ctx.thread_ts)
         task = tasks.transition(self.conn, task.id, Status.working, actor=ctx.actor or "agent")
         if ctx.conversation_id:
             self.conn.execute("UPDATE conversations SET task_id = ?, project = ? WHERE id = ?",
@@ -320,7 +319,7 @@ class AgentToolRouter:
             thread_ts, is_primary = posted["ts"], 1
         else:
             thread_ts, is_primary = ctx.thread_ts, 0
-        task = self._create_task(ctx, project, title, kind, brief, thread_ts=thread_ts)
+        task = self._create_task(ctx, project, title, kind, brief, thread_ts)
         task = tasks.transition(self.conn, task.id, Status.working, actor=ctx.actor or "agent")
         convo_id = create_conversation(self.conn, agent_name=self.config.name, channel=ctx.channel,
                                        thread_ts=thread_ts, project=project, title=task.title, task_id=task.id,

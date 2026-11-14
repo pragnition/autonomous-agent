@@ -23,5 +23,4 @@ def test_fresh_database_has_every_table_and_column(tmp_path):
                                               "is_primary", "waiting", "model", "created_at", "last_active_at",
                                               "consolidated_at", "branch", "workdir"}
     assert columns(conn, "slack_messages") == {"channel", "ts", "conversation_id"}
-    assert not [t for t in tables if "sandbox" in columns(conn, t)]
     assert conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0

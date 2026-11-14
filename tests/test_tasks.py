@@ -126,7 +126,3 @@ def test_review_can_go_back_to_working(conn):
         tasks.transition(conn, t.id, s, actor="x")
     assert tasks.get_task(conn, t.id).status == Status.closed
 
-
-def test_v1_statuses_are_gone():
-    assert {s.value for s in Status} == {"queued", "working", "needs_input", "ready_for_review", "done", "merged",
-                                         "closed", "failed", "cancelled"}

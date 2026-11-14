@@ -177,11 +177,9 @@ class WorkQueue:
             self.cancel(item_id)
         return ids
 
-    def claimed_count(self, kind: str | None = None) -> int:
-        sql, args = "SELECT COUNT(*) FROM work_items WHERE status = 'claimed'", []
-        if kind:
-            sql, args = sql + " AND kind = ?", [kind]
-        return self.conn.execute(sql, args).fetchone()[0]
+    def claimed_count(self, kind: str) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM work_items WHERE status = 'claimed' AND kind = ?",
+                                 (kind,)).fetchone()[0]
 
 
 class Gate:
@@ -191,8 +189,7 @@ class Gate:
         self.conn, self.config, self.proxy = conn, config, proxy
 
     async def can_start(self, kind: str = "turn") -> tuple[bool, str]:
-        """Only turns count toward max_concurrent_sessions: production questions and memory chores serve a turn
-        that is already running, so they must never wait behind it."""
+        """Only turns count toward max_concurrent_sessions; memory chores never wait behind busy turns."""
         if db.get_setting(self.conn, "paused", "0") == "1":
             return False, "paused"
         queue = WorkQueue(self.conn)

@@ -10,9 +10,6 @@ from agent.config import Pack, ProjectConfig, load_agent_config
 
 AGENT_TOML = """name = "agent"
 
-[slack]
-channels = ["C-GENERAL"]
-
 [people.ann]
 slack = "U1"
 github = "ann-gh"
@@ -45,7 +42,7 @@ def make_pack(name: str = "sample", **over) -> Pack:
                   build_setup=["pip install -r requirements.txt"], build_checks=["pytest -q"],
                   secrets_worker=["SAMPLE_TEST_USER"])
     fields.update(over)
-    return Pack(ProjectConfig(**fields), Path("/nonexistent"), Path("/nonexistent/plugin"))
+    return Pack(ProjectConfig(**fields))
 
 
 class FakeSlack:

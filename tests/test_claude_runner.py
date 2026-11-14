@@ -2,7 +2,6 @@ import asyncio
 import json
 from pathlib import Path
 
-import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, tool
 
 from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, Usage
@@ -28,7 +27,7 @@ class FakeProxy:
         return self.account
 
     async def usage(self):
-        return Usage({self.account: AccountUsage(self.account, self.status, 1, True, 0.1, 0.1, 1)}, "on")
+        return Usage({self.account: AccountUsage(self.status, 1, True)})
 
 
 class FakeClient:
@@ -62,7 +61,7 @@ def assistant(c):
     return AssistantMessage(content=[TextBlock("working")], model="m", session_id=c.options.session_id)
 
 
-def result(subtype="success", status=None, **kw):
+def result(subtype="success", **kw):
     def make(c):
         return ResultMessage(subtype=subtype, duration_ms=1, duration_api_ms=1, is_error=subtype != "success",
                              num_turns=kw.pop("num_turns", 3), session_id=c.options.session_id or c.options.resume,

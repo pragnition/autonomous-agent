@@ -84,14 +84,13 @@ class Runner:
         return [dest / "plugins" / "core", dest / "plugins" / "effortless",
                 *sorted((dest / "plugins" / "packs").glob("*"))]
 
-    async def _workdir(self, convo: str, payload: dict) -> tuple[Path, Path | None, str]:
+    async def _workdir(self, session: Path, payload: dict) -> tuple[Path, Path | None, str]:
         """(cwd, checkout, note). The checkout, when the conversation has one, lives in its session folder at
         <session>/<project>. The session runs in the checkout only when it was bound to its project up front
         (workdir "checkout"), otherwise in the session folder: either way the same folder on every turn. When what
         is at the checkout's path wasn't made by prepare, it is left alone and the turn still runs, in the session
         folder with no checkout; `note` tells the agent why, for the top of its prompt. A new checkout's setup that
         fails leaves the turn in the checkout, with a note saying what failed."""
-        session = self.scratch_root / convo
         session.mkdir(parents=True, exist_ok=True)
         wt, checkout, note = payload.get("worktree"), None, ""
         if wt:
@@ -100,7 +99,7 @@ class Runner:
                 checkout, created = await asyncio.to_thread(self.worktrees.prepare, session / project, project,
                                                             wt["branch"], wt["default_branch"])
             except CheckoutRefused as e:
-                log.warning("not using the checkout for %s: %s", convo, e)
+                log.warning("not using the checkout in %s: %s", session, e)
                 return session, None, REFUSED_NOTE.format(project=project, reason=e)
             if created:
                 passed, tail = await run_setup(list(wt.get("setup") or []), checkout, setup_marker(session, project))
@@ -148,7 +147,7 @@ class Runner:
         return result
 
     async def handle(self, item: dict, tok: str, manifest: list[dict]) -> None:
-        payload, item_id = item["payload"], item["id"]
+        item_id = item["id"]
         convo = item.get("conversation_id") or item_id
         try:
             spec, sink = await self._prepare(item, tok, manifest, convo)
@@ -178,7 +177,8 @@ class Runner:
     async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> tuple[RunSpec, dict | None]:
         payload, item_id = item["payload"], item["id"]
         plugins = await self._bundle()
-        cwd, path, note = await self._workdir(convo, payload)
+        session = self.scratch_root / convo
+        cwd, path, note = await self._workdir(session, payload)
         sessions = self.sessions_root / convo
         sessions.mkdir(parents=True, exist_ok=True)
         sink = {} if payload.get("structured") else None
@@ -186,7 +186,7 @@ class Runner:
         # open_pr works in the checkout, which work_on can make partway through; post_files reads from the session
         # folder, the checkout included
         checkout = Checkout(path, wt["branch"] if path is not None else None, list(wt.get("checks") or []))
-        tools = remote_sdk_tools(manifest, self.link, tok, session_dir=self.scratch_root / convo, checkout=checkout,
+        tools = remote_sdk_tools(manifest, self.link, tok, session_dir=session, checkout=checkout,
                                  worktrees=self.worktrees, agent_name=self.agent_name, structured_sink=sink,
                                  structured_schema=payload.get("structured"), app_env_dir=self.app_env_dir)
         env = {**self.extra_env, **read_env_files(self.env_files)}

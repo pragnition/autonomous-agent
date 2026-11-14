@@ -38,8 +38,8 @@ def check_runner_token(conn, path: Path) -> Check:
     return Check("runner token", ok, "live" if ok else f"missing or invalid in {path}")
 
 
-async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, github=None, linear=None,
-                     required: tuple[str, ...] | None = None) -> list[Check]:
+async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, github=None,
+                     linear=None) -> list[Check]:
     checks: list[Check] = []
     try:
         config = load_agent_config(Path(config_dir) / "agent.toml")
@@ -53,7 +53,7 @@ async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, g
         packs = {}
         checks.append(Check("packs", False, "; ".join(e.problems)))
 
-    names = list(required if required is not None else required_core(config))
+    names = list(required_core(config))
     names += sorted(up.key for up in config.llm_meter.upstreams.values())  # keys the model-call meter adds
     for name in dict.fromkeys(names):
         checks.append(Check(f"secret:{name}", bool(secrets.get(name)), "set" if secrets.get(name) else "missing"))

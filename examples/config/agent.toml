@@ -3,9 +3,6 @@ name = "chilli"                  # the agent's display name and branch prefix
 # github = "chilli-bot"          # the agent's GitHub login, when it differs from name
 timezone = "Asia/Singapore"
 
-[slack]
-channels = ["#chilli"]           # where it answers mentions (DMs always work for listed people)
-
 [people.parthib]
 slack = "U00000001"
 github = "parthib-example"

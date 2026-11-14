@@ -137,22 +137,21 @@ async def test_second_message_waits_for_first(convos, queue):
     assert queue.claim().payload["text"].endswith("also b")
 
 
-async def test_dm_goes_to_the_agent_queue(convos, queue):
+async def test_dm_queues_a_turn(convos, queue):
     await convos.handle_slack(dm("hi"))
     payload = queue.claim().payload
     assert {k: payload[k] for k in ("text", "actor", "unattended", "model")} == \
         {"text": "hi", "actor": "ann", "unattended": False, "model": None}
 
 
-async def test_mention_outside_pack_channel_goes_to_the_agent_queue(convos, queue):
+async def test_mention_outside_a_project_channel_queues_a_turn(convos, queue):
     await convos.handle_slack(mention("t9", "hello", channel="C-OTHER"))
     assert queue.claim() is not None
 
 
-async def test_dm_and_project_channel_use_one_queue(convos, conn, queue):
-    """Nothing about where a message came from routes it to a different queue: a DM, a mention in a channel with
-    no project pack, and a mention in a project's channel all land on the one queue, and only the project one
-    carries a project."""
+async def test_only_a_project_channel_binds_a_project(convos, conn, queue):
+    """A DM, a mention in a channel with no project pack and a mention in a project's channel each queue a turn;
+    only the project channel's conversation carries a project."""
     await convos.handle_slack(dm("hi"))
     await convos.handle_slack(mention("t9", "hello", channel="C-OTHER"))
     await convos.handle_slack(mention("t1", "do a"))
@@ -437,7 +436,7 @@ async def test_channel_thread_reply_without_mention_continues(convos, queue, sla
     assert "reply_thread_ts" not in last_item(queue).payload  # its own thread: answered there anyway
 
 
-async def test_first_dm_after_upgrade_starts_rolling_chat(convos, conn, queue):
+async def test_top_level_dm_does_not_continue_a_threaded_dm_conversation(convos, conn, queue):
     old = add_conversation(conn, project=None, channel="D-1", thread_ts="5.1")
     await convos.handle_slack(dm("hello again"))
     new = last_item(queue).conversation_id

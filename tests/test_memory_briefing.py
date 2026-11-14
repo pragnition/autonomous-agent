@@ -20,12 +20,12 @@ def add(store, summary, scope=P, **kw):
                                   body=kw.pop("body", f"Body of {summary}."), **kw))
 
 
-def test_scopes_builder():
+def test_scopes_without_a_channel():
     assert scopes_for(SessionContext(project="p", requester="alice")) == \
         ["projects/p", "team", "people/alice"]
 
 
-def test_scopes_channel_chat():
+def test_scopes_channel():
     ctx = SessionContext(project="p", channel_id="C1", participants=["alice", "bob"])
     assert scopes_for(ctx) == ["channels/C1", "projects/p", "team", "people/alice", "people/bob"]
 

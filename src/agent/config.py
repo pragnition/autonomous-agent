@@ -125,7 +125,6 @@ class AgentConfig:
     name: str
     timezone: str
     people: dict[str, Person]
-    slack_channels: list[str]
     limits: Limits
     models: Models
     memory_budget: MemoryBudget
@@ -169,8 +168,6 @@ class ProjectConfig:
 @dataclass
 class Pack:
     project: ProjectConfig
-    dir: Path
-    plugin_dir: Path
 
 
 def _read_toml(path: Path, problems: list[str]) -> dict:
@@ -309,9 +306,6 @@ def load_agent_config(path: Path) -> AgentConfig:
     if not people:
         problems.append(f"{where}: at least one [people.<key>] entry is required")
 
-    slack = data.get("slack") or {}
-    channels = _str_list(slack, "channels", f"{where} [slack]", problems)
-
     lim = data.get("limits") or {}
     lw = f"{where} [limits]"
     limits = Limits(max_concurrent_sessions=_int(lim, "max_concurrent_sessions", 10, lw, problems),
@@ -371,8 +365,8 @@ def load_agent_config(path: Path) -> AgentConfig:
 
     if problems:
         raise ConfigError(problems)
-    return AgentConfig(name, timezone, people, channels, limits, models, budget, agent_settings, cli, observability,
-                       linear, mcp, github_login, dashboard, llm_meter)
+    return AgentConfig(name, timezone, people, limits, models, budget, agent_settings, cli, observability, linear,
+                       mcp, github_login, dashboard, llm_meter)
 
 
 def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
@@ -411,7 +405,7 @@ def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
 
     if problems:
         raise ConfigError(problems)
-    return Pack(project, pack_dir, plugin_dir)
+    return Pack(project)
 
 
 def load_packs(config_dir: Path, agent: AgentConfig) -> dict[str, Pack]:

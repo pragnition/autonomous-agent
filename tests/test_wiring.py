@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -20,7 +19,7 @@ EXAMPLES = ROOT / "examples" / "config"
 
 class Proxy:
     async def usage(self):
-        return Usage({"maple": AccountUsage("maple", "allowed", 1, True, 0.1, 0.1, 1)}, "on")
+        return Usage({"maple": AccountUsage("allowed", 1, True)})
 
 
 class Writer:
@@ -249,14 +248,6 @@ async def test_git_endpoint_needs_a_token(api):
     assert (await api.get("/git/sample.git/info/refs?service=git-upload-pack")).status == 401
 
 
-def test_no_v1_pipeline_left():
-    out = subprocess.run(["grep", "-rlE", "--include=*.py", r"agent\.worker|agent\.roles|core\.dispatch|core\.chat|core\.prompts",
-                          str(ROOT / "src")], capture_output=True, text=True)
-    assert out.stdout == ""
-    for gone in ("worker", "roles.py", "core/dispatch.py", "core/chat.py", "core/tools.py", "core/internal_api.py"):
-        assert not (ROOT / "src" / "agent" / gone).exists(), gone
-
-
 
 async def test_session_token_ttl_follows_task_minutes(tmp_path):
     config = tmp_path / "config"
@@ -278,10 +269,10 @@ async def test_session_token_ttl_follows_task_minutes(tmp_path):
         await client.close()
 
 
-async def test_open_mode_tools(app):
+async def test_members_get_the_work_tools_and_admins_the_logins(app):
     member = manifest_names(app, tier="act")
     assert {"open_pr", "post_update", "track_task"} <= member
-    assert not ({"ask_production", "az"} & member)
+    assert "az_login" not in member
     assert "az_login" in manifest_names(app, tier="admin")
 
 

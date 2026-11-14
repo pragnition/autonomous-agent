@@ -142,14 +142,13 @@ async def test_stale_claims_are_reaped_by_the_gate(conn):
     assert q.claim() is not None
 
 
-async def test_production_and_chores_are_not_blocked_by_busy_turns(conn):
+async def test_chores_are_not_blocked_by_busy_turns(conn):
     q = WorkQueue(conn)
     for i in range(3):
         q.enqueue(f"c{i}", "turn", {})
         q.claim()
     gate = Gate(conn, cfg(sessions=3), FakeProxy())
     assert (await gate.can_start("turn")) == (False, "busy")
-    assert (await gate.can_start("production")) == (True, "")
     assert (await gate.can_start("chore")) == (True, "")
 
 

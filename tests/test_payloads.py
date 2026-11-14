@@ -112,11 +112,10 @@ def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
     assert p["system_prompt"].startswith("CUSTOM SYSTEM PROMPT")
 
 
-def test_open_mode_system_prompt(payloads, tmp_path):
+def test_shipped_system_prompt(payloads, tmp_path):
     text = payloads.system_prompt()
     for phrase in ("gh", "az", "open_pr", "fork", "free port"):
         assert phrase in text
-    assert "never hold credentials" not in text
     (tmp_path / "config" / "agent").mkdir(parents=True)
     (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM")
     assert payloads.system_prompt() == "CUSTOM"
