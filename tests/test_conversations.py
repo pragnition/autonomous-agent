@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agent import db, tasks
-from agent.core.conversations import (DM_IDLE, FAILED_REPLY, NOT_AUTHORISED, BindRefused, Conversations,
+from agent.core.conversations import (DM_IDLE, NOT_AUTHORISED, BindRefused, Conversations,
                                       bind_project, create_conversation, record_message)
 from agent.core.sessions import WorkQueue
 from agent.gitutil import branch_name
@@ -406,12 +406,48 @@ async def test_on_result_reply_without_configured_secrets_still_drops_token_patt
     assert slack.posts[-1]["text"] == "[redacted]"
 
 
-async def test_on_result_failure_posts_failed_reply(convos, queue, slack):
-    await convos.handle_slack(mention("t10", "question"))
+async def failed_turn(convos, queue, thread, result):
+    await convos.handle_slack(mention(thread, "question"))
     item = queue.claim()
-    queue.complete(item.id, {"outcome": "error"})
-    await convos.on_result(queue.get(item.id), {"outcome": "error", "error": "boom"})
-    assert slack.posts[-1]["text"] == FAILED_REPLY
+    queue.complete(item.id, result)
+    await convos.on_result(queue.get(item.id), result)
+
+
+async def test_failed_turn_says_what_the_error_was(convos, queue, slack):
+    error = "preparing the session failed: GitError: git clone -q failed: fatal: the remote end hung up unexpectedly"
+    await failed_turn(convos, queue, "t10", {"outcome": "error", "error": error})
+    text = slack.posts[-1]["text"]
+    assert text.startswith("That failed before I could finish it:")
+    assert error in text
+
+
+async def test_failed_turn_error_is_scrubbed(conn, queue, slack, tmp_path):
+    convos = Conversations(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=queue,
+                           slack=slack, payloads=FakePayloads(), notifier=FakeNotifier(), bot_user_id="UBOT",
+                           secret_values=["SUPERSECRETVALUE"])
+    await failed_turn(convos, queue, "t10s", {"outcome": "error", "error": "auth failed for SUPERSECRETVALUE"})
+    assert "SUPERSECRETVALUE" not in slack.posts[-1]["text"]
+    assert "auth failed for [redacted]" in slack.posts[-1]["text"]
+
+
+async def test_failed_turn_without_an_error_says_so(convos, queue, slack):
+    await failed_turn(convos, queue, "t10n", {"outcome": "error"})
+    assert slack.posts[-1]["text"] == "That failed before I could finish it, and the runner didn't say why."
+
+
+async def test_timed_out_turn_says_it_ran_out_of_time(convos, queue, slack):
+    await failed_turn(convos, queue, "t10t", {"outcome": "timeout", "error": "no result within 3600 s"})
+    assert slack.posts[-1]["text"] == "I ran out of time before finishing that (no result within 3600 s)."
+
+
+async def test_turn_at_the_step_limit_says_so(convos, queue, slack):
+    await failed_turn(convos, queue, "t10m", {"outcome": "max_turns"})
+    assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
+
+
+async def test_interrupted_turn_says_it_was_stopped(convos, queue, slack):
+    await failed_turn(convos, queue, "t10i", {"outcome": "interrupted", "error": "interrupted"})
+    assert slack.posts[-1]["text"] == "That was stopped before I finished it."
 
 
 async def test_on_result_for_cancelled_item_posts_nothing(convos, queue, slack):

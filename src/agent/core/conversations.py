@@ -29,7 +29,6 @@ from agent.tasks import Status
 
 log = logging.getLogger(__name__)
 NOT_AUTHORISED = "Sorry, I only work with people on this team's list."
-FAILED_REPLY = "Something went wrong on my side, so I couldn't finish that. Try again in a moment."
 FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
@@ -40,6 +39,19 @@ LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the
 def origin_line(where: str, *, who: str | None = None, link: str | None = None) -> str:
     """A turn's first line, e.g. [from Sam Taylor (sam) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
     return "[" + " · ".join(p for p in (f"from {who}" if who else None, where, link) if p) + "]"
+
+
+def failure_reply(outcome: str, error: str | None) -> str:
+    """What the thread is told when a turn fails: what happened, with the runner's own error text."""
+    if outcome == "timeout":
+        return "I ran out of time before finishing that" + (f" ({error})." if error else ".")
+    if outcome == "max_turns":
+        return "I hit my step limit before finishing that."
+    if outcome == "interrupted":
+        return "That was stopped before I finished it."
+    if not error:
+        return "That failed before I could finish it, and the runner didn't say why."
+    return f"That failed before I could finish it:\n```\n{error.strip()}\n```"
 
 
 async def _nothing(*args) -> None:
@@ -309,7 +321,7 @@ class Conversations:
         outcome = result.get("outcome", "done")
         text = (result.get("text") or "").strip()
         failed = outcome in FAILED_OUTCOMES
-        text = FAILED_REPLY if failed else scrub(text, self.secret_values)
+        text = scrub(failure_reply(outcome, result.get("error")) if failed else text, self.secret_values)
         # Saved before anything is awaited: the next turn can be claimed as soon as this one completed, and it
         # resumes whatever session the conversation has at that moment
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
