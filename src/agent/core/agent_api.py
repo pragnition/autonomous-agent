@@ -43,6 +43,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    on_result: Callable[[WorkItem, dict], Awaitable[None]],
                    on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[bool | None]],
                    refresh: Callable[[str, dict], dict] | None = None,
+                   on_start: Callable[[WorkItem], Awaitable[None]] | None = None,
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
                    runs_dir: Path | None = None) -> web.Application:
     """`refresh(conversation_id, payload)` re-reads a turn's conversation when the turn is claimed (see
@@ -73,6 +74,11 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                 event_log.append(conn, "session_started",
                                  task_id=getattr(ctx, "task_id", None), actor=None,
                                  data={"work_item": item.id, "queued_at": item.created_at, "project": ctx.project})
+                if on_start is not None:
+                    try:
+                        await on_start(item)
+                    except Exception:  # the runner gets the item either way; a Slack hiccup must not lose it
+                        log.exception("handling the start of %s failed", item.id)
                 return web.json_response({
                     "work_item": {"id": item.id, "conversation_id": item.conversation_id, "kind": item.kind,
                                   "payload": item.payload, "attempts": item.attempts},

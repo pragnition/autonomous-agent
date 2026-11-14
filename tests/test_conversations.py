@@ -241,6 +241,41 @@ async def test_failed_eyes_still_queues_the_turn(convos, slack, queue):
     assert queue.claim().payload["text"] == "hi"
 
 
+async def test_reaction_moves_from_seen_to_working_to_done(convos, queue, slack):
+    await convos.handle_slack(mention("t12", "question"))
+    item = queue.claim()
+    await convos.on_start(item)
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"text": "answer", "outcome": "done"})
+    assert [r["name"] for r in slack.reactions] == ["eyes", "hourglass_flowing_sand", "white_check_mark"]
+    assert [r["name"] for r in slack.unreacted] == ["eyes", "hourglass_flowing_sand"]
+    assert {r["timestamp"] for r in slack.reactions + slack.unreacted} == {"t12"}
+
+
+async def test_failed_turn_ends_on_a_warning(convos, queue, slack):
+    convos.config.limits.continuations = 0
+    await convos.handle_slack(mention("t13", "question"))
+    item = queue.claim()
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"outcome": "error"})
+    assert slack.reactions[-1]["name"] == "warning"
+
+
+async def test_a_continued_turn_stays_working_until_it_finishes(convos, queue, slack):
+    await convos.handle_slack(mention("t14", "big job"))
+    first = queue.claim()
+    await convos.on_start(first)
+    queue.complete(first.id, {})
+    await convos.on_result(queue.get(first.id), {"outcome": "max_turns"})
+    assert slack.reactions[-1]["name"] == "hourglass_flowing_sand"
+    nxt = queue.claim()
+    await convos.on_start(nxt)
+    queue.complete(nxt.id, {})
+    await convos.on_result(queue.get(nxt.id), {"text": "done now", "outcome": "done"})
+    assert [r["name"] for r in slack.reactions] == ["eyes", "hourglass_flowing_sand", "white_check_mark"]
+    assert slack.reactions[-1]["timestamp"] == "t14"
+
+
 def permalink_of(channel, ts):
     return f"https://team.slack.com/archives/{channel}/p{ts.replace('.', '')}"
 

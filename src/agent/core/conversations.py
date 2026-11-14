@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 NOT_AUTHORISED = "Sorry, I only work with people on this team's list."
 FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 LIMIT_OUTCOMES = {"timeout", "max_turns"}  # a turn that ran out of time or steps carries on in a new one
+# A message's progress: seen -> working -> done or failed
+SEEN, WORKING, DONE, FAILED = "eyes", "hourglass_flowing_sand", "white_check_mark", "warning"
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
 LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the line goes without it after that
@@ -236,10 +238,18 @@ class Conversations:
         came_from = event.get("thread_ts")
         self._enqueue_turn(convo, text, person.key, origin=origin, message_ts=event["ts"],
                            reply_thread_ts=came_from if came_from != convo["thread_ts"] else None)
-        try:  # the acknowledgement: the person sees it landed long before the session replies
-            await self.slack.reactions_add(channel=channel, timestamp=event["ts"], name="eyes")
+        await self._react(channel, event["ts"], SEEN)  # the person sees it landed long before the session replies
+
+    async def _react(self, channel: str, ts: str, name: str, replaces: str | None = None) -> None:
+        if replaces:
+            try:
+                await self.slack.reactions_remove(channel=channel, timestamp=ts, name=replaces)
+            except Exception:
+                pass  # already gone; not worth skipping the new one over
+        try:
+            await self.slack.reactions_add(channel=channel, timestamp=ts, name=name)
         except Exception:
-            log.warning("couldn't add the eyes reaction to %s:%s", channel, event["ts"], exc_info=True)
+            log.warning("couldn't add the %s reaction to %s:%s", name, channel, ts, exc_info=True)
 
     async def intake_linear(self) -> list[str]:
         if self.linear_poller is None:
@@ -273,6 +283,13 @@ class Conversations:
 
     # results
 
+    async def on_start(self, item: WorkItem) -> None:
+        if item.kind != "turn" or item.payload.get("continuation"):  # a continuation's message is already working
+            return
+        convo = self._row(item.conversation_id) if item.conversation_id else None
+        if convo is not None and convo["channel"] and item.payload.get("message_ts"):
+            await self._react(convo["channel"], item.payload["message_ts"], WORKING, replaces=SEEN)
+
     async def on_result(self, item: WorkItem | None, result: dict) -> None:
         if item is None or item.kind != "turn" or item.status == "cancelled":
             return
@@ -302,12 +319,15 @@ class Conversations:
             p, limit = item.payload, limit_name(outcome, self.config.limits)
             self._enqueue_turn(self._row(convo["id"]), f"(Your last turn hit its {limit} before you finished. Carry "
                                "on from where you stopped.)", p.get("actor"), origin=p.get("origin") or "",
-                               unattended=bool(p.get("unattended")), reply_thread_ts=p.get("reply_thread_ts"),
-                               continuation=step + 1)
+                               unattended=bool(p.get("unattended")), message_ts=p.get("message_ts"),
+                               reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1)
         if text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
             reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
             for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
                 record_message(self.conn, convo["channel"], ts, convo["id"])
+        if not continuing and convo["channel"] and item.payload.get("message_ts"):
+            await self._react(convo["channel"], item.payload["message_ts"], FAILED if failed else DONE,
+                              replaces=WORKING)
         task = tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
         if failed and task is not None and task.status == Status.working:
             await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.failed, actor="agent",

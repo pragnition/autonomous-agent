@@ -50,7 +50,7 @@ def queue(conn):
 
 @pytest.fixture
 def parts(tmp_path):
-    return SimpleNamespace(router=FakeRouter(), results=[], files=[], runs=tmp_path / "runs")
+    return SimpleNamespace(router=FakeRouter(), results=[], files=[], started=[], runs=tmp_path / "runs")
 
 
 async def _client(conn, queue, parts, gate_ok=True, **kw):
@@ -60,10 +60,13 @@ async def _client(conn, queue, parts, gate_ok=True, **kw):
     async def on_files(item_id, files, text):
         parts.files.append((item_id, files, text))
 
+    async def on_start(item):
+        parts.started.append(item.id)
+
     app = make_agent_app(conn=conn, queue=queue, gate=FakeGate(gate_ok), tools=parts.router,
                          context_for=lambda item_id: SimpleNamespace(work_item_id=item_id, task_id=None, project=None),
                          bundles=lambda: ("b1", b"bundle-bytes"),
-                         on_result=on_result, on_files=on_files, pull_wait_s=0.2,
+                         on_result=on_result, on_files=on_files, on_start=on_start, pull_wait_s=0.2,
                          runs_dir=parts.runs, **kw)
     client = TestClient(TestServer(app))
     await client.start_server()
@@ -101,9 +104,10 @@ async def pull_status(api):
     return (await api.post("/agent/pull", headers=bearer(tok))).status
 
 
-async def test_pull_hands_out_item_token_and_tools(api):
+async def test_pull_hands_out_item_token_and_tools(api, parts):
     item, tok = await pull_one(api, {"text": "fix it"})
     assert item["payload"] == {"text": "fix it"} and item["kind"] == "turn" and tok
+    assert parts.started == [item["id"]]
     conn = api.server.app[CONN_KEY]
     WorkQueue(conn).enqueue("c2", "turn", {})
     stok = mint_token(conn, "runner", ttl_s=3600)

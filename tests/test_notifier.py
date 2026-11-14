@@ -36,3 +36,19 @@ async def test_a_task_without_a_conversation_records_nothing(tmp_path):
     await notifier.task_changed(task)
     await notifier.ask(tasks.get_task(conn, task.id), "which env?")
     assert recorded(conn) == []
+
+
+async def test_tick_already_on_the_thread_root_is_fine(tmp_path):
+    conn = db.connect(tmp_path / "agent.db")
+    db.create_schema(conn)
+    slack = FakeSlack()
+
+    async def already(**kw):  # a finished chat turn left the same tick on the message
+        raise RuntimeError("The server responded with: {'ok': False, 'error': 'already_reacted'}")
+
+    slack.reactions_add = already
+    task = new_task(conn)
+    tasks.set_fields(conn, task.id, slack_thread_ts="t1")
+    task = tasks.transition(conn, task.id, Status.done, actor="x")
+    await SlackNotifier(slack, conn).task_changed(task)
+    assert db.get_setting(conn, f"reaction:{task.id}") == "white_check_mark"
