@@ -94,8 +94,8 @@ class GitHost:
                "PATH_INFO": f"/{project}.git/{request.match_info['tail']}", "REQUEST_METHOD": request.method,
                "QUERY_STRING": request.query_string, "CONTENT_TYPE": request.headers.get("Content-Type", ""),
                "PATH": "/usr/bin:/bin"}
-        if "Content-Encoding" in request.headers:
-            env["HTTP_CONTENT_ENCODING"] = request.headers["Content-Encoding"]
+        # aiohttp has already inflated a gzipped body (git gzips requests over 1 KB), so http-backend gets it plain
+        # and is never told it's compressed
         body = await request.read()
         proc = await asyncio.create_subprocess_exec("git", "http-backend", env=env, stdin=asyncio.subprocess.PIPE,
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)

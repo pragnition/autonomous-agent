@@ -61,6 +61,16 @@ async def test_clone_over_http(githost_server, tmp_path):
     assert (tmp_path / "work" / "a.txt").read_text() == "a.txt"
 
 
+async def test_clone_whose_request_git_gzips(githost, upstream, githost_server, tmp_path):
+    """Wanting this many commits makes the request body bigger than 1 KB, so git sends it gzipped."""
+    for i in range(40):
+        run(upstream, "checkout", "-q", "-b", f"feat/{i}", "main")
+        commit(upstream, f"f{i}.txt", branch=f"feat/{i}")
+    githost.refresh("p")
+    r = await git_async(tmp_path, "clone", "-q", githost_server, "work")
+    assert r.returncode == 0, r.stderr
+
+
 async def test_rejects_main_tags_and_deletes(githost_server, tmp_path):
     work = tmp_path / "work"
     assert (await git_async(tmp_path, "clone", "-q", githost_server, "work")).returncode == 0
