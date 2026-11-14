@@ -1,7 +1,8 @@
 # Create the Slack app from this manifest (api.slack.com/apps → Create New App → From an app manifest).
-# The agent is Jensen; rename it here if yours differs. Read access is as wide as a bot token allows, so ambient mode
-# never needs a reinstall: it can join any public channel and read every channel, DM and group DM it's in. Private
-# channels still need an /invite; no bot token can read private channels it isn't in, or DMs between other people.
+# The agent here is Jensen; use your agent's name (agent.toml `name`) if it differs. Read access is as wide as a bot
+# token allows, so reading more of Slack (the slack_read tool) never needs a reinstall: the app can join any public
+# channel and read every channel, DM and group DM it's in. Private channels still need an /invite; no bot token can
+# read private channels it isn't in, or DMs between other people.
 display_information:
   name: Jensen
   description: The team's autonomous engineering agent (an AI).

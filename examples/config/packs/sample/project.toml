@@ -1,4 +1,4 @@
-# The bundled sample pack: a tiny repo used by `just smoke`.
+# A minimal pack: copy it to data/config/packs/<project>/ and point it at one of your repos.
 [project]
 name = "sample"
 repo = "example-org/agent-sample"
@@ -19,4 +19,4 @@ checks = ["python -m pytest -q"]
 
 
 [secrets]
-worker = []                      # test-only values handed to coding sessions
+worker = []                      # names of test-only keys in core.env, for sessions on this project

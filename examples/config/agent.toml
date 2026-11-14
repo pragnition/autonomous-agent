@@ -1,5 +1,5 @@
-# Example install config. Copy to /data/config/agent.toml and edit.
-name = "chilli"                  # the agent's display name and branch prefix
+# Example install config. Copy it to data/config/agent.toml (core reads /data/config/agent.toml) and edit.
+name = "chilli"                  # the agent's name, branch prefix and Linear label
 # github = "chilli-bot"          # the agent's GitHub login, when it differs from name
 timezone = "Asia/Singapore"
 
@@ -30,7 +30,7 @@ hard = "claude-fable-5-1"        # when someone says "use fable" in a conversati
 uid = 1001                       # the agent container's user; core hands it the Azure login and runner token
 
 [linear]
-public_url = ""                  # e.g. "https://jensen.<tailnet>.ts.net": Linear's webhook and OAuth callback, via Tailscale Funnel
+public_url = ""                  # e.g. "https://<node>.<tailnet>.ts.net": Linear's webhook and OAuth callback, via Tailscale Funnel
 
 # MCP servers every session gets. ${VAR} comes from the session's environment (agent.env, and LINEAR_APP_TOKEN once
 # the Linear app is installed), so the agent searches and edits Linear as itself.

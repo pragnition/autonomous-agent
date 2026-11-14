@@ -52,4 +52,4 @@ PY''',
 checks = ["just check"]
 
 [secrets]
-worker = []                          # test-only values handed to coding sessions; none needed
+worker = []                          # names of test-only keys in core.env, for sessions on this project; none needed
