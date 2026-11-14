@@ -1,0 +1,63 @@
+# Create the Slack app from this manifest (api.slack.com/apps → Create New App → From an app manifest).
+# The agent here is Jensen; use your agent's name (agent.toml `name`) if it differs. Read access is as wide as a bot
+# token allows, so reading more of Slack (the slack_read tool) never needs a reinstall: the app can join any public
+# channel and read every channel, DM and group DM it's in. Private channels still need an /invite; no bot token can
+# read private channels it isn't in, or DMs between other people.
+display_information:
+  name: Jensen
+  description: The team's autonomous engineering agent (an AI).
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Jensen
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      # conversations: join public channels; read public, private, DM and group DM history and details
+      - channels:join
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+      - im:read
+      - im:history
+      - mpim:read
+      - mpim:history
+      - app_mentions:read
+      # content inside conversations
+      - files:read
+      - canvases:read
+      - pins:read
+      - bookmarks:read
+      - reactions:read
+      - links:read
+      - remote_files:read
+      - metadata.message:read
+      # people and the workspace
+      - users:read
+      - users:read.email
+      - users.profile:read
+      - usergroups:read
+      - team:read
+      - emoji:read
+      - dnd:read
+      # writing: replies, reactions, file uploads, DMs
+      - chat:write
+      - reactions:write
+      - files:write
+      - im:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

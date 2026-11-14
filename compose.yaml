@@ -1,0 +1,108 @@
+# The autonomous agent's stack. Host data lives under ${AGENT_DATA:-./data}:
+#   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos the runner clones)   cli/
+#   runner/ (core's runner token for the agent container)
+#   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
+#   secrets/projects/<project>.env   (a project's app .env; core hands it to the agent as runner/projects/)
+# Claude never runs in core: Claude Code sessions run in the `agent` service below, a container of its own. The
+# Claude account proxy runs on the host; the relay lets core read its usage and lets the agent container reach it.
+name: autonomous-agent
+
+networks:
+  agentnet:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
+
+services:
+  core:
+    build: {context: ., target: core}
+    container_name: agent-core
+    restart: unless-stopped
+    networks:
+      agentnet:
+        ipv4_address: 172.30.0.10   # fixed: apps in the agent's own Docker reach the model-call meter by address,
+                                    # since they can't resolve the name `core`
+    ports:
+      - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port
+      - "127.0.0.1:18086:8086"    # the dashboard; `just dashboard-serve` puts it on the tailnet only, never Funnel
+    environment:
+      PROXY_URL: http://172.30.0.1:28090
+    volumes:
+      - ${AGENT_DATA:-./data}/config:/data/config
+      - ${AGENT_DATA:-./data}/db:/data/db
+      - ${AGENT_DATA:-./data}/runs:/data/runs
+      - ${AGENT_DATA:-./data}/git:/data/git
+      - ${AGENT_DATA:-./data}/cli:/data/cli
+      - ${AGENT_DATA:-./data}/runner:/data/runner
+      - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
+      - ${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro   # apps' own .env files, passed to the agent
+
+  # The agent's own Docker daemon: the apps it runs to test its work start here, never on the laptop's Docker.
+  # Its API listens only on 127.0.0.1 of this container's network, which the agent container shares (below), so an
+  # app published on 127.0.0.1:<port> is the agent's localhost too. The work volume is mounted at the same path as
+  # in the agent container, so a compose file's bind mounts of a worktree resolve.
+  docker:
+    image: docker:29-dind
+    container_name: agent-docker
+    restart: unless-stopped
+    privileged: true
+    networks: [agentnet]
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    # Starting with `dockerd` keeps the image from adding its own 0.0.0.0:2375 listener on the stack network
+    command: [dockerd, --host=unix:///var/run/docker.sock, --host=tcp://127.0.0.1:2375, --tls=false,
+              "--default-address-pool=base=10.201.0.0/16,size=24"]
+    volumes:
+      - agentdocker:/var/lib/docker
+      - agentwork:/var/agent
+
+  # Claude Code sessions with a full development environment. It pulls work from core, reads its runner token
+  # from data/runner and shares core's Azure login in data/cli/azure. It runs in the docker service's network
+  # namespace: same stack network, and the apps it starts are on its localhost.
+  agent:
+    build: {context: ., target: agent}
+    container_name: agent-runner
+    restart: unless-stopped
+    network_mode: service:docker
+    depends_on: [docker]
+    command: [python, -m, agent, runner, --token-file, /run/agent/runner-token, --core, "http://core:8080",
+              --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
+              --git-email, "${AGENT_GIT_EMAIL:-}"]
+    # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables. Compose reads
+    # the file as the laptop user, so it can stay 0600, and `docker compose exec agent` shells see the keys too.
+    env_file: ["${AGENT_DATA:-./data}/secrets/agent.env"]
+    volumes:
+      - ${AGENT_DATA:-./data}/runner:/run/agent:ro
+      - ${AGENT_DATA:-./data}/cli/azure:/data/cli/azure
+      - agentwork:/var/agent
+
+  supervisor:
+    build: {context: ., target: supervisor}
+    container_name: agent-supervisor
+    restart: unless-stopped
+    networks: [agentnet]
+    environment:
+      CORE_HEALTH: http://core:8080/health
+      CORE_CONTAINER: agent-core
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro
+
+  relay:
+    build: {context: ., target: relay}
+    container_name: agent-relay
+    restart: unless-stopped
+    network_mode: host
+    # Listens only on the stack's own gateway address, never on the LAN: nobody else can reach the accounts.
+    command:
+      - sh
+      - -c
+      - >-
+        socat TCP-LISTEN:28090,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18090 &
+        socat TCP-LISTEN:28091,bind=172.30.0.1,fork,reuseaddr TCP:127.0.0.1:18091 &
+        wait
+
+volumes:
+  agentwork:     # the agent's clones, sessions, memory and caches; survives rebuilds so sessions can resume
+  agentdocker:   # the agent's Docker images, containers and volumes (the apps it tests)

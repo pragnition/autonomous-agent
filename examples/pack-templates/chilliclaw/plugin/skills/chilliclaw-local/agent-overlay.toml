@@ -1,0 +1,55 @@
+# Appended to deployments/default/config.local-lite.toml for the agent's local runs (the chilliclaw-local skill).
+# Every chat model call goes to the dev Foundry deployment through the agent's meter at core's fixed address (the
+# app's containers can't resolve the name `core`): core adds the key and stops calls once the cost cap is spent.
+# AGENT_LLM_KEY is a placeholder in .env; the meter replaces it. Integrations use the team's own .env as is.
+
+# Audio transcription and image generation need Foundry deployments of their own that the .env has no keys for:
+# off, with a URL and a model only because the schema wants them (nothing listens on port 9). Project-file audio
+# stays nominally on, because video upload validation depends on it.
+[workspace.transcribe_audio]
+enabled = false
+base_url = "http://127.0.0.1:9"
+model = "off-in-local-runs"
+
+[workspace.generate_image]
+enabled = false
+base_url = "http://127.0.0.1:9"
+model = "off-in-local-runs"
+
+[project_files.audio]
+base_url = "http://127.0.0.1:9"
+api_key = "off-in-local-runs"
+model = "off-in-local-runs"
+
+[llm.deployments.main]
+backend = "foundry"
+model = "chilliclaw-dev-gpt-5.6-terra"
+
+[llm.deployments.main.foundry]
+base_url = "http://172.30.0.10:8087/llm/chilliclaw-dev"
+auth_mode = "api_key"
+api_key_env = "AGENT_LLM_KEY"
+key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
+regional_endpoints_env = "AGENT_LLM_NO_REGIONS"
+
+[llm.deployments.email_summary]
+backend = "foundry"
+model = "chilliclaw-dev-gpt-5.6-terra"
+
+[llm.deployments.email_summary.foundry]
+base_url = "http://172.30.0.10:8087/llm/chilliclaw-dev"
+auth_mode = "api_key"
+api_key_env = "AGENT_LLM_KEY"
+key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
+regional_endpoints_env = "AGENT_LLM_NO_REGIONS"
+
+[llm.deployments.usecase_classifier]
+backend = "foundry"
+model = "chilliclaw-dev-gpt-5.6-terra"
+
+[llm.deployments.usecase_classifier.foundry]
+base_url = "http://172.30.0.10:8087/llm/chilliclaw-dev"
+auth_mode = "api_key"
+api_key_env = "AGENT_LLM_KEY"
+key_vault_secret_name = "unused-the-agent-meter-adds-the-key"
+regional_endpoints_env = "AGENT_LLM_NO_REGIONS"

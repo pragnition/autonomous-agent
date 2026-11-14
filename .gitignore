@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.pytest_cache/
+/data/
+.superpowers/
+dashboard/node_modules/
+dashboard/dist/
+.env
+*.env
+claude_proxy/

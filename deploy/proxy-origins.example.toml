@@ -1,0 +1,8 @@
+# Add these to ~/.claude/accounts/proxy.toml (the proxy's own config). Both origins belong to the default tenant,
+# so the agent shares the team's account pool. core reads usage through the relay (agent-core). Sessions use
+# agent-sandbox: the agent container through the relay on 172.30.0.1:28091.
+container_placeholders = ["sk-ant-oat01-container-via-host-proxy"]
+
+[origins]
+agent-core = 18090
+agent-sandbox = 18091

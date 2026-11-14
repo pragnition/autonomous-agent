@@ -1,0 +1,22 @@
+# A minimal pack: copy it to data/config/packs/<project>/ and point it at one of your repos.
+[project]
+name = "sample"
+repo = "example-org/agent-sample"
+default_branch = "main"
+owner = "sam"
+slack_channel = "#jensen"
+linear_team = "SAM"
+
+[linear.status]
+working = "In Progress"
+ready_for_review = "In Review"
+merged = "Done"
+failed = "Todo"
+
+[build]
+setup = ["python -m pip install -q -r requirements.txt"]
+checks = ["python -m pytest -q"]
+
+
+[secrets]
+worker = []                      # names of test-only keys in core.env, for sessions on this project

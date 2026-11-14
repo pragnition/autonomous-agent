@@ -1,0 +1,73 @@
+# Example install config. Copy it to data/config/agent.toml (core reads /data/config/agent.toml) and edit.
+name = "jensen"                  # the agent's name, branch prefix and Linear label
+# github = "jensen-bot"          # the agent's GitHub login, when it differs from name
+timezone = "Asia/Singapore"
+
+[people.sam]
+slack = "U00000001"
+github = "sam-example"
+linear = "sam@example.com"
+role = "admin"
+tailscale = "sam@example.com"       # Tailscale login: an admin with one can resume the agent from the dashboard
+
+[people.alice]
+slack = "U00000002"
+github = "alice-example"
+linear = "alice@example.com"
+role = "member"
+
+[limits]
+max_concurrent_sessions = 10     # Claude sessions running at once
+max_tasks_per_day = 20
+task_minutes = 90                # wall-time budget per work item
+max_turns = 400
+
+[claude.models]
+default = "claude-opus-5-5"      # every session
+hard = "claude-fable-5-1"        # when someone says "use fable" in a conversation
+
+[agent]
+uid = 1001                       # the agent container's user; core hands it the Azure login and runner token
+
+[linear]
+public_url = ""                  # e.g. "https://<node>.<tailnet>.ts.net": Linear's webhook and OAuth callback, via Tailscale Funnel
+
+# MCP servers every session gets. ${VAR} comes from the session's environment (agent.env, and LINEAR_APP_TOKEN once
+# the Linear app is installed), so the agent searches and edits Linear as itself.
+[mcp.linear]
+type = "http"
+url = "https://mcp.linear.app/mcp"
+headers = { Authorization = "Bearer ${LINEAR_APP_TOKEN}" }
+
+# The dashboard: core serves it on `port`, published on the host as 127.0.0.1:18086; `just dashboard-serve` puts it
+# on the tailnet only. It answers requests only from trusted_peers (where tailscale serve's requests arrive).
+[dashboard]
+port = 8086
+trusted_peers = ["172.30.0.1"]
+agent_origins = ["agent-core", "agent-sandbox"]   # the account proxy's origins that are the agent; others are people
+
+# Model calls from the apps the agent runs and tests (a project's own LLM features). Apps point their OpenAI-style
+# base URL at http://172.30.0.10:8087/llm/<upstream> (core's fixed address) with any placeholder key; core adds the real key (core.env), counts
+# each call's tokens at these prices, and refuses calls once the day's or month's cap is spent. The dashboard can
+# change the caps at runtime. Without upstreams, the meter doesn't run.
+[llm_meter]
+daily_usd = 10
+monthly_usd = 100
+# [llm_meter.upstreams.<project>-dev]
+# base_url = "https://<resource>.openai.azure.com/openai/v1"
+# key = "<PROJECT>_DEV_FOUNDRY_KEY"        # in core.env
+
+[llm_meter.prices]                         # USD per million tokens: [input, cached input, output]
+"gpt-5.6-terra" = [2.0, 0.2, 12.0]         # Azure Global Standard, short context
+default = [5.0, 0.5, 30.0]                 # anything not listed: priced high on purpose
+
+[observability]
+digest_channel = ""              # e.g. "#agent-ops": a daily KPI digest; empty means none
+digest_time = "09:00"            # in `timezone`
+
+# Azure CLI login (az_login): the agent runs az itself
+[cli.azure]
+command = "az"
+env = { AZURE_CONFIG_DIR = "/data/cli/azure", AZURE_CORE_OUTPUT = "json", AZURE_CORE_ONLY_SHOW_ERRORS = "true", AZURE_CORE_COLLECT_TELEMETRY = "false" }
+login = ["az", "login", "--use-device-code"]
+login_check = ["az", "account", "show"]
