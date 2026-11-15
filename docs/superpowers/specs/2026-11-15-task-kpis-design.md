@@ -247,3 +247,29 @@ How Jensen reads the record:
 - Table and column names, and the task id format.
 - How the Linear requester is read from the webhook, and the matching to a team person.
 - The daily chart's exact series and colours, and the task detail view's layout.
+
+## Addition: project tasks and general tasks, and a deep dive
+
+### Why
+
+A task list that mixes product work with everything else doesn't say how much went into the products. Tasks are now
+**project tasks** (work on one of the configured projects: its code, deployments, tests, issues, users or roadmap) or
+**general tasks** (work that belongs to no project: installing tools for the agent, messaging teammates, research not
+tied to a product). Chat still isn't a task. Clicking the task count opens the tasks behind it, filterable by project.
+
+### Design
+
+- **Haiku names the project** in the same call: one of the configured projects (each listed with its repo, Slack
+  channel and Linear team), or null for general. Code passes it signals it can see for itself: the conversation's
+  bound project, a Linear key of the project's team, the project's repo or name in the request or reply. An answer
+  that isn't a configured project falls back to the first signal, else general; a null in a conversation bound to a
+  project becomes that project.
+- **A task's project** is the first project among its requests, so a follow-up that reveals the product fills it in.
+- **Relabeling on change.** Each label carries the labeler's version. When the prompt or the rules change, the
+  version goes up and the sweep relabels the history in arrival order, without anyone clearing tables. A relabeled
+  `new` request keeps its task id. A request whose relabel keeps failing keeps its previous label.
+- **KPIs.** The Tasks number splits by project: `Tasks: 18 (chilliclaw 12 · general 6)`. The other three are
+  unchanged.
+- **Dashboard.** The Tasks tile opens a dialog with the window's tasks (title, project, source, who, when, time,
+  status, expandable steps) and a project filter: all, each project, general. The task list moves into that dialog.
+- **The agent's copy** has a `project` field (null for general), and the skill shows how to filter by it.
