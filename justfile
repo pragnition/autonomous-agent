@@ -37,6 +37,10 @@ stop:
 resume:
     docker compose exec core python -m agent resume
 
+# Check the schedules file (data/schedules/schedules.toml) and show when each schedule runs next
+schedules:
+    docker compose exec core python -m agent schedules
+
 # One unattended turn end to end (core, runner, proxy, Claude), with no pack and no Slack; prints `smoke ok`
 smoke:
     docker compose exec core python /app/scripts/smoke.py

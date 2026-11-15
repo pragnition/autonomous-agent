@@ -9,3 +9,5 @@ DATA = Path(os.environ.get("AGENT_DATA_DIR", "/data"))
 CONFIG_DIR = Path(os.environ.get("AGENT_CONFIG_DIR", DATA / "config"))
 DB_DIR = DATA / "db"
 SECRETS_FILE = Path(os.environ.get("AGENT_SECRETS_FILE", "/run/agent/secrets.env"))
+SCHEDULES_FILE = Path(os.environ.get("AGENT_SCHEDULES_FILE", DATA / "schedules" / "schedules.toml"))
+RUNNER_TIMEZONE = Path("/run/agent/timezone")  # core leaves its timezone here for the agent container

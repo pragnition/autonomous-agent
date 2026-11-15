@@ -1,4 +1,4 @@
-"""python -m agent core|runner|kpis|supervisor|doctor|stop|resume"""
+"""python -m agent core|runner|kpis|schedules|supervisor|doctor|stop|resume"""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["kpis"]:  # pickup, PR and merge times, queue wait, merge rate
         from agent.core.kpis import main as show_kpis
         return show_kpis(argv[1:])
+    if argv[:1] == ["schedules"]:  # check the schedules file and show when each runs next
+        from agent.core.schedules import main as check_schedules
+        return check_schedules(argv[1:])
     if argv[:1] == ["runner"]:  # the agent container's runner
         from agent.runner.main import main as run_runner
         return run_runner(argv[1:])
@@ -19,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("core", help="run the core service: Slack, the work queue and pollers")
     sub.add_parser("runner", help="run in the agent container: the runner that works on core's queue")
     sub.add_parser("kpis", help="show the KPIs: pickup, PR and merge times, queue wait, merge rate")
+    sub.add_parser("schedules", help="check the schedules file and show when each schedule runs next")
     sub.add_parser("supervisor", help="run the health watchdog")
     sub.add_parser("doctor", help="check config, secrets, the proxy, GitHub and Linear")
     sub.add_parser("stop", help="stop everything: pause new work and cancel what is running")
