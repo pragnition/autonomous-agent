@@ -261,9 +261,10 @@ tied to a product). Chat still isn't a task. Clicking the task count opens the t
 
 - **Haiku names the project** in the same call: one of the configured projects (each listed with its repo, Slack
   channel and Linear team), or null for general. Code passes it signals it can see for itself: the conversation's
-  bound project, a Linear key of the project's team, the project's repo or name in the request or reply. An answer
-  that isn't a configured project falls back to the first signal, else general; a null in a conversation bound to a
-  project becomes that project.
+  bound project, a Linear key of the project's team or the project's repo in the request or reply, the project's name
+  in the request (not the reply: the agent names its main project in most replies). An answer that isn't a configured
+  project falls back to the first signal, else general. A null stays general, even in a project's channel: messaging
+  a teammate from there is still general work.
 - **A task's project** is the first project among its requests, so a follow-up that reveals the product fills it in.
 - **Relabeling on change.** Each label carries the labeler's version. When the prompt or the rules change, the
   version goes up and the sweep relabels the history in arrival order, without anyone clearing tables. A relabeled

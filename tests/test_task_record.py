@@ -259,3 +259,9 @@ def test_project_hints_from_the_conversation_linear_key_repo_and_name(conn):
     conn.execute("UPDATE conversations SET project = 'sample' WHERE id = 'V-d'")
     assert project_hints(conn, nothing, PROJECTS) == ["sample"]
     assert project_hints(conn, item(conn, "W5", "V-e", "10:04", text="SAMPLER-1 and o/rx"), PROJECTS) == []
+
+
+def test_a_project_named_only_in_the_reply_is_no_signal(conn):
+    """The agent mentions its main project in most replies; only the request's own words count for the name."""
+    chatty = item(conn, "W1", "V-a", "10:00", text="ask haojun what's up", reply="Asked him how Sample is going")
+    assert project_hints(conn, chatty, PROJECTS) == []

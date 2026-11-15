@@ -283,11 +283,18 @@ async def test_an_unknown_project_without_signals_is_general(conn, tmp_path):
     assert project_of(conn, "TK-0001") is None
 
 
-async def test_general_in_a_conversation_bound_to_a_project_is_that_project(conn, tmp_path):
-    turn(conn, "W1", "V-a", 0, "check the deploy")
+async def test_general_work_in_a_conversation_bound_to_a_project_stays_general(conn, tmp_path):
+    """Messaging a teammate from a project's channel is still general work: the bound project is only a signal."""
+    turn(conn, "W1", "V-a", 0, "ask haojun what's up")
     conn.execute("UPDATE conversations SET project = 'sample' WHERE id = 'V-a'")
-    await projects_labeler(conn, tmp_path, FakeHaiku(project_answer(project=None))).sweep()
-    assert project_of(conn, "TK-0001") == "sample"
+    haiku = FakeHaiku(project_answer(project=None))
+    await projects_labeler(conn, tmp_path, haiku).sweep()
+    assert project_of(conn, "TK-0001") is None and "Signals core found for this request: sample" in haiku.calls[0][1]
+
+
+def test_the_prompt_says_general_work_is_still_a_task():
+    from agent.core.task_labeler import PROMPT
+    assert "general task is still \"new\" or \"same\"" in PROMPT
 
 
 async def test_an_older_labelers_labels_are_relabeled(conn, tmp_path):
@@ -323,3 +330,8 @@ async def test_a_task_emptied_by_a_relabel_leaves_the_agents_copy(conn, tmp_path
     await lab.sweep()
     ids = [json.loads(line)["id"] for line in (tmp_path / "tasks" / "2026-11.jsonl").read_text().splitlines()]
     assert ids == ["TK-0001"]
+
+
+def test_the_prompt_says_work_the_agent_couldnt_do_is_still_a_task():
+    from agent.core.task_labeler import PROMPT
+    assert "couldn't or wouldn't do is still a task" in PROMPT

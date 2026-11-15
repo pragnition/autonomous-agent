@@ -43,21 +43,25 @@ label:
   not chat.
 - "new": the request asks the agent to do something: build, fix, run, test, check, find out, install, set up, report,
   investigate, or message someone ("ask Sam what's up", "tell the channel"). A different piece of work is "new" even
-  in the same conversation and even about the same project.
+  in the same conversation and even about the same project. Whether the agent managed it doesn't change the label:
+  work it couldn't or wouldn't do is still a task, with finished false.
 - "same": the request is about one of the earlier tasks listed below and asks for no different piece of work: a
   follow-up on its progress or result ("so what are the findings??"), a correction, a nudge ("bro I logged you in
   already"), an answer to the agent's question, approval or edits of the agent's draft, or "done" after the person
-  did a step the agent asked for.
+  did a step the agent asked for. A task from another conversation is "same" only when the request clearly refers
+  back to it; a request for different work is "new" even when it is on a similar subject.
 task: for "same", the id of that earlier task. Use only an id listed below; if none fits, answer "new".
 title: for "new", 3-8 words naming the work, e.g. "Debloat study of the web app codebase".
 outcome: for "new" and "same", one sentence on what the agent did or delivered in this reply.
 finished: for "new" and "same", whether the agent delivered what was asked. A PR opened, a deploy to staging, a
 message sent or a report posted counts as finished even while it waits for review or merge. Not finished: it couldn't
 do it, got stuck, gave up, stopped mid-work, or is waiting on input it needs to go on.
-project: for "new" and "same", the name of the listed project the work is on (its code, deployments, tests, issues,
-users or roadmap), or null for general work that belongs to no project (installing tools for the agent itself,
-messaging teammates, questions about the agent, research not tied to a product). The signals core found are strong
-evidence; a request about a project's product is that project's even when it doesn't name it.
+project: for "new" and "same", the name of the listed project when the work is on that product itself: its code,
+builds, deployments, tests, Linear issues, bugs, users or roadmap. null for general work that belongs to no project,
+even when a project is mentioned: messaging or introducing the agent to teammates, the agent's own access, setup,
+tools and plugins, questions about the agent, and research or reports about agents or the team rather than the
+product. The signals core found point at a project but don't decide it. The project never changes the label: a
+general task is still "new" or "same", and installing or setting something up for the agent is a task, not chat.
 For "chat", task, title, outcome, finished and project are null."""
 
 
@@ -273,12 +277,8 @@ class TaskLabeler:
         return apply_label(self.conn, row, label, source=source, requester=requester, follows=follows)
 
     def _project(self, row: sqlite3.Row, named: str | None, hints: list[str]) -> str | None:
-        """Haiku's project when it's a configured one. A name that isn't falls back to what core can see; none at all
-        in a conversation bound to a project is that project."""
+        """Haiku's project when it's a configured one; a name that isn't falls back to what core can see. None stays
+        general: general work can happen in a project's channel too."""
         if named in self.projects:
             return named
-        if named:
-            return hints[0] if hints else None
-        bound = self.conn.execute("SELECT project FROM conversations WHERE id = ?",
-                                  (row["conversation_id"],)).fetchone()
-        return bound["project"] if bound and bound["project"] in self.projects else None
+        return (hints[0] if hints else None) if named else None

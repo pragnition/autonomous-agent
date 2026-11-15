@@ -135,17 +135,19 @@ def _result(row: sqlite3.Row) -> dict:
 
 def project_hints(conn: sqlite3.Connection, row: sqlite3.Row, projects: dict) -> list[str]:
     """Projects core can tell a request is about, strongest first: the conversation's bound project, then a Linear key
-    of the project's team, its repo, or its name in the request or the reply."""
+    of the project's team or its repo in the request or the reply, or its name in the request. The name in the reply
+    doesn't count: the agent mentions its main project in most of what it says."""
     hints = []
     convo = conn.execute("SELECT project FROM conversations WHERE id = ?", (row["conversation_id"],)).fetchone()
     if convo and convo["project"] in projects:
         hints.append(convo["project"])
-    text = f"{asked_text(json.loads(row['payload']))}\n{_result(row).get('text') or ''}"
+    asked = asked_text(json.loads(row["payload"]))
+    text = f"{asked}\n{_result(row).get('text') or ''}"
     for name, project in projects.items():
         team, repo = getattr(project, "linear_team", ""), getattr(project, "repo", "")
         if (team and re.search(rf"\b{re.escape(team)}-\d+\b", text, re.I)) \
                 or (repo and re.search(rf"(?<![\w.-]){re.escape(repo)}(?![\w.-])", text, re.I)) \
-                or re.search(rf"\b{re.escape(name)}\b", text, re.I):
+                or re.search(rf"\b{re.escape(name)}\b", asked, re.I):
             hints.append(name)
     return list(dict.fromkeys(hints))
 
