@@ -5,7 +5,6 @@ import pytest
 
 from agent import db
 from agent.core.kpis import Stat, compute_kpis, format_duration, format_kpis
-from agent.core.linear_issues import record_issue
 
 SINCE, UNTIL = datetime(2026, 11, 13, tzinfo=UTC), datetime(2026, 11, 14, tzinfo=UTC)
 
@@ -17,119 +16,105 @@ def conn(tmp_path):
     return c
 
 
-def at(hhmm):
-    return f"2026-11-13T{hhmm}:00Z"
+def at(hhmm, day=13):
+    return f"2026-11-{day:02d}T{hhmm}:00Z"
 
 
-def issue(conn, n, handed, *, completed=None, canceled=None):
-    record_issue(conn, {"createdAt": at(handed), "issue": {"id": f"i{n}", "identifier": f"PRA-{n}"}}, f"V-{n}")
-    conn.execute("UPDATE linear_issues SET completed_at = ?, canceled_at = ? WHERE issue_id = ?",
-                 (at(completed) if completed else None, at(canceled) if canceled else None, f"i{n}"))
+def task(conn, n, source, started, secs, finished):
+    record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": at(started)}
+    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, jensen_time_s, finished, "
+                 "record) VALUES (?, ?, 'ann', ?, ?, ?, ?, ?)",
+                 (f"TK-{n:04d}", source, at(started), at(started), secs,
+                  None if finished is None else int(finished), json.dumps(record)))
 
 
-def started(conn, convo, hhmm, queued, item):
-    conn.execute("INSERT INTO work_items(id, conversation_id, kind, payload, created_at, updated_at) "
-                 "VALUES (?, ?, 'turn', '{}', ?, ?)", (item, convo, at(queued), at(queued)))
-    conn.execute("INSERT INTO events(ts, type, data) VALUES (?, 'session_started', ?)",
-                 (at(hhmm), json.dumps({"work_item": item, "queued_at": at(queued), "project": None})))
+def pr(conn, n, opened, merged=None):
+    conn.execute("INSERT INTO agent_prs(repo, number, opened_at, merged_at, closed_at, updated_at) "
+                 "VALUES ('o/r', ?, ?, ?, ?, ?)", (n, at(opened), merged and at(merged), merged and at(merged),
+                                                   at(opened)))
 
 
-def pr(conn, n, opened, merged=None, closed=None, issue=None):
-    conn.execute("INSERT INTO agent_prs(repo, number, opened_at, merged_at, closed_at, issue_identifier, updated_at) "
-                 "VALUES ('o/r', ?, ?, ?, ?, ?, ?)", (n, at(opened), at(merged) if merged else None,
-                                                     at(closed or merged) if (closed or merged) else None, issue,
-                                                     at(opened)))
+def issue(conn, n, completed):
+    conn.execute("INSERT INTO linear_issues(issue_id, identifier, handed_at, completed_at) VALUES (?, ?, ?, ?)",
+                 (f"i{n}", f"PRA-{n}", at("09:00"), completed and at(completed)))
 
 
 @pytest.fixture
 def seeded(conn):
-    issue(conn, 1, "10:00", completed="13:30")
-    started(conn, "V-1", "10:05", "10:04", "W1")
-    started(conn, "V-1", "12:00", "12:00", "W1b")         # a follow-up turn: pickup stays the first
-    pr(conn, 1, "11:05", merged="13:05", issue="PRA-1")
-    issue(conn, 2, "10:00", completed="11:00")             # a report: no PR
-    started(conn, "V-2", "10:15", "10:14", "W2")
-    pr(conn, 2, "12:00")                                   # a PR that names no tracked issue
+    task(conn, 1, "slack", "10:00", 600, True)
+    task(conn, 2, "slack", "11:00", 1800, False)
+    task(conn, 3, "linear", "12:00", 60, True)
+    task(conn, 4, "slack", "10:00", 99, True)       # started the day before: outside the window
+    conn.execute("UPDATE task_records SET started_at = ? WHERE id = 'TK-0004'", (at("10:00", day=12),))
+    pr(conn, 1, "11:00", merged="13:00")
+    pr(conn, 2, "11:30")                            # still open
+    pr(conn, 3, "09:00", merged="10:00")
+    conn.execute("UPDATE agent_prs SET merged_at = ? WHERE number = 3", (at("10:00", day=12),))
+    issue(conn, 1, "14:00")
+    issue(conn, 2, None)
     return conn
 
 
-def test_kpis_from_observed_history(seeded):
+def test_kpis_from_task_records(seeded):
     k = compute_kpis(seeded, since=SINCE, until=UNTIL)
-    assert k.pickup == Stat(2, 600, 900)
-    assert k.to_pr == Stat(1, 3600, 3600)
-    assert k.to_merge == Stat(1, 7200, 7200)
-    assert k.to_done_pr == Stat(1, 12600, 12600)
-    assert k.to_done_other == Stat(1, 3600, 3600)
-    assert k.queue_wait == Stat(3, 60, 60)
-    assert (k.issues, k.done, k.canceled, k.prs, k.merged, k.closed, k.unmatched) == (2, 2, 0, 2, 1, 0, 1)
-    assert k.merge_rate == 0.5
+    assert (k.tasks, k.by_source) == (3, {"slack": 2, "linear": 1, "schedule": 0})
+    assert k.time == Stat(3, 600, 1800)
+    assert (k.finished, k.finished_rate) == (2, 2 / 3)
+    assert (k.merged, k.issues_closed) == (1, 1)
 
 
-def test_canceled_and_closed_unmerged(conn):
-    issue(conn, 3, "10:00", canceled="10:30")
-    pr(conn, 9, "10:10", closed="10:20", issue="PRA-3")
-    k = compute_kpis(conn, since=SINCE, until=UNTIL)
-    assert (k.issues, k.done, k.canceled, k.closed, k.merged) == (1, 0, 1, 1, 0)
-    assert k.to_done_pr == Stat(0, None, None)
+def test_format_kpis_exact(seeded):
+    assert format_kpis(compute_kpis(seeded, since=SINCE, until=UNTIL), "Jensen") == (
+        "Jensen, last 1 day\n"
+        "Tasks: 3 (Slack 2 · Linear 1 · schedules 0)\n"
+        "Time per task: median 10m · p90 30m\n"
+        "Finished: 67% (2 of 3)\n"
+        "Shipped: 1 PR merged · 1 Linear issue closed")
 
 
-def test_empty_window_reports_na(conn):
-    k = compute_kpis(conn, since=SINCE, until=UNTIL)
-    assert k.pickup == k.to_pr == k.to_merge == k.queue_wait == Stat(0, None, None)
-    assert k.merge_rate is None
-    assert "n/a" in format_kpis(k)
+def test_format_kpis_empty(conn):
+    text = format_kpis(compute_kpis(conn, since=SINCE, until=UNTIL), "Jensen")
+    assert "Tasks: 0 (Slack 0 · Linear 0 · schedules 0)" in text
+    assert "Time per task: n/a" in text and "Finished: n/a (0 of 0)" in text
+    assert "Shipped: 0 PRs merged · 0 Linear issues closed" in text
+
+
+def test_format_kpis_names_the_days(seeded):
+    k = compute_kpis(seeded, since=datetime(2026, 11, 7, tzinfo=UTC), until=UNTIL)
+    assert format_kpis(k).startswith("Agent, last 7 days\n")
+
+
+def test_format_duration():
+    assert [format_duration(s) for s in (600, 5400, 90000, 20)] == ["10m", "1h 30m", "1d 1h", "20s"]
 
 
 async def test_no_claude_cost_anywhere_the_kpis_are_shown(seeded, tmp_path):
-    """The digest, the kpis tool and `just kpis` all print format_kpis: none of them shows a Claude cost."""
+    """The digest, the kpis tool and `agent kpis` all print format_kpis: none of them shows a Claude cost."""
     import dataclasses
 
-    from agent.core.agent_tools import AgentToolRouter
-    from agent.core.kpis import Kpis, register_kpi_tools
-    from agent.core.sessions import WorkQueue
-    from agent_fixtures import FakeNotifier, FakeSlack, make_config, make_pack
+    from agent.core.kpis import Kpis
 
     assert not {f.name for f in dataclasses.fields(Kpis)} & {"cost_usd", "cost_per_task", "cost_per_merged"}
     for k in (compute_kpis(seeded, since=SINCE, until=UNTIL), compute_kpis(seeded, since=SINCE, until=SINCE)):
         text = format_kpis(k)
         assert "cost" not in text.lower() and "$" not in text
-    router = AgentToolRouter(seeded, config=make_config(tmp_path), packs={"sample": make_pack()},
-                             queue=WorkQueue(seeded), slack=FakeSlack(), notifier=FakeNotifier(), secret_values=[])
-    register_kpi_tools(router)
-    [spec] = [s for s in router.manifest(router_ctx()) if s["name"] == "kpis"]
-    assert "cost" not in spec["description"].lower()
 
 
-def router_ctx():
-    from agent.core.agent_tools import ToolContext
-    return ToolContext(work_item_id="W", conversation_id=None, project=None, actor="ann", tier="admin",
-                       unattended=False, task_id=None, channel=None, thread_ts=None)
-
-
-def test_format_duration():
-    assert [format_duration(s) for s in (600, 5400, 90000, 20)] == ["10m", "1h 30m", "1d 1h", "0m"]
-
-
-def test_format_kpis(seeded):
-    text = format_kpis(compute_kpis(seeded, since=SINCE, until=UNTIL))
-    assert "Ticket → pickup: median 10m, p90 15m (n=2)" in text and "Merge rate: 50%" in text
-    assert "Ticket → done (with PR): median 3h 30m" in text and "Ticket → done (no PR): median 1h 0m" in text
-    assert "Issues: 2 · done: 2 · canceled: 0" in text
-    assert "PRs: 2 · merged: 1 · closed unmerged: 0 · not linked to an issue: 1" in text
-    assert "last 1 day" in text
-
-
-async def test_kpis_tool(conn, tmp_path):
-    from agent.core.agent_tools import AgentToolRouter
+async def test_kpis_tool(seeded, tmp_path):
+    from agent.core.agent_tools import AgentToolRouter, ToolContext
     from agent.core.kpis import register_kpi_tools
     from agent.core.sessions import WorkQueue
     from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
 
-    router = AgentToolRouter(conn, config=make_config(tmp_path), packs={"sample": make_pack()}, queue=WorkQueue(conn),
-                             slack=FakeSlack(), notifier=FakeNotifier(),
-                             secret_values=[])
+    router = AgentToolRouter(seeded, config=make_config(tmp_path), packs={"sample": make_pack()},
+                             queue=WorkQueue(seeded), slack=FakeSlack(), notifier=FakeNotifier(), secret_values=[])
     register_kpi_tools(router)
-    cid = add_conversation(conn, channel="C1")
+    cid = add_conversation(seeded, channel="C1")
     ctx = router.context_for(add_item(router.queue, cid, actor="bob"))
-    assert "Ticket → pickup" in (await router.call(ctx, "kpis", {"days": 7})).text
+    text = (await router.call(ctx, "kpis", {"days": 7})).text
+    assert text.startswith("agent, last 7 days\n") and "Tasks:" in text
     assert "whole number" in (await router.call(ctx, "kpis", {"days": 0})).text
+    admin = ToolContext(work_item_id="W", conversation_id=None, project=None, actor="ann", tier="admin",
+                        unattended=False, task_id=None, channel=None, thread_ts=None)
+    [spec] = [s for s in router.manifest(admin) if s["name"] == "kpis"]
+    assert "cost" not in spec["description"].lower() and "tasks" in spec["description"]
