@@ -284,7 +284,9 @@ def test_prepare_agent_dirs_hands_them_to_the_agent(app, monkeypatch):
     app.sync_runner_token()
     owned = {path for path, uid in calls if uid == 1001}
     assert {str(app.data_dir / "cli"), str(app.data_dir / "cli" / "azure"),
-            str(app.data_dir / "cli" / "azure" / "msal_token_cache.json"), str(app.data_dir / "runner")} <= owned
+            str(app.data_dir / "cli" / "azure" / "msal_token_cache.json"), str(app.data_dir / "runner"),
+            str(app.data_dir / "schedules")} <= owned
+    assert (app.data_dir / "runner" / "timezone").read_text().strip() == "Asia/Singapore"
     assert any(path.endswith(".runner-token.tmp") for path, _ in calls)
 
 
@@ -443,3 +445,14 @@ def test_foundry_meter_is_wired_when_installed(app, monkeypatch):
 def test_foundry_meter_absent_is_none(app):
     assert not app.config.llm_meter.upstreams
     assert app.llm_meter() == (None, None)
+
+
+async def test_dm_admins_messages_each_admin(app):
+    await app.dm_admins("hello admins")
+    assert app.slack.opened == [{"users": "U00000001"}]
+    assert app.slack.posts == [{"channel": "D-U00000001", "text": "hello admins"}]
+
+
+def test_core_runs_the_scheduler_on_the_shared_schedules_file(app):
+    assert app.scheduler.path == app.data_dir / "schedules" / "schedules.toml"
+    assert app.scheduler.fire == app.conversations.start_scheduled

@@ -35,6 +35,7 @@ services:
       - ${AGENT_DATA:-./data}/git:/data/git
       - ${AGENT_DATA:-./data}/cli:/data/cli
       - ${AGENT_DATA:-./data}/runner:/data/runner
+      - ${AGENT_DATA:-./data}/schedules:/data/schedules     # the schedules file the agent edits; core fires it
       - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
       - ${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro   # apps' own .env files, passed to the agent
 
@@ -75,6 +76,7 @@ services:
     volumes:
       - ${AGENT_DATA:-./data}/runner:/run/agent:ro
       - ${AGENT_DATA:-./data}/cli/azure:/data/cli/azure
+      - ${AGENT_DATA:-./data}/schedules:/data/schedules     # the agent edits the schedules file here
       - agentwork:/var/agent
 
   supervisor:

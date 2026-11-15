@@ -281,6 +281,24 @@ class Conversations:
                            origin=origin_line(f"Linear {task.source_ref}", link=issue_link(task.description)))
         await self.notifier.task_changed(task)
 
+    async def start_scheduled(self, s) -> str:
+        """A due schedule: a ⏰ message in its channel (a person key means their DM), and an unattended turn with its
+        prompt in a new conversation on that message's thread, so replies there continue it."""
+        person = self.config.people.get(s.channel)
+        channel = (await self.slack.conversations_open(users=person.slack))["channel"]["id"] if person else s.channel
+        resp = await self.slack.chat_postMessage(channel=channel, text=f"⏰ {s.name}")
+        project = await self._project_for_channel(resp["channel"])
+        convo = self._row(self._new(resp["channel"], resp["ts"], project))
+        by = self.config.people.get(s.by)
+        if by is None:
+            who = s.by
+        else:
+            name = await _answer(self.person_name(by.key))
+            tags = ", ".join(t for t in (by.key if name else "", f"GitHub @{by.github}" if by.github else "") if t)
+            who = f"{name or by.key} ({tags})" if tags else by.key
+        return self._enqueue_turn(convo, s.prompt, by.key if by else None, unattended=True,
+                                  origin=origin_line(f"schedule {s.name} · {s.cron} · set up by {who}", link=s.link))
+
     # results
 
     async def on_start(self, item: WorkItem) -> None:

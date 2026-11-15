@@ -688,3 +688,55 @@ async def test_thread_reply_to_an_old_dm_chat_is_answered_in_its_thread(convos, 
     await finish_turn(convos, queue, "answer two")
     assert (slack.posts[-1]["channel"], slack.posts[-1]["thread_ts"]) == ("D-1", sent[0])
     assert conn.execute("SELECT conversation_id FROM slack_messages WHERE ts = ?", (sent[1],)).fetchone()[0] == old
+
+
+# schedules
+
+from agent.core.schedules import Schedule
+
+
+def scheduled(**over):
+    fields = dict(name="nightly-sweep", cron="0 22 * * *", channel="C-SAMPLE", prompt="Sweep it", by="ann",
+                  link="https://l")
+    fields.update(over)
+    return Schedule(**fields)
+
+
+def only_item(queue, conn):
+    rows = conn.execute("SELECT id FROM work_items").fetchall()
+    assert len(rows) == 1
+    return queue.get(rows[0]["id"])
+
+
+async def test_scheduled_run_starts_a_thread_and_an_unattended_turn(convos, slack, queue, conn):
+    await convos.start_scheduled(scheduled())
+    assert slack.posts == [{"channel": "C-SAMPLE", "text": "⏰ nightly-sweep"}]
+    item = only_item(queue, conn)
+    convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
+    assert (convo["channel"], convo["thread_ts"], convo["project"]) == ("C-SAMPLE", "101.0", "sample")
+    p = item.payload
+    assert p["text"] == "Sweep it" and p["actor"] == "ann" and p["unattended"] is True
+    assert p["origin"].startswith("[schedule nightly-sweep · 0 22 * * * · set up by ")
+    assert p["origin"].endswith(" · https://l]") and "GitHub @ann-gh" in p["origin"]
+
+
+async def test_scheduled_run_for_a_person_goes_to_their_dm(convos, slack):
+    await convos.start_scheduled(scheduled(channel="bob", link=None))
+    assert slack.opened == [{"users": "U2"}]
+    assert slack.posts[0]["channel"] == "D-U2"
+
+
+async def test_scheduled_run_by_someone_unknown_has_no_actor(convos, queue, conn):
+    await convos.start_scheduled(scheduled(by="carol", link=None))
+    p = only_item(queue, conn).payload
+    assert p["actor"] is None and p["origin"] == "[schedule nightly-sweep · 0 22 * * * · set up by carol]"
+
+
+async def test_reply_in_a_scheduled_thread_continues_it(convos, queue, conn):
+    await convos.start_scheduled(scheduled())
+    first = only_item(queue, conn)
+    convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (first.conversation_id,)).fetchone()
+    await convos.handle_slack(reply(convo["thread_ts"], "more"))
+    convo_ids = {r["conversation_id"] for r in conn.execute("SELECT conversation_id FROM work_items")}
+    assert convo_ids == {first.conversation_id}
+    assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 2

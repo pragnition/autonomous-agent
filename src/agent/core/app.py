@@ -36,6 +36,7 @@ from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
 from agent.core.runner_tokens import sync_runner_token
+from agent.core.schedules import Scheduler
 from agent.core.sessions import Gate, WorkItem, WorkQueue
 from agent.core.tracker_tools import register_tracker_tools
 from agent.dashboard.app import make_dashboard_app
@@ -152,6 +153,10 @@ class CoreApp:
                                            bot_user_id=bot_user_id, linear_poller=self.linear_poller,
                                            person_name=self.person_name, permalink=self.permalink,
                                            secret_values=self.secret_values)
+        # Work on a timer: the schedules file the agent edits, fired as turns through the same queue
+        self.scheduler = Scheduler(self.conn, path=self.data_dir / "schedules" / "schedules.toml",
+                                   timezone=self.config.timezone, fire=self.conversations.start_scheduled,
+                                   report=self._report_schedules)
         self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
                                       on_change=self.notifier.task_changed) if github_reader else None
         self.agent_app = make_agent_app(
@@ -180,6 +185,20 @@ class CoreApp:
         return (lambda: llm_meter.meter_view(self.conn, settings, self.config.timezone),
                 lambda actor, daily_usd=None, monthly_usd=None: llm_meter.set_caps(
                     self.conn, actor=actor, daily_usd=daily_usd, monthly_usd=monthly_usd))
+
+    async def dm_admins(self, text: str) -> None:
+        """A DM to each admin; one that fails doesn't stop the others."""
+        for person in self.config.people.values():
+            if person.role != "admin" or not person.slack:
+                continue
+            try:
+                dm = (await self.slack.conversations_open(users=person.slack))["channel"]["id"]
+                await self.slack.chat_postMessage(channel=dm, text=text)
+            except Exception:
+                log.exception("couldn't DM %s", person.key)
+
+    async def _report_schedules(self, text: str) -> None:
+        await self.dm_admins(f"Problems in the schedules file (data/schedules/schedules.toml):\n{text}")
 
     async def person_name(self, key: str) -> str | None:
         """A person's name as Slack has it, for the dashboard and each turn's first line; failures are remembered
@@ -272,18 +291,21 @@ class CoreApp:
         return self.config.agent.uid if core_is_root() else None
 
     def prepare_agent_dirs(self) -> None:
-        """The agent container owns what core shares with it (the CLI logins, its runner token)."""
-        cli, runner = self.data_dir / "cli", self.data_dir / "runner"
-        for path in (cli, runner):
+        """The agent container owns what core shares with it (the CLI logins, its runner token, the schedules
+        file). Core's timezone goes to runner/timezone, for the agent's `python -m agent schedules`."""
+        cli, runner, schedules = self.data_dir / "cli", self.data_dir / "runner", self.data_dir / "schedules"
+        for path in (cli, runner, schedules):
             path.mkdir(parents=True, exist_ok=True)
+        (runner / "timezone").write_text(self.config.timezone + "\n")
         owner = self._agent_owner()
         if owner is None:
             return
         os.chown(runner, owner, -1)
-        os.chown(cli, owner, -1)
-        for parent, dirs, files in os.walk(cli):
-            for name in [*dirs, *files]:
-                os.chown(Path(parent) / name, owner, -1)
+        for tree in (cli, schedules):
+            os.chown(tree, owner, -1)
+            for parent, dirs, files in os.walk(tree):
+                for name in [*dirs, *files]:
+                    os.chown(Path(parent) / name, owner, -1)
 
     def share_project_envs(self) -> None:
         """Each project's app env file (data/secrets/projects/<project>.env, what the app needs to run locally)
@@ -373,7 +395,7 @@ class CoreApp:
             meter = web.AppRunner(self.meter_app)
             await meter.setup()
             await web.TCPSite(meter, "0.0.0.0", self.config.llm_meter.port).start()
-        loops = [self._every(60, self.conversations.intake_linear),
+        loops = [self._every(60, self.conversations.intake_linear), self._every(60, self.scheduler.tick),
                  self._every(3600, self.maintenance),
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token)]
         if self.pr_stats:

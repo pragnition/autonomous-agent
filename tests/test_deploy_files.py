@@ -38,6 +38,11 @@ def test_core_gets_only_its_own_secrets(compose):
     assert "${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro" in vols
 
 
+def test_schedules_folder_is_shared(compose):
+    for name in ("core", "agent"):
+        assert "${AGENT_DATA:-./data}/schedules:/data/schedules" in volumes(compose, name), name
+
+
 def test_services_and_core_published_on_loopback_only(compose):
     assert set(compose["services"]) == {"core", "supervisor", "relay", "agent", "docker"}
     assert "ports" not in compose["services"]["agent"] and "ports" not in compose["services"]["docker"]
