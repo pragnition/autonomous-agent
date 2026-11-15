@@ -5,7 +5,7 @@ import pytest
 
 from agent import db
 from agent.core.task_labeler import MODEL, HaikuUnavailable, TaskLabeler, make_haiku, parse_label
-from agent.core.task_record import task_record
+from agent.core.task_record import pending, task_record
 from agent_fixtures import make_config
 
 
@@ -335,3 +335,42 @@ async def test_a_task_emptied_by_a_relabel_leaves_the_agents_copy(conn, tmp_path
 def test_the_prompt_says_work_the_agent_couldnt_do_is_still_a_task():
     from agent.core.task_labeler import PROMPT
     assert "couldn't or wouldn't do is still a task" in PROMPT
+
+
+# review fixes: relabeling a shared thread, project names in any case
+
+class YieldingHaiku(FakeHaiku):
+    """Answers after yielding once, as the real HTTP call does, so parallel groups interleave."""
+    async def __call__(self, system, user, session_id):
+        import asyncio
+        await asyncio.sleep(0)
+        return await super().__call__(system, user, session_id)
+
+
+def tasks_without_a_new_request(conn):
+    return [r[0] for r in conn.execute(
+        "SELECT t.id FROM task_records t WHERE NOT EXISTS (SELECT 1 FROM request_labels l WHERE l.task_id = t.id "
+        "AND l.label = 'new')")]
+
+
+async def test_relabeling_a_thread_two_people_share_leaves_no_task_without_its_first_request(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "fix the login", requester="ann")
+    turn(conn, "W2", "V-a", 1, "also the logout", requester="bob")
+    lab = projects_labeler(conn, tmp_path, YieldingHaiku(
+        project_answer(title="Login"), project_answer("same", task="TK-0001"),       # the first labeling
+        project_answer("chat", title=None), project_answer("same", task="TK-0001"),  # the relabel
+        project_answer(title="Logout")))
+    await lab.sweep()
+    conn.execute("UPDATE request_labels SET version = ?", (LABEL_VERSION - 1,))
+    for _ in range(3):
+        await lab.sweep()
+    assert tasks_without_a_new_request(conn) == [] and pending(conn) == []
+    assert label_of(conn, "W1") == ("chat", None) and label_of(conn, "W2")[0] == "new"
+    titles = [json.loads(line)["title"] for line in (tmp_path / "tasks" / "2026-11.jsonl").read_text().splitlines()]
+    assert "Untitled" not in titles
+
+
+async def test_a_project_named_in_another_case_is_that_project(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "the app's login is broken")
+    await projects_labeler(conn, tmp_path, FakeHaiku(project_answer(project="Sample"))).sweep()
+    assert project_of(conn, "TK-0001") == "sample"

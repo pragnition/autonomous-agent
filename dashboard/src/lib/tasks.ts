@@ -23,3 +23,9 @@ export function tasksIn(tasks: TaskRecord[], filter: string): TaskRecord[] {
   if (filter === "all") return tasks
   return tasks.filter((t) => (filter === GENERAL ? !t.project : t.project === filter))
 }
+
+// The filter to apply: the chosen one while it still has tasks in the range, else "all" (a project with no tasks
+// in a shorter range would leave the list empty under a filter the menu no longer shows)
+export function filterOrAll(filter: string, options: ProjectOption[]): string {
+  return options.some((o) => o.value === filter) ? filter : "all"
+}

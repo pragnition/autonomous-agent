@@ -189,10 +189,7 @@ class TaskLabeler:
                 return 0
             if not await self._capacity():
                 return 0
-            groups: dict[str | None, list] = {}
-            for row in rows:
-                source, requester, follows = origin_of(self.conn, self.config, row)
-                groups.setdefault(requester, []).append((row, source, requester, follows))
+            groups = self._groups(rows)
             session, gate, months, labeled = str(uuid.uuid4()), asyncio.Semaphore(self.concurrency), set(), []
 
             async def run(group: list) -> None:
@@ -206,7 +203,7 @@ class TaskLabeler:
                             months.add(month_of(task_record(self.conn, task_id)["started_at"], self.config.timezone))
 
             # every group finishes before the lock is released, even one that failed
-            for failure in await asyncio.gather(*(run(g) for g in groups.values()), return_exceptions=True):
+            for failure in await asyncio.gather(*(run(g) for g in groups), return_exceptions=True):
                 if isinstance(failure, Exception):
                     log.error("labeling a requester's requests failed", exc_info=failure)
             if months:
@@ -214,6 +211,33 @@ class TaskLabeler:
             if labeled:
                 log.info("labeled %d request(s)", len(labeled))
             return len(labeled)
+
+    def _groups(self, rows: list[sqlite3.Row]) -> list[list]:
+        """Requests that can depend on each other, each group in arrival order: a label reads the earlier requests of
+        its conversation and its requester's recent tasks, so requests sharing either (or a hand-over's parent's
+        conversation) are labeled one after another. Unrelated groups run side by side."""
+        parent: dict[str, str] = {}
+
+        def root(key: str) -> str:
+            while parent.setdefault(key, key) != key:
+                parent[key] = parent[parent[key]]
+                key = parent[key]
+            return key
+
+        items = []
+        for row in rows:
+            source, requester, follows = origin_of(self.conn, self.config, row)
+            keys = [f"c:{row['conversation_id']}"] + ([f"r:{requester}"] if requester else [])
+            if follows and (up := self.conn.execute("SELECT conversation_id FROM work_items WHERE id = ?",
+                                                    (follows,)).fetchone()):
+                keys.append(f"c:{up['conversation_id']}")
+            for key in keys[1:]:
+                parent[root(key)] = root(keys[0])
+            items.append((keys[0], (row, source, requester, follows)))
+        groups: dict[str, list] = {}
+        for key, item in items:
+            groups.setdefault(root(key), []).append(item)
+        return list(groups.values())
 
     async def _capacity(self) -> bool:
         """Whether the proxy has room: labeling only runs on capacity real work isn't using."""
@@ -279,6 +303,7 @@ class TaskLabeler:
     def _project(self, row: sqlite3.Row, named: str | None, hints: list[str]) -> str | None:
         """Haiku's project when it's a configured one; a name that isn't falls back to what core can see. None stays
         general: general work can happen in a project's channel too."""
-        if named in self.projects:
-            return named
-        return (hints[0] if hints else None) if named else None
+        if not named:
+            return None
+        known = {name.lower(): name for name in self.projects}
+        return known.get(named.lower()) or (hints[0] if hints else None)

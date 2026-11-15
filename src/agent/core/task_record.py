@@ -258,10 +258,14 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
         "SELECT l.*, w.result FROM request_labels l LEFT JOIN work_items w ON w.id = l.work_item_id "
         "WHERE l.task_id = ? AND l.label IN ('new', 'same') ORDER BY l.arrived_at, l.work_item_id",
         (task_id,)).fetchall()
-    if not reqs:
+    if not any(r["label"] == "new" for r in reqs):
+        # Its first request was relabeled away: the task is gone. Follow-ups labeled by this labeler are labeled
+        # again (an older labeler's are pending anyway), so none of them is left in a task that doesn't exist.
         conn.execute("DELETE FROM task_records WHERE id = ?", (task_id,))
+        conn.execute("UPDATE request_labels SET label = NULL, task_id = NULL, version = 0 WHERE task_id = ? "
+                     "AND version >= ?", (task_id, LABEL_VERSION))
         return
-    first = next((r for r in reqs if r["label"] == "new"), reqs[0])
+    first = next(r for r in reqs if r["label"] == "new")
     # where the task stands: the latest request with a verdict (one labeled without one says nothing new)
     latest = next((r for r in reversed(reqs) if r["finished"] is not None or r["outcome"] is not None), reqs[-1])
     answered = [r["answered_at"] for r in reqs if r["answered_at"]]

@@ -25,3 +25,12 @@ describe("task filters", () => {
     expect(tasksIn(tasks, "all")).toHaveLength(4)
   })
 })
+
+describe("the project filter", () => {
+  it("falls back to all when its project has no tasks in the range", async () => {
+    const { filterOrAll } = await import("./tasks")
+    expect(filterOrAll("beta", projectOptions(tasks))).toBe("beta")
+    expect(filterOrAll("gamma", projectOptions(tasks))).toBe("all")
+    expect(filterOrAll("all", [])).toBe("all")
+  })
+})

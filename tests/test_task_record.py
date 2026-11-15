@@ -265,3 +265,11 @@ def test_a_project_named_only_in_the_reply_is_no_signal(conn):
     """The agent mentions its main project in most replies; only the request's own words count for the name."""
     chatty = item(conn, "W1", "V-a", "10:00", text="ask haojun what's up", reply="Asked him how Sample is going")
     assert project_hints(conn, chatty, PROJECTS) == []
+
+
+def test_a_task_left_without_its_first_request_is_dropped_and_its_follow_ups_relabeled(conn):
+    label(conn, item(conn, "W1", "V-a", "10:00"), new("Login"))
+    label(conn, item(conn, "W2", "V-a", "10:05"), same("TK-0001"), requester="bob")
+    label(conn, row(conn, "W1"), CHAT)
+    assert task_record(conn, "TK-0001") is None
+    assert [r["id"] for r in pending(conn)] == ["W2"]

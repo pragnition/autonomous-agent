@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { fmtDateTime, fmtDuration, fmtPct } from "@/lib/format"
-import { GENERAL, projectOptions, tasksIn } from "@/lib/tasks"
+import { filterOrAll, GENERAL, projectOptions, tasksIn } from "@/lib/tasks"
 
 const RANGES = [7, 30, 90]
 
@@ -129,8 +129,9 @@ function TaskList({ tasks }: { tasks: TaskRecord[] }) {
 }
 
 function TasksDialog({ tasks, days, count, sub }: { tasks: TaskRecord[]; days: number; count: number; sub: string }) {
-  const [project, setProject] = useState("all")
+  const [chosen, setProject] = useState("all")
   const options = projectOptions(tasks)
+  const project = filterOrAll(chosen, options)
   const shown = tasksIn(tasks, project)
   return (
     <Dialog>
