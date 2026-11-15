@@ -14,9 +14,9 @@ One table per schedule; the table's name is the schedule's name (lowercase lette
 ```toml
 [pr-stats]
 cron = "0 9 * * *"                 # five-field cron, in the agent's timezone (the check prints it)
-channel = "sam"                    # a person key for their DM, or a channel ("#chilliclaw-dev" or its ID)
+channel = "sam"                    # a person key for their DM, or a channel ("#project-dev" or its ID)
 prompt = """
-Send PR stats for pragnition/chilliclaw: opened, merged and still open since yesterday, and review times.
+Send PR stats for <owner>/<repo>: opened, merged and still open since yesterday, and review times.
 """
 by = "sam"                         # the asker's person key, from the first line of their message
 link = "https://…"                 # the link from that first line

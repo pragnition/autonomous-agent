@@ -237,3 +237,59 @@ async def test_missing_file_is_quiet(conn, tmp_path):
     s = make_scheduler(conn, tmp_path, rec)
     assert await s.tick(at(16, 9)) == []
     assert rec.fired == [] and rec.reports == []
+
+
+# review fixes
+
+async def test_removed_and_readded_schedule_waits_for_its_next_slot(conn, tmp_path):
+    rec = Recorder()
+    path = tmp_path / "schedules.toml"
+    path.write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 8))
+    path.write_text("")
+    await s.tick(at(16, 10))
+    path.write_text(entry())
+    await s.tick(at(20, 14))           # back days later: not straight away
+    assert rec.fired == []
+    await s.tick(at(21, 9))
+    assert rec.fired == ["daily"]
+
+
+async def test_invalid_entry_fixed_later_waits_for_its_next_slot(conn, tmp_path):
+    rec = Recorder()
+    path = tmp_path / "schedules.toml"
+    path.write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 8))
+    path.write_text(entry(extra="when = 1"))
+    await s.tick(at(16, 10))
+    path.write_text(entry())
+    await s.tick(at(18, 14))
+    assert rec.fired == []
+
+
+def test_parse_reports_a_cron_that_never_runs():
+    schedules, errors = parse(entry(name="feb-30", cron="0 9 30 2 *") + VALID)
+    assert [x.name for x in schedules] == ["ok"]
+    assert len(errors) == 1 and errors[0].startswith("feb-30: ") and "never" in errors[0]
+
+
+async def test_unreadable_file_keeps_last_valid_set_and_reports_once(conn, tmp_path):
+    rec = Recorder()
+    path = tmp_path / "schedules.toml"
+    path.write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 8))
+    path.write_bytes(entry().encode() + b"# caf\xe9\n")
+    await s.tick(at(16, 9))
+    await s.tick(at(16, 9, 1))
+    assert rec.fired == ["daily"]
+    assert len(rec.reports) == 1 and "can't read" in rec.reports[0]
+
+
+def test_cli_reports_an_unreadable_file(tmp_path, capsys):
+    path = tmp_path / "schedules.toml"
+    path.write_bytes(b"\xff\xfe")
+    assert main(["--file", str(path), "--timezone", "UTC"]) == 1
+    assert "can't read" in capsys.readouterr().out

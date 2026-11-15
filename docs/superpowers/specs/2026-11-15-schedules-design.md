@@ -74,8 +74,9 @@ A new core loop runs every 60 s next to the existing ones:
 2. For each valid, unpaused entry, find the latest cron slot at or before now. Core records the last slot it handled
    per name (`settings`: `schedule.<name>.last`). If the latest slot is newer, fire once and record it. Older missed
    slots are skipped, so a core that was down fires each schedule at most once when it comes back.
-3. A schedule core sees for the first time (new, or renamed), or whose `cron` changed, records the current slot
-   without firing; it first fires at its next slot. (`schedule.<name>.last` holds the slot and the cron.)
+3. A schedule core sees for the first time (new, renamed, or back after leaving the file or being invalid), or whose
+   `cron` changed, records the current slot without firing; it first fires at its next slot. (`schedule.<name>.last`
+   holds the slot and the cron.)
 4. While the schedule is `paused` or the agent is stopped, due slots are recorded but not fired, so unpausing or
    resuming never fires a backlog.
 

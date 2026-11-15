@@ -59,6 +59,10 @@ def _entry(name: str, table) -> tuple[Schedule | None, str | None]:
     cron = table["cron"].strip()
     if len(cron.split()) != 5 or not croniter.is_valid(cron):
         return None, f"{name}: '{cron}' isn't a five-field cron expression"
+    try:
+        croniter(cron).get_next(datetime)
+    except Exception:
+        return None, f"{name}: '{cron}' never runs (no date matches it)"
     return Schedule(name=name, cron=cron, channel=table["channel"].strip(), prompt=table["prompt"],
                     by=table["by"].strip(), link=table.get("link"), paused=table.get("paused", False)), None
 
@@ -79,6 +83,17 @@ def parse(text: str) -> tuple[list[Schedule] | None, list[str]]:
     return schedules, errors
 
 
+def load(path: Path) -> tuple[list[Schedule] | None, list[str]]:
+    """parse() of the file; a missing file is no schedules, and one that can't be read is like invalid TOML."""
+    if not path.is_file():
+        return [], []
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return None, [f"can't read the file: {e}"]
+    return parse(text)
+
+
 def latest_slot(cron: str, now: datetime) -> datetime:
     """The latest time the schedule was due, at or before now (to the minute)."""
     return croniter(cron, now.replace(second=0, microsecond=0) + timedelta(seconds=1)).get_prev(datetime)
@@ -92,7 +107,8 @@ def next_slots(cron: str, now: datetime, n: int = 3) -> list[datetime]:
 class Scheduler:
     """Fires each due schedule once per cron slot. A schedule seen for the first time, or whose cron changed, waits
     for its next slot; slots missed while core was down collapse into one firing; slots due while the schedule is
-    paused or the agent is stopped are used up without firing. A broken file keeps the last valid schedules. Errors
+    paused or the agent is stopped are used up without firing; one that leaves the file and comes back counts as new.
+    A broken file keeps the last valid schedules. Errors
     (the file's, and firings that couldn't start) are reported once per distinct text."""
 
     def __init__(self, conn: sqlite3.Connection, *, path: Path, timezone: str,
@@ -107,19 +123,30 @@ class Scheduler:
         except ValueError:
             return None
 
+    def _forget_all_but(self, names: set[str]) -> None:
+        """A schedule that left the file (removed, renamed or invalid) counts as new if it comes back."""
+        for row in self.conn.execute("SELECT key FROM settings WHERE key LIKE 'schedule.%.last'").fetchall():
+            if row["key"][len("schedule."):-len(".last")] not in names:
+                self.conn.execute("DELETE FROM settings WHERE key = ?", (row["key"],))
+
     def _record(self, s: Schedule, slot: datetime) -> None:
         db.set_setting(self.conn, f"schedule.{s.name}.last", json.dumps({"slot": slot.isoformat(), "cron": s.cron}))
 
     async def tick(self, now: datetime | None = None) -> list[str]:
         now = (now or datetime.now(self.tz)).astimezone(self.tz)
-        text = self.path.read_text() if self.path.is_file() else ""
-        schedules, errors = parse(text)
+        schedules, errors = load(self.path)
         if schedules is not None:
             self._valid = schedules
+            self._forget_all_but({s.name for s in schedules})
         stopped = db.get_setting(self.conn, "paused", "0") == "1"
         fired = []
         for s in self._valid:
-            slot, last = latest_slot(s.cron, now), self._last(s.name)
+            try:
+                slot = latest_slot(s.cron, now)
+            except Exception as e:
+                errors.append(f"{s.name}: {e}")
+                continue
+            last = self._last(s.name)
             if last is None or last.get("cron") != s.cron:
                 self._record(s, slot)
                 continue
@@ -178,7 +205,7 @@ def main(argv: list[str]) -> int:
         return 0
     tz_name = args.timezone or _timezone()
     now = datetime.now(ZoneInfo(tz_name))
-    schedules, errors = parse(args.file.read_text())
+    schedules, errors = load(args.file)
     for s in schedules or []:
         times = ", ".join(t.strftime("%Y-%m-%d %H:%M") for t in next_slots(s.cron, now))
         print(f"{s.name}  {s.cron}  -> {s.channel}{'  (paused)' if s.paused else ''}\n  next: {times} ({tz_name})")

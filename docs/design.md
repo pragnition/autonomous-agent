@@ -248,10 +248,12 @@ conversation on that message's thread, first line `[schedule <name> · <cron> ·
 the thread continue that conversation. Each firing is its own conversation, so runs can overlap; the queue's gate
 applies as to any turn.
 
-- A schedule seen for the first time, or whose `cron` changed, waits for its next slot.
+- A schedule seen for the first time (or back after it was removed or invalid), or whose `cron` changed, waits for
+  its next slot.
 - Slots missed while core was down collapse into one firing when it comes back.
 - Slots due while the schedule is `paused` or the agent is stopped are used up without firing.
-- A file that isn't valid TOML keeps the last valid schedules; an invalid entry is skipped and the rest still fire.
+- A file that isn't valid TOML or can't be read keeps the last valid schedules; an invalid entry (including a cron
+  that never matches) is skipped and the rest still fire.
 - Errors (the file's, and firings that couldn't start, e.g. the bot isn't in the channel) are DMed to each admin
   once per distinct set and logged; a firing that couldn't start is retried every minute.
 

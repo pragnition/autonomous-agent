@@ -740,3 +740,14 @@ async def test_reply_in_a_scheduled_thread_continues_it(convos, queue, conn):
     convo_ids = {r["conversation_id"] for r in conn.execute("SELECT conversation_id FROM work_items")}
     assert convo_ids == {first.conversation_id}
     assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 2
+
+
+async def test_scheduled_run_that_fails_after_its_header_says_so_in_the_thread(convos, slack, conn):
+    def broken(*a, **k):
+        raise RuntimeError("database is locked")
+    convos.payloads.turn = broken
+    assert await convos.start_scheduled(scheduled()) is None
+    assert slack.posts[0]["text"] == "⏰ nightly-sweep"
+    assert len(slack.posts) == 2 and slack.posts[1]["thread_ts"] == "101.0"
+    assert "database is locked" in slack.posts[1]["text"]
+    assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
