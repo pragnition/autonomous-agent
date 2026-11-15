@@ -18,9 +18,18 @@ log = logging.getLogger(__name__)
 SESSION_KEY = "linear_session:{}"
 
 
+def linear_requester(body: dict, config=None) -> str | None:
+    """Who asked, from a session webhook: the person who prompted it, else the one who started it. A team member
+    (matched by their Linear email) is named by their person key, anyone else by their Linear name."""
+    user = (body.get("agentActivity") or {}).get("user") if body.get("action") == "prompted" else None
+    user = user or (body.get("agentSession") or {}).get("creator") or {}
+    person = config.person_by_linear(user.get("email")) if config is not None else None
+    return person.key if person else user.get("name")
+
+
 class LinearAgentSessions:
-    def __init__(self, conn, *, queue, payloads, client):
-        self.conn, self.queue, self.payloads, self.client = conn, queue, payloads, client
+    def __init__(self, conn, *, queue, payloads, client, config=None):
+        self.conn, self.queue, self.payloads, self.client, self.config = conn, queue, payloads, client, config
 
     async def on_event(self, body: dict) -> None:
         sid = (body.get("agentSession") or {}).get("id")
@@ -47,4 +56,5 @@ class LinearAgentSessions:
         issue = body["agentSession"].get("issue") or {}
         payload["origin"] = origin_line(f"Linear {issue['identifier']}" if issue.get("identifier") else "Linear",
                                         link=issue.get("url"))
+        payload.update(source="linear", requester=linear_requester(body, self.config), follows=None)
         self.queue.enqueue(convo_id, "turn", payload)

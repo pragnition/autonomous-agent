@@ -197,10 +197,13 @@ class Conversations:
                 await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.working, actor="human"))
         return self._row(convo["id"])
 
-    def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, unattended: bool = False,
+    def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, source: str,
+                      requester: str | None, follows: str | None = None, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
         payload["origin"] = origin  # the runner puts it at the top of the prompt
+        # where the turn came from, who asked and which turn it carries on: the task record's labeler reads them
+        payload.update(source=source, requester=requester, follows=follows)
         if continuation:
             payload["continuation"] = continuation
         if message_ts:
@@ -236,7 +239,8 @@ class Conversations:
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
         came_from = event.get("thread_ts")
-        self._enqueue_turn(convo, text, person.key, origin=origin, message_ts=event["ts"],
+        self._enqueue_turn(convo, text, person.key, origin=origin, source="slack", requester=person.key,
+                           message_ts=event["ts"],
                            reply_thread_ts=came_from if came_from != convo["thread_ts"] else None)
         await self._react(channel, event["ts"], SEEN)  # the person sees it landed long before the session replies
 
@@ -277,7 +281,7 @@ class Conversations:
         convo = self._row(self._new(resp["channel"], resp["ts"], task.project, task.id))
         task = tasks.transition(self.conn, task.id, Status.working, actor="linear")
         self._enqueue_turn(convo, f"Linear issue {task.source_ref}: {task.title}\n\n{task.description}",
-                           task.requester, unattended=True,
+                           task.requester, unattended=True, source="linear", requester=task.requester,
                            origin=origin_line(f"Linear {task.source_ref}", link=issue_link(task.description)))
         await self.notifier.task_changed(task)
 
@@ -297,7 +301,8 @@ class Conversations:
                 name = await _answer(self.person_name(by.key))
                 tags = ", ".join(t for t in (by.key if name else "", f"GitHub @{by.github}" if by.github else "") if t)
                 who = f"{name or by.key} ({tags})" if tags else by.key
-            return self._enqueue_turn(convo, s.prompt, by.key if by else None, unattended=True,
+            return self._enqueue_turn(convo, s.prompt, by.key if by else None, unattended=True, source="schedule",
+                                      requester=by.key if by else s.by,
                                       origin=origin_line(f"schedule {s.name} · {s.cron} · set up by {who}",
                                                          link=s.link))
         except Exception as e:  # the ⏰ is posted: say why in its thread, and don't post another on every retry
@@ -344,6 +349,7 @@ class Conversations:
             p, limit = item.payload, limit_name(outcome, self.config.limits)
             self._enqueue_turn(self._row(convo["id"]), f"(Your last turn hit its {limit} before you finished. Carry "
                                "on from where you stopped.)", p.get("actor"), origin=p.get("origin") or "",
+                               source=p.get("source") or "slack", requester=p.get("requester"), follows=item.id,
                                unattended=bool(p.get("unattended")), message_ts=p.get("message_ts"),
                                reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1)
         if text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own

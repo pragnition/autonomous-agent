@@ -122,3 +122,32 @@ async def test_client_uses_app_token_when_installed():
     await c.agent_activity("S1", "thought", "On it")
     assert [s[0] for s in seen] == ["lin_api_key", "Bearer app-tok"]
     assert seen[0][1] == {"input": {"agentSessionId": "S1", "content": {"type": "thought", "body": "On it"}}}
+
+
+# who asked (the task record)
+
+@pytest.fixture
+def people_sessions(conn, client, tmp_path):
+    from agent_fixtures import make_config
+    return LinearAgentSessions(conn, queue=WorkQueue(conn), payloads=FakePayloads(), client=client,
+                               config=make_config(tmp_path))
+
+
+async def test_created_session_requester_is_the_creator_person(people_sessions, conn):
+    await people_sessions.on_event(event("created", agentSession={
+        "id": "S1", "creator": {"name": "Ann A", "email": "ANN@example.com"}}))
+    [turn] = turns(conn)
+    assert (turn["source"], turn["requester"]) == ("linear", "ann")
+
+
+async def test_prompted_session_requester_is_the_activity_user_name_when_unknown(people_sessions, conn):
+    await people_sessions.on_event(event("created", agentSession={
+        "id": "S1", "creator": {"name": "Ann A", "email": "ann@example.com"}}))
+    await people_sessions.on_event(event("prompted", agentSession={"id": "S1"}, agentActivity={
+        "content": {"type": "prompt", "body": "also logout"}, "user": {"name": "Dana Lee", "email": "dana@x.io"}}))
+    assert turns(conn)[1]["requester"] == "Dana Lee"
+
+
+async def test_session_without_a_config_names_the_creator(sessions, conn):
+    await sessions.on_event(event("created", agentSession={"id": "S1", "creator": {"name": "Ann A"}}))
+    assert turns(conn)[0]["requester"] == "Ann A"

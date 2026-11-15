@@ -292,6 +292,9 @@ class AgentToolRouter:
             record_message(self.conn, ctx.channel, thread_ts, convo_id)
         payload = self.turn_payload(convo_id, brief, ctx.actor, ctx.unattended)
         payload["origin"] = self._handover_origin(ctx)
+        asked = self._payload(ctx)  # a hand-over is part of the calling turn's task: same source, same requester
+        payload.update(source=asked.get("source") or "slack", requester=asked.get("requester", ctx.actor),
+                       follows=ctx.work_item_id)
         self.queue.enqueue(convo_id, "turn", payload)
         await self.notifier.task_changed(task)
         return ToolReply(f"Started {task.id} ({task.title}) in a new session for {project}.")

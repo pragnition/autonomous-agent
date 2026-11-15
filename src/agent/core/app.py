@@ -132,7 +132,7 @@ class CoreApp:
             if linear_client is not None:   # installed, core's own Linear calls show as the agent too
                 linear_client.token = self.linear_auth.token
             self.linear_sessions = LinearAgentSessions(
-                self.conn, queue=self.queue, payloads=self.payloads,
+                self.conn, queue=self.queue, payloads=self.payloads, config=self.config,
                 client=linear_client or LinearClient("", token=self.linear_auth.token))
             self.public_app = make_public_app(webhook_secret=secrets.get("LINEAR_WEBHOOK_SECRET", ""),
                                               on_event=self.on_linear_event, auth=self.linear_auth,

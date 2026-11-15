@@ -751,3 +751,33 @@ async def test_scheduled_run_that_fails_after_its_header_says_so_in_the_thread(c
     assert len(slack.posts) == 2 and slack.posts[1]["thread_ts"] == "101.0"
     assert "database is locked" in slack.posts[1]["text"]
     assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
+
+
+# where each turn came from and who asked (the task record)
+
+async def test_slack_turn_records_source_and_requester(convos, queue):
+    await convos.handle_slack(dm("study the codebase"))
+    p = queue.claim().payload
+    assert (p["source"], p["requester"], p.get("follows")) == ("slack", "ann", None)
+
+
+async def test_scheduled_turn_records_schedule_and_by(convos, queue, conn):
+    await convos.start_scheduled(scheduled())
+    p = only_item(queue, conn).payload
+    assert (p["source"], p["requester"]) == ("schedule", "ann")
+
+
+async def test_scheduled_turn_by_someone_unknown_keeps_their_name(convos, queue, conn):
+    await convos.start_scheduled(scheduled(by="carol", link=None))
+    assert only_item(queue, conn).payload["requester"] == "carol"
+
+
+async def test_continuation_follows_the_turn_it_continues(convos, queue):
+    await convos.handle_slack(mention("t41", "build it"))
+    first = queue.claim()
+    result = {"outcome": "max_turns"}
+    queue.complete(first.id, result)
+    await convos.on_result(queue.get(first.id), result)
+    nxt = queue.claim()
+    assert nxt.payload["follows"] == first.id
+    assert (nxt.payload["source"], nxt.payload["requester"]) == ("slack", "ann")

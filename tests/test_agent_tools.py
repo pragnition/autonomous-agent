@@ -398,3 +398,11 @@ async def test_stop_all_keeps_queued_turns_and_tells_the_thread(router, ctx_memb
     assert router.queue.get(queued).status == "queued" and router.queue.get(running).status == "cancelled"
     stopped = [p for p in router.slack.posts if "Stopped" in p["text"]]
     assert sorted(p["thread_ts"] for p in stopped) == ["1.0", "8.0"]
+
+
+async def test_start_task_follows_the_calling_turn(router, conn):
+    cid = add_conversation(conn, project=None, channel="D-ann", thread_ts="9.0")
+    ctx = router.context_for(add_item(router.queue, cid, source="slack", requester="ann"))
+    await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
+    child = latest_item(router).payload
+    assert (child["follows"], child["source"], child["requester"]) == (ctx.work_item_id, "slack", "ann")
