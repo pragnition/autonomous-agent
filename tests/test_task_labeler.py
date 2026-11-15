@@ -190,3 +190,46 @@ async def test_make_haiku_raises_unavailable_when_unreachable():
     complete = make_haiku("http://proxy:1", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     with pytest.raises(HaikuUnavailable):
         await complete("s", "u", "sid")
+
+
+# review fixes
+
+async def test_a_hand_over_waits_while_its_parent_turn_is_still_running(conn, tmp_path):
+    turn(conn, "P1", "V-a", 0, "split this up")
+    conn.execute("UPDATE work_items SET status = 'claimed', result = NULL WHERE id = 'P1'")
+    turn(conn, "C1", "V-child", 1, "the brief", follows="P1")
+    haiku = FakeHaiku(answer("new", title="Split it"), answer("chat", outcome="Did the child part"))
+    lab = labeler(conn, tmp_path, haiku)
+    assert await lab.sweep() == 0 and haiku.calls == []
+    conn.execute("UPDATE work_items SET status = 'done', result = ? WHERE id = 'P1'",
+                 (json.dumps({"outcome": "done", "text": "handed it over"}),))
+    await lab.sweep()
+    assert (label_of(conn, "P1"), label_of(conn, "C1")) == (("new", "TK-0001"), ("same", "TK-0001"))
+
+
+async def test_an_unexpected_error_neither_counts_a_try_nor_stops_other_requesters(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "study", requester="ann")
+    turn(conn, "W2", "V-b", 1, "deploy it", requester="bob")
+    haiku = FakeHaiku(RuntimeError("boom"), answer("new", title="Deploy"))
+    assert await labeler(conn, tmp_path, haiku).sweep() == 1
+    assert (tries_of(conn, "W1"), label_of(conn, "W2")) == (0, ("new", "TK-0001"))
+
+
+async def test_capacity_is_checked_before_each_call(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "study")
+    turn(conn, "W2", "V-a", 1, "and more")
+    answers = iter([True, True, False])
+
+    async def has_capacity():
+        return next(answers, False)
+
+    haiku = FakeHaiku(answer("new", title="Study"), answer("same", task="TK-0001"))
+    lab = TaskLabeler(conn, make_config(tmp_path), complete=haiku, has_capacity=has_capacity,
+                      tasks_dir=tmp_path / "tasks")
+    assert await lab.sweep() == 1 and len(haiku.calls) == 1
+
+
+async def test_make_haiku_treats_a_non_json_body_as_a_bad_answer():
+    complete = make_haiku("http://proxy:1", httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html>oops</html>"))))
+    assert await complete("s", "u", "sid") == ""

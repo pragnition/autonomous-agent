@@ -184,3 +184,20 @@ def test_export_into_an_unwritable_folder_logs(conn, tmp_path, caplog):
     with caplog.at_level(logging.ERROR):
         export_months(conn, tmp_path / "file" / "tasks", {"2026-11"}, "UTC")
     assert "couldn't write the task file for 2026-11" in caplog.text
+
+
+# review fixes
+
+def test_a_turn_cancelled_before_pickup_adds_no_working_time(conn):
+    label(conn, item(conn, "W1", "V-a", "10:00", started="10:00", answered="10:05"), new("Study"))
+    w2 = item(conn, "W2", "V-a", "11:00", answered="14:00", status="cancelled")
+    conn.execute("UPDATE work_items SET result = NULL WHERE id = 'W2'")
+    label(conn, row(conn, "W2"), same("TK-0001", None, None))
+    assert task_record(conn, "TK-0001")["work_time_s"] == 300
+
+
+def test_a_request_with_no_verdict_keeps_the_tasks_outcome(conn):
+    label(conn, item(conn, "W1", "V-a", "10:00"), new("Build it", "Built it and opened PR #3", True))
+    label(conn, item(conn, "W2", "V-a", "10:30"), Label("same", "TK-0001", None, None, None))
+    rec = task_record(conn, "TK-0001")
+    assert (rec["finished"], rec["outcome"], rec["requests"]) == (True, "Built it and opened PR #3", 2)

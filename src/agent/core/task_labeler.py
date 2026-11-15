@@ -41,7 +41,7 @@ request, the agent's reply to it, and what came before. Answer with one JSON obj
   piece of work; "same" for one that continues, corrects or follows up an earlier task (a nudge like "so what are the
   findings??" or "bro I logged you in already" continues the task it's about).
 - task: for "same", the id of the earlier task it continues. Use only an id listed below; otherwise answer "new".
-- title: for "new", 3-8 words naming the work ("Debloat study of the ChilliClaw codebase").
+- title: for "new", 3-8 words naming the work ("Debloat study of the web app codebase").
 - outcome: for "new" and "same", one sentence on what the agent did or delivered in this reply.
 - finished: for "new" and "same", whether the agent delivered what was asked. A PR opened, a deploy to staging or a
   report posted counts as finished even while it waits for review or merge. Not finished: it couldn't do it, got
@@ -74,7 +74,12 @@ def make_haiku(base_url: str, http: httpx.AsyncClient | None = None) -> Complete
         if resp.status_code >= 400:  # a request it will never take: counts as a bad answer, so it ends as chat
             log.warning("Haiku refused a label request: %s %s", resp.status_code, resp.text[:300])
             return ""
-        return "".join(b.get("text", "") for b in resp.json().get("content") or [] if b.get("type") == "text")
+        try:
+            content = resp.json().get("content") or []
+        except ValueError:  # not an answer at all: a bad one, so it ends as chat if it keeps happening
+            log.warning("the proxy answered a label request with something that isn't JSON: %s", resp.text[:300])
+            return ""
+        return "".join(b.get("text", "") for b in content if b.get("type") == "text")
 
     return complete
 
@@ -152,11 +157,7 @@ class TaskLabeler:
             rows = pending(self.conn)
             if not rows:
                 return 0
-            try:
-                if not await self.has_capacity():
-                    return 0
-            except Exception:
-                log.warning("couldn't ask the proxy for capacity; labeling waits", exc_info=True)
+            if not await self._capacity():
                 return 0
             groups: dict[str | None, list] = {}
             for row in rows:
@@ -174,30 +175,47 @@ class TaskLabeler:
                         if task_id:
                             months.add(month_of(task_record(self.conn, task_id)["started_at"], self.config.timezone))
 
-            await asyncio.gather(*(run(g) for g in groups.values()))
+            # every group finishes before the lock is released, even one that failed
+            for failure in await asyncio.gather(*(run(g) for g in groups.values()), return_exceptions=True):
+                if isinstance(failure, Exception):
+                    log.error("labeling a requester's requests failed", exc_info=failure)
             if months:
                 export_months(self.conn, self.tasks_dir, months, self.config.timezone)
             if labeled:
                 log.info("labeled %d request(s)", len(labeled))
             return len(labeled)
 
+    async def _capacity(self) -> bool:
+        """Whether the proxy has room: labeling only runs on capacity real work isn't using."""
+        try:
+            return await self.has_capacity()
+        except Exception:
+            log.warning("couldn't ask the proxy for capacity; labeling waits", exc_info=True)
+            return False
+
     async def _label(self, row: sqlite3.Row, source: str, requester: str | None, follows: str | None,
                      session: str):
         """Label one request: its task id, None for chat, or _STOP when it has to wait."""
         fixed = None
         if follows:
-            parent = self.conn.execute("SELECT label, task_id FROM request_labels WHERE work_item_id = ?",
-                                       (follows,)).fetchone()
+            parent = self.conn.execute(
+                "SELECT w.conversation_id, l.label, l.task_id FROM work_items w LEFT JOIN request_labels l "
+                "ON l.work_item_id = w.id WHERE w.id = ?", (follows,)).fetchone()
             if parent is not None and parent["label"] is not None:
                 fixed = parent["task_id"]
-            elif any(p["id"] == follows for p in pending(self.conn)):
-                return _STOP  # the turn it carries on isn't labeled yet
+            elif parent is not None and not (parent["conversation_id"] or "").startswith("V-smoke"):
+                return _STOP  # the turn it carries on is still running, or finished and not labeled yet
+        if not await self._capacity():
+            return _STOP
         ctx = context_for(self.conn, row, requester)
         offered = {e["task"] for e in ctx.earlier if e["task"]} | {t["task"] for t in ctx.recent}
         try:
             answer = await self.complete(PROMPT, render(ctx, source=source, requester=requester), session)
         except HaikuUnavailable as e:
             log.info("labeling waits: %s", e)
+            return _STOP
+        except Exception:  # not the request's fault: it waits for the next sweep without using up a try
+            log.exception("asking Haiku to label %s failed", row["id"])
             return _STOP
         label = parse_label(answer)
         if label is None:

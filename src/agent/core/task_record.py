@@ -230,7 +230,8 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
         conn.execute("DELETE FROM task_records WHERE id = ?", (task_id,))
         return
     first = next((r for r in reqs if r["label"] == "new"), reqs[0])
-    latest = reqs[-1]
+    # where the task stands: the latest request with a verdict (one labeled without one says nothing new)
+    latest = next((r for r in reversed(reqs) if r["finished"] is not None or r["outcome"] is not None), reqs[-1])
     answered = [r["answered_at"] for r in reqs if r["answered_at"]]
     finished = None if latest["finished"] is None else bool(latest["finished"])
     record = {
@@ -239,7 +240,9 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
         "followed_up_by": [p for p in _distinct(r["requester"] for r in reqs) if p != first["requester"]],
         "where": _distinct(r["link"] for r in reqs),
         "started_at": reqs[0]["arrived_at"], "ended_at": max(answered) if answered else None,
-        "work_time_s": work_seconds([(r["started_at"] or r["arrived_at"], r["answered_at"]) for r in reqs]),
+        # from pickup to answer; a request never picked up (cancelled while queued, so no result) adds nothing
+        "work_time_s": work_seconds([(r["started_at"] or (r["arrived_at"] if r["result"] else None), r["answered_at"])
+                                     for r in reqs]),
         "requests": len(reqs), "finished": finished, "outcome": latest["outcome"],
         "links": _distinct(link for r in reqs
                            for link in _LINKS.findall(json.loads(r["result"]).get("text") or "" if r["result"] else "")),
