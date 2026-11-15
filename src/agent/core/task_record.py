@@ -244,7 +244,8 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
         "links": _distinct(link for r in reqs
                            for link in _LINKS.findall(json.loads(r["result"]).get("text") or "" if r["result"] else "")),
         "steps": [{"at": r["arrived_at"], "by": r["requester"], "asked": r["asked"], "outcome": r["outcome"],
-                   "finished": None if r["finished"] is None else bool(r["finished"]), "work_item": r["work_item_id"]}
+                   "finished": None if r["finished"] is None else bool(r["finished"]), "work_item": r["work_item_id"],
+                   "conversation": r["conversation_id"]}
                   for r in reqs]}
     conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, jensen_time_s, finished, "
                  "record) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET source = excluded.source, "

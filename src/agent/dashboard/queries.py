@@ -14,7 +14,7 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from agent import db
-from agent.core.kpis import FMT, compute_kpis
+from agent.core.kpis import FMT, SOURCES, compute_kpis
 
 STATES = {"queued": "queued", "running": "claimed", "done": "done", "failed": "failed", "cancelled": "cancelled"}
 TERMINAL = {"done", "failed", "cancelled"}
@@ -330,26 +330,29 @@ def _kpis_dict(k) -> dict:
         elif dataclasses.is_dataclass(value):
             value = dataclasses.asdict(value)
         out[f.name] = value
-    out["merge_rate"] = k.merge_rate
+    out["finished_rate"] = k.finished_rate
     return out
 
 
+TASK_LIST = 200  # the KPI page lists at most this many of the window's tasks
+
+
 def kpi_view(conn: sqlite3.Connection, days: int, now: datetime, tz: str) -> dict:
+    """The four KPIs, tasks per local day by source, and the window's tasks, newest first."""
     zone = ZoneInfo(tz)
     today = now.astimezone(zone).date()
     dates = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
     lo = datetime.combine(dates[0], time(), zone).astimezone(UTC).strftime(FMT)
     hi = now.astimezone(UTC).strftime(FMT)
-    daily = {d.isoformat(): {"date": d.isoformat(), "issues": 0, "prs": 0, "merged": 0} for d in dates}
-
-    def bucket(sql: str, key: str) -> None:
-        for r in conn.execute(sql, (lo, hi)):
-            day = datetime.strptime(r["ts"], FMT).replace(tzinfo=UTC).astimezone(zone).date().isoformat()
-            if day in daily:
-                daily[day][key] += 1
-
-    bucket("SELECT handed_at AS ts FROM linear_issues WHERE handed_at >= ? AND handed_at < ?", "issues")
-    bucket("SELECT opened_at AS ts FROM agent_prs WHERE opened_at >= ? AND opened_at < ?", "prs")
-    bucket("SELECT merged_at AS ts FROM agent_prs WHERE merged_at >= ? AND merged_at < ?", "merged")
-    kpis = compute_kpis(conn, since=now - timedelta(days=days), until=now)
-    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values())}
+    daily = {d.isoformat(): {"date": d.isoformat(), **{s: 0 for s in SOURCES}} for d in dates}
+    for r in conn.execute("SELECT started_at, source FROM task_records WHERE started_at >= ? AND started_at < ?",
+                          (lo, hi)):
+        day = datetime.strptime(r["started_at"], FMT).replace(tzinfo=UTC).astimezone(zone).date().isoformat()
+        if day in daily and r["source"] in daily[day]:
+            daily[day][r["source"]] += 1
+    since = now - timedelta(days=days)
+    tasks = [json.loads(r["record"]) for r in conn.execute(
+        "SELECT record FROM task_records WHERE started_at >= ? AND started_at < ? ORDER BY started_at DESC, id DESC "
+        "LIMIT ?", (since.astimezone(UTC).strftime(FMT), hi, TASK_LIST))]
+    kpis = compute_kpis(conn, since=since, until=now)
+    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values()), "tasks": tasks}

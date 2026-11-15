@@ -146,7 +146,8 @@ def test_apply_label_builds_a_task_across_requests(conn):
     assert rec["where"] == ["https://slack/p1", "https://slack/p2"]
     assert rec["links"] == ["https://github.com/o/r/pull/7", "https://linear.app/ws/issue/SAM-9/x"]
     assert rec["steps"][1] == {"at": at("11:00"), "by": "bob", "asked": "so the findings?",
-                               "outcome": "Posted the findings", "finished": True, "work_item": "W2"}
+                               "outcome": "Posted the findings", "finished": True, "work_item": "W2",
+                               "conversation": "V-b"}
 
 
 def test_time_without_a_pickup_counts_from_arrival(conn):

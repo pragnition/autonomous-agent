@@ -1,4 +1,4 @@
-import { Ban, Bot, Braces, CheckCircle2, CircleDashed, CircleDot, FilePen, FileText, Gauge, GitFork, Globe,
+import { Ban, Bot, Braces, CheckCircle2, CircleDashed, CircleDot, Clock, FilePen, FileText, Gauge, GitFork, Globe,
   Kanban, ListChecks, Loader2, MessageSquare, Plug, Search, Terminal, Wrench, XCircle } from "lucide-react"
 import type { ComponentType } from "react"
 import { Link } from "react-router"
@@ -32,6 +32,7 @@ const SOURCES: Record<Source, { label: string; icon: Icon }> = {
   slack: { label: "Slack", icon: MessageSquare },
   linear: { label: "Linear", icon: Kanban },
   handover: { label: "Hand-over", icon: GitFork },
+  schedule: { label: "Schedule", icon: Clock },
   other: { label: "Other", icon: CircleDot },
 }
 

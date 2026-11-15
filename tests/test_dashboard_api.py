@@ -368,7 +368,7 @@ async def test_history_is_cached(api, proxy):
 
 async def test_kpis_route(api):
     body = await (await api.get("/api/kpis?days=7", headers=ANN)).json()
-    assert len(body["daily"]) == 7 and "merge_rate" in body["kpis"]
+    assert len(body["daily"]) == 7 and "finished_rate" in body["kpis"] and body["tasks"] == []
     assert (await api.get("/api/kpis?days=0", headers=ANN)).status == 400
 
 

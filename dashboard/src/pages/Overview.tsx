@@ -35,12 +35,10 @@ function WeekCard() {
           {({ kpis: k }) => (
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
               {[
-                ["Ticket → pickup", fmtDuration(k.pickup.median_s)],
-                ["Pickup → PR", fmtDuration(k.to_pr.median_s)],
-                ["PR → merge", fmtDuration(k.to_merge.median_s)],
-                ["Merge rate", fmtPct(k.merge_rate)],
-                ["Issues · done", `${k.issues} · ${k.done}`],
-                ["PRs · merged", `${k.prs} · ${k.merged}`],
+                ["Tasks", String(k.tasks)],
+                ["Time per task", fmtDuration(k.time.median_s)],
+                ["Finished", fmtPct(k.finished_rate)],
+                ["Shipped", `${k.merged} merged · ${k.issues_closed} closed`],
               ].map(([label, value]) => (
                 <div key={label}>
                   <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -50,7 +48,7 @@ function WeekCard() {
             </dl>
           )}
         </QueryState>
-        <p className="mt-4 text-xs text-muted-foreground">Times are medians.</p>
+        <p className="mt-4 text-xs text-muted-foreground">Time per task is a median; shipped is PRs merged and Linear issues closed.</p>
       </CardContent>
     </Card>
   )

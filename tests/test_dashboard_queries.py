@@ -288,23 +288,31 @@ def test_events_paging_and_types(conn):
     assert page["types"] == ["resume_all", "stop_all"]
 
 
-def test_kpi_daily_zero_filled_without_cost(conn, queue):
-    from agent.core.linear_issues import record_issue
+def _task(conn, n, source, started, finished):
+    record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": started, "steps": []}
+    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, jensen_time_s, finished, "
+                 "record) VALUES (?, ?, 'ann', ?, ?, 60, ?, ?)",
+                 (f"TK-{n:04d}", source, started, started, int(finished), json.dumps(record)))
+
+
+def test_kpi_view_daily_by_source_and_task_list(conn, queue):
     now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
-    record_issue(conn, {"createdAt": "2026-11-12T03:00:00Z", "issue": {"id": "i1", "identifier": "PRA-1"}}, "V-1")
+    _task(conn, 1, "slack", "2026-11-12T03:00:00Z", True)
+    _task(conn, 2, "linear", "2026-11-13T02:00:00Z", False)
+    _task(conn, 3, "slack", "2026-11-10T02:00:00Z", True)        # before the window
     conn.execute("INSERT INTO agent_prs(repo, number, opened_at, merged_at, closed_at, issue_identifier, updated_at) "
                  "VALUES ('o/r', 1, '2026-11-12T04:00:00Z', '2026-11-13T02:00:00Z', '2026-11-13T02:00:00Z', "
                  "'PRA-1', '2026-11-13T02:00:00Z')")
     view = kpi_view(conn, 3, now, "Asia/Singapore")
     assert [d["date"] for d in view["daily"]] == ["2026-11-11", "2026-11-12", "2026-11-13"]
     by_date = {d["date"]: d for d in view["daily"]}
-    assert by_date["2026-11-11"] == {"date": "2026-11-11", "issues": 0, "prs": 0, "merged": 0}
-    assert by_date["2026-11-12"]["issues"] == 1 and by_date["2026-11-12"]["prs"] == 1
-    assert by_date["2026-11-13"]["merged"] == 1
-    assert "projects" not in view
-    assert not {"cost_usd", "cost_per_task", "cost_per_merged"} & set(view["kpis"])
-    assert view["kpis"]["merged"] == 1 and view["kpis"]["merge_rate"] == 1.0
-    assert view["kpis"]["to_merge"]["n"] == 1
+    assert by_date["2026-11-11"] == {"date": "2026-11-11", "slack": 0, "linear": 0, "schedule": 0}
+    assert by_date["2026-11-12"]["slack"] == 1 and by_date["2026-11-13"]["linear"] == 1
+    assert [t["id"] for t in view["tasks"]] == ["TK-0002", "TK-0001"]
+    k = view["kpis"]
+    assert (k["tasks"], k["finished"], k["finished_rate"], k["merged"]) == (2, 1, 0.5, 1)
+    assert k["by_source"] == {"slack": 1, "linear": 1, "schedule": 0} and k["time"]["n"] == 2
+    assert not {"cost_usd", "cost_per_task", "merge_rate", "pickup"} & set(k)
 
 
 def test_overview_counts_local_day(conn, queue):

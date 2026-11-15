@@ -4,7 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 
 export type Tokens = { in: number; out: number; cache_read: number; cache_write: number }
 export type SessionState = "queued" | "running" | "done" | "failed" | "cancelled"
-export type Source = "slack" | "linear" | "handover" | "other"
+export type Source = "slack" | "linear" | "handover" | "schedule" | "other"
 
 export type SessionRow = {
   id: string
@@ -138,15 +138,30 @@ export type History = {
 
 export type Stat = { n: number; median_s: number | null; p90_s: number | null }
 
+export type TaskSource = "slack" | "linear" | "schedule"
+
+export type TaskStep = {
+  at: string; by: string | null; asked: string; outcome: string | null; finished: boolean | null
+  work_item: string; conversation: string | null
+}
+
+// One task from the task record (src/agent/core/task_record.py)
+export type TaskRecord = {
+  id: string; title: string; source: TaskSource
+  requested_by: string | null; followed_up_by: string[]; where: string[]
+  started_at: string; ended_at: string | null; jensen_time_s: number; requests: number
+  finished: boolean | null; outcome: string | null; links: string[]; steps: TaskStep[]
+}
+
 export type KpiView = {
   kpis: {
     since: string; until: string
-    pickup: Stat; to_pr: Stat; to_merge: Stat; to_done_pr: Stat; to_done_other: Stat; queue_wait: Stat
-    issues: number; done: number; canceled: number
-    prs: number; merged: number; closed: number; unmatched: number
-    merge_rate: number | null
+    tasks: number; by_source: Record<TaskSource, number>; time: Stat
+    finished: number; finished_rate: number | null
+    merged: number; issues_closed: number
   }
-  daily: { date: string; issues: number; prs: number; merged: number }[]
+  daily: { date: string; slack: number; linear: number; schedule: number }[]
+  tasks: TaskRecord[]
 }
 
 export type EventSource = "slack" | "linear" | "dashboard" | "command line" | "agent" | "other"
