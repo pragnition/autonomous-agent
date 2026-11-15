@@ -106,3 +106,134 @@ def test_cli_exits_nonzero_on_errors(tmp_path, capsys):
 def test_cli_missing_file(tmp_path, capsys):
     assert main(["--file", str(tmp_path / "none.toml"), "--timezone", "UTC"]) == 0
     assert "no schedules file" in capsys.readouterr().out
+
+
+# the scheduler
+
+import pytest
+
+from agent import db
+from agent.core.schedules import Scheduler
+
+
+class Recorder:
+    def __init__(self, fail_times: int = 0, error: str = "boom"):
+        self.fired, self.reports, self.fail_times, self.error = [], [], fail_times, error
+
+    async def fire(self, schedule):
+        if self.fail_times:
+            self.fail_times -= 1
+            raise RuntimeError(self.error)
+        self.fired.append(schedule.name)
+
+    async def report(self, text):
+        self.reports.append(text)
+
+
+@pytest.fixture
+def conn(tmp_path):
+    c = db.connect(tmp_path / "agent.db")
+    db.create_schema(c)
+    return c
+
+
+def entry(name="daily", cron="0 9 * * *", extra=""):
+    return f'[{name}]\ncron = "{cron}"\nchannel = "C1"\nprompt = "p"\nby = "ann"\n{extra}\n'
+
+
+def make_scheduler(conn, tmp_path, rec):
+    return Scheduler(conn, path=tmp_path / "schedules.toml", timezone="Asia/Singapore", fire=rec.fire,
+                     report=rec.report)
+
+
+async def test_first_sight_records_without_firing(conn, tmp_path):
+    rec = Recorder()
+    (tmp_path / "schedules.toml").write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    assert await s.tick(at(16, 9, 30)) == []
+    assert await s.tick(at(17, 9)) == ["daily"]
+    assert rec.fired == ["daily"]
+
+
+async def test_fires_once_per_slot(conn, tmp_path):
+    rec = Recorder()
+    (tmp_path / "schedules.toml").write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 8, 59))
+    for t in (at(16, 9), at(16, 9, 1), at(16, 9, 59)):
+        await s.tick(t)
+    assert rec.fired == ["daily"]
+
+
+async def test_downtime_fires_once_on_return(conn, tmp_path):
+    rec = Recorder()
+    (tmp_path / "schedules.toml").write_text(entry())
+    await make_scheduler(conn, tmp_path, rec).tick(at(16, 9))
+    await make_scheduler(conn, tmp_path, rec).tick(at(19, 10))  # a restarted core
+    assert rec.fired == ["daily"]
+
+
+async def test_changed_cron_waits_for_its_next_slot(conn, tmp_path):
+    rec = Recorder()
+    path = tmp_path / "schedules.toml"
+    path.write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 9))
+    path.write_text(entry(cron="0 */3 * * *"))
+    await s.tick(at(16, 13))
+    assert rec.fired == []
+    await s.tick(at(16, 15))
+    assert rec.fired == ["daily"]
+
+
+async def test_paused_and_stopped_slots_are_consumed(conn, tmp_path):
+    rec = Recorder()
+    path = tmp_path / "schedules.toml"
+    path.write_text(entry(extra="paused = true"))
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 8))
+    await s.tick(at(16, 9))            # due while paused
+    path.write_text(entry())
+    await s.tick(at(16, 9, 5))         # unpaused just after: no backlog
+    assert rec.fired == []
+    db.set_setting(conn, "paused", "1")
+    await s.tick(at(17, 9))            # due while the agent is stopped
+    db.set_setting(conn, "paused", "0")
+    await s.tick(at(17, 9, 5))
+    assert rec.fired == []
+    await s.tick(at(18, 9))
+    assert rec.fired == ["daily"]
+
+
+async def test_broken_file_keeps_last_valid_set_and_reports_once(conn, tmp_path):
+    rec = Recorder()
+    path = tmp_path / "schedules.toml"
+    path.write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 8))
+    path.write_text("[x\n")
+    await s.tick(at(16, 9))
+    await s.tick(at(16, 9, 1))
+    assert rec.fired == ["daily"]
+    assert len(rec.reports) == 1 and "not valid TOML" in rec.reports[0]
+    path.write_text(entry())
+    await s.tick(at(16, 9, 2))
+    assert len(rec.reports) == 1 and db.get_setting(conn, "schedules.errors_hash") == ""
+
+
+async def test_failed_firing_retries_and_reports_once(conn, tmp_path):
+    rec = Recorder(fail_times=2, error="not_in_channel")
+    (tmp_path / "schedules.toml").write_text(entry())
+    s = make_scheduler(conn, tmp_path, rec)
+    await s.tick(at(16, 8))
+    for t in (at(16, 9), at(16, 9, 1), at(16, 9, 2), at(16, 9, 3)):
+        await s.tick(t)
+    assert rec.fired == ["daily"]
+    assert len(rec.reports) == 1 and "not_in_channel" in rec.reports[0]
+
+
+async def test_missing_file_is_quiet(conn, tmp_path):
+    rec = Recorder()
+    s = make_scheduler(conn, tmp_path, rec)
+    assert await s.tick(at(16, 9)) == []
+    assert rec.fired == [] and rec.reports == []

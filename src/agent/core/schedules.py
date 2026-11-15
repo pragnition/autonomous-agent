@@ -8,14 +8,23 @@ by hand. Core reads it every minute and fires each due schedule as a turn. `pyth
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import logging
 import re
+import sqlite3
 import tomllib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
+
+from agent import db
+
+log = logging.getLogger(__name__)
 
 NAME = re.compile(r"^[a-z0-9-]{1,40}$")
 REQUIRED = ("cron", "channel", "prompt", "by")
@@ -78,6 +87,65 @@ def latest_slot(cron: str, now: datetime) -> datetime:
 def next_slots(cron: str, now: datetime, n: int = 3) -> list[datetime]:
     it = croniter(cron, now)
     return [it.get_next(datetime) for _ in range(n)]
+
+
+class Scheduler:
+    """Fires each due schedule once per cron slot. A schedule seen for the first time, or whose cron changed, waits
+    for its next slot; slots missed while core was down collapse into one firing; slots due while the schedule is
+    paused or the agent is stopped are used up without firing. A broken file keeps the last valid schedules. Errors
+    (the file's, and firings that couldn't start) are reported once per distinct text."""
+
+    def __init__(self, conn: sqlite3.Connection, *, path: Path, timezone: str,
+                 fire: Callable[[Schedule], Awaitable[object]], report: Callable[[str], Awaitable[None]]):
+        self.conn, self.path, self.tz, self.fire, self.report = conn, Path(path), ZoneInfo(timezone), fire, report
+        self._valid: list[Schedule] = []
+
+    def _last(self, name: str) -> dict | None:
+        raw = db.get_setting(self.conn, f"schedule.{name}.last")
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError:
+            return None
+
+    def _record(self, s: Schedule, slot: datetime) -> None:
+        db.set_setting(self.conn, f"schedule.{s.name}.last", json.dumps({"slot": slot.isoformat(), "cron": s.cron}))
+
+    async def tick(self, now: datetime | None = None) -> list[str]:
+        now = (now or datetime.now(self.tz)).astimezone(self.tz)
+        text = self.path.read_text() if self.path.is_file() else ""
+        schedules, errors = parse(text)
+        if schedules is not None:
+            self._valid = schedules
+        stopped = db.get_setting(self.conn, "paused", "0") == "1"
+        fired = []
+        for s in self._valid:
+            slot, last = latest_slot(s.cron, now), self._last(s.name)
+            if last is None or last.get("cron") != s.cron:
+                self._record(s, slot)
+                continue
+            if slot <= datetime.fromisoformat(last["slot"]):
+                continue
+            if not (s.paused or stopped):
+                try:
+                    await self.fire(s)
+                except Exception as e:
+                    log.exception("schedule %s couldn't start", s.name)
+                    errors.append(f"{s.name}: couldn't start: {e}")
+                    continue
+                fired.append(s.name)
+            self._record(s, slot)
+        await self._report(errors)
+        return fired
+
+    async def _report(self, errors: list[str]) -> None:
+        text = "\n".join(f"- {e}" for e in errors)
+        digest = hashlib.sha256(text.encode()).hexdigest() if errors else ""
+        if digest == db.get_setting(self.conn, "schedules.errors_hash", ""):
+            return
+        if errors:
+            log.warning("schedules: %s", "; ".join(errors))
+            await self.report(text)
+        db.set_setting(self.conn, "schedules.errors_hash", digest)
 
 
 # python -m agent schedules
