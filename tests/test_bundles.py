@@ -78,4 +78,4 @@ def test_every_skill_has_name_and_description(skill):
 def test_core_skills_present():
     assert {p.parent.name for p in SKILL_DIRS[0].glob("*/SKILL.md")} == {
         "debugging", "build-feature", "browser-testing", "find-features", "playwright-cli", "review-before-pr",
-        "pr-description"}
+        "pr-description", "schedules"}

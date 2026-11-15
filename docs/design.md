@@ -6,8 +6,8 @@ questions, investigates incidents, fixes bugs and builds features, tests them en
 requests that a person reviews and merges.
 
 It runs as one Docker Compose stack on a single host. Claude access goes through a Claude account proxy on the
-same host. The agent's name is `name` in `agent.toml`; it is the agent's display name, its branch prefix and the
-Linear label it picks up. In Slack it serves the people listed in `agent.toml` under `[people]`; anyone else gets a
+same host. The agent's name is `name` in `agent.toml`; it is the agent's display name and the Linear label it
+picks up. In Slack it serves the people listed in `agent.toml` under `[people]`; anyone else gets a
 refusal.
 
 ## Components
@@ -55,7 +55,7 @@ into the environment), runs only this repository's code and never runs Claude. I
 - keeps all state in one SQLite database, `data/db/agent.db` (WAL), created on start;
 - serves the agent API, the git endpoint, the public Linear listener, the dashboard and the model-call meter;
 - runs core's tools for the sessions;
-- runs background loops: git mirror refresh (5 min), Linear poll (1 min), PR stats (5 min), KPI digest check
+- runs background loops: git mirror refresh (5 min), Linear poll (1 min), schedules (1 min), PR stats (5 min), KPI digest check
   (5 min), Linear app token refresh (10 min) and runner token renewal (hourly).
 
 At start it writes the runner token to `data/runner/runner-token`, copies each project's app env file to
@@ -88,6 +88,9 @@ Everything lives under `/var/agent`, the `agentwork` volume, which survives rebu
 | `memory/` | Claude Code's auto memory, shared by every session |
 | `transcripts/<work item>.jsonl` | the runner's own transcript of each turn |
 | `bundles/<version>/` | the core plugin, the effortless plugin and every pack's plugin |
+
+The schedules file is outside the volume, at `/data/schedules/schedules.toml` (the host's `data/schedules/`), the
+same path as in core.
 
 Sessions run with `permission_mode="bypassPermissions"`. Each gets the system prompt and persona from the payload,
 the plugins, the MCP servers from `[mcp]` (with `${VAR}` filled from the session's environment; a server with an
@@ -221,6 +224,40 @@ There are two ways in:
   with `LINEAR_APP_TOKEN` (core refreshes it in `data/runner/linear.env`).
 
 An admin installs the app with the `linear_install` tool: core DMs them a single-use link valid for 15 minutes.
+
+### Schedules
+
+Work on a timer. People ask the agent for something on a schedule in plain language ("send me PR stats every
+morning at 9", "sweep the codebase every night at 10"); the agent writes it into the schedules file with its own
+tools (the `schedules` skill), and core fires it. People can also edit the file by hand on the host:
+`data/schedules/schedules.toml`, mounted at `/data/schedules` in core and the agent container.
+
+```toml
+[nightly-sweep]
+cron = "0 22 * * *"           # five-field cron, in agent.toml's timezone
+channel = "#project-dev"      # a channel name or ID, or a person key for their DM
+prompt = "Sweep the codebase and file each real problem as a Linear issue labelled jensen. Skip anything open."
+by = "sam"                    # who asked: the turn's actor when it is a person key
+link = "https://…"            # where they asked (optional)
+paused = false                # optional
+```
+
+Every minute core reads the file and, for each schedule whose latest cron slot it hasn't handled yet (`settings`:
+`schedule.<name>.last`), posts `⏰ <name>` in the channel and queues an unattended turn with the prompt in a new
+conversation on that message's thread, first line `[schedule <name> · <cron> · set up by <who> · <link>]`. Replies in
+the thread continue that conversation. Each firing is its own conversation, so runs can overlap; the queue's gate
+applies as to any turn.
+
+- A schedule seen for the first time, or whose `cron` changed, waits for its next slot.
+- Slots missed while core was down collapse into one firing when it comes back.
+- Slots due while the schedule is `paused` or the agent is stopped are used up without firing.
+- A file that isn't valid TOML keeps the last valid schedules; an invalid entry is skipped and the rest still fire.
+- Errors (the file's, and firings that couldn't start, e.g. the bot isn't in the channel) are DMed to each admin
+  once per distinct set and logged; a firing that couldn't start is retried every minute.
+
+`python -m agent schedules` (in either container; `just schedules` on the host) prints each schedule with its next
+three run times and any errors, and exits non-zero on errors. The agent runs it after every edit. Core writes its
+timezone to `runner/timezone` so the check in the agent container uses the same one.
 
 ### Tasks and status in Slack
 
@@ -397,7 +434,8 @@ Host data lives under `${AGENT_DATA:-./data}`.
 | `secrets/supervisor.env` | `SLACK_ALERT_WEBHOOK` (optional) |
 | `secrets/agent.env` | the agent container's environment: `GH_TOKEN` for its own `gh` login, its dev and test keys |
 | `secrets/projects/<project>.env` | a project's app `.env` for local runs; core copies it at start |
-| `runner/` | written by core for the agent container: `runner-token`, `linear.env`, `projects/` |
+| `runner/` | written by core for the agent container: `runner-token`, `linear.env`, `projects/`, `timezone` |
+| `schedules/schedules.toml` | the schedules; the agent edits it, core fires it |
 | `db/agent.db` | core's state |
 | `runs/` | each turn's session messages, for the dashboard |
 | `git/` | the bare mirrors behind the git endpoint |
@@ -412,7 +450,7 @@ Linear app also `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` and `LINEAR_WEBHOOK_S
 
 | Key | Meaning |
 |---|---|
-| `name`, `github`, `timezone` | the agent's name (display name, branch prefix, Linear label), its GitHub login, the timezone for digests and caps |
+| `name`, `github`, `timezone` | the agent's name (display name, Linear label), its GitHub login, the timezone for digests, caps and schedules |
 | `[people.<key>]` | `slack` user id and `linear` email (required), `github` login, `role` (`member` or `admin`), `tailscale` login |
 | `[limits]` | `max_concurrent_sessions` (10), `max_tasks_per_day` (20), `task_minutes` (90), `max_turns` (400) |
 | `[claude.models]` | `default` for every session, `hard` after "use fable" |
@@ -442,6 +480,7 @@ account's noreply address.
 | `just dashboard-serve` | `tailscale serve --bg --https=9443 http://127.0.0.1:18086`: the dashboard at `https://<node>.<tailnet>.ts.net:9443`, tailnet only |
 | `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `relay`) |
 | `just kpis [--days N] [--project P]` | prints the KPIs |
+| `just schedules` | checks the schedules file and prints each schedule's next three run times |
 | `just stop`, `just resume` | the kill switch from the host, for when Slack isn't an option |
 | `just account-names` | writes the proxy's account holders' names for the dashboard (run on the host) |
 | `just proxy-install` | installs the account proxy, placed at `claude_proxy/claude-fallback-proxy.py` first, as a systemd user service (once) |

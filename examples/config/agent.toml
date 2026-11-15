@@ -1,5 +1,5 @@
 # Example install config. Copy it to data/config/agent.toml (core reads /data/config/agent.toml) and edit.
-name = "jensen"                  # the agent's name, branch prefix and Linear label
+name = "jensen"                  # the agent's name and Linear label
 # github = "jensen-bot"          # the agent's GitHub login, when it differs from name
 timezone = "Asia/Singapore"
 

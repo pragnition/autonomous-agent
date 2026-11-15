@@ -27,9 +27,6 @@ poller turns each issue into its own session that fixes it.
 - No new core tool. The agent edits a file.
 - No schedules page on the dashboard.
 - No catch-up of every slot missed while core was down (at most one firing on return, below).
-- No change to how the agent names branches or labels PRs. Its PRs already look like any teammate's: a new branch
-  per piece of work named the repo's way, a PR to the default branch with the repo's usual labels, and no marking
-  as agent work. The GitHub account shows who opened it.
 
 ## Approaches
 
@@ -45,12 +42,9 @@ poller turns each issue into its own session that fixes it.
 
 ### The file
 
-One TOML file, `data/schedules/schedules.toml` on the host. Bind mounts:
-
-| Service | Path | Mode |
-|---|---|---|
-| core | `/data/schedules` | read-write (core creates the folder and gives it to the agent's uid at start; it never writes the file) |
-| agent | `/var/agent/schedules` | read-write |
+One TOML file, `data/schedules/schedules.toml` on the host, bind-mounted read-write at the same path,
+`/data/schedules`, in core and the agent container. Core creates the folder at start and gives it and its files to
+the agent's uid; it never writes the file.
 
 Each table is one schedule; its key is the name (`[a-z0-9-]+`, at most 40 characters):
 
@@ -62,13 +56,14 @@ prompt = """
 Dogfood <project> on main and file each new breakage as a Linear issue labelled jensen.
 Skip anything already open.
 """
-by = "sam"                    # person key of who asked; the turn's actor
+by = "sam"                    # who asked; the turn's actor when it is a person key
 link = "https://…"            # where they asked (optional)
 paused = false                # optional
 ```
 
-`cron`, `channel`, `prompt` and `by` are required. `by` must be a key in `[people]`. Unknown keys are an error for
-that entry.
+`cron`, `channel`, `prompt` and `by` are required text; `link` is text and `paused` is true or false. Unknown keys
+are an error for that entry. `by` isn't checked against `[people]` (the agent container has no `agent.toml`): a person
+key becomes the turn's actor, anything else fires with no actor and shows as written.
 
 ### Firing
 
@@ -79,9 +74,10 @@ A new core loop runs every 60 s next to the existing ones:
 2. For each valid, unpaused entry, find the latest cron slot at or before now. Core records the last slot it handled
    per name (`settings`: `schedule.<name>.last`). If the latest slot is newer, fire once and record it. Older missed
    slots are skipped, so a core that was down fires each schedule at most once when it comes back.
-3. A schedule core sees for the first time (new, or renamed) records the current slot without firing; it first
-   fires at its next slot.
-4. While the agent is stopped, due slots are recorded but not fired.
+3. A schedule core sees for the first time (new, or renamed), or whose `cron` changed, records the current slot
+   without firing; it first fires at its next slot. (`schedule.<name>.last` holds the slot and the cron.)
+4. While the schedule is `paused` or the agent is stopped, due slots are recorded but not fired, so unpausing or
+   resuming never fires a backlog.
 
 A firing:
 
@@ -95,14 +91,16 @@ parallel within `max_concurrent_sessions`.
 
 ### Errors
 
-When the file or an entry has errors, core DMs each admin the errors once per distinct file content (a hash in
-`settings`), and logs them. A fixed file clears it.
+Errors are the file's (not TOML, invalid entries) and firings that couldn't start (e.g. the bot isn't in the
+channel; retried every minute). Core DMs each admin the list once per distinct text (a hash in
+`settings`: `schedules.errors_hash`) and logs it. No errors clears the hash.
 
 ### Checking the file
 
 `python -m agent schedules [--file PATH]` parses the file and prints each schedule with its next three firing
 times, then any errors; it exits non-zero when there are errors. It runs in the agent container (the agent checks
-its edits) and on the host as `just schedules`.
+its edits) and on the host as `just schedules`. It uses `agent.toml`'s timezone where it can read it (core), else
+`/run/agent/timezone`, which core writes at start for the agent container, else UTC.
 
 ### The agent's side
 
@@ -110,6 +108,12 @@ its edits) and on the host as `just schedules`.
 - A `schedules` skill in the core plugin: the file's path and format, record who asked and the link, run
   `python -m agent schedules` after every edit and fix what it reports, reply with the next firing times, pause with
   `paused = true` and remove by deleting the table.
+
+### PRs
+
+The agent's PRs look like any teammate's: a new branch per piece of work named the repo's way, a PR to the default
+branch with the repo's usual labels, and no marking as agent work; the GitHub account shows who opened it.
+`system.md` says so, and the `pr-description` skill no longer opens the PR body with "you're an AI agent".
 
 ### Docs
 
