@@ -78,10 +78,15 @@ Rules in code, without Haiku:
 - A reply that isn't valid JSON is retried on the next sweep. After 3 tries the request is labeled `chat` and
   `finished` stays empty, so one bad request can't hold up the sweep forever.
 
-A sweep every 5 minutes labels any finished request that is still unlabeled, in the order they arrived, and stops
-at the first request it can't label, because a label can depend on any earlier one (in the conversation or the
-requester's recent tasks). The same sweep is the backfill: on first start it labels every request already in the
-database.
+A sweep every 5 minutes labels any finished request that is still unlabeled. A label only depends on earlier
+requests in its conversation and the same requester's recent tasks, so the sweep keeps arrival order **per
+requester** and labels different requesters in parallel (a few at a time). Within one requester it stops at the first
+request it can't label; other requesters carry on. The same sweep is the backfill: on first start it labels every
+request already in the database.
+
+Labeling uses the same Claude seats as Jensen's sessions, so it never competes with them: before each call it asks
+the proxy for capacity, the same check sessions use, and waits for the next sweep when there's none. The calls only
+go out when Jensen has room to spare.
 
 ### Source and requester
 
@@ -125,16 +130,18 @@ Records live in core's database and are never deleted.
 
 ### How Jensen reads it
 
-Core writes a copy of the record to `/data/tasks/tasks.jsonl`, one task per line, newest first. It rewrites the file
-whenever a record changes, writing to a temporary file and renaming it so a reader never sees half a file. The folder
-is mounted into the agent container read-only, the same way `/data/schedules` is shared.
+Core writes a copy of the record to one file per month, `/data/tasks/YYYY-MM.jsonl` (by the task's start, in the
+agent's timezone), one task per line, newest first. When a record changes, only its month's file is rewritten,
+written to a temporary file and renamed so a reader never sees half a file. The folder is mounted into the agent
+container read-only, the same way `/data/schedules` is shared.
 
 A new core plugin skill, `task-history`, tells Jensen when and how to use it:
 
 - **When:** someone asks what Jensen did, worked on or finished; who asked for something; how long something took;
   what's still unfinished; or anything about past work.
-- **How:** query the file with `jq` (filter by date, person, source, finished; search titles and steps). Answer from
-  the record, link the thread or issue, and say so when the record has nothing.
+- **How:** pick the months the question covers, then query those files with `jq` (filter by date, person, source,
+  finished; search titles and steps). Never read a whole file into the conversation. Answer from the record, link the
+  thread or issue, and say so when the record has nothing.
 - **What it doesn't show:** chat isn't recorded, and the newest request appears only once its labeling sweep has run
   (up to about 5 minutes).
 
@@ -226,8 +233,10 @@ How Jensen reads the record:
   task from last week still counts as shipped this week.
 - **Backfill**: the history is already in the database (every request and reply), so it gets labeled and lands in the
   record.
-- **JSON lines, not a SQLite copy**, for the agent's copy: one task per line is easy to grep and `jq`, and it stays
-  small (a few thousand tasks a year).
+- **JSON lines, one file per month, not a SQLite copy**, for the agent's copy: one task per line is easy to grep and
+  `jq`, a change rewrites only one month, and a question about last week never touches last year.
+- **Labeling is ordered per requester and waits for spare capacity**, so one stuck request delays only that person's
+  labels, and labeling never takes capacity from Jensen's own work.
 
 ## Left to the builder
 
