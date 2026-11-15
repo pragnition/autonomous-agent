@@ -169,6 +169,40 @@ CREATE TABLE IF NOT EXISTS agent_prs (
     updated_at TEXT NOT NULL,
     PRIMARY KEY(repo, number)
 );
+-- The labeler's verdict on each request the agent answered: chat, a new task or the same task as an earlier one
+CREATE TABLE IF NOT EXISTS request_labels (
+    work_item_id TEXT PRIMARY KEY,
+    conversation_id TEXT,
+    source TEXT NOT NULL,         -- slack | linear | schedule
+    requester TEXT,               -- a person key, or a Linear name when no person matches
+    follows TEXT,                 -- the work item this one carries on (a continuation or a hand-over)
+    asked TEXT NOT NULL DEFAULT '',
+    link TEXT,                    -- the origin line's URL: the Slack permalink or the Linear issue
+    label TEXT,                   -- chat | new | same; NULL until labeled
+    task_id TEXT,
+    title TEXT,                   -- for a `new` request: the task's title
+    outcome TEXT,
+    finished INTEGER,
+    arrived_at TEXT NOT NULL,     -- the work item's created_at
+    started_at TEXT,              -- its latest session_started
+    answered_at TEXT,             -- its updated_at once finished
+    tries INTEGER NOT NULL DEFAULT 0,
+    labeled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS request_labels_task ON request_labels(task_id);
+CREATE INDEX IF NOT EXISTS request_labels_requester ON request_labels(requester, arrived_at);
+-- One row per task, rebuilt from its labeled requests; `record` is the whole record as the agent's copy has it
+CREATE TABLE IF NOT EXISTS task_records (
+    id TEXT PRIMARY KEY,          -- TK-0001
+    source TEXT NOT NULL,
+    requested_by TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    jensen_time_s INTEGER NOT NULL DEFAULT 0,
+    finished INTEGER,
+    record TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS task_records_started ON task_records(started_at);
 """
 
 
