@@ -38,11 +38,14 @@ from agent.core.pr_stats import PrStatsPoller
 from agent.core.runner_tokens import sync_runner_token
 from agent.core.schedules import Scheduler
 from agent.core.sessions import Gate, WorkItem, WorkQueue
+from agent.core.task_labeler import HaikuUnavailable, TaskLabeler, make_haiku
+from agent.core.task_record import export_all
 from agent.core.tracker_tools import register_tracker_tools
 from agent.dashboard.app import make_dashboard_app
 from agent.dashboard.names import NAMES_FILE, AccountNames
 from agent.dashboard.transcript import make_scrubber
 from agent.persona import load_persona, render_persona
+from agent.proxy import ProxyUnavailable
 from agent.scrub import scrub
 from agent.tasks import Task
 
@@ -167,6 +170,9 @@ class CoreApp:
             on_start=self.conversations.on_start,
             runs_dir=self.data_dir / "runs",
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
+        # The task record: Haiku labels each answered request in the background, and the agent reads data/tasks
+        self.labeler = TaskLabeler(self.conn, self.config, complete=self._haiku(proxy),
+                                   has_capacity=lambda: self._has_capacity(proxy), tasks_dir=self.data_dir / "tasks")
         self.account_names = AccountNames(self.config_dir / NAMES_FILE)
         self.dashboard_app = make_dashboard_app(
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
@@ -176,6 +182,23 @@ class CoreApp:
         # Model calls from the apps the agent runs and tests, metered against caps; only the stack's network reaches it
         self.meter_app = make_meter_app(self.conn, self.config.llm_meter, secrets=secrets,
                                         timezone=self.config.timezone) if self.config.llm_meter.upstreams else None
+
+    @staticmethod
+    def _haiku(proxy):
+        base_url = getattr(proxy, "base_url", None)
+        if base_url:
+            return make_haiku(base_url)
+
+        async def unavailable(system: str, user: str, session_id: str) -> str:
+            raise HaikuUnavailable("no Claude proxy URL")
+        return unavailable
+
+    @staticmethod
+    async def _has_capacity(proxy) -> bool:
+        try:
+            return (await proxy.usage()).has_capacity()
+        except ProxyUnavailable:
+            return False
 
     def llm_meter(self):
         """The model-call meter's view and cap setter for the dashboard, when the meter is installed."""
@@ -267,6 +290,10 @@ class CoreApp:
             return
         self._record_run(item, result)
         await self.conversations.on_result(item, result)
+        try:  # last, and only a poke: labeling runs in the background and never touches the turn
+            self.labeler.poke()
+        except Exception:
+            log.exception("couldn't start labeling after %s", item.id)
 
     async def on_files(self, item_id: str, files: list[tuple[str, bytes]], text: str) -> bool:
         """Post files to the conversation's Slack thread. Every post is logged as evidence; returns whether it
@@ -292,9 +319,10 @@ class CoreApp:
 
     def prepare_agent_dirs(self) -> None:
         """The agent container owns what core shares with it (the CLI logins, its runner token, the schedules
-        file). Core's timezone goes to runner/timezone, for the agent's `python -m agent schedules`."""
+        file). Core's timezone goes to runner/timezone, for the agent's `python -m agent schedules`. The task files
+        stay core's: the agent only reads them."""
         cli, runner, schedules = self.data_dir / "cli", self.data_dir / "runner", self.data_dir / "schedules"
-        for path in (cli, runner, schedules):
+        for path in (cli, runner, schedules, self.data_dir / "tasks"):
             path.mkdir(parents=True, exist_ok=True)
         (runner / "timezone").write_text(self.config.timezone + "\n")
         owner = self._agent_owner()
@@ -362,7 +390,7 @@ class CoreApp:
         today = local.date().isoformat()
         if local.strftime("%H:%M") < ob.digest_time or db.get_setting(self.conn, DIGEST_SETTING) == today:
             return False
-        text = format_kpis(compute_kpis(self.conn, since=now - timedelta(days=7), until=now))
+        text = format_kpis(compute_kpis(self.conn, since=now - timedelta(days=7), until=now), self.config.name)
         await self.slack.chat_postMessage(channel=ob.digest_channel, text=text)
         db.set_setting(self.conn, DIGEST_SETTING, today)
         return True
@@ -381,6 +409,7 @@ class CoreApp:
         self.prepare_agent_dirs()
         self.share_project_envs()
         self.sync_runner_token()
+        export_all(self.conn, self.data_dir / "tasks", self.config.timezone)
         runner = web.AppRunner(self.agent_app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()
@@ -397,7 +426,8 @@ class CoreApp:
             await web.TCPSite(meter, "0.0.0.0", self.config.llm_meter.port).start()
         loops = [self._every(60, self.conversations.intake_linear), self._every(60, self.scheduler.tick),
                  self._every(3600, self.maintenance),
-                 self._every(300, self.post_digest), self._every(600, self.refresh_linear_token)]
+                 self._every(300, self.post_digest), self._every(600, self.refresh_linear_token),
+                 self._every(300, self.labeler.sweep)]
         if self.pr_stats:
             loops.append(self._every(300, self.pr_stats.poll_all))
         if self.issue_poller:

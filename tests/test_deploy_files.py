@@ -174,3 +174,8 @@ def test_agent_image_can_run_and_drive_apps():
 def test_core_publishes_public_port(compose):
     # only the Linear webhook/OAuth listener goes through Tailscale Funnel; both stay on loopback
     assert "127.0.0.1:18085:8085" in compose["services"]["core"]["ports"]
+
+
+def test_task_files_are_shared_read_only_with_the_agent(compose):
+    assert "${AGENT_DATA:-./data}/tasks:/data/tasks" in volumes(compose, "core")
+    assert "${AGENT_DATA:-./data}/tasks:/data/tasks:ro" in volumes(compose, "agent")

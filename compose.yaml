@@ -1,6 +1,6 @@
 # The autonomous agent's stack. Host data lives under ${AGENT_DATA:-./data}:
 #   config/ (agent.toml, packs/, persona.toml)   db/   runs/   git/ (bare repos the runner clones)   cli/
-#   runner/ (core's runner token for the agent container)
+#   runner/ (core's runner token for the agent container)   schedules/   tasks/ (the task record, read by the agent)
 #   secrets/core.env, secrets/supervisor.env, secrets/agent.env   (mode 0600; each service mounts only its own)
 #   secrets/projects/<project>.env   (a project's app .env; core hands it to the agent as runner/projects/)
 # Claude never runs in core: Claude Code sessions run in the `agent` service below, a container of its own. The
@@ -36,6 +36,7 @@ services:
       - ${AGENT_DATA:-./data}/cli:/data/cli
       - ${AGENT_DATA:-./data}/runner:/data/runner
       - ${AGENT_DATA:-./data}/schedules:/data/schedules     # the schedules file the agent edits; core fires it
+      - ${AGENT_DATA:-./data}/tasks:/data/tasks             # the task record, one file per month, for the agent
       - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
       - ${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro   # apps' own .env files, passed to the agent
 
@@ -77,6 +78,7 @@ services:
       - ${AGENT_DATA:-./data}/runner:/run/agent:ro
       - ${AGENT_DATA:-./data}/cli/azure:/data/cli/azure
       - ${AGENT_DATA:-./data}/schedules:/data/schedules     # the agent edits the schedules file here
+      - ${AGENT_DATA:-./data}/tasks:/data/tasks:ro          # the task record core keeps; the agent only reads it
       - agentwork:/var/agent
 
   supervisor:

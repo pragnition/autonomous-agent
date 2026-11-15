@@ -456,3 +456,69 @@ async def test_dm_admins_messages_each_admin(app):
 def test_core_runs_the_scheduler_on_the_shared_schedules_file(app):
     assert app.scheduler.path == app.data_dir / "schedules" / "schedules.toml"
     assert app.scheduler.fire == app.conversations.start_scheduled
+
+
+# the task record
+
+class StubLabeler:
+    def __init__(self, fail=False):
+        self.poked, self.fail = 0, fail
+
+    def poke(self):
+        self.poked += 1
+        if self.fail:
+            raise RuntimeError("boom")
+
+
+async def finished_dm(app, api, text="Done."):
+    await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1",
+                                          "user": "U00000001", "ts": "5.1", "text": "study the codebase"})
+    tok = mint_token(app.conn, "runner", ttl_s=60)
+    body = await (await api.post("/agent/pull", headers=bearer(tok))).json()
+    await api.post("/agent/result", json={"result": {"outcome": "done", "text": text}},
+                   headers=bearer(body["session_token"]))
+    return body["work_item"]["id"]
+
+
+async def test_a_result_pokes_the_labeler(app, api):
+    app.labeler = StubLabeler()
+    await finished_dm(app, api)
+    assert app.labeler.poked == 1
+
+
+async def test_a_failing_labeler_never_touches_the_reply(app, api):
+    app.labeler = StubLabeler(fail=True)
+    await finished_dm(app, api, "Here are the findings.")
+    assert app.slack.posts[-1]["text"] == "Here are the findings."
+
+
+async def test_a_finished_turn_lands_in_the_task_record(app, api):
+    import asyncio
+    import json as _json
+
+    async def haiku(system, user, session_id):
+        return _json.dumps({"label": "new", "title": "Debloat study", "outcome": "Listed modules", "finished": True})
+
+    app.labeler.complete = haiku
+    item_id = await finished_dm(app, api)
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if app.conn.execute("SELECT 1 FROM task_records").fetchone():
+            break
+    [rec] = [_json.loads(r[0]) for r in app.conn.execute("SELECT record FROM task_records")]
+    assert (rec["title"], rec["source"], rec["steps"][0]["work_item"]) == ("Debloat study", "slack", item_id)
+    month = rec["started_at"][:7]
+    assert (app.data_dir / "tasks" / f"{month}.jsonl").is_file()
+
+
+def test_prepare_agent_dirs_makes_the_tasks_folder(app):
+    app.prepare_agent_dirs()
+    assert (app.data_dir / "tasks").is_dir()
+
+
+async def test_digest_names_the_agent(app):
+    from datetime import UTC, datetime
+    app.config.observability.digest_channel = "#agent-ops"
+    assert await app.post_digest(datetime(2026, 11, 13, 1, 10, tzinfo=UTC))
+    [post] = [p for p in app.slack.posts if p["channel"] == "#agent-ops"]
+    assert post["text"].startswith(f"{app.config.name}, last 7 days\nTasks: 0")
