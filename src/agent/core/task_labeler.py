@@ -31,21 +31,29 @@ MAX_TRIES = 3
 TITLE_CHARS = 60
 LABELS = {"chat", "new", "same"}
 
-PROMPT = """You sort the requests a team sends their AI engineer, so the team can see what it worked on. You get one
+PROMPT = """You sort the requests a team sends their AI engineer into a record of the work it did. You get one
 request, the agent's reply to it, and what came before. Answer with one JSON object and nothing else:
 
 {"label": "chat" | "new" | "same", "task": "<id>" | null, "title": "<3-8 words>" | null,
  "outcome": "<one sentence>" | null, "finished": true | false | null}
 
-- label: "chat" for greetings, small talk and status pings with no work in them; "new" for a request that starts a
-  piece of work; "same" for one that continues, corrects or follows up an earlier task (a nudge like "so what are the
-  findings??" or "bro I logged you in already" continues the task it's about).
-- task: for "same", the id of the earlier task it continues. Use only an id listed below; otherwise answer "new".
-- title: for "new", 3-8 words naming the work ("Debloat study of the web app codebase").
-- outcome: for "new" and "same", one sentence on what the agent did or delivered in this reply.
-- finished: for "new" and "same", whether the agent delivered what was asked. A PR opened, a deploy to staging or a
-  report posted counts as finished even while it waits for review or merge. Not finished: it couldn't do it, got
-  stuck, gave up, stopped mid-work, or is waiting on input it needs to go on.
+label:
+- "chat": the request asks for no work at all. Only greetings ("hi", "yo"), thanks, small talk, "you alive?", "how's
+  it going?", or a question about the agent itself that it answers from what it already knows. When in doubt, it is
+  not chat.
+- "new": the request asks the agent to do something: build, fix, run, test, check, find out, install, set up, report,
+  investigate, or message someone ("ask Sam what's up", "tell the channel"). A different piece of work is "new" even
+  in the same conversation and even about the same project.
+- "same": the request is about one of the earlier tasks listed below and asks for no different piece of work: a
+  follow-up on its progress or result ("so what are the findings??"), a correction, a nudge ("bro I logged you in
+  already"), an answer to the agent's question, approval or edits of the agent's draft, or "done" after the person
+  did a step the agent asked for.
+task: for "same", the id of that earlier task. Use only an id listed below; if none fits, answer "new".
+title: for "new", 3-8 words naming the work, e.g. "Debloat study of the web app codebase".
+outcome: for "new" and "same", one sentence on what the agent did or delivered in this reply.
+finished: for "new" and "same", whether the agent delivered what was asked. A PR opened, a deploy to staging, a
+message sent or a report posted counts as finished even while it waits for review or merge. Not finished: it couldn't
+do it, got stuck, gave up, stopped mid-work, or is waiting on input it needs to go on.
 For "chat", task, title, outcome and finished are null."""
 
 
