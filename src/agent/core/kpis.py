@@ -18,6 +18,7 @@ from agent.core.agent_tools import AgentToolRouter, ToolContext, ToolReply, Tool
 
 FMT = "%Y-%m-%dT%H:%M:%SZ"
 SOURCES = ("slack", "linear", "schedule")
+GENERAL = "general"   # tasks on no configured project
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class Kpis:
     until: datetime
     tasks: int
     by_source: dict[str, int]
+    by_project: dict[str, int]   # each project's tasks, most first, then "general" (tasks on no project)
     time: Stat               # the agent's own working time per task
     finished: int
     merged: int
@@ -53,16 +55,23 @@ def _stat(values: list[float]) -> Stat:
 def compute_kpis(conn: sqlite3.Connection, *, since: datetime, until: datetime) -> Kpis:
     """Tasks that started in [since, until); PRs merged and Linear issues completed in it."""
     lo, hi = since.astimezone(UTC).strftime(FMT), until.astimezone(UTC).strftime(FMT)
-    rows = conn.execute("SELECT source, work_time_s, finished FROM task_records "
+    rows = conn.execute("SELECT source, project, work_time_s, finished FROM task_records "
                         "WHERE started_at >= ? AND started_at < ?", (lo, hi)).fetchall()
     by_source = {s: 0 for s in SOURCES}
+    projects: dict[str, int] = {}
     for r in rows:
         by_source[r["source"]] = by_source.get(r["source"], 0) + 1
+        if r["project"]:
+            projects[r["project"]] = projects.get(r["project"], 0) + 1
+    by_project = dict(sorted(projects.items(), key=lambda kv: (-kv[1], kv[0])))
+    general = sum(1 for r in rows if not r["project"])
+    if general:
+        by_project[GENERAL] = general
 
     def count(sql: str) -> int:
         return conn.execute(sql, (lo, hi)).fetchone()[0]
 
-    return Kpis(since, until, tasks=len(rows), by_source=by_source,
+    return Kpis(since, until, tasks=len(rows), by_source=by_source, by_project=by_project,
                 time=_stat([r["work_time_s"] for r in rows]), finished=sum(1 for r in rows if r["finished"]),
                 merged=count("SELECT COUNT(*) FROM agent_prs WHERE merged_at >= ? AND merged_at < ?"),
                 issues_closed=count("SELECT COUNT(*) FROM linear_issues WHERE completed_at >= ? AND completed_at < ?"))
@@ -85,14 +94,13 @@ def _n(count: int, one: str, many: str) -> str:
 
 def format_kpis(k: Kpis, name: str = "Agent") -> str:
     days = max(1, round((k.until - k.since) / timedelta(days=1)))
-    s = k.by_source
+    split = " · ".join(f"{name} {n}" for name, n in k.by_project.items())
     time = "n/a" if not k.time.n else \
         f"median {format_duration(k.time.median_s)} · p90 {format_duration(k.time.p90_s)}"
     rate = "n/a" if k.finished_rate is None else f"{k.finished_rate:.0%}"
     return "\n".join([
         f"{name}, last {_n(days, 'day', 'days')}",
-        f"Tasks: {k.tasks} (Slack {s.get('slack', 0)} · Linear {s.get('linear', 0)} · "
-        f"schedules {s.get('schedule', 0)})",
+        f"Tasks: {k.tasks}" + (f" ({split})" if split else ""),
         f"Time per task: {time}",
         f"Finished: {rate} ({k.finished} of {k.tasks})",
         f"Shipped: {_n(k.merged, 'PR', 'PRs')} merged · {_n(k.issues_closed, 'Linear issue', 'Linear issues')} closed",
@@ -109,7 +117,7 @@ def register_kpi_tools(router: AgentToolRouter) -> None:
                                      router.config.name))
 
     router.register(ToolSpec(
-        "kpis", "The agent's own KPIs over the last `days` days (default 7): tasks by source, time per task, the "
+        "kpis", "The agent's own KPIs over the last `days` days (default 7): tasks by project, time per task, the "
                 "share finished, and PRs merged and Linear issues closed.",
         schema({}, {"days": "integer"}), "read"), kpis)
 

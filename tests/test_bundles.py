@@ -89,4 +89,5 @@ def test_core_skills_name_no_project():
 def test_task_history_skill_points_at_the_shared_task_files():
     text = (SKILL_DIRS[0] / "task-history" / "SKILL.md").read_text()
     assert "/data/tasks/YYYY-MM.jsonl" in text and "jq" in text and "/run/agent/timezone" in text
+    assert "`project`" in text and ".project ==" in text and "general" in text
     assert "jensen" not in text.lower()

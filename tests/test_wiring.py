@@ -522,3 +522,8 @@ async def test_digest_names_the_agent(app):
     assert await app.post_digest(datetime(2026, 11, 13, 1, 10, tzinfo=UTC))
     [post] = [p for p in app.slack.posts if p["channel"] == "#agent-ops"]
     assert post["text"].startswith(f"{app.config.name}, last 7 days\nTasks: 0")
+
+
+def test_the_labeler_knows_the_configured_projects(app):
+    assert set(app.labeler.projects) == set(app.packs) and app.labeler.projects
+    assert all(p.repo for p in app.labeler.projects.values())

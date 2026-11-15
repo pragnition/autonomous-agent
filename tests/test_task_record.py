@@ -201,3 +201,61 @@ def test_a_request_with_no_verdict_keeps_the_tasks_outcome(conn):
     label(conn, item(conn, "W2", "V-a", "10:30"), Label("same", "TK-0001", None, None, None))
     rec = task_record(conn, "TK-0001")
     assert (rec["finished"], rec["outcome"], rec["requests"]) == (True, "Built it and opened PR #3", 2)
+
+
+# projects and relabeling
+
+from agent.core.task_record import LABEL_VERSION, project_hints  # noqa: E402
+from agent_fixtures import make_pack  # noqa: E402
+
+PROJECTS = {"sample": make_pack().project}   # repo o/r, Slack C-SAMPLE, Linear team SAM
+
+
+def test_a_tasks_project_is_the_first_one_its_requests_name(conn):
+    label(conn, item(conn, "W1", "V-a", "10:00"), Label("new", None, "Look into it", "Asked which app", False))
+    label(conn, item(conn, "W2", "V-a", "10:05"), Label("same", "TK-0001", None, "Fixed the app", True, "sample"))
+    rec = task_record(conn, "TK-0001")
+    assert rec["project"] == "sample"
+    assert conn.execute("SELECT project FROM task_records").fetchone()[0] == "sample"
+
+
+def test_a_task_with_no_project_is_general(conn):
+    label(conn, item(conn, "W1", "V-a", "10:00"), new("Install a plugin"))
+    assert task_record(conn, "TK-0001")["project"] is None
+
+
+def test_labels_from_an_older_labeler_are_pending_again(conn):
+    label(conn, item(conn, "W1", "V-a", "10:00"), new("First"))
+    assert pending(conn) == []
+    conn.execute("UPDATE request_labels SET version = ?", (LABEL_VERSION - 1,))
+    assert [r["id"] for r in pending(conn)] == ["W1"]
+
+
+def test_a_relabeled_new_request_keeps_its_task_id(conn):
+    w1 = item(conn, "W1", "V-a", "10:00")
+    label(conn, w1, new("First"))
+    label(conn, item(conn, "W2", "V-b", "11:00"), new("Second"))
+    label(conn, row(conn, "W1"), new("First, renamed"))
+    assert task_record(conn, "TK-0001")["title"] == "First, renamed"
+    assert conn.execute("SELECT COUNT(*) FROM task_records").fetchone()[0] == 2
+
+
+def test_a_request_relabeled_into_another_task_leaves_its_old_one(conn):
+    label(conn, item(conn, "W1", "V-a", "10:00"), new("First"))
+    label(conn, item(conn, "W2", "V-a", "10:05"), new("Second"))
+    label(conn, row(conn, "W2"), same("TK-0001"))
+    assert task_record(conn, "TK-0002") is None and task_record(conn, "TK-0001")["requests"] == 2
+
+
+def test_project_hints_from_the_conversation_linear_key_repo_and_name(conn):
+    plain = item(conn, "W1", "V-a", "10:00", text="look at SAM-12 please")
+    assert project_hints(conn, plain, PROJECTS) == ["sample"]
+    repo = item(conn, "W2", "V-b", "10:01", text="hi", reply="Opened https://github.com/o/r/pull/9")
+    assert project_hints(conn, repo, PROJECTS) == ["sample"]
+    named = item(conn, "W3", "V-c", "10:02", text="is the Sample app up?")
+    assert project_hints(conn, named, PROJECTS) == ["sample"]
+    nothing = item(conn, "W4", "V-d", "10:03", text="install superpowers")
+    assert project_hints(conn, nothing, PROJECTS) == []
+    conn.execute("UPDATE conversations SET project = 'sample' WHERE id = 'V-d'")
+    assert project_hints(conn, nothing, PROJECTS) == ["sample"]
+    assert project_hints(conn, item(conn, "W5", "V-e", "10:04", text="SAMPLER-1 and o/rx"), PROJECTS) == []

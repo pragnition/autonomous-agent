@@ -20,11 +20,12 @@ def at(hhmm, day=13):
     return f"2026-11-{day:02d}T{hhmm}:00Z"
 
 
-def task(conn, n, source, started, secs, finished):
-    record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": at(started)}
-    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, work_time_s, finished, "
-                 "record) VALUES (?, ?, 'ann', ?, ?, ?, ?, ?)",
-                 (f"TK-{n:04d}", source, at(started), at(started), secs,
+def task(conn, n, source, started, secs, finished, project=None):
+    record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": at(started),
+              "project": project}
+    conn.execute("INSERT INTO task_records(id, source, project, requested_by, started_at, ended_at, work_time_s, "
+                 "finished, record) VALUES (?, ?, ?, 'ann', ?, ?, ?, ?, ?)",
+                 (f"TK-{n:04d}", source, project, at(started), at(started), secs,
                   None if finished is None else int(finished), json.dumps(record)))
 
 
@@ -41,9 +42,9 @@ def issue(conn, n, completed):
 
 @pytest.fixture
 def seeded(conn):
-    task(conn, 1, "slack", "10:00", 600, True)
+    task(conn, 1, "slack", "10:00", 600, True, "chilliclaw")
     task(conn, 2, "slack", "11:00", 1800, False)
-    task(conn, 3, "linear", "12:00", 60, True)
+    task(conn, 3, "linear", "12:00", 60, True, "chilliclaw")
     task(conn, 4, "slack", "10:00", 99, True)       # started the day before: outside the window
     conn.execute("UPDATE task_records SET started_at = ? WHERE id = 'TK-0004'", (at("10:00", day=12),))
     pr(conn, 1, "11:00", merged="13:00")
@@ -58,6 +59,7 @@ def seeded(conn):
 def test_kpis_from_task_records(seeded):
     k = compute_kpis(seeded, since=SINCE, until=UNTIL)
     assert (k.tasks, k.by_source) == (3, {"slack": 2, "linear": 1, "schedule": 0})
+    assert k.by_project == {"chilliclaw": 2, "general": 1}
     assert k.time == Stat(3, 600, 1800)
     assert (k.finished, k.finished_rate) == (2, 2 / 3)
     assert (k.merged, k.issues_closed) == (1, 1)
@@ -66,7 +68,7 @@ def test_kpis_from_task_records(seeded):
 def test_format_kpis_exact(seeded):
     assert format_kpis(compute_kpis(seeded, since=SINCE, until=UNTIL), "Jensen") == (
         "Jensen, last 1 day\n"
-        "Tasks: 3 (Slack 2 · Linear 1 · schedules 0)\n"
+        "Tasks: 3 (chilliclaw 2 · general 1)\n"
         "Time per task: median 10m · p90 30m\n"
         "Finished: 67% (2 of 3)\n"
         "Shipped: 1 PR merged · 1 Linear issue closed")
@@ -74,7 +76,7 @@ def test_format_kpis_exact(seeded):
 
 def test_format_kpis_empty(conn):
     text = format_kpis(compute_kpis(conn, since=SINCE, until=UNTIL), "Jensen")
-    assert "Tasks: 0 (Slack 0 · Linear 0 · schedules 0)" in text
+    assert "Tasks: 0\n" in text
     assert "Time per task: n/a" in text and "Finished: n/a (0 of 0)" in text
     assert "Shipped: 0 PRs merged · 0 Linear issues closed" in text
 
@@ -118,3 +120,14 @@ async def test_kpis_tool(seeded, tmp_path):
                         unattended=False, task_id=None, channel=None, thread_ts=None)
     [spec] = [s for s in router.manifest(admin) if s["name"] == "kpis"]
     assert "cost" not in spec["description"].lower() and "tasks" in spec["description"]
+
+
+def test_projects_come_first_by_count_and_general_last(conn):
+    task(conn, 1, "slack", "10:00", 60, True)
+    task(conn, 2, "slack", "10:01", 60, True)
+    task(conn, 3, "slack", "10:02", 60, True, "beta")
+    task(conn, 4, "slack", "10:03", 60, True, "alpha")
+    task(conn, 5, "slack", "10:04", 60, True, "alpha")
+    k = compute_kpis(conn, since=SINCE, until=UNTIL)
+    assert list(k.by_project.items()) == [("alpha", 2), ("beta", 1), ("general", 2)]
+    assert "Tasks: 5 (alpha 2 · beta 1 · general 2)" in format_kpis(k)

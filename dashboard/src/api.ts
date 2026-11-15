@@ -147,7 +147,7 @@ export type TaskStep = {
 
 // One task from the task record (src/agent/core/task_record.py)
 export type TaskRecord = {
-  id: string; title: string; source: TaskSource
+  id: string; title: string; source: TaskSource; project: string | null
   requested_by: string | null; followed_up_by: string[]; where: string[]
   started_at: string; ended_at: string | null; work_time_s: number; requests: number
   finished: boolean | null; outcome: string | null; links: string[]; steps: TaskStep[]
@@ -156,7 +156,7 @@ export type TaskRecord = {
 export type KpiView = {
   kpis: {
     since: string; until: string
-    tasks: number; by_source: Record<TaskSource, number>; time: Stat
+    tasks: number; by_source: Record<TaskSource, number>; by_project: Record<string, number>; time: Stat
     finished: number; finished_rate: number | null
     merged: number; issues_closed: number
   }

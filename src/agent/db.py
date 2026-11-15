@@ -181,13 +181,15 @@ CREATE TABLE IF NOT EXISTS request_labels (
     label TEXT,                   -- chat | new | same; NULL until labeled
     task_id TEXT,
     title TEXT,                   -- for a `new` request: the task's title
+    project TEXT,                 -- the configured project the work is on; NULL for general work
     outcome TEXT,
     finished INTEGER,
     arrived_at TEXT NOT NULL,     -- the work item's created_at
     started_at TEXT,              -- its latest session_started
     answered_at TEXT,             -- its updated_at once finished
     tries INTEGER NOT NULL DEFAULT 0,
-    labeled_at TEXT
+    labeled_at TEXT,
+    version INTEGER NOT NULL DEFAULT 1  -- the labeler's version; an older one is relabeled
 );
 CREATE INDEX IF NOT EXISTS request_labels_task ON request_labels(task_id);
 CREATE INDEX IF NOT EXISTS request_labels_requester ON request_labels(requester, arrived_at);
@@ -195,6 +197,7 @@ CREATE INDEX IF NOT EXISTS request_labels_requester ON request_labels(requester,
 CREATE TABLE IF NOT EXISTS task_records (
     id TEXT PRIMARY KEY,          -- TK-0001
     source TEXT NOT NULL,
+    project TEXT,                 -- NULL: a general task
     requested_by TEXT,
     started_at TEXT NOT NULL,
     ended_at TEXT,
@@ -219,9 +222,18 @@ def connect(path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+# Columns added to tables a live install already has; CREATE TABLE IF NOT EXISTS leaves those tables as they were
+ADDED_COLUMNS = [("request_labels", "project", "TEXT"), ("request_labels", "version", "INTEGER NOT NULL DEFAULT 1"),
+                 ("task_records", "project", "TEXT")]
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Create every table and index that doesn't exist yet. Run on every start."""
+    """Create every table and index that doesn't exist yet, and add the columns older tables lack. Run on every
+    start."""
     conn.executescript(SCHEMA)
+    for table, column, kind in ADDED_COLUMNS:
+        if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
 
 def get_setting(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:

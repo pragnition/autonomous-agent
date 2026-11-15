@@ -288,16 +288,17 @@ def test_events_paging_and_types(conn):
     assert page["types"] == ["resume_all", "stop_all"]
 
 
-def _task(conn, n, source, started, finished):
-    record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": started, "steps": []}
-    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, work_time_s, finished, "
-                 "record) VALUES (?, ?, 'ann', ?, ?, 60, ?, ?)",
-                 (f"TK-{n:04d}", source, started, started, int(finished), json.dumps(record)))
+def _task(conn, n, source, started, finished, project=None):
+    record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": started, "steps": [],
+              "project": project}
+    conn.execute("INSERT INTO task_records(id, source, project, requested_by, started_at, ended_at, work_time_s, "
+                 "finished, record) VALUES (?, ?, ?, 'ann', ?, ?, 60, ?, ?)",
+                 (f"TK-{n:04d}", source, project, started, started, int(finished), json.dumps(record)))
 
 
 def test_kpi_view_daily_by_source_and_task_list(conn, queue):
     now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
-    _task(conn, 1, "slack", "2026-11-12T03:00:00Z", True)
+    _task(conn, 1, "slack", "2026-11-12T03:00:00Z", True, "sample")
     _task(conn, 2, "linear", "2026-11-13T02:00:00Z", False)
     _task(conn, 3, "slack", "2026-11-10T02:00:00Z", True)        # before the window
     conn.execute("INSERT INTO agent_prs(repo, number, opened_at, merged_at, closed_at, issue_identifier, updated_at) "
@@ -308,10 +309,11 @@ def test_kpi_view_daily_by_source_and_task_list(conn, queue):
     by_date = {d["date"]: d for d in view["daily"]}
     assert by_date["2026-11-11"] == {"date": "2026-11-11", "slack": 0, "linear": 0, "schedule": 0}
     assert by_date["2026-11-12"]["slack"] == 1 and by_date["2026-11-13"]["linear"] == 1
-    assert [t["id"] for t in view["tasks"]] == ["TK-0002", "TK-0001"]
+    assert [(t["id"], t["project"]) for t in view["tasks"]] == [("TK-0002", None), ("TK-0001", "sample")]
     k = view["kpis"]
     assert (k["tasks"], k["finished"], k["finished_rate"], k["merged"]) == (2, 1, 0.5, 1)
     assert k["by_source"] == {"slack": 1, "linear": 1, "schedule": 0} and k["time"]["n"] == 2
+    assert k["by_project"] == {"sample": 1, "general": 1}
     assert not {"cost_usd", "cost_per_task", "merge_rate", "pickup"} & set(k)
 
 

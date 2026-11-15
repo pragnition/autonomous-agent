@@ -38,3 +38,22 @@ def test_a_database_from_before_the_agent_made_its_own_clones_still_works(tmp_pa
     db.create_schema(conn)
     cid = create_conversation(conn, channel="C1", thread_ts="1.0", project="sample")
     assert conn.execute("SELECT project FROM conversations WHERE id = ?", (cid,)).fetchone()[0] == "sample"
+
+
+def test_the_task_record_tables_from_before_projects_gain_their_new_columns(tmp_path):
+    """The first task-record release created these tables without a project or a label version."""
+    conn = db.connect(tmp_path / "agent.db")
+    conn.execute("CREATE TABLE request_labels (work_item_id TEXT PRIMARY KEY, conversation_id TEXT, source TEXT NOT "
+                 "NULL, requester TEXT, follows TEXT, asked TEXT NOT NULL DEFAULT '', link TEXT, label TEXT, task_id "
+                 "TEXT, title TEXT, outcome TEXT, finished INTEGER, arrived_at TEXT NOT NULL, started_at TEXT, "
+                 "answered_at TEXT, tries INTEGER NOT NULL DEFAULT 0, labeled_at TEXT)")
+    conn.execute("INSERT INTO request_labels(work_item_id, source, label, arrived_at) VALUES ('W1', 'slack', 'chat', "
+                 "'2026-11-15T10:00:00Z')")
+    conn.execute("CREATE TABLE task_records (id TEXT PRIMARY KEY, source TEXT NOT NULL, requested_by TEXT, started_at "
+                 "TEXT NOT NULL, ended_at TEXT, work_time_s INTEGER NOT NULL DEFAULT 0, finished INTEGER, record TEXT "
+                 "NOT NULL)")
+    db.create_schema(conn)
+    db.create_schema(conn)
+    assert {"project", "version"} <= columns(conn, "request_labels")
+    assert "project" in columns(conn, "task_records")
+    assert tuple(conn.execute("SELECT project, version FROM request_labels").fetchone()) == (None, 1)

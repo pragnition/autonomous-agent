@@ -21,7 +21,7 @@ from pathlib import Path
 import httpx
 
 from agent.core.task_record import (NO_TEXT, Label, RequestContext, apply_label, context_for, count_try,
-                                    export_months, month_of, origin_of, pending, task_record)
+                                    export_months, month_of, origin_of, pending, project_hints, task_record)
 from agent.proxy import PLACEHOLDER_TOKEN
 
 log = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ PROMPT = """You sort the requests a team sends their AI engineer into a record o
 request, the agent's reply to it, and what came before. Answer with one JSON object and nothing else:
 
 {"label": "chat" | "new" | "same", "task": "<id>" | null, "title": "<3-8 words>" | null,
- "outcome": "<one sentence>" | null, "finished": true | false | null}
+ "outcome": "<one sentence>" | null, "finished": true | false | null, "project": "<name>" | null}
 
 label:
 - "chat": the request asks for no work at all. Only greetings ("hi", "yo"), thanks, small talk, "you alive?", "how's
@@ -54,7 +54,11 @@ outcome: for "new" and "same", one sentence on what the agent did or delivered i
 finished: for "new" and "same", whether the agent delivered what was asked. A PR opened, a deploy to staging, a
 message sent or a report posted counts as finished even while it waits for review or merge. Not finished: it couldn't
 do it, got stuck, gave up, stopped mid-work, or is waiting on input it needs to go on.
-For "chat", task, title, outcome and finished are null."""
+project: for "new" and "same", the name of the listed project the work is on (its code, deployments, tests, issues,
+users or roadmap), or null for general work that belongs to no project (installing tools for the agent itself,
+messaging teammates, questions about the agent, research not tied to a product). The signals core found are strong
+evidence; a request about a project's product is that project's even when it doesn't name it.
+For "chat", task, title, outcome, finished and project are null."""
 
 
 class HaikuUnavailable(Exception):
@@ -106,20 +110,33 @@ def parse_label(text: str) -> Label | None:
     text_of = lambda key: data[key].strip() if isinstance(data.get(key), str) and data[key].strip() else None  # noqa: E731
     finished = data.get("finished")
     return Label(data["label"], text_of("task"), text_of("title"), text_of("outcome"),
-                 finished if isinstance(finished, bool) else None)
+                 finished if isinstance(finished, bool) else None, text_of("project"))
 
 
-def render(ctx: RequestContext, *, source: str, requester: str | None) -> str:
-    """The user message: what came before, the ids Haiku may use, the request and the reply."""
-    lines = ["Earlier requests in this conversation (oldest first):"]
+def _where(project) -> str:
+    parts = [f"repo {project.repo}" if getattr(project, "repo", "") else "",
+             f"Slack {project.slack_channel}" if getattr(project, "slack_channel", "") else "",
+             f"Linear team {project.linear_team}" if getattr(project, "linear_team", "") else ""]
+    return ", ".join(p for p in parts if p)
+
+
+def render(ctx: RequestContext, *, source: str, requester: str | None, projects: dict | None = None,
+           hints: list[str] | None = None) -> str:
+    """The user message: the projects, what came before, the ids Haiku may use, the request and the reply."""
+    lines = ["Projects:"]
+    lines += [f"- {name}: {_where(p)}" for name, p in sorted((projects or {}).items())] or \
+        ["- none configured (project is always null)"]
+    lines.append(f"Signals core found for this request: {', '.join(hints or []) or 'none'}")
+    lines.append("Earlier requests in this conversation (oldest first):")
     for e in ctx.earlier:
         what = f"{e['task']} \"{e['title']}\"" if e["task"] else "chat"
-        lines.append(f"- [{what}] {e['asked']}")
+        lines.append(f"- [{what}{', ' + e['project'] if e.get('project') else ''}] {e['asked']}")
     if not ctx.earlier:
         lines.append("- none")
     lines.append("This person's other tasks from the last 24 hours:")
     for t in ctx.recent:
-        lines.append(f"- {t['task']} \"{t['title']}\" (latest: {t['outcome'] or 'no outcome yet'})")
+        lines.append(f"- {t['task']} \"{t['title']}\" ({t.get('project') or 'general'}; latest: "
+                     f"{t['outcome'] or 'no outcome yet'})")
     if not ctx.recent:
         lines.append("- none")
     ids = list(dict.fromkeys([e["task"] for e in ctx.earlier if e["task"]] + [t["task"] for t in ctx.recent]))
@@ -134,9 +151,10 @@ _STOP = object()  # this requester's later requests wait for the next sweep
 
 class TaskLabeler:
     def __init__(self, conn: sqlite3.Connection, config, *, complete: Complete,
-                 has_capacity: Callable[[], Awaitable[bool]], tasks_dir: Path, concurrency: int = 4,
-                 max_tries: int = MAX_TRIES):
+                 has_capacity: Callable[[], Awaitable[bool]], tasks_dir: Path, projects: dict | None = None,
+                 concurrency: int = 4, max_tries: int = MAX_TRIES):
         self.conn, self.config, self.complete, self.has_capacity = conn, config, complete, has_capacity
+        self.projects = projects or {}   # name -> ProjectConfig: what a task's project may be
         self.tasks_dir, self.concurrency, self.max_tries = Path(tasks_dir), concurrency, max_tries
         self._lock = asyncio.Lock()
         self._running: asyncio.Task | None = None
@@ -176,7 +194,7 @@ class TaskLabeler:
             async def run(group: list) -> None:
                 async with gate:
                     for row, source, requester, follows in group:
-                        task_id = await self._label(row, source, requester, follows, session)
+                        task_id = await self._label(row, source, requester, follows, session, months)
                         if task_id is _STOP:
                             return
                         labeled.append(row["id"])
@@ -202,8 +220,9 @@ class TaskLabeler:
             return False
 
     async def _label(self, row: sqlite3.Row, source: str, requester: str | None, follows: str | None,
-                     session: str):
-        """Label one request: its task id, None for chat, or _STOP when it has to wait."""
+                     session: str, months: set[str]):
+        """Label one request: its task id, None for chat, or _STOP when it has to wait. A relabeled request adds the
+        month of the task it was in to `months`, so a task it leaves is rewritten too."""
         fixed = None
         if follows:
             parent = self.conn.execute(
@@ -216,27 +235,50 @@ class TaskLabeler:
         if not await self._capacity():
             return _STOP
         ctx = context_for(self.conn, row, requester)
+        hints = project_hints(self.conn, row, self.projects)
         offered = {e["task"] for e in ctx.earlier if e["task"]} | {t["task"] for t in ctx.recent}
         try:
-            answer = await self.complete(PROMPT, render(ctx, source=source, requester=requester), session)
+            answer = await self.complete(PROMPT, render(ctx, source=source, requester=requester,
+                                                        projects=self.projects, hints=hints), session)
         except HaikuUnavailable as e:
             log.info("labeling waits: %s", e)
             return _STOP
         except Exception:  # not the request's fault: it waits for the next sweep without using up a try
             log.exception("asking Haiku to label %s failed", row["id"])
             return _STOP
+        before = self.conn.execute("SELECT * FROM request_labels WHERE work_item_id = ?", (row["id"],)).fetchone()
         label = parse_label(answer)
         if label is None:
             tries = count_try(self.conn, row, source=source, requester=requester, follows=follows)
             if tries < self.max_tries:
                 return _STOP
-            log.warning("gave up labeling %s after %d unreadable answers; it counts as chat", row["id"], tries)
-            label = Label("same", fixed, None, None, None) if fixed else Label("chat", None, None, None, None)
+            if before is not None and before["label"] is not None:  # a relabel that keeps failing: keep what it was
+                log.warning("gave up relabeling %s after %d unreadable answers; it keeps its label", row["id"], tries)
+                label = Label(before["label"], before["task_id"], before["title"], before["outcome"],
+                              None if before["finished"] is None else bool(before["finished"]), before["project"])
+            else:
+                log.warning("gave up labeling %s after %d unreadable answers; it counts as chat", row["id"], tries)
+                label = Label("same", fixed, None, None, None) if fixed else Label("chat", None, None, None, None)
         elif fixed:
-            label = Label("same", fixed, None, label.outcome, label.finished)
+            label = Label("same", fixed, None, label.outcome, label.finished, label.project)
         elif label.label == "same" and label.task not in offered:
-            label = Label("new", None, None, label.outcome, label.finished)
+            label = Label("new", None, None, label.outcome, label.finished, label.project)
         if label.label == "new" and not label.title:
             title = ctx.asked if ctx.asked != NO_TEXT else "Untitled"
-            label = Label("new", None, title[:TITLE_CHARS].strip(), label.outcome, label.finished)
+            label = Label("new", None, title[:TITLE_CHARS].strip(), label.outcome, label.finished, label.project)
+        label = Label(label.label, label.task, label.title, label.outcome, label.finished,
+                      self._project(row, label.project, hints))
+        if before is not None and before["task_id"] and (old := task_record(self.conn, before["task_id"])):
+            months.add(month_of(old["started_at"], self.config.timezone))
         return apply_label(self.conn, row, label, source=source, requester=requester, follows=follows)
+
+    def _project(self, row: sqlite3.Row, named: str | None, hints: list[str]) -> str | None:
+        """Haiku's project when it's a configured one. A name that isn't falls back to what core can see; none at all
+        in a conversation bound to a project is that project."""
+        if named in self.projects:
+            return named
+        if named:
+            return hints[0] if hints else None
+        bound = self.conn.execute("SELECT project FROM conversations WHERE id = ?",
+                                  (row["conversation_id"],)).fetchone()
+        return bound["project"] if bound and bound["project"] in self.projects else None

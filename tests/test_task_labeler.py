@@ -233,3 +233,93 @@ async def test_make_haiku_treats_a_non_json_body_as_a_bad_answer():
     complete = make_haiku("http://proxy:1", httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html>oops</html>"))))
     assert await complete("s", "u", "sid") == ""
+
+
+# projects and relabeling
+
+from agent.core.task_record import LABEL_VERSION  # noqa: E402
+from agent_fixtures import make_pack  # noqa: E402
+
+
+def project_answer(label="new", project=None, **kw):
+    return json.dumps({"label": label, "task": kw.get("task"), "title": kw.get("title", "Work"),
+                       "outcome": "did it", "finished": True, "project": project})
+
+
+def projects_labeler(conn, tmp_path, haiku):
+    async def has_capacity():
+        return True
+    return TaskLabeler(conn, make_config(tmp_path), complete=haiku, has_capacity=has_capacity,
+                       tasks_dir=tmp_path / "tasks", projects={"sample": make_pack().project})
+
+
+def project_of(conn, task_id):
+    return conn.execute("SELECT project FROM task_records WHERE id = ?", (task_id,)).fetchone()[0]
+
+
+def test_parse_label_reads_the_project():
+    assert parse_label(project_answer(project="sample")).project == "sample"
+    assert parse_label(project_answer(project=None)).project is None
+
+
+async def test_the_prompt_lists_the_projects_and_the_signals(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "fix SAM-12")
+    haiku = FakeHaiku(project_answer(project="sample"))
+    await projects_labeler(conn, tmp_path, haiku).sweep()
+    user = haiku.calls[0][1]
+    assert "sample: repo o/r" in user and "Linear team SAM" in user and "Signals" in user and "sample" in user
+    assert project_of(conn, "TK-0001") == "sample"
+
+
+async def test_an_unknown_project_falls_back_to_the_first_signal(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "fix SAM-12")
+    await projects_labeler(conn, tmp_path, FakeHaiku(project_answer(project="Sample App"))).sweep()
+    assert project_of(conn, "TK-0001") == "sample"
+
+
+async def test_an_unknown_project_without_signals_is_general(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "install superpowers")
+    await projects_labeler(conn, tmp_path, FakeHaiku(project_answer(project="tooling"))).sweep()
+    assert project_of(conn, "TK-0001") is None
+
+
+async def test_general_in_a_conversation_bound_to_a_project_is_that_project(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "check the deploy")
+    conn.execute("UPDATE conversations SET project = 'sample' WHERE id = 'V-a'")
+    await projects_labeler(conn, tmp_path, FakeHaiku(project_answer(project=None))).sweep()
+    assert project_of(conn, "TK-0001") == "sample"
+
+
+async def test_an_older_labelers_labels_are_relabeled(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "fix SAM-12")
+    lab = projects_labeler(conn, tmp_path, FakeHaiku(project_answer(project=None), project_answer(project="sample")))
+    await lab.sweep()
+    conn.execute("UPDATE request_labels SET version = ?", (LABEL_VERSION - 1,))
+    await lab.sweep()
+    assert project_of(conn, "TK-0001") == "sample"
+    line = json.loads((tmp_path / "tasks" / "2026-11.jsonl").read_text().splitlines()[0])
+    assert (line["id"], line["project"]) == ("TK-0001", "sample")
+
+
+async def test_a_relabel_that_keeps_failing_keeps_the_old_label(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "study")
+    lab = projects_labeler(conn, tmp_path, FakeHaiku(project_answer(title="Study"), "bad", "bad", "bad"))
+    await lab.sweep()
+    conn.execute("UPDATE request_labels SET version = ?", (LABEL_VERSION - 1,))
+    for _ in range(3):
+        await lab.sweep()
+    assert label_of(conn, "W1") == ("new", "TK-0001")
+    assert conn.execute("SELECT version FROM request_labels").fetchone()[0] == LABEL_VERSION
+
+
+async def test_a_task_emptied_by_a_relabel_leaves_the_agents_copy(conn, tmp_path):
+    turn(conn, "W1", "V-a", 0, "fix the login")
+    turn(conn, "W2", "V-a", 1, "and the logout")
+    lab = projects_labeler(conn, tmp_path, FakeHaiku(project_answer(title="Login"), project_answer(title="Logout"),
+                                                     project_answer(title="Login"),
+                                                     project_answer("same", task="TK-0001")))
+    await lab.sweep()
+    conn.execute("UPDATE request_labels SET version = ?", (LABEL_VERSION - 1,))
+    await lab.sweep()
+    ids = [json.loads(line)["id"] for line in (tmp_path / "tasks" / "2026-11.jsonl").read_text().splitlines()]
+    assert ids == ["TK-0001"]

@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react"
-import { Fragment, useState } from "react"
+import { Fragment, type KeyboardEvent, useState } from "react"
 import { Link } from "react-router"
 import { type TaskRecord, useKpis, useMe } from "@/api"
 import { StackedColumns } from "@/components/charts"
@@ -9,9 +9,11 @@ import { SourceBadge } from "@/components/session"
 import { StatTile } from "@/components/StatTile"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { fmtDateTime, fmtDuration, fmtPct } from "@/lib/format"
+import { GENERAL, projectOptions, tasksIn } from "@/lib/tasks"
 
 const RANGES = [7, 30, 90]
 
@@ -68,6 +70,12 @@ function TaskList({ tasks }: { tasks: TaskRecord[] }) {
     else next.add(id)
     return next
   })
+  const onKey = (id: string) => (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault()
+      toggle(id)
+    }
+  }
   return (
     <Table>
       <TableHeader>
@@ -87,7 +95,8 @@ function TaskList({ tasks }: { tasks: TaskRecord[] }) {
         )}
         {tasks.map((t) => (
           <Fragment key={t.id}>
-            <TableRow className="cursor-pointer" onClick={() => toggle(t.id)} aria-expanded={open.has(t.id)}>
+            <TableRow className="cursor-pointer" onClick={() => toggle(t.id)} onKeyDown={onKey(t.id)} role="button"
+              tabIndex={0} aria-expanded={open.has(t.id)}>
               <TableCell className="max-w-[32rem]">
                 <div className="flex items-center gap-1.5">
                   {open.has(t.id)
@@ -96,6 +105,7 @@ function TaskList({ tasks }: { tasks: TaskRecord[] }) {
                   <span className="truncate font-medium">{t.title}</span>
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 pl-5 text-xs text-muted-foreground">
+                  <Badge variant="outline" className="font-normal">{t.project ?? GENERAL}</Badge>
                   <SourceBadge source={t.source} />
                   <span className="font-mono">{t.id}</span>
                   <span className="tabular">{plural(t.requests, "request", "requests")}</span>
@@ -118,6 +128,44 @@ function TaskList({ tasks }: { tasks: TaskRecord[] }) {
   )
 }
 
+function TasksDialog({ tasks, days, count, sub }: { tasks: TaskRecord[]; days: number; count: number; sub: string }) {
+  const [project, setProject] = useState("all")
+  const options = projectOptions(tasks)
+  const shown = tasksIn(tasks, project)
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button type="button" className="rounded-xl text-left transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          aria-label={`Show the ${count} tasks`}>
+          <StatTile label="Tasks" value={count} sub={sub} className="h-full bg-transparent" />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>Tasks, last {days} days</DialogTitle>
+          <DialogDescription>
+            Newest first. Project tasks are work on a project; general tasks belong to none. Chat isn't counted. Click
+            a task for its steps.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center gap-2">
+          <Select value={project} onValueChange={setProject}>
+            <SelectTrigger size="sm" className="w-56" aria-label="Project"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All projects ({tasks.length})</SelectItem>
+              {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label} ({o.count})</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <span className="text-xs text-muted-foreground tabular">{plural(shown.length, "task", "tasks")}</span>
+        </div>
+        <div className="-mx-6 min-h-0 flex-1 overflow-y-auto border-t px-2">
+          <TaskList tasks={shown} />
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function Kpis() {
   const [days, setDays] = useState(7)
   const kpis = useKpis(days)
@@ -137,8 +185,8 @@ export function Kpis() {
         {({ kpis: k, daily, tasks }) => (
           <>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatTile label="Tasks" value={k.tasks}
-                sub={`Slack ${k.by_source.slack} · Linear ${k.by_source.linear} · schedules ${k.by_source.schedule}`} />
+              <TasksDialog tasks={tasks} days={days} count={k.tasks}
+                sub={Object.entries(k.by_project).map(([name, n]) => `${name} ${n}`).join(" · ") || "none yet"} />
               <StatTile label="Time per task" value={fmtDuration(k.time.median_s)}
                 sub={k.time.n ? `median · p90 ${fmtDuration(k.time.p90_s)}` : "no tasks in this range"} />
               <StatTile label="Finished" value={fmtPct(k.finished_rate)} sub={`${k.finished} of ${k.tasks}`} />
@@ -158,14 +206,6 @@ export function Kpis() {
                            { key: "linear", label: "Linear", color: "var(--series-2)" },
                            { key: "schedule", label: "Schedules", color: "var(--series-3)" }]} />
               </CardContent>
-            </Card>
-
-            <Card className="mt-6 py-0 shadow-none">
-              <CardHeader className="pt-5">
-                <CardTitle className="text-sm font-medium">Tasks</CardTitle>
-                <CardDescription className="text-xs">Newest first. Chat isn't counted. Click a task for its steps.</CardDescription>
-              </CardHeader>
-              <TaskList tasks={tasks} />
             </Card>
           </>
         )}

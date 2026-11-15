@@ -172,7 +172,8 @@ class CoreApp:
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         # The task record: Haiku labels each answered request in the background, and the agent reads data/tasks
         self.labeler = TaskLabeler(self.conn, self.config, complete=self._haiku(proxy),
-                                   has_capacity=lambda: self._has_capacity(proxy), tasks_dir=self.data_dir / "tasks")
+                                   has_capacity=lambda: self._has_capacity(proxy), tasks_dir=self.data_dir / "tasks",
+                                   projects={name: pack.project for name, pack in self.packs.items()})
         self.account_names = AccountNames(self.config_dir / NAMES_FILE)
         self.dashboard_app = make_dashboard_app(
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",

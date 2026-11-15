@@ -30,6 +30,9 @@ NO_TEXT = "(no text)"
 LINEAR_EVENT = "Linear agent session event:"
 ASKED_CHARS, REPLY_CHARS, STEP_CHARS = 2000, 3000, 300
 EARLIER_MAX, RECENT_MAX, RECENT_HOURS = 5, 10, 24
+# The labeler's version. Raising it relabels the whole history, oldest first, the next time the sweep runs: do so
+# whenever the prompt or the rules change what a label means.
+LABEL_VERSION = 2
 _URL = re.compile(r"https?://[^\s\]|>]+")
 _LINKS = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://linear\.app/[\w.-]+/issue/[\w-]+(?:/[\w-]+)?")
 
@@ -41,6 +44,7 @@ class Label:
     title: str | None        # for new
     outcome: str | None
     finished: bool | None
+    project: str | None = None   # a configured project's name; None for general work
 
 
 @dataclass(frozen=True)
@@ -61,12 +65,13 @@ def _iso(value: datetime) -> str:
 
 
 def pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Finished turns with no label yet, oldest first. Smoke-test conversations are never labeled."""
+    """Finished turns with no label yet, or one from an older labeler, oldest first. Smoke-test conversations are
+    never labeled."""
     return conn.execute(
         "SELECT w.* FROM work_items w LEFT JOIN request_labels l ON l.work_item_id = w.id "
         "WHERE w.kind = 'turn' AND w.status IN ('done', 'failed', 'cancelled') "
-        "AND COALESCE(w.conversation_id, '') NOT LIKE 'V-smoke%' AND l.label IS NULL "
-        "ORDER BY w.created_at, w.rowid").fetchall()
+        "AND COALESCE(w.conversation_id, '') NOT LIKE 'V-smoke%' AND (l.label IS NULL OR l.version < ?) "
+        "ORDER BY w.created_at, w.rowid", (LABEL_VERSION,)).fetchall()
 
 
 def _webhook(text: str) -> dict | None:
@@ -128,6 +133,23 @@ def _result(row: sqlite3.Row) -> dict:
         return {}
 
 
+def project_hints(conn: sqlite3.Connection, row: sqlite3.Row, projects: dict) -> list[str]:
+    """Projects core can tell a request is about, strongest first: the conversation's bound project, then a Linear key
+    of the project's team, its repo, or its name in the request or the reply."""
+    hints = []
+    convo = conn.execute("SELECT project FROM conversations WHERE id = ?", (row["conversation_id"],)).fetchone()
+    if convo and convo["project"] in projects:
+        hints.append(convo["project"])
+    text = f"{asked_text(json.loads(row['payload']))}\n{_result(row).get('text') or ''}"
+    for name, project in projects.items():
+        team, repo = getattr(project, "linear_team", ""), getattr(project, "repo", "")
+        if (team and re.search(rf"\b{re.escape(team)}-\d+\b", text, re.I)) \
+                or (repo and re.search(rf"(?<![\w.-]){re.escape(repo)}(?![\w.-])", text, re.I)) \
+                or re.search(rf"\b{re.escape(name)}\b", text, re.I):
+            hints.append(name)
+    return list(dict.fromkeys(hints))
+
+
 def context_for(conn: sqlite3.Connection, row: sqlite3.Row, requester: str | None) -> RequestContext:
     result = _result(row)
     errored = row["status"] != "done" or result.get("outcome") in FAILED_OUTCOMES
@@ -136,8 +158,8 @@ def context_for(conn: sqlite3.Connection, row: sqlite3.Row, requester: str | Non
         "FROM request_labels l WHERE l.conversation_id = ? AND l.label IS NOT NULL AND l.arrived_at <= ? "
         "AND l.work_item_id != ? ORDER BY l.arrived_at DESC, l.work_item_id DESC LIMIT ?",
         (row["conversation_id"], row["created_at"], row["id"], EARLIER_MAX)).fetchall()
-    earlier = [{"task": r["task_id"], "label": r["label"], "title": r["t"], "asked": r["asked"][:STEP_CHARS]}
-               for r in reversed(earlier_rows)]
+    earlier = [{"task": r["task_id"], "label": r["label"], "title": r["t"], "asked": r["asked"][:STEP_CHARS],
+                "project": r["project"]} for r in reversed(earlier_rows)]
     recent = []
     if requester:
         since = _iso(_ts(row["created_at"]) - timedelta(hours=RECENT_HOURS))
@@ -150,7 +172,8 @@ def context_for(conn: sqlite3.Connection, row: sqlite3.Row, requester: str | Non
                 continue
             rec = task_record(conn, r["task_id"])
             if rec:
-                recent.append({"task": rec["id"], "title": rec["title"], "outcome": rec["outcome"]})
+                recent.append({"task": rec["id"], "title": rec["title"], "outcome": rec["outcome"],
+                               "project": rec.get("project")})
             if len(recent) >= RECENT_MAX:
                 break
     return RequestContext(asked_text(json.loads(row["payload"]))[:ASKED_CHARS],
@@ -189,15 +212,22 @@ def count_try(conn: sqlite3.Connection, row: sqlite3.Row, *, source: str, reques
 
 def apply_label(conn: sqlite3.Connection, row: sqlite3.Row, label: Label, *, source: str, requester: str | None,
                 follows: str | None) -> str | None:
-    """Save the request's label and rebuild its task; the task's id, or None for chat."""
-    task_id = _new_task_id(conn) if label.label == "new" else label.task if label.label == "same" else None
+    """Save the request's label and rebuild its task (and the task it was in before, when relabeled); the task's id,
+    or None for chat. A request relabeled `new` keeps the task id it had."""
+    before = conn.execute("SELECT label, task_id FROM request_labels WHERE work_item_id = ?", (row["id"],)).fetchone()
+    if label.label == "new":
+        task_id = before["task_id"] if before and before["label"] == "new" and before["task_id"] else _new_task_id(conn)
+    else:
+        task_id = label.task if label.label == "same" else None
     is_task = task_id is not None
     _save(conn, row, source=source, requester=requester, follows=follows, label=label.label, task_id=task_id,
           title=label.title if label.label == "new" else None, outcome=label.outcome if is_task else None,
           finished=None if not is_task or label.finished is None else int(label.finished),
-          labeled_at=db.utcnow())
+          project=label.project if is_task else None, labeled_at=db.utcnow(), version=LABEL_VERSION, tries=0)
     if task_id:
         rebuild_task(conn, task_id)
+    if before and before["task_id"] and before["task_id"] != task_id:
+        rebuild_task(conn, before["task_id"])
     return task_id
 
 
@@ -234,8 +264,9 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
     latest = next((r for r in reversed(reqs) if r["finished"] is not None or r["outcome"] is not None), reqs[-1])
     answered = [r["answered_at"] for r in reqs if r["answered_at"]]
     finished = None if latest["finished"] is None else bool(latest["finished"])
+    project = next((r["project"] for r in reqs if r["project"]), None)
     record = {
-        "id": task_id, "title": first["title"] or "Untitled", "source": first["source"],
+        "id": task_id, "title": first["title"] or "Untitled", "source": first["source"], "project": project,
         "requested_by": first["requester"],
         "followed_up_by": [p for p in _distinct(r["requester"] for r in reqs) if p != first["requester"]],
         "where": _distinct(r["link"] for r in reqs),
@@ -250,11 +281,12 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
                    "finished": None if r["finished"] is None else bool(r["finished"]), "work_item": r["work_item_id"],
                    "conversation": r["conversation_id"]}
                   for r in reqs]}
-    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, work_time_s, finished, "
-                 "record) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET source = excluded.source, "
-                 "requested_by = excluded.requested_by, started_at = excluded.started_at, ended_at = excluded.ended_at, "
-                 "work_time_s = excluded.work_time_s, finished = excluded.finished, record = excluded.record",
-                 (task_id, record["source"], record["requested_by"], record["started_at"], record["ended_at"],
+    conn.execute("INSERT INTO task_records(id, source, project, requested_by, started_at, ended_at, work_time_s, "
+                 "finished, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                 "source = excluded.source, project = excluded.project, requested_by = excluded.requested_by, "
+                 "started_at = excluded.started_at, ended_at = excluded.ended_at, work_time_s = excluded.work_time_s, "
+                 "finished = excluded.finished, record = excluded.record",
+                 (task_id, record["source"], project, record["requested_by"], record["started_at"], record["ended_at"],
                   record["work_time_s"], None if finished is None else int(finished), json.dumps(record)))
 
 
