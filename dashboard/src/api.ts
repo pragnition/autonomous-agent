@@ -149,7 +149,7 @@ export type TaskStep = {
 export type TaskRecord = {
   id: string; title: string; source: TaskSource
   requested_by: string | null; followed_up_by: string[]; where: string[]
-  started_at: string; ended_at: string | null; jensen_time_s: number; requests: number
+  started_at: string; ended_at: string | null; work_time_s: number; requests: number
   finished: boolean | null; outcome: string | null; links: string[]; steps: TaskStep[]
 }
 

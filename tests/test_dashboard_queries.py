@@ -290,7 +290,7 @@ def test_events_paging_and_types(conn):
 
 def _task(conn, n, source, started, finished):
     record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": started, "steps": []}
-    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, jensen_time_s, finished, "
+    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, work_time_s, finished, "
                  "record) VALUES (?, ?, 'ann', ?, ?, 60, ?, ?)",
                  (f"TK-{n:04d}", source, started, started, int(finished), json.dumps(record)))
 

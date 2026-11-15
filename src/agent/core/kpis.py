@@ -53,7 +53,7 @@ def _stat(values: list[float]) -> Stat:
 def compute_kpis(conn: sqlite3.Connection, *, since: datetime, until: datetime) -> Kpis:
     """Tasks that started in [since, until); PRs merged and Linear issues completed in it."""
     lo, hi = since.astimezone(UTC).strftime(FMT), until.astimezone(UTC).strftime(FMT)
-    rows = conn.execute("SELECT source, jensen_time_s, finished FROM task_records "
+    rows = conn.execute("SELECT source, work_time_s, finished FROM task_records "
                         "WHERE started_at >= ? AND started_at < ?", (lo, hi)).fetchall()
     by_source = {s: 0 for s in SOURCES}
     for r in rows:
@@ -63,7 +63,7 @@ def compute_kpis(conn: sqlite3.Connection, *, since: datetime, until: datetime) 
         return conn.execute(sql, (lo, hi)).fetchone()[0]
 
     return Kpis(since, until, tasks=len(rows), by_source=by_source,
-                time=_stat([r["jensen_time_s"] for r in rows]), finished=sum(1 for r in rows if r["finished"]),
+                time=_stat([r["work_time_s"] for r in rows]), finished=sum(1 for r in rows if r["finished"]),
                 merged=count("SELECT COUNT(*) FROM agent_prs WHERE merged_at >= ? AND merged_at < ?"),
                 issues_closed=count("SELECT COUNT(*) FROM linear_issues WHERE completed_at >= ? AND completed_at < ?"))
 

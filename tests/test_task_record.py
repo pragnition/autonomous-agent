@@ -142,7 +142,7 @@ def test_apply_label_builds_a_task_across_requests(conn):
     assert (rec["title"], rec["source"], rec["requested_by"], rec["followed_up_by"]) == (
         "Debloat study", "slack", "ann", ["bob"])
     assert (rec["requests"], rec["finished"], rec["outcome"]) == (2, True, "Posted the findings")
-    assert (rec["started_at"], rec["ended_at"], rec["jensen_time_s"]) == (at("10:00"), at("11:05"), 900)
+    assert (rec["started_at"], rec["ended_at"], rec["work_time_s"]) == (at("10:00"), at("11:05"), 900)
     assert rec["where"] == ["https://slack/p1", "https://slack/p2"]
     assert rec["links"] == ["https://github.com/o/r/pull/7", "https://linear.app/ws/issue/SAM-9/x"]
     assert rec["steps"][1] == {"at": at("11:00"), "by": "bob", "asked": "so the findings?",
@@ -152,7 +152,7 @@ def test_apply_label_builds_a_task_across_requests(conn):
 
 def test_time_without_a_pickup_counts_from_arrival(conn):
     label(conn, item(conn, "W1", "V-a", "10:00", answered="10:02"), new("Quick one"))
-    assert task_record(conn, "TK-0001")["jensen_time_s"] == 120
+    assert task_record(conn, "TK-0001")["work_time_s"] == 120
 
 
 def test_chat_makes_no_task(conn):

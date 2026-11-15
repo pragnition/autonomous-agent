@@ -239,7 +239,7 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
         "followed_up_by": [p for p in _distinct(r["requester"] for r in reqs) if p != first["requester"]],
         "where": _distinct(r["link"] for r in reqs),
         "started_at": reqs[0]["arrived_at"], "ended_at": max(answered) if answered else None,
-        "jensen_time_s": work_seconds([(r["started_at"] or r["arrived_at"], r["answered_at"]) for r in reqs]),
+        "work_time_s": work_seconds([(r["started_at"] or r["arrived_at"], r["answered_at"]) for r in reqs]),
         "requests": len(reqs), "finished": finished, "outcome": latest["outcome"],
         "links": _distinct(link for r in reqs
                            for link in _LINKS.findall(json.loads(r["result"]).get("text") or "" if r["result"] else "")),
@@ -247,12 +247,12 @@ def rebuild_task(conn: sqlite3.Connection, task_id: str) -> None:
                    "finished": None if r["finished"] is None else bool(r["finished"]), "work_item": r["work_item_id"],
                    "conversation": r["conversation_id"]}
                   for r in reqs]}
-    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, jensen_time_s, finished, "
+    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, work_time_s, finished, "
                  "record) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET source = excluded.source, "
                  "requested_by = excluded.requested_by, started_at = excluded.started_at, ended_at = excluded.ended_at, "
-                 "jensen_time_s = excluded.jensen_time_s, finished = excluded.finished, record = excluded.record",
+                 "work_time_s = excluded.work_time_s, finished = excluded.finished, record = excluded.record",
                  (task_id, record["source"], record["requested_by"], record["started_at"], record["ended_at"],
-                  record["jensen_time_s"], None if finished is None else int(finished), json.dumps(record)))
+                  record["work_time_s"], None if finished is None else int(finished), json.dumps(record)))
 
 
 def task_record(conn: sqlite3.Connection, task_id: str) -> dict | None:

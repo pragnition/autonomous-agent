@@ -119,7 +119,7 @@ keeps one record per task, updated whenever one of its requests is labeled:
 | `where` | every place the task happened: Slack thread links, the Linear issue key and link, the schedule's name |
 | `started_at` | when the first request arrived |
 | `ended_at` | when Jensen answered the latest request |
-| `jensen_time_s` | the time Jensen spent working: from when a runner picked up each request (its `session_started`) to its answer, with overlapping requests merged so no second counts twice |
+| `work_time_s` | the time Jensen spent working: from when a runner picked up each request (its `session_started`) to its answer, with overlapping requests merged so no second counts twice |
 | `requests` | how many requests the task took |
 | `finished` | the latest request's `finished`, so a task that failed and was fixed on a follow-up counts as finished |
 | `outcome` | the latest request's outcome |
@@ -150,7 +150,7 @@ A new core plugin skill, `task-history`, tells Jensen when and how to use it:
 Over a window `[since, until)`, counting tasks whose first request arrived in the window:
 
 1. **Tasks**: how many, split by source.
-2. **Time per task**: `jensen_time_s`. That's Jensen's own working time; time spent queued (paused, out of Claude
+2. **Time per task**: `work_time_s`. That's Jensen's own working time; time spent queued (paused, out of Claude
    capacity) and the hours a person takes to reply in between don't count. Shown as median, with p90 below.
 3. **Finished**: the share of tasks with `finished` true, with "x of y" below.
 4. **Shipped**: PRs merged in the window (from `agent_prs`), with Linear issues completed in the window (from

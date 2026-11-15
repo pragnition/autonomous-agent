@@ -78,9 +78,15 @@ def test_every_skill_has_name_and_description(skill):
 def test_core_skills_present():
     assert {p.parent.name for p in SKILL_DIRS[0].glob("*/SKILL.md")} == {
         "debugging", "build-feature", "browser-testing", "find-features", "playwright-cli", "review-before-pr",
-        "pr-description", "schedules"}
+        "pr-description", "schedules", "task-history"}
 
 
 def test_core_skills_name_no_project():
     for skill in SKILL_DIRS[0].glob("*/SKILL.md"):
         assert "chilliclaw" not in skill.read_text().lower(), skill.parent.name
+
+
+def test_task_history_skill_points_at_the_shared_task_files():
+    text = (SKILL_DIRS[0] / "task-history" / "SKILL.md").read_text()
+    assert "/data/tasks/YYYY-MM.jsonl" in text and "jq" in text and "/run/agent/timezone" in text
+    assert "jensen" not in text.lower()

@@ -103,7 +103,7 @@ function TaskList({ tasks }: { tasks: TaskRecord[] }) {
               </TableCell>
               <TableCell className="text-muted-foreground">{t.requested_by ?? "—"}</TableCell>
               <TableCell className="text-muted-foreground">{fmtDateTime(t.started_at)}</TableCell>
-              <TableCell className="tabular text-right">{fmtDuration(t.jensen_time_s)}</TableCell>
+              <TableCell className="tabular text-right">{fmtDuration(t.work_time_s)}</TableCell>
               <TableCell><Finished value={t.finished} /></TableCell>
             </TableRow>
             {open.has(t.id) && (

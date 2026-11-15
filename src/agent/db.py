@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS task_records (
     requested_by TEXT,
     started_at TEXT NOT NULL,
     ended_at TEXT,
-    jensen_time_s INTEGER NOT NULL DEFAULT 0,
+    work_time_s INTEGER NOT NULL DEFAULT 0,
     finished INTEGER,
     record TEXT NOT NULL
 );

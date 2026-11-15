@@ -22,7 +22,7 @@ def at(hhmm, day=13):
 
 def task(conn, n, source, started, secs, finished):
     record = {"id": f"TK-{n:04d}", "title": f"task {n}", "source": source, "started_at": at(started)}
-    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, jensen_time_s, finished, "
+    conn.execute("INSERT INTO task_records(id, source, requested_by, started_at, ended_at, work_time_s, finished, "
                  "record) VALUES (?, ?, 'ann', ?, ?, ?, ?, ?)",
                  (f"TK-{n:04d}", source, at(started), at(started), secs,
                   None if finished is None else int(finished), json.dumps(record)))
