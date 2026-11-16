@@ -708,22 +708,23 @@ def only_item(queue, conn):
     return queue.get(rows[0]["id"])
 
 
-async def test_scheduled_run_starts_a_thread_and_an_unattended_turn(convos, slack, queue, conn):
+async def test_scheduled_run_posts_nothing_and_queues_an_unattended_turn(convos, slack, queue, conn):
     await convos.start_scheduled(scheduled())
-    assert slack.posts == [{"channel": "C-SAMPLE", "text": "⏰ nightly-sweep"}]
+    assert slack.posts == [] and slack.opened == []
     item = only_item(queue, conn)
     convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
-    assert (convo["channel"], convo["thread_ts"], convo["project"]) == ("C-SAMPLE", "101.0", "sample")
+    assert (convo["channel"], convo["thread_ts"], convo["project"]) == (None, None, "sample")
     p = item.payload
     assert p["text"] == "Sweep it" and p["actor"] == "ann" and p["unattended"] is True
     assert p["origin"].startswith("[schedule nightly-sweep · 0 22 * * * · set up by ")
     assert p["origin"].endswith(" · https://l]") and "GitHub @ann-gh" in p["origin"]
 
 
-async def test_scheduled_run_for_a_person_goes_to_their_dm(convos, slack):
+async def test_scheduled_run_for_a_person_posts_nothing(convos, slack, queue, conn):
     await convos.start_scheduled(scheduled(channel="bob", link=None))
-    assert slack.opened == [{"users": "U2"}]
-    assert slack.posts[0]["channel"] == "D-U2"
+    assert slack.posts == [] and slack.opened == []
+    convo = conn.execute("SELECT * FROM conversations").fetchone()
+    assert (convo["channel"], convo["project"]) == (None, None)
 
 
 async def test_scheduled_run_by_someone_unknown_has_no_actor(convos, queue, conn):
@@ -732,25 +733,46 @@ async def test_scheduled_run_by_someone_unknown_has_no_actor(convos, queue, conn
     assert p["actor"] is None and p["origin"] == "[schedule nightly-sweep · 0 22 * * * · set up by carol]"
 
 
-async def test_reply_in_a_scheduled_thread_continues_it(convos, queue, conn):
+async def test_scheduled_runs_final_message_goes_nowhere(convos, slack, queue):
+    await convos.start_scheduled(scheduled(channel="bob"))
+    await finish_turn(convos, queue, "nothing new")
+    assert slack.posts == [] and slack.reactions == []
+
+
+async def test_scheduled_run_carries_on_without_posting(convos, slack, queue):
     await convos.start_scheduled(scheduled())
-    first = only_item(queue, conn)
-    convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (first.conversation_id,)).fetchone()
-    await convos.handle_slack(reply(convo["thread_ts"], "more"))
-    convo_ids = {r["conversation_id"] for r in conn.execute("SELECT conversation_id FROM work_items")}
-    assert convo_ids == {first.conversation_id}
-    assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 2
+    first = queue.claim()
+    queue.complete(first.id, {"outcome": "max_turns"})
+    await convos.on_result(queue.get(first.id), {"outcome": "max_turns"})
+    assert slack.posts == []
+    assert queue.claim().payload["report_to"] == first.payload["report_to"]
 
 
-async def test_scheduled_run_that_fails_after_its_header_says_so_in_the_thread(convos, slack, conn):
+async def test_failed_scheduled_run_says_so_and_replies_continue_it(convos, slack, queue, conn):
+    await convos.start_scheduled(scheduled(channel="bob"))
+    item = queue.claim()
+    result = {"outcome": "error", "error": "gh: not logged in"}
+    queue.complete(item.id, result)
+    await convos.on_result(queue.get(item.id), result)
+    assert slack.opened == [{"users": "U2"}] and len(slack.posts) == 1
+    post = slack.posts[0]
+    assert post["channel"] == "D-U2" and "thread_ts" not in post
+    assert post["text"].startswith("My nightly-sweep run didn't finish.") and "gh: not logged in" in post["text"]
+    convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
+    assert (convo["channel"], convo["thread_ts"]) == ("D-U2", "101.0")
+    await convos.handle_slack({**reply("101.0", "try again", user="U2", channel="D-U2"), "channel_type": "im"})
+    assert last_item(queue).conversation_id == item.conversation_id
+
+
+async def test_scheduled_run_that_cannot_be_queued_posts_nothing(convos, slack, conn):
     def broken(*a, **k):
         raise RuntimeError("database is locked")
     convos.payloads.turn = broken
-    assert await convos.start_scheduled(scheduled()) is None
-    assert slack.posts[0]["text"] == "⏰ nightly-sweep"
-    assert len(slack.posts) == 2 and slack.posts[1]["thread_ts"] == "101.0"
-    assert "database is locked" in slack.posts[1]["text"]
+    with pytest.raises(RuntimeError):  # the scheduler reports it to the admins and retries on its next tick
+        await convos.start_scheduled(scheduled())
+    assert slack.posts == []
     assert conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == 0
 
 
 # where each turn came from and who asked (the task record)

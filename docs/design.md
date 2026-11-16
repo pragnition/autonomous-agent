@@ -235,7 +235,7 @@ tools (the `schedules` skill), and core fires it. People can also edit the file 
 ```toml
 [nightly-sweep]
 cron = "0 22 * * *"           # five-field cron, in agent.toml's timezone
-channel = "#project-dev"      # a channel name or ID, or a person key for their DM
+channel = "#project-dev"      # who it's for: a channel name or ID, or a person key for their DM
 prompt = "Sweep the codebase and file each real problem as a Linear issue labelled jensen. Skip anything open."
 by = "sam"                    # who asked: the turn's actor when it is a person key
 link = "https://…"            # where they asked (optional)
@@ -243,9 +243,11 @@ paused = false                # optional
 ```
 
 Every minute core reads the file and, for each schedule whose latest cron slot it hasn't handled yet (`settings`:
-`schedule.<name>.last`), posts `⏰ <name>` in the channel and queues an unattended turn with the prompt in a new
-conversation on that message's thread, first line `[schedule <name> · <cron> · set up by <who> · <link>]`. Replies in
-the thread continue that conversation. Each firing is its own conversation, so runs can overlap; the queue's gate
+`schedule.<name>.last`), queues an unattended turn with the prompt in a new conversation, first line
+`[schedule <name> · <cron> · set up by <who> · <link>]`. Core posts nothing: like a teammate, the agent messages
+people itself when a run has something for them, and the run's final message goes nowhere, as in a Linear session.
+A run that fails says so in the channel (`My <name> run didn't finish.` with the error), and replies in that
+message's thread continue the run. Each firing is its own conversation, so runs can overlap; the queue's gate
 applies as to any turn.
 
 - A schedule seen for the first time (or back after it was removed or invalid), or whose `cron` changed, waits for
@@ -254,7 +256,7 @@ applies as to any turn.
 - Slots due while the schedule is `paused` or the agent is stopped are used up without firing.
 - A file that isn't valid TOML or can't be read keeps the last valid schedules; an invalid entry (including a cron
   that never matches) is skipped and the rest still fire.
-- Errors (the file's, and firings that couldn't start, e.g. the bot isn't in the channel) are DMed to each admin
+- Errors (the file's, and firings that couldn't be queued) are DMed to each admin
   once per distinct set and logged; a firing that couldn't start is retried every minute.
 
 `python -m agent schedules` (in either container; `just schedules` on the host) prints each schedule with its next

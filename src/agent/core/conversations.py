@@ -199,7 +199,8 @@ class Conversations:
 
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, source: str,
                       requester: str | None, follows: str | None = None, unattended: bool = False,
-                      message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0) -> str:
+                      message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0,
+                      report_to: dict | None = None) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
         payload["origin"] = origin  # the runner puts it at the top of the prompt
         # where the turn came from, who asked and which turn it carries on: the task record's labeler reads them
@@ -210,6 +211,8 @@ class Conversations:
             payload["message_ts"] = message_ts
         if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
             payload["reply_thread_ts"] = reply_thread_ts
+        if report_to:  # a scheduled run: where it says it failed
+            payload["report_to"] = report_to
         self.conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (db.utcnow(), convo["id"]))
         return self.queue.enqueue(convo["id"], "turn", payload)
 
@@ -285,31 +288,28 @@ class Conversations:
                            origin=origin_line(f"Linear {task.source_ref}", link=issue_link(task.description)))
         await self.notifier.task_changed(task)
 
-    async def start_scheduled(self, s) -> str | None:
-        """A due schedule: a ⏰ message in its channel (a person key means their DM), and an unattended turn with its
-        prompt in a new conversation on that message's thread, so replies there continue it."""
-        person = self.config.people.get(s.channel)
-        channel = (await self.slack.conversations_open(users=person.slack))["channel"]["id"] if person else s.channel
-        resp = await self.slack.chat_postMessage(channel=channel, text=f"⏰ {s.name}")
+    async def start_scheduled(self, s) -> str:
+        """A due schedule: an unattended turn with its prompt in a new conversation. Nothing is posted: like a
+        teammate, the agent messages whoever it needs to itself, and the run's final message goes nowhere. A run that
+        fails says so in the schedule's channel (a person key means their DM); see on_result."""
+        project = None if s.channel in self.config.people else await self._project_for_channel(s.channel)
+        convo = self._row(self._new(None, None, project))
+        by = self.config.people.get(s.by)
+        if by is None:
+            who = s.by
+        else:
+            name = await _answer(self.person_name(by.key))
+            tags = ", ".join(t for t in (by.key if name else "", f"GitHub @{by.github}" if by.github else "") if t)
+            who = f"{name or by.key} ({tags})" if tags else by.key
         try:
-            project = await self._project_for_channel(resp["channel"])
-            convo = self._row(self._new(resp["channel"], resp["ts"], project))
-            by = self.config.people.get(s.by)
-            if by is None:
-                who = s.by
-            else:
-                name = await _answer(self.person_name(by.key))
-                tags = ", ".join(t for t in (by.key if name else "", f"GitHub @{by.github}" if by.github else "") if t)
-                who = f"{name or by.key} ({tags})" if tags else by.key
             return self._enqueue_turn(convo, s.prompt, by.key if by else None, unattended=True, source="schedule",
                                       requester=by.key if by else s.by,
                                       origin=origin_line(f"schedule {s.name} · {s.cron} · set up by {who}",
-                                                         link=s.link))
-        except Exception as e:  # the ⏰ is posted: say why in its thread, and don't post another on every retry
-            log.exception("scheduled run %s couldn't start", s.name)
-            await self.slack.chat_postMessage(channel=resp["channel"], thread_ts=resp["ts"],
-                                              text=f"I couldn't start this scheduled run:\n```\n{e}\n```")
-            return None
+                                                         link=s.link),
+                                      report_to={"channel": s.channel, "schedule": s.name})
+        except Exception:  # the scheduler reports it and fires again next minute, with a new conversation
+            self.conn.execute("DELETE FROM conversations WHERE id = ?", (convo["id"],))
+            raise
 
     # results
 
@@ -319,6 +319,18 @@ class Conversations:
         convo = self._row(item.conversation_id) if item.conversation_id else None
         if convo is not None and convo["channel"] and item.payload.get("message_ts"):
             await self._react(convo["channel"], item.payload["message_ts"], WORKING, replaces=SEEN)
+
+    async def _report_scheduled_failure(self, convo: sqlite3.Row, report_to: dict, text: str) -> None:
+        """A scheduled run that failed says so in its schedule's channel, and that message's thread becomes the run's
+        conversation, so replies there continue it."""
+        person = self.config.people.get(report_to["channel"])
+        channel = (await self.slack.conversations_open(users=person.slack))["channel"]["id"] if person \
+            else report_to["channel"]
+        resp = await self.slack.chat_postMessage(channel=channel,
+                                                 text=f"My {report_to['schedule']} run didn't finish. {text}")
+        self.conn.execute("UPDATE conversations SET channel = ?, thread_ts = ? WHERE id = ?",
+                          (resp["channel"], resp["ts"], convo["id"]))
+        record_message(self.conn, resp["channel"], resp["ts"], convo["id"])
 
     async def on_result(self, item: WorkItem | None, result: dict) -> None:
         if item is None or item.kind != "turn" or item.status == "cancelled":
@@ -351,8 +363,11 @@ class Conversations:
                                "on from where you stopped.)", p.get("actor"), origin=p.get("origin") or "",
                                source=p.get("source") or "slack", requester=p.get("requester"), follows=item.id,
                                unattended=bool(p.get("unattended")), message_ts=p.get("message_ts"),
-                               reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1)
-        if text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
+                               reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1,
+                               report_to=p.get("report_to"))
+        if failed and not convo["channel"] and item.payload.get("report_to"):
+            await self._report_scheduled_failure(convo, item.payload["report_to"], text)
+        elif text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
             reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
             for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
                 record_message(self.conn, convo["channel"], ts, convo["id"])

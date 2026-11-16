@@ -82,8 +82,10 @@ A new core loop runs every 60 s next to the existing ones:
 
 A firing:
 
-- posts `⏰ <name>` in the entry's channel (a person key resolves to their DM);
-- starts a new conversation on that message's thread, so replies in the thread reach it like any other;
+- posts nothing: the run messages people itself when it has something for them, and its final message goes
+  nowhere;
+- starts a new conversation with no Slack thread; a run that fails says so in the entry's channel (a person key
+  resolves to their DM), and replies in that message's thread continue it;
 - queues an unattended turn with the entry's prompt, actor `by`, and the first line
   `[schedule <name> · <cron> · set up by <name of by> · <link>]`.
 
@@ -92,8 +94,8 @@ parallel within `max_concurrent_sessions`.
 
 ### Errors
 
-Errors are the file's (not TOML, invalid entries) and firings that couldn't start (e.g. the bot isn't in the
-channel; retried every minute). Core DMs each admin the list once per distinct text (a hash in
+Errors are the file's (not TOML, invalid entries) and firings that couldn't be queued (retried every
+minute). Core DMs each admin the list once per distinct text (a hash in
 `settings`: `schedules.errors_hash`) and logs it. No errors clears the hash.
 
 ### Checking the file
@@ -125,11 +127,11 @@ branch with the repo's usual labels, and no marking as agent work; the GitHub ac
 ## Constraints
 
 - Core's state stays in `agent.db`; the file is only the schedule definitions.
-- Nothing about a schedule can fail a turn that has already been queued; a firing that can't post to Slack is logged
+- Nothing about a schedule can fail a turn that has already been queued; a firing that can't be queued is logged
   and retried on the next tick (the slot is recorded only after the turn is queued).
 - The cron parser is a small pinned dependency (`croniter`) in `pyproject.toml`, so the core and agent images both have it.
 
 ## Left to the builder
 
 - Where the loop and parser live in `src/agent/core/`, and test layout.
-- The exact `⏰` header text and the error DM wording.
+- The error DM wording.

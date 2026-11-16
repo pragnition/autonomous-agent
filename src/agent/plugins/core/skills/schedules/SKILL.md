@@ -5,7 +5,7 @@ description: Use when someone asks for work on a schedule ("every morning at 9",
 
 # Schedules
 
-Core runs every schedule in `/data/schedules/schedules.toml`. Each run is a new session in a new Slack thread, with the schedule's prompt as its message. You set schedules up by editing that file.
+Core runs every schedule in `/data/schedules/schedules.toml`. Each run is a new session with the schedule's prompt as its message. Nothing is posted when a run starts and its final message goes nowhere: the run messages people itself, like a teammate would. Only a run that fails is posted, in the schedule's channel. You set schedules up by editing that file.
 
 ## The file
 
@@ -24,7 +24,7 @@ paused = false                     # optional
 ```
 
 - **channel**: "send me" or "DM me" means the asker's person key. Otherwise the channel they named, or the channel they asked in. The bot must be in the channel; join a public one with Slack's `conversations.join`.
-- **prompt**: write it for a fresh session that has none of this conversation. It knows earlier runs only from Linear, GitHub and your memory, so say "skip anything already filed or open" when that matters, and name the repo, the project and where the output goes.
+- **prompt**: write it for a fresh session that has none of this conversation. Say who to message with the results, and when ("DM sam the stats", "post in #project-dev only when there's something new"). It knows earlier runs only from Linear, GitHub and your memory, so say "skip anything already filed or open" when that matters, and name the repo, the project and where the output goes.
 - If the file isn't writable, use `sudo`.
 
 ## Every edit
