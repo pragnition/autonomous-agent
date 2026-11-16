@@ -167,6 +167,14 @@ def test_a_long_index_is_cut_and_says_how_much(tmp_path):
     assert "- line 199" in text and "- line 200" not in text and "50 more lines" in text
 
 
+def test_invalid_utf8_in_the_index_does_not_crash_and_keeps_the_good_line(tmp_path):
+    """A concurrent write (or a hand edit) can leave MEMORY.md with invalid UTF-8 bytes mid-file; memory_block must
+    not raise, and should still surface the lines that do read cleanly."""
+    (tmp_path / "MEMORY.md").write_bytes(b"- good line\n\xff\xfe bad bytes\n- another good line\n")
+    text = memory_block(tmp_path)
+    assert "- good line" in text and "- another good line" in text
+
+
 async def test_every_session_gets_the_memory_block(tmp_path):
     claude = FakeClaude()
     memory_dir = tmp_path / "memory"

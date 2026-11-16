@@ -82,7 +82,9 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
 def memory_block(memory_dir: Path, max_lines: int = 200) -> str:
     """MEMORY_RULES with the folder filled in, followed by its index (memory_dir/MEMORY.md) cut to max_lines."""
     try:
-        lines = (memory_dir / "MEMORY.md").read_text().splitlines()
+        # errors="replace": a concurrent write can leave invalid UTF-8 mid-file; keep the readable lines rather
+        # than raising and failing every session's turn until someone repairs the file.
+        lines = (memory_dir / "MEMORY.md").read_text(errors="replace").splitlines()
     except OSError:
         lines = []
     if not lines:
