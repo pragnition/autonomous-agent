@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Jensen takes a spec and ships the product over days. Its requests keep running, it survives restarts, it reads Slack messages mid-turn, and it works through a skill built on Superpowers.
+**Goal:** Jensen takes a spec and ships the product over days. Its requests keep running, it survives restarts, it reads Slack messages mid-turn, and it works through a skill built on Superpowers. It merges its own PRs only in a repo or fork made for the project.
 
-**Architecture:** There's no new service. Carry-ons become silent and plentiful. The runner's 15-second heartbeat now carries the live session id and the messages that arrived mid-turn, in both directions. The runner writes those messages into the running Claude Code session and tracks which ones the model has read through `--replay-user-messages`. The project workflow is a core skill, `long-project`.
+**Architecture:** There's no new service. Carry-ons become silent and plentiful for requests, and stay capped for scheduled runs. The runner's 15-second heartbeat now carries the live session id and the messages that arrived mid-turn, in both directions. The runner writes those messages into the running Claude Code session and tracks which ones the model has read through `--replay-user-messages`. That protocol is written down for the control-plane phase. The project workflow is a core skill, `long-project`.
 
 **Tech Stack:** Python 3.12, aiohttp, SQLite, claude-agent-sdk 0.2.180 (bundled Claude Code 2.1.321), pytest in the dev image.
 
@@ -18,26 +18,30 @@
 - Commit messages follow the repo's style (`feat: …` / `fix: …` as a plain sentence). No co-author trailer and no mention of Claude Code.
 - The repo is public, so commit no secrets, tokens or `.env` content.
 - Wherever docs or prompt text describe Jensen, it is a fully autonomous engineering agent, never a "coding agent".
+- Docs and prompt text name no meetings or people. Core code and the core prompt never name a specific project.
 
 ## Review Focus
 
 1. **Two messages sent seconds apart into a busy thread** must both reach the session in order, both be marked read, and both get ✅. Owned by Task 4 (`test_two_messages_are_both_read_in_order`).
 2. **A runner restart while a delivered message is still unread.** The message goes back to the queue, is delivered again to the retried turn, and is answered once. Owned by Task 2 (`test_a_lost_lease_releases_its_unread_messages`).
 3. **A message read just before core goes unreachable.** The heartbeat that would report it fails, but the result still carries it, so it ends up done, not run again. Owned by Task 5 (`test_result_reports_every_message_the_session_read`).
-4. **An account fork while a message is unread.** The forked session never saw it, so it must not be reported read; core then runs it as the next turn. Owned by Task 4 (`test_a_fork_does_not_report_an_unread_message`).
+4. **A scheduled run that keeps hitting its limit** (a hung feedback triage every 30 minutes) must stop after 3 carry-ons, not 100, or its runs pile up and fill the session slots. Owned by Task 1 (`test_a_scheduled_run_carries_on_at_most_three_times`).
 5. **A message arrives while the runner can't take messages** (between attempts, or while a session is resuming). It stays queued with no ⏳, and a later beat delivers it. Owned by Task 3 (`test_a_runner_that_cannot_take_messages_gets_none`).
 
 ---
 
-### Task 1: Carry-ons are silent, and there are 100 of them
+### Task 1: Carry-ons are silent; requests get 100, scheduled runs keep 3
 
 **Files:**
-- Modify: `src/agent/config.py:66` (`Limits.continuations` default) and `src/agent/config.py:305` (parse default)
-- Modify: `src/agent/core/conversations.py` (`on_result`, the `if continuing:` text)
+- Modify: `src/agent/config.py:66` (`Limits`) and `src/agent/config.py:300-305` (parsing `[limits]`)
+- Modify: `src/agent/core/conversations.py` (`on_result`: the cap, and the `if continuing:` text)
 - Test: `tests/test_conversations.py`, `tests/test_config.py`
 
 **Interfaces:**
-- Produces: `Limits.continuations: int = 100`
+- Produces:
+  - `Limits.continuations: int = 100`
+  - `Limits.schedule_continuations: int = 3`, parsed from `[limits] schedule_continuations`
+- In `on_result`, a turn whose `payload["source"] == "schedule"` carries on while `step < limits.schedule_continuations`. Every other turn uses `limits.continuations`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -63,16 +67,31 @@ async def test_turn_that_hits_a_limit_carries_on_silently(convos, queue, slack, 
 
 In `test_carrying_on_stops_after_the_configured_number_of_times`, set `convos.config.limits.continuations = 3` first and replace the `startswith("Still on it…")` assertion with `assert len(slack.posts) == posts_before` (record `posts_before = len(slack.posts)` right after intake). The final failure reply assertion stays as it is.
 
-In `tests/test_config.py`, add `test_continuations_default_to_one_hundred`: a minimal valid config without `continuations` in `[limits]` loads with `config.limits.continuations == 100`.
+Add, using the file's `scheduled()` helper (around line 702):
+
+```python
+async def test_a_scheduled_run_carries_on_at_most_three_times(convos, queue, slack):
+    convos.config.limits.continuations = 100
+    await convos.start_scheduled(scheduled())
+    for n in range(4):
+        item = queue.claim()
+        assert item.payload.get("continuation", 0) == n and item.payload["source"] == "schedule"
+        queue.complete(item.id, {"outcome": "timeout"})
+        await convos.on_result(queue.get(item.id), {"outcome": "timeout"})
+    assert queue.claim() is None
+    assert "didn't finish" in slack.posts[-1]["text"]      # the schedule's existing failure report
+```
+
+In `tests/test_config.py`, add `test_continuations_default_to_one_hundred_and_three_for_schedules`. A minimal valid config with no carry-on settings in `[limits]` loads with `config.limits.continuations == 100` and `config.limits.schedule_continuations == 3`. Setting `schedule_continuations = 0` in `[limits]` loads as 0.
 
 - [ ] **Step 2: Run them to make sure they fail**
 
 Run: `just test tests/test_conversations.py tests/test_config.py -k "carries_on or carrying_on or continuations"`
-Expected: FAIL (a "Still on it" post is made; the default is 3)
+Expected: FAIL (a "Still on it" post is made; the default is 3; `schedule_continuations` doesn't exist)
 
 - [ ] **Step 3: Implement**
 
-Set both defaults to 100. In `on_result`, a continuing turn sets `text = ""`, so nothing is posted. Keep `limit_name` for the carry-on prompt.
+Set the defaults to 100 and 3, and parse `schedule_continuations` with `_int`, like the others. In `on_result`, choose the cap by source. A continuing turn sets `text = ""`, so nothing is posted. Keep `limit_name` for the carry-on prompt.
 
 - [ ] **Step 4: Run them to make sure they pass**
 
@@ -83,7 +102,7 @@ Expected: PASS
 
 ```bash
 git add src/agent/config.py src/agent/core/conversations.py tests/test_conversations.py tests/test_config.py
-git commit -m "feat: a turn that hits a limit carries on silently, up to 100 times by default"
+git commit -m "feat: a turn that hits a limit carries on silently, up to 100 times for requests and 3 for scheduled runs"
 ```
 
 ---
@@ -395,6 +414,7 @@ git commit -m "feat: the runner writes new messages into a running session and k
 **Files:**
 - Modify: `src/agent/runner/link.py` (`CoreLink.heartbeat`)
 - Modify: `src/agent/runner/worker.py` (`MIDTURN_NOTE`, `RESTARTED_NOTE`, `_heartbeat`, `handle`, `_prepare`)
+- Create: `docs/runner-protocol.md`
 - Test: `tests/test_runner.py`
 
 **Interfaces:**
@@ -464,11 +484,24 @@ Expected: FAIL
 Run: `just test`
 Expected: PASS, every test
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Write `docs/runner-protocol.md`**
+
+This is the contract between the runner and whatever control plane it pulls from. A later control plane implements it so the runner, the skill and the prompt carry over unchanged. Write it from the code as it now stands, one section each:
+- **Tokens:** the runner token for pull and bundle; a session token per work item for everything else.
+- **`POST /agent/pull`:** long-poll for up to 25 s; 204 when there's nothing. The reply holds `work_item` (`id`, `conversation_id`, `kind`, `payload`, `attempts`), `session_token` and `tools`. Also list the payload fields the runner reads.
+- **Leases:** 90 s. Every heartbeat and event extends it. A lost lease re-queues the item, up to 5 attempts. `attempts > 0` with a `resume_session_id` means "restarted": the prompt gets `RESTARTED_NOTE`.
+- **One running item per conversation.**
+- **`POST /agent/heartbeat`:** the body and reply from Task 3, and the delivered → read → done lifecycle. A delivered item that is never read goes back to the queue when its turn ends.
+- **`POST /agent/events`**, **`/agent/tool`**, **`/agent/files`**, **`GET /agent/bundle`:** one line each on what they carry.
+- **`POST /agent/result`:** every field the runner sends, including `read`, and the outcomes (`done`, `error`, `timeout`, `max_turns`, `interrupted`) with what core does for each: reply, carry on (and the two caps), or post the failure.
+
+Give each endpoint a JSON example taken from the tests. Keep it under 150 lines.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/agent/runner/link.py src/agent/runner/worker.py tests/test_runner.py
-git commit -m "feat: the runner's heartbeat carries the live session and new messages, and a restarted turn resumes where it stopped"
+git add src/agent/runner/link.py src/agent/runner/worker.py tests/test_runner.py docs/runner-protocol.md
+git commit -m "feat: the runner's heartbeat carries the live session and new messages, a restarted turn resumes where it stopped, and the runner protocol is written down"
 ```
 
 ---
@@ -491,7 +524,8 @@ git commit -m "feat: the runner's heartbeat carries the live session and new mes
 def test_shipped_system_prompt_sends_long_work_to_the_skill_and_lets_it_merge(payloads):
     text = payloads.system_prompt()
     assert "long-project skill" in text
-    assert "merge your own PRs once the tests and CI pass" in text
+    assert "Merge your own PRs only in a repo or fork made for a project you're building" in text
+    assert "leave merging to the team" in text
 ```
 
 `tests/test_bundles.py`: add `"long-project"` to the names `test_core_skills_present` expects. Then add:
@@ -500,7 +534,8 @@ def test_shipped_system_prompt_sends_long_work_to_the_skill_and_lets_it_merge(pa
 def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
     text = (ROOT / "src/agent/plugins/core/skills/long-project/SKILL.md").read_text()
     for phrase in ("superpowers@anthropic-plugin-directory", "subagent-driven-development", "writing-plans",
-                   '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note"):
+                   '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note",
+                   "gh repo set-default", "never to the parent", "leave the PR for the team"):
         assert phrase in text
 ```
 
@@ -512,7 +547,7 @@ Expected: FAIL
 - [ ] **Step 3: Add the two prompt lines.** Put them right after the line that starts "- Start a new branch for each piece of work":
 
 ```markdown
-- When you build a project from a spec, merge your own PRs once the tests and CI pass and your review found nothing blocking. In other repos, follow the repo's own review rules.
+- Merge your own PRs only in a repo or fork made for a project you're building (one you created or forked for it, or one the request says is yours), once the tests and CI pass and your review found nothing blocking. In the team's existing repos, open PRs and leave merging to the team.
 - A spec, or any work that will take more than a few hours: use the long-project skill. Your turn carries on by itself when it hits a limit or your machine restarts, so keep going until it's done.
 ```
 
@@ -531,23 +566,32 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 ## Start
 
 1. **Superpowers.** Check `claude plugin list` for superpowers. If it's missing, run `claude plugin install superpowers@anthropic-plugin-directory`. Its skills load from your next session; until then, read them from the plugin's folder under `~/.claude/plugins/cache/`.
-2. **Repo.** Use the repo the spec names, or create one in the requester's org (`gh repo create <org>/<name> --private`), and clone it into this conversation's folder. Commit the spec as `docs/spec.md` if it isn't in the repo yet.
-3. **Plan.** Use superpowers:writing-plans. Split the work into milestones. Each milestone is something a person can run and see, and gets its own plan under `docs/plans/`. Settle the questions the skills would ask you yourself, and post what you assumed in the thread.
-4. **Memory note.** Save a memory note named after the project. Include the thread link, who asked, the repo, this conversation's folder (`pwd`), the plan files, where the ledger lives and the progress schedule's name. Any session that answers a question about the project starts from this note.
-5. **Hourly progress.** Add a schedule named `<project>-progress` (schedules skill) with `cron = "0 * * * *"`, using the thread's channel as its channel. Write its prompt for a fresh session:
+2. **Repo.** Work where the request says, and clone it into this conversation's folder.
+   - **A fork.** If the request says to work in a fork that doesn't exist yet, create it: `gh repo fork <owner>/<repo> --org <org> --fork-name <name> --clone=false`. After cloning a fork, run `gh repo set-default <org>/<fork>` so every PR goes to the fork, never to the parent.
+   - **No repo at all.** For a new product, create one in the requester's org: `gh repo create <org>/<name> --private`.
+   - **Blocked?** If you can't create the fork or repo, say exactly what access you need.
+3. **Spec.** The spec may be a message, a file in the thread (PDF, Word) or a link. Read all of it. Commit the original and a Markdown copy under `docs/` if they aren't in the repo yet.
+4. **Plan.** Read the repo's CLAUDE.md, its roadmap and its existing plans first, so your milestones fit what's already there. Then use superpowers:writing-plans:
+   - Split the work into milestones. Each one is something a person can run and see.
+   - Give each milestone its own plan, in the folder where the repo keeps its plans (`docs/plans/` if it has none).
+   - Settle the questions the skills would ask you yourself, and post what you assumed in the thread.
+5. **Memory note.** Save a memory note named after the project. Include the thread link, who asked, the repo, this conversation's folder (`pwd`), the plan files, where the ledger lives and the progress schedule's name. Any session that answers a question about the project starts from this note.
+6. **Hourly progress.** Add a schedule named `<project>-progress` (schedules skill) with `cron = "0 * * * *"`, using the thread's channel as its channel. Write its prompt for a fresh session:
    - Read the project's memory note.
    - Fetch the repo and check out the newest pushed commit of the milestone in progress (main when none is).
    - Run the app on a free port and screenshot its main screens (browser-testing).
    - Post the screenshots in the project thread with two or three lines: what merged since the last update, what's being built now, and what's next, taken from the ledger and `git log`. A scheduled run has no thread of its own, so upload with Slack's `files.getUploadURLExternal` and `files.completeUploadExternal` using `$SLACK_BOT_TOKEN`, the channel and the thread's `thread_ts`.
    - Skip the post when nothing changed since the last one.
-6. **Kickoff.** Post a short message in the thread: the milestones, and when the first one should land.
+7. **Kickoff.** Post a short message in the thread: the milestones, and when the first one should land.
 
 ## Each milestone
 
-1. Branch from main, named the way the repo names its branches.
+1. Branch from main, named the way the repo names its branches. In a team's existing repo, while the previous milestone's PR is still open, branch from that PR's branch instead.
 2. Run its plan with superpowers:subagent-driven-development: a fresh implementer subagent and a reviewer for each task, with the ledger in the repo's `.superpowers/sdd/`. Push the branch after every task, so the hourly run and anyone else can see it.
 3. Test it end to end in a real browser (browser-testing) and run the full suite.
-4. Open the PR (review-before-pr, pr-description). Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
+4. Open the PR (review-before-pr, pr-description). Wait for CI with `gh pr checks --watch` and fix what fails.
+   - **A repo or fork made for this project:** merge it yourself with `gh pr merge --squash --delete-branch` (or the repo's own style), then check that main still builds and runs.
+   - **A team's existing repo:** leave the PR for the team and go on to the next milestone. Never push to a deploy branch.
 5. Post in the thread what landed, with the PR link and the screenshots (`post_files`).
 
 ## When someone asks how it's going
@@ -556,9 +600,10 @@ Messages that arrive mid-turn reach you between steps. Answer at once with post_
 
 ## Finish
 
-When the last milestone is merged and verified:
+When the last milestone is merged (or, in a team's existing repo, its PR is up) and verified:
 - Delete the progress schedule and update the memory note.
-- End with what shipped, where it runs (staging, never production) and how you verified it.
+- End with what shipped, how to run it and how you verified it.
+- Deploy only where you have the credentials and the spec or request asks for it: staging, never production. If deploying needs access you don't have, say what.
 ````
 
 - [ ] **Step 5: Run them to make sure they pass**
@@ -623,6 +668,23 @@ Expected:
 - No "That was stopped" post.
 - About 2 minutes later the turn runs again, its prompt starts with the restart note (check the dashboard's session timeline), and it ends with "done".
 
-- [ ] **Step 7: Hand over**
+- [ ] **Step 7: Set up the first project (RosterRolo demo)**
 
-Tell the team to post their spec to Jensen in Slack. The first project run is the live check for the long-project skill and the hourly schedule.
+1. **The fork.** It doesn't exist yet: `pragnition/RosterRolo` has no forks, and it's the team's live repo. Either a person forks it and grants Jensen's account access, or the request asks Jensen to fork it itself. Check that Jensen can reach the fork:
+   ```bash
+   ssh workstation 'docker exec agent-runner gh repo view <org>/<fork> --json nameWithOwner,viewerPermission'
+   ```
+   Expected: `viewerPermission` of `WRITE` or `ADMIN`.
+2. **App keys.** Pick the keys from RosterRolo's `.env.example` that the demo needs (`OPENROUTER_API_KEY`; the two secrets have local fallbacks). An admin writes them to `data/secrets/projects/rosterrolo.env` on the workstation, then runs `docker compose restart core`.
+3. **Handover message.** The person handing it over posts it in a Slack thread: the tender specification (attached or linked), "build this in the fork <org>/<fork>", and what the demo has to show.
+
+- [ ] **Step 8: Watch the first run**
+
+The first run is the live check for the long-project skill, the hourly schedule and merging in the fork. Check:
+- the kickoff post
+- the memory note (`/var/agent/memory`)
+- the `<project>-progress` entry in `data/schedules/schedules.toml`
+- the first hourly post
+- that every PR targets the fork (`gh pr list -R <org>/<fork>`, and nothing new on `pragnition/RosterRolo`)
+
+Fix what breaks as it comes up.
