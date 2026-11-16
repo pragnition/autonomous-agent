@@ -110,7 +110,7 @@ class WorkQueue:
             self.conn.execute("UPDATE work_items SET status = ?, attempts = ?, lease_until = NULL, updated_at = ? "
                               "WHERE id = ?", (status, attempts, db.utcnow(), row["id"]))
             revoke_for_work_item(self.conn, row["id"])
-            self.release(row["id"])
+            self._release(row["id"])
 
     def reap(self, now: datetime | None = None) -> None:
         """Re-queue (or fail) items whose runner stopped heartbeating, whoever asks first."""
@@ -152,16 +152,23 @@ class WorkQueue:
         return cur.rowcount == 1
 
     def complete(self, item_id: str, result: dict) -> None:
-        self.conn.execute("UPDATE work_items SET status = 'done', result = ?, lease_until = NULL, updated_at = ? "
-                          "WHERE id = ? AND status IN ('queued', 'claimed')", (json.dumps(result), db.utcnow(), item_id))
-        revoke_for_work_item(self.conn, item_id)
-        self.release(item_id)
+        result_json, now = json.dumps(result), db.utcnow()
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute("UPDATE work_items SET status = 'done', result = ?, lease_until = NULL, "
+                              "updated_at = ? WHERE id = ? AND status IN ('queued', 'claimed')",
+                              (result_json, now, item_id))
+            revoke_for_work_item(self.conn, item_id)
+            self._release(item_id)
 
     def cancel(self, item_id: str) -> None:
-        self.conn.execute("UPDATE work_items SET status = 'cancelled', lease_until = NULL, updated_at = ? "
-                          "WHERE id = ? AND status IN ('queued', 'claimed')", (db.utcnow(), item_id))
-        revoke_for_work_item(self.conn, item_id)
-        self.release(item_id)
+        now = db.utcnow()
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute("UPDATE work_items SET status = 'cancelled', lease_until = NULL, updated_at = ? "
+                              "WHERE id = ? AND status IN ('queued', 'claimed')", (now, item_id))
+            revoke_for_work_item(self.conn, item_id)
+            self._release(item_id)
 
     def deliver(self, conversation_id: str, into: str) -> list[WorkItem]:
         """Hand a busy conversation's queued turns into the one already running, oldest first, so the runner can
@@ -190,9 +197,7 @@ class WorkQueue:
                 changed.append(self.get(item_id))
         return changed
 
-    def release(self, into: str) -> list[str]:
-        """Hand back every item still delivered into this turn — it ended without reading them — so they wait as
-        queued turns again, for whichever turn (this one restarted, or the next) runs the conversation next."""
+    def _release(self, into: str) -> list[str]:
         rows = self.conn.execute(
             "SELECT id FROM work_items WHERE status = 'delivered' AND delivered_into = ?", (into,)).fetchall()
         now = db.utcnow()
@@ -200,6 +205,15 @@ class WorkQueue:
             self.conn.execute("UPDATE work_items SET status = 'queued', delivered_into = NULL, updated_at = ? "
                               "WHERE id = ?", (now, row["id"]))
         return [row["id"] for row in rows]
+
+    def release(self, into: str) -> list[str]:
+        """Hand back every item still delivered into this turn — it ended without reading them — so they wait as
+        queued turns again, for whichever turn (this one restarted, or the next) runs the conversation next.
+        complete(), cancel() and _reap() call _release() directly, inside their own already-open transaction,
+        instead of this public wrapper, so a BEGIN IMMEDIATE never nests inside another."""
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            return self._release(into)
 
     def cancel_running(self) -> list[str]:
         """Interrupt what is running; queued messages wait (they can't start while paused) and run after resume."""
