@@ -177,13 +177,16 @@ class WorkQueue:
 
     def deliver(self, conversation_id: str, into: str) -> list[WorkItem]:
         """Hand a busy conversation's queued turns into the one already running, oldest first, so the runner can
-        read them as new messages instead of leaving them to wait behind it."""
+        read them as new messages instead of leaving them to wait behind it. A carry-on (its payload has
+        "continuation") is never among them: it must run as its own turn, after whatever unread message is
+        ahead of it, not get folded into a turn that is already running."""
         now = db.utcnow()
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             rows = self.conn.execute(
                 "SELECT id FROM work_items WHERE conversation_id = ? AND kind = 'turn' AND status = 'queued' "
-                "AND id != ? ORDER BY created_at, rowid", (conversation_id, into)).fetchall()
+                "AND id != ? AND json_extract(payload, '$.continuation') IS NULL ORDER BY created_at, rowid",
+                (conversation_id, into)).fetchall()
             for row in rows:
                 self.conn.execute("UPDATE work_items SET status = 'delivered', delivered_into = ?, updated_at = ? "
                                   "WHERE id = ?", (into, now, row["id"]))

@@ -853,6 +853,41 @@ async def test_an_unread_message_runs_before_the_carry_on(convos, queue):
     assert queue.claim().id == msg["id"]
 
 
+def last_reaction_for(slack, ts):
+    return [r for r in slack.reactions if r["timestamp"] == ts][-1]
+
+
+async def test_a_carry_on_never_lands_in_the_next_turn_that_runs_the_unread_message(convos, queue, slack):
+    """Turn A times out with message M delivered but unread. complete(A) releases M back to queued, and
+    on_result(A) enqueues carry-on C. M is older than C, so it is claimed and run first — but its own heartbeat
+    must not deliver C into it: C runs as its own turn, after M, not folded into M as a mid-turn message. Until
+    C actually runs, the original request (t52) keeps its hourglass, not a checkmark."""
+    await convos.handle_slack(mention("t52", "build the app"))
+    first = queue.claim()
+    await convos.on_start(first)
+    await convos.handle_slack(reply("t52", "status?"))
+    [msg] = (await convos.on_beat(first, {"accepts_messages": True}))["messages"]
+    result = {"outcome": "timeout", "session_id": "live-1"}
+    queue.complete(first.id, result)
+    await convos.on_result(queue.get(first.id), result)
+    assert last_reaction_for(slack, "t52")["name"] == "hourglass_flowing_sand"
+
+    nxt = queue.claim()
+    assert nxt.id == msg["id"]                      # M, not the carry-on, runs next
+    out = await convos.on_beat(nxt, {"accepts_messages": True})
+    assert out["messages"] == []                    # the carry-on is never handed into M's turn
+
+    msg_result = {"text": "still going", "outcome": "done"}
+    queue.complete(nxt.id, msg_result)
+    await convos.on_result(queue.get(nxt.id), msg_result)
+    assert last_reaction_for(slack, msg["payload"]["message_ts"])["name"] == "white_check_mark"
+    assert last_reaction_for(slack, "t52")["name"] == "hourglass_flowing_sand"  # still no checkmark on the request
+
+    carry_on = queue.claim()
+    assert carry_on.payload.get("continuation") == 1
+    assert carry_on.id != msg["id"]
+
+
 async def test_a_runner_that_cannot_take_messages_gets_none(convos, queue, slack):
     await convos.handle_slack(mention("t53", "build the app"))
     first = queue.claim()

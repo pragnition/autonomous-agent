@@ -79,6 +79,16 @@ def test_deliver_hands_over_a_busy_conversations_queued_turns(conn):
     assert q.claim().id == d                     # delivered items are never claimed
 
 
+def test_a_carry_on_is_never_delivered_into_a_running_turn(conn):
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {"text": "build it"}); q.claim()
+    carry_on = q.enqueue("V1", "turn", {"continuation": 1})
+    b = q.enqueue("V1", "turn", {"text": "how's it going?"})
+    assert [i.id for i in q.deliver("V1", a)] == [b]       # the carry-on waits; the real message is delivered
+    assert q.get(carry_on).status == "queued"
+    assert q.deliver("V1", a) == []
+
+
 def test_read_messages_are_done_once(conn):
     q = WorkQueue(conn)
     a = q.enqueue("V1", "turn", {}); q.claim()
