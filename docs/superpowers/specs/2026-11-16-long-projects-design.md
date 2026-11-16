@@ -4,9 +4,7 @@
 
 The team hands Jensen a spec and Jensen turns it into a working product over several days with nobody driving it. It plans the work, builds it with subagents, tests it in its own Docker and browser, opens and merges its own PRs, posts screenshots every hour, and answers anyone who asks what it has done so far.
 
-The first project is a demo of RosterRolo for a tender. The tender specification is the input, and the work happens in a fork of the RosterRolo repo.
-
-Full autonomy, including merging its own PRs and running for days, applies to a repo or fork made for the project. In the team's existing repos, such as the production ChilliClaw repo, Jensen keeps working as it does today: it opens PRs and the team reviews and merges them.
+The first project is a RosterRolo demo built from a tender specification, in a new repo made for Jensen. Every request names the repo to work in. Jensen works in it on its own and merges its own PRs there, as it may in any repo it works in.
 
 ## Phases
 
@@ -22,15 +20,14 @@ This build runs on the current Python core, so the first project can start now. 
 - **A message sent while a turn runs waits for the turn to end,** which can be up to 90 minutes.
 - **Jensen has no planning skills.** Superpowers isn't in its Claude home; only skill-creator is.
 - **The prompt says to open PRs** and says nothing about merging them.
-- **Jensen's token sees the team's live `pragnition/RosterRolo`.** It's private, not a fork, and has no forks yet. The team merges to its `main` every day. A push to the `deploy` branch deploys to GCP, and Jensen has no GCP access.
 
 ## Goals
 
 1. A request runs until the work is done. Carry-ons are silent and default to 100, about 150 hours at 90 minutes each. A scheduled run still stops after 3 carry-ons, so a recurring schedule can't pile up runaway runs.
 2. A runner restart costs a minute, not the work. The retried turn resumes the live session and is told it was restarted.
 3. A message sent mid-turn reaches the running session within one heartbeat (15 s) plus the step in progress, and Jensen answers it right away.
-4. Jensen runs a spec milestone by milestone with Superpowers (writing-plans, then subagent-driven-development). It fits the milestones to the repo's own conventions and existing plans.
-5. Jensen merges its own PRs only in a repo or fork made for the project, once tests and CI pass. In a fork, PRs never go to the parent. In the team's existing repos it opens PRs and leaves merging to the team.
+4. Jensen runs a spec milestone by milestone with Superpowers (writing-plans, then subagent-driven-development), in the repo the request names. It fits the milestones to the repo's own conventions and existing plans.
+5. Jensen merges its own PRs once tests and CI pass and its review found nothing blocking.
 6. Every hour, a scheduled run posts screenshots and progress in the project thread.
 7. Anyone who asks what it has done so far gets an answer, in the thread or anywhere else, built from the plan ledger, PRs and the thread.
 8. The runner protocol is written down for the control-plane phase.
@@ -41,11 +38,10 @@ This build runs on the current Python core, so the first project can start now. 
 - Core tools, gates or a pipeline for projects. The workflow lives in a skill, and Jensen decides the steps.
 - ralph-loop. Its `/ralph-loop` command is marked `hide-from-slash-command-tool`, so the model can't start it, and Jensen's sessions have no person typing. Carry-ons plus the skill's rule (the turn ends when the last milestone ships) do the same job. Revisit if a live run ends early.
 - GitHub webhooks for PR comments or CI. Jensen waits on CI itself with `gh pr checks --watch`.
-- Deploying the product. Jensen runs it in its own environment. Deploy targets that need credentials it doesn't have, such as RosterRolo's GCP, are out of scope; it says what access it would need. Production stays off limits.
+- Deploying the product. Jensen runs it in its own environment and deploys only where it has credentials and the request asks; it says what access it would need otherwise. Production stays off limits.
 
 ## Anti-goals
 
-- A merge into a team's existing repo, or a PR from a fork to its parent.
 - Bot-style posts from core. No "Still on it" and no run headers; updates come from Jensen, worded like a teammate.
 - A message answered twice, or lost. Every message is either read by the running session or runs as its own next turn.
 
@@ -95,11 +91,11 @@ The control-plane phase implements this contract.
 
 The project workflow lives in a core skill, written for Jensen:
 - **Superpowers.** Check for it and install it if missing (`claude plugin install superpowers@anthropic-plugin-directory`).
-- **Repo.** Work where the request says. A fork named in the request is used, or created with `gh repo fork` if it doesn't exist yet. In a fork, `gh repo set-default <fork>` keeps PRs off the parent. A product with no repo gets a new one.
+- **Repo.** Work in the repo the request names.
 - **Spec.** The spec may be a message, a file in the thread (PDF, Word) or a link. Jensen reads all of it and commits the original and a Markdown copy.
 - **Plan.** Read the repo's CLAUDE.md, roadmap and existing plans, then write milestone plans with writing-plans. Each milestone is something a person can run and see.
 - **Memory and schedule.** Save a project memory note (thread, repo, conversation folder, plans, ledger, schedule), and add an hourly `<project>-progress` schedule.
-- **Each milestone.** Run it with subagent-driven-development, pushing after every task. Test it in the browser, open the PR and wait for CI. Merge only in a repo or fork made for the project; in a team's existing repo, leave the PR for the team and branch the next milestone from it. Then post what landed with screenshots.
+- **Each milestone.** Run it with subagent-driven-development, pushing after every task. Test it in the browser, open the PR, wait for CI and merge it. Then post what landed with screenshots.
 - **Status questions** are answered from the ledger, `git log` and `gh pr list`.
 - **Finish.** Delete the schedule, update the note, and report what shipped, how to run it and how it was verified.
 
@@ -109,21 +105,20 @@ The hourly run posts screenshots of the newest pushed commit, plus what merged, 
 
 Two lines in `system.md`:
 - A spec, or anything that will take more than a few hours, uses the long-project skill. The turn carries on by itself.
-- Jensen merges its own PRs only in a repo or fork made for a project it's building, once tests and CI pass and its review found nothing blocking. In the team's existing repos it opens PRs and leaves merging to the team.
+- Jensen merges its own PRs once tests and CI pass and its review found nothing blocking.
 
 ## Constraints
 
 - The live runner uses claude-agent-sdk 0.2.180, which bundles Claude Code 2.1.321.
 - The core is Python, and tests run in the dev image with `just test`.
 - Jensen's workflow stays in skills. Core posts nothing on Jensen's behalf except real failures.
-- A project's app keys reach Jensen only through `data/secrets/projects/<project>.env`. For RosterRolo, that's the keys from its `.env.example` that the demo needs, such as `OPENROUTER_API_KEY`.
+- A project's app keys reach Jensen only through `data/secrets/projects/<project>.env`.
 
 ## Decisions made without the team
 
 - 100 carry-ons for requests, 3 for scheduled runs, and 5 attempts per turn.
 - The hourly post is skipped when nothing changed since the last one.
 - One PR per milestone, rather than one PR at the end of the project.
-- In a team's existing repo, milestones stack: each branches from the previous milestone's open PR.
 - ralph-loop is left out (see Non-goals).
 
 ## Left to the builder

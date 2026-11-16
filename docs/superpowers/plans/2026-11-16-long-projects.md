@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Jensen takes a spec and ships the product over days. Its requests keep running, it survives restarts, it reads Slack messages mid-turn, and it works through a skill built on Superpowers. It merges its own PRs only in a repo or fork made for the project.
+**Goal:** Jensen takes a spec and ships the product over days. Its requests keep running, it survives restarts, it reads Slack messages mid-turn, and it works through a skill built on Superpowers. It works in the repo the request names and merges its own PRs there.
 
 **Architecture:** There's no new service. Carry-ons become silent and plentiful for requests, and stay capped for scheduled runs. The runner's 15-second heartbeat now carries the live session id and the messages that arrived mid-turn, in both directions. The runner writes those messages into the running Claude Code session and tracks which ones the model has read through `--replay-user-messages`. That protocol is written down for the control-plane phase. The project workflow is a core skill, `long-project`.
 
@@ -524,8 +524,7 @@ git commit -m "feat: the runner's heartbeat carries the live session and new mes
 def test_shipped_system_prompt_sends_long_work_to_the_skill_and_lets_it_merge(payloads):
     text = payloads.system_prompt()
     assert "long-project skill" in text
-    assert "Merge your own PRs only in a repo or fork made for a project you're building" in text
-    assert "leave merging to the team" in text
+    assert "Merge your own PRs once the tests and CI pass" in text
 ```
 
 `tests/test_bundles.py`: add `"long-project"` to the names `test_core_skills_present` expects. Then add:
@@ -534,8 +533,7 @@ def test_shipped_system_prompt_sends_long_work_to_the_skill_and_lets_it_merge(pa
 def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
     text = (ROOT / "src/agent/plugins/core/skills/long-project/SKILL.md").read_text()
     for phrase in ("superpowers@anthropic-plugin-directory", "subagent-driven-development", "writing-plans",
-                   '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note",
-                   "gh repo set-default", "never to the parent", "leave the PR for the team"):
+                   '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note"):
         assert phrase in text
 ```
 
@@ -547,7 +545,7 @@ Expected: FAIL
 - [ ] **Step 3: Add the two prompt lines.** Put them right after the line that starts "- Start a new branch for each piece of work":
 
 ```markdown
-- Merge your own PRs only in a repo or fork made for a project you're building (one you created or forked for it, or one the request says is yours), once the tests and CI pass and your review found nothing blocking. In the team's existing repos, open PRs and leave merging to the team.
+- Merge your own PRs once the tests and CI pass and your review found nothing blocking.
 - A spec, or any work that will take more than a few hours: use the long-project skill. Your turn carries on by itself when it hits a limit or your machine restarts, so keep going until it's done.
 ```
 
@@ -566,10 +564,7 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 ## Start
 
 1. **Superpowers.** Check `claude plugin list` for superpowers. If it's missing, run `claude plugin install superpowers@anthropic-plugin-directory`. Its skills load from your next session; until then, read them from the plugin's folder under `~/.claude/plugins/cache/`.
-2. **Repo.** Work where the request says, and clone it into this conversation's folder.
-   - **A fork.** If the request says to work in a fork that doesn't exist yet, create it: `gh repo fork <owner>/<repo> --org <org> --fork-name <name> --clone=false`. After cloning a fork, run `gh repo set-default <org>/<fork>` so every PR goes to the fork, never to the parent.
-   - **No repo at all.** For a new product, create one in the requester's org: `gh repo create <org>/<name> --private`.
-   - **Blocked?** If you can't create the fork or repo, say exactly what access you need.
+2. **Repo.** Work in the repo the request names, and clone it into this conversation's folder.
 3. **Spec.** The spec may be a message, a file in the thread (PDF, Word) or a link. Read all of it. Commit the original and a Markdown copy under `docs/` if they aren't in the repo yet.
 4. **Plan.** Read the repo's CLAUDE.md, its roadmap and its existing plans first, so your milestones fit what's already there. Then use superpowers:writing-plans:
    - Split the work into milestones. Each one is something a person can run and see.
@@ -586,12 +581,10 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 
 ## Each milestone
 
-1. Branch from main, named the way the repo names its branches. In a team's existing repo, while the previous milestone's PR is still open, branch from that PR's branch instead.
+1. Branch from main, named the way the repo names its branches.
 2. Run its plan with superpowers:subagent-driven-development: a fresh implementer subagent and a reviewer for each task, with the ledger in the repo's `.superpowers/sdd/`. Push the branch after every task, so the hourly run and anyone else can see it.
 3. Test it end to end in a real browser (browser-testing) and run the full suite.
-4. Open the PR (review-before-pr, pr-description). Wait for CI with `gh pr checks --watch` and fix what fails.
-   - **A repo or fork made for this project:** merge it yourself with `gh pr merge --squash --delete-branch` (or the repo's own style), then check that main still builds and runs.
-   - **A team's existing repo:** leave the PR for the team and go on to the next milestone. Never push to a deploy branch.
+4. Open the PR (review-before-pr, pr-description). Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
 5. Post in the thread what landed, with the PR link and the screenshots (`post_files`).
 
 ## When someone asks how it's going
@@ -600,7 +593,7 @@ Messages that arrive mid-turn reach you between steps. Answer at once with post_
 
 ## Finish
 
-When the last milestone is merged (or, in a team's existing repo, its PR is up) and verified:
+When the last milestone is merged and verified:
 - Delete the progress schedule and update the memory note.
 - End with what shipped, how to run it and how you verified it.
 - Deploy only where you have the credentials and the spec or request asks for it: staging, never production. If deploying needs access you don't have, say what.
@@ -670,21 +663,21 @@ Expected:
 
 - [ ] **Step 7: Set up the first project (RosterRolo demo)**
 
-1. **The fork.** It doesn't exist yet: `pragnition/RosterRolo` has no forks, and it's the team's live repo. Either a person forks it and grants Jensen's account access, or the request asks Jensen to fork it itself. Check that Jensen can reach the fork:
+1. **The repo.** The team makes a new repo for Jensen. Check that Jensen's token reaches it:
    ```bash
-   ssh workstation 'docker exec agent-runner gh repo view <org>/<fork> --json nameWithOwner,viewerPermission'
+   ssh workstation 'docker exec agent-runner gh repo view <org>/<repo> --json nameWithOwner,viewerPermission'
    ```
-   Expected: `viewerPermission` of `WRITE` or `ADMIN`.
-2. **App keys.** Pick the keys from RosterRolo's `.env.example` that the demo needs (`OPENROUTER_API_KEY`; the two secrets have local fallbacks). An admin writes them to `data/secrets/projects/rosterrolo.env` on the workstation, then runs `docker compose restart core`.
-3. **Handover message.** The person handing it over posts it in a Slack thread: the tender specification (attached or linked), "build this in the fork <org>/<fork>", and what the demo has to show.
+   Expected: `viewerPermission` of `ADMIN` (it merges there).
+2. **App keys.** Put the keys the app needs in `data/secrets/projects/<project>.env` on the workstation, then run `docker compose restart core`. For RosterRolo's code, that's `OPENROUTER_API_KEY` from its `.env.example`; its two other secrets have local fallbacks.
+3. **Handover message.** Posted in a Slack thread: the tender specification (attached or linked), the repo to build in, and what the demo has to show.
 
 - [ ] **Step 8: Watch the first run**
 
-The first run is the live check for the long-project skill, the hourly schedule and merging in the fork. Check:
+The first run is the live check for the long-project skill, the hourly schedule and merging. Check:
 - the kickoff post
 - the memory note (`/var/agent/memory`)
 - the `<project>-progress` entry in `data/schedules/schedules.toml`
 - the first hourly post
-- that every PR targets the fork (`gh pr list -R <org>/<fork>`, and nothing new on `pragnition/RosterRolo`)
+- that each milestone's PR is merged into the repo's main (`gh pr list -R <org>/<repo> --state merged`)
 
 Fix what breaks as it comes up.
