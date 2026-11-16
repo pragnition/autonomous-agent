@@ -75,6 +75,21 @@ def test_a_delivered_item_shows_as_running():
     assert queries._state("delivered") == "running"
 
 
+def test_filter_by_running_state_also_matches_delivered(conn, queue):
+    """The running filter must agree with _state(): a delivered turn (a message handed into the turn already
+    running) is running too, not left out of the filter that's supposed to show it."""
+    cid = add_conversation(conn, project=None)
+    a = add_item(queue, cid)
+    queue.claim()
+    b = add_item(queue, cid, text="follow-up")
+    queue.deliver(cid, a)
+
+    def ids(**f):
+        return [r["id"] for r in list_sessions(conn, SessionFilter(**f))[0]]
+
+    assert set(ids(state="running")) == {a, b}
+
+
 def test_filter_by_state_project_source_account_q(conn, queue):
     slack = add_conversation(conn, project="sample")
     other = add_conversation(conn, project=None, channel=None, thread_ts=None)

@@ -16,7 +16,8 @@ from zoneinfo import ZoneInfo
 from agent import db
 from agent.core.kpis import FMT, SOURCES, compute_kpis
 
-STATES = {"queued": "queued", "running": "claimed", "done": "done", "failed": "failed", "cancelled": "cancelled"}
+STATES = {"queued": ("queued",), "running": ("claimed", "delivered"), "done": ("done",), "failed": ("failed",),
+         "cancelled": ("cancelled",)}
 TERMINAL = {"done", "failed", "cancelled"}
 TITLE_CHARS = 120
 LINEAR_PREFIX = "Linear agent session event:"
@@ -115,11 +116,16 @@ def _started(conn: sqlite3.Connection, ids: list[str]) -> dict[str, str]:
     return {r["item"]: r["ts"] for r in rows}
 
 
+def _state_values(state: str) -> tuple[str, ...]:
+    return STATES.get(state, (state,))
+
+
 def _where(f: SessionFilter) -> tuple[str, list]:
     where, args = [], []
     if f.state:
-        where.append("w.status = ?")
-        args.append(STATES.get(f.state, f.state))
+        values = _state_values(f.state)
+        where.append(f"w.status IN ({','.join('?' * len(values))})")
+        args += list(values)
     if f.project:
         where.append("COALESCE(c.project, t.project) = ?")
         args.append(f.project)
@@ -172,8 +178,9 @@ def list_conversations(conn: sqlite3.Connection, f: SessionFilter) -> tuple[list
     clause, args = _where(dataclasses.replace(f, state=None))
     where, params = [], []
     if f.state:
-        where.append("status = ?")
-        params.append(STATES.get(f.state, f.state))
+        values = _state_values(f.state)
+        where.append(f"status IN ({','.join('?' * len(values))})")
+        params += list(values)
     if clause:
         where.append(f"key IN (SELECT COALESCE(conversation_id, id) FROM ({_SELECT}{clause}))")
         params += args
