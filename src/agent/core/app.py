@@ -22,7 +22,7 @@ from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
 from agent.core.agent_prs import AgentPrPoller
 from agent.core.agent_tools import AgentToolRouter
-from agent.core.azure_rates import AzureRates
+from agent.core.azure_rates import CHECK_EVERY_S, AzureRates
 from agent.core.bundles import build_bundle
 from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
 from agent.core.conversations import Conversations
@@ -437,7 +437,7 @@ class CoreApp:
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token),
                  self._every(300, self.labeler.sweep)]
         if self.azure_rates:
-            loops.append(self._every(6 * 3600, self.azure_rates.refresh))
+            loops.append(self._every(CHECK_EVERY_S, self.azure_rates.refresh))
         if self.pr_stats:
             loops.append(self._every(300, self.pr_stats.poll_all))
         if self.issue_poller:

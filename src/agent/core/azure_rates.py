@@ -5,8 +5,9 @@ Azure keeps no per-caller record on a shared resource: its metrics split by depl
 agent's tokens are Foundry's own usage report on each answer the meter forwards, and only the rate comes from here:
 for each billing meter on the upstream's resource, Cost Management's cost over its quantity for the last 30 days.
 That carries the discount, the cache-write price and per-token add-ons such as Defender for AI, as the bill does.
-core reads them every few hours with the admin's az login ([cli.azure]) and re-prices this month's calls. Until a
-read works, and for models Azure hasn't billed on the resource yet, the meter uses agent.toml's prices.
+core reads them every 6 hours with the admin's az login ([cli.azure]), retrying a failed read (Cost Management
+throttles) after 30 minutes, and re-prices this month's calls. Until a read works, and for models Azure hasn't
+billed on the resource yet, the meter uses agent.toml's prices.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ UNITS = {"1": 1, "1K": 1_000, "1M": 1_000_000}
 # How a billing meter names each kind of token, after the model and context ("5.6 terra ShortCo Cd Wr Std Gl ...")
 KINDS = (("cdwr", "cache_write"), ("cdinp", "cached_input"), ("inp", "input"), ("opt", "output"))
 WINDOW_DAYS = 30
+CHECK_EVERY_S = 30 * 60            # how often core checks; a read older than FRESH_FOR is done again
+FRESH_FOR = timedelta(hours=6)
 AZ_TIMEOUT_S = 120
 
 
@@ -112,21 +115,24 @@ class AzureRates:
                 "window_days": WINDOW_DAYS, "rates": info["rates"], "addon": info["addon"],
                 "error": info.get("error")}
 
-    async def refresh(self) -> None:
-        """Read the billed rates for every upstream on an Azure resource, then re-price this month's calls."""
+    async def refresh(self, now: datetime | None = None) -> None:
+        """Read the billed rates for every upstream on an Azure resource whose last read is stale or failed, then
+        re-price this month's calls."""
+        now = now or datetime.now(UTC)
         for name, upstream in self.settings.upstreams.items():
-            account = account_name(upstream.base_url)
-            if account is None:
+            account, last = account_name(upstream.base_url), self.state.get(name) or {}
+            if account is None or (last.get("as_of") and not last.get("error") and
+                                   now - datetime.fromisoformat(last["as_of"]) < FRESH_FOR):
                 continue
             try:
-                self.state[name] = await self._read(account)
+                self.state[name] = await self._read(account, now)
             except (AzureError, KeyError, TypeError, ValueError) as e:
                 log.warning("couldn't read Azure's billed rates for %s: %s", name, e)
                 self.state[name] = {**self.state.get(name, {}), "error": f"{type(e).__name__}: {e}"[:300]}
         db.set_setting(self.conn, RATES_KEY, json.dumps(self.state))
         llm_meter.reprice(self.conn, self.settings, self, self.timezone)
 
-    async def _read(self, account: str) -> dict:
+    async def _read(self, account: str, now: datetime) -> dict:
         found = await self._az("rest", "--method", "post",
                                "--url", f"{ARM}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01",
                                "--body", json.dumps({"query": "resources | where type =~ "
@@ -138,7 +144,6 @@ class AzureRates:
         resource = ids[0]
         listed = await self._az("rest", "--url", f"{ARM}{resource}/deployments?api-version=2024-10-01")
         deployments = {d["name"]: d["properties"]["model"]["name"] for d in listed.get("value", [])}
-        now = datetime.now(UTC)
         query = {"type": "ActualCost", "timeframe": "Custom",
                  "timePeriod": {"from": (now - timedelta(days=WINDOW_DAYS)).strftime("%Y-%m-%dT00:00:00Z"),
                                 "to": now.strftime("%Y-%m-%dT%H:%M:%SZ")},

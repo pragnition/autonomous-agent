@@ -416,7 +416,7 @@ placeholder key. core:
   config's timezone), and with 503 while the agent is stopped.
 
 The price is what Azure bills on the upstream's own resource. Every 6 hours core reads the resource's billing
-meters from Cost Management with the `[cli.azure]` login. Each meter's cost over its quantity for the last 30 days
+meters from Cost Management with the `[cli.azure]` login, and retries a failed read after 30 minutes. Each meter's cost over its quantity for the last 30 days
 gives a rate for input, cached input, cache writes and output per model, with the discount applied. Defender for
 AI's per-token charge is added on all but cached input. core then re-prices the month's calls. Azure records
 nothing per caller on a shared resource, so the agent's share is its own calls' token counts at those rates.

@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -127,13 +127,28 @@ async def test_refresh_prices_deployments_at_the_billed_rates_and_reprices_the_m
         "team-dev", "team-dev-gpt-5.6-terra", LISTED) == price                   # kept across restarts
 
 
-async def test_a_failed_read_keeps_the_last_rates_and_says_why(conn):
-    await rates_for(conn, []).refresh()
+async def test_a_fresh_read_is_kept_for_6_hours(conn):
+    now = datetime.now(UTC)
+    await rates_for(conn, []).refresh(now)
+    calls = []
+    await rates_for(conn, calls).refresh(now + timedelta(hours=5))
+    assert calls == []
+    await rates_for(conn, calls).refresh(now + timedelta(hours=7))
+    assert len(calls) == 3
+
+
+async def test_a_failed_read_keeps_the_last_rates_says_why_and_is_retried_next_check(conn):
+    now = datetime.now(UTC)
+    await rates_for(conn, []).refresh(now)
     before = rates_for(conn, []).price("team-dev", "team-dev-gpt-5.6-terra", LISTED)
     rates = rates_for(conn, [], fail="CostManagement")
-    await rates.refresh()
+    await rates.refresh(now + timedelta(hours=7))
     assert rates.price("team-dev", "team-dev-gpt-5.6-terra", LISTED) == before
     assert "AADSTS70043" in rates.view("team-dev")["error"]
+    calls = []
+    retry = rates_for(conn, calls)
+    await retry.refresh(now + timedelta(hours=7, minutes=30))
+    assert len(calls) == 3 and retry.view("team-dev")["error"] is None
 
 
 async def test_without_any_read_the_meter_uses_agent_toml(conn):
