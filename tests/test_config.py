@@ -65,6 +65,9 @@ def test_defaults(tmp_path):
     cfg = load_agent_config(write_agent(tmp_path, ""))
     assert cfg.limits.max_concurrent_sessions == 10 and cfg.limits.task_minutes == 90
     assert cfg.limits.max_tasks_per_day == 20 and cfg.limits.max_turns == 400
+    assert cfg.models.default == "claude-opus-5-5" and cfg.models.hard == "claude-fable-5-1"
+    assert cfg.agent.uid == 1001
+    assert cfg.cli == {}
 
 
 def test_continuations_default_to_one_hundred_and_three_for_schedules(tmp_path):
@@ -72,9 +75,6 @@ def test_continuations_default_to_one_hundred_and_three_for_schedules(tmp_path):
     assert cfg.limits.continuations == 100 and cfg.limits.schedule_continuations == 3
     cfg = load_agent_config(write_agent(tmp_path, "[limits]\nschedule_continuations = 0\n"))
     assert cfg.limits.schedule_continuations == 0
-    assert cfg.models.default == "claude-opus-5-5" and cfg.models.hard == "claude-fable-5-1"
-    assert cfg.agent.uid == 1001
-    assert cfg.cli == {}
 
 
 def test_github_login_defaults_to_name(tmp_path):
