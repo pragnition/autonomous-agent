@@ -9,7 +9,7 @@ import pytest
 from agent.runner.base import RunResult
 from agent.runner.link import CoreLink, SessionRevoked
 from agent.runner.tools import remote_sdk_tools
-from agent.runner.worker import FRESH_NOTE, MIDTURN_NOTE, RESTARTED_NOTE, Runner
+from agent.runner.worker import FRESH_NOTE, MIDTURN_NOTE, RESTARTED_NOTE, Runner, memory_block
 
 
 async def wait_until(cond):
@@ -149,6 +149,33 @@ async def test_every_session_shares_one_claude_code_memory(tmp_path):
     await runner.handle(item("V-2", project=None), "tok", [])
     assert [s.settings for s in claude.specs] == [{"autoMemoryDirectory": str(tmp_path / "memory")}] * 2
     assert (tmp_path / "memory").is_dir()
+
+
+def test_memory_block_carries_the_rules_and_the_index(tmp_path):
+    (tmp_path / "MEMORY.md").write_text("- [Reply style](people-ivan-replies.md) — short replies\n")
+    text = memory_block(tmp_path)
+    assert str(tmp_path) in text and "One fact per file" in text and "people-ivan-replies.md" in text
+
+
+def test_an_empty_memory_says_so(tmp_path):
+    assert "(empty)" in memory_block(tmp_path)
+
+
+def test_a_long_index_is_cut_and_says_how_much(tmp_path):
+    (tmp_path / "MEMORY.md").write_text("".join(f"- line {i}\n" for i in range(250)))
+    text = memory_block(tmp_path, max_lines=200)
+    assert "- line 199" in text and "- line 200" not in text and "50 more lines" in text
+
+
+async def test_every_session_gets_the_memory_block(tmp_path):
+    claude = FakeClaude()
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "MEMORY.md").write_text("- [Reply style](people-ivan-replies.md) — short replies\n")
+    runner = make_runner(tmp_path, FakeLink(), claude, memory_dir=memory_dir)
+    await runner.handle(item(), "tok", [])
+    prompt = claude.specs[0].system_prompt
+    assert prompt.startswith("SYS") and "people-ivan-replies.md" in prompt and "One fact per file" in prompt
 
 
 async def test_prompt_starts_with_the_messages_origin(tmp_path):

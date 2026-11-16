@@ -26,6 +26,23 @@ MIDTURN_NOTE = ("(A new message arrived while you're working. Answer it now with
                 "change course if it asks you to.)\n\n")
 RESTARTED_NOTE = ("(Your machine restarted partway through this turn. Your session picks up where it stopped: check "
                   "what you had already done, then carry on. The message you were working on:)\n\n")
+MEMORY_RULES = """# Memory
+
+Your memory is the folder {dir}, shared by all your sessions. Its index, MEMORY.md, is below; read a fact's file when its line matters to what you're doing.
+
+- One fact per file, named for it (`people-ivan-replies.md`, `project-roster-demo.md`), starting with:
+  ---
+  name: <short-kebab-name>
+  description: <one line: what it is and when it matters>
+  ---
+  then the fact, with who said it, when and the link.
+- Add one line for it to MEMORY.md: `- [Title](file.md) — hook`. The index holds pointers, never the facts.
+- Before you save, look for a file that already covers it and update that one. When a fact turns out wrong, fix or delete its file and its line.
+- Save what you'd want next time: what people want and how, decisions, conventions, gotchas, where things are. Not what the code, git or the task record already says.
+- Never write what you learn into CLAUDE.md.
+
+## MEMORY.md
+"""
 
 _VAR = re.compile(r"\$\{(\w+)\}")
 
@@ -62,6 +79,22 @@ def expand_mcp(servers: dict, env: dict[str, str]) -> dict:
     return out
 
 
+def memory_block(memory_dir: Path, max_lines: int = 200) -> str:
+    """MEMORY_RULES with the folder filled in, followed by its index (memory_dir/MEMORY.md) cut to max_lines."""
+    try:
+        lines = (memory_dir / "MEMORY.md").read_text().splitlines()
+    except OSError:
+        lines = []
+    if not lines:
+        index = "(empty)"
+    else:
+        index = "\n".join(lines[:max_lines])
+        hidden = len(lines) - max_lines
+        if hidden > 0:
+            index += f"\n(… {hidden} more lines not shown: the index is too long, so tidy it)"
+    return MEMORY_RULES.format(dir=memory_dir) + index
+
+
 class Runner:
     def __init__(self, link, claude, *, bundles_dir: Path, claude_home: Path, scratch_root: Path,
                  heartbeat_s: float = 15, max_parallel: int = 32, extra_env: dict[str, str] | None = None,
@@ -73,7 +106,7 @@ class Runner:
         self.heartbeat_s, self.max_parallel = heartbeat_s, max_parallel  # core's Gate is the real limit; this is a safety bound
         self.extra_env = dict(extra_env or {})  # agent.env and a git identity for every session
         self.env_files = [Path(f) for f in env_files]  # re-read per session: core rotates LINEAR_APP_TOKEN there
-        self.memory_dir = memory_dir  # Claude Code's auto memory, one folder for every session
+        self.memory_dir = memory_dir  # one folder of fact files for every session; see memory_block
 
     async def _bundle(self) -> list[Path]:
         version, data = await self.link.bundle()
@@ -168,14 +201,16 @@ class Runner:
         tools = remote_sdk_tools(manifest, self.link, tok, session_dir=session)
         env = {**self.extra_env, **read_env_files(self.env_files)}
         settings = {}
+        system_prompt = payload["system_prompt"]
         if self.memory_dir is not None:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             settings["autoMemoryDirectory"] = str(self.memory_dir)
+            system_prompt += "\n\n" + memory_block(self.memory_dir)
         # the message's origin (who, where, link) comes first, then the restart note (if this attempt is resuming
         # a turn the machine restarted mid-way through), then the message
         note = RESTARTED_NOTE if item.get("attempts") and payload.get("resume_session_id") else ""
         spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + note + payload["text"], cwd=session,
-                       model=payload["model"], system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
+                       model=payload["model"], system_prompt=system_prompt, max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,
                        # plugins/effortless/hooks) are forced last, so a pack's test secret or the container's

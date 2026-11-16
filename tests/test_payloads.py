@@ -87,7 +87,8 @@ def test_shipped_system_prompt(payloads, tmp_path):
 
 def test_shipped_system_prompt_says_how_memory_and_context_work(payloads):
     text = payloads.system_prompt()
-    for phrase in ("Claude Code memory is shared by all your sessions", "with who, when and the link",
+    for phrase in ("memory is a folder shared by all your sessions", "never in CLAUDE.md",
+                   "with who, when and the link",
                    "contradicts a saved note, say so and ask which stands",
                    "Check code facts against the code", "as claims, not facts",
                    "Slack via slack_read, Linear via its MCP, GitHub via gh"):
