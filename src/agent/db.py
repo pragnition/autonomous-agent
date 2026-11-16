@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     input_tokens INTEGER NOT NULL DEFAULT 0,
     cached_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd REAL NOT NULL DEFAULT 0
+    cost_usd REAL NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS llm_usage_at ON llm_usage(at);
 -- One row per agent session: a Slack thread or DM chat, a Linear issue, a hand-over or a split
@@ -224,7 +225,7 @@ def connect(path: Path | str) -> sqlite3.Connection:
 
 # Columns added to tables a live install already has; CREATE TABLE IF NOT EXISTS leaves those tables as they were
 ADDED_COLUMNS = [("request_labels", "project", "TEXT"), ("request_labels", "version", "INTEGER NOT NULL DEFAULT 1"),
-                 ("task_records", "project", "TEXT")]
+                 ("task_records", "project", "TEXT"), ("llm_usage", "cache_write_tokens", "INTEGER NOT NULL DEFAULT 0")]
 
 
 def create_schema(conn: sqlite3.Connection) -> None:

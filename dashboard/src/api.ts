@@ -169,7 +169,13 @@ export type EventRow = { id: number; ts: string; type: string; source: EventSour
 export type Events = { rows: EventRow[]; types: string[] }
 
 export type LlmModelRow = { upstream: string; model: string; calls: number; errors: number; input_tokens: number;
-  cached_tokens: number; output_tokens: number; cost_usd: number }
+  cached_tokens: number; cache_write_tokens: number; output_tokens: number; cost_usd: number }
+export type LlmRates = { input?: number; cached_input?: number; cache_write?: number; output?: number }
+// Where an endpoint's prices come from: what Azure bills on its resource, or agent.toml's list prices
+export type LlmPricing =
+  | { source: "agent.toml"; error?: string | null }
+  | { source: "azure"; resource: string; as_of: string; window_days: number; rates: Record<string, LlmRates>;
+      addon: number; error: string | null }
 export type LlmMeter = {
   installed: true
   caps: { daily_usd: number | null; monthly_usd: number | null; changed_at_runtime: boolean }
@@ -178,6 +184,7 @@ export type LlmMeter = {
   upstreams: string[]
   by_model: LlmModelRow[]
   daily: { day: string; calls: number; cost_usd: number }[]
+  pricing: Record<string, LlmPricing>
 }
 export type LlmView = { installed: false } | LlmMeter
 

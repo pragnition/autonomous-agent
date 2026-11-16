@@ -89,10 +89,12 @@ def test_price_for_exact_then_longest_part_then_default():
 
 def test_usage_of_each_api_shape():
     assert usage_of({"usage": {"prompt_tokens": 100, "completion_tokens": 7,
-                               "prompt_tokens_details": {"cached_tokens": 40}}}) == (100, 40, 7)
+                               "prompt_tokens_details": {"cached_tokens": 40}}}) == (100, 40, 7, 0)
     assert usage_of({"type": "response.completed", "response": {"usage": {
-        "input_tokens": 9, "output_tokens": 3, "input_tokens_details": {"cached_tokens": 0}}}}) == (9, 0, 3)
-    assert usage_of({"usage": {"prompt_tokens": 12, "total_tokens": 12}}) == (12, 0, 0)
+        "input_tokens": 9, "output_tokens": 3, "input_tokens_details": {"cached_tokens": 0}}}}) == (9, 0, 3, 0)
+    assert usage_of({"usage": {"prompt_tokens": 12, "total_tokens": 12}}) == (12, 0, 0, 0)
+    assert usage_of({"usage": {"prompt_tokens": 50, "completion_tokens": 2, "prompt_tokens_details": {
+        "cached_tokens": 10, "cache_write_tokens": 30}}}) == (50, 10, 2, 30)
     assert usage_of({"choices": []}) is None
     assert usage_of({"usage": None}) is None
 
@@ -102,6 +104,15 @@ def test_cost_charges_cached_tokens_at_the_cached_price():
     assert llm_meter.cost(price, 1_000_000, 400_000, 100_000) == pytest.approx(0.6 * 2 + 0.4 * 0.2 + 0.1 * 12)
 
 
+def test_cost_charges_cache_writes_and_the_addon_on_all_but_cached_input():
+    price = LlmPrice(input=1.54, cached_input=0.154, output=9.24, cache_write=1.925, addon=0.616)
+    # 1M in: 0.4M cached, 0.5M written to the cache, 0.1M fresh; 0.2M out
+    expected = 0.1 * 1.54 + 0.4 * 0.154 + 0.5 * 1.925 + 0.2 * 9.24 + (0.1 + 0.5 + 0.2) * 0.616
+    assert llm_meter.cost(price, 1_000_000, 400_000, 200_000, 500_000) == pytest.approx(expected)
+    # without a cache-write price, cache writes cost what input does
+    assert llm_meter.cost(PRICES["gpt-5.6-terra"], 1_000_000, 0, 0, 1_000_000) == pytest.approx(2.0)
+
+
 def test_sse_usage_survives_chunks_split_mid_line():
     stream = (b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
               b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}}\n\ndata: [DONE]\n\n')
@@ -109,7 +120,7 @@ def test_sse_usage_survives_chunks_split_mid_line():
     for i in range(0, len(stream), 7):
         scan.feed(stream[i:i + 7])
     scan.close()
-    assert scan.usage == (5, 0, 2)
+    assert scan.usage == (5, 0, 2, 0)
 
 
 def test_prepare_body_asks_streams_for_usage_and_finds_the_model():

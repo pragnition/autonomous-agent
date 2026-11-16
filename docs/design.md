@@ -410,10 +410,19 @@ placeholder key. core:
 
 - adds the upstream's real key from `core.env` (`api-key` header, or `Authorization: Bearer`);
 - forwards the call, streaming included (it asks streamed chat completions to report usage);
-- reads the token usage from each answer, prices it with `[llm_meter.prices]` (USD per million tokens for input,
-  cached input and output; `default` for unlisted models), and records it in `llm_usage`;
+- reads Foundry's own token usage from each answer (input, cached input, cache writes, output), prices it, and
+  records it in `llm_usage`;
 - refuses calls with 429 `cost_cap_reached` once the day's or the month's cap is spent (days and months in the
   config's timezone), and with 503 while the agent is stopped.
+
+The price is what Azure bills on the upstream's own resource. Every 6 hours core reads the resource's billing
+meters from Cost Management with the `[cli.azure]` login. Each meter's cost over its quantity for the last 30 days
+gives a rate for input, cached input, cache writes and output per model, with the discount applied. Defender for
+AI's per-token charge is added on all but cached input. core then re-prices the month's calls. Azure records
+nothing per caller on a shared resource, so the agent's share is its own calls' token counts at those rates.
+`[llm_meter.prices]` (USD per million tokens for input, cached input and output; `default` for unlisted models)
+applies until a read works, and to models Azure hasn't billed on the resource yet. The dashboard shows which
+applies to each endpoint.
 
 Caps start from `daily_usd` and `monthly_usd` and can be changed at runtime from the dashboard. The meter runs only
 when `[llm_meter.upstreams]` has an entry. The address is fixed because apps in the agent's Docker can't resolve

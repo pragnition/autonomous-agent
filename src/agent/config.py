@@ -99,6 +99,8 @@ class LlmPrice:
     input: float                   # USD per million tokens
     cached_input: float
     output: float
+    cache_write: float | None = None   # input written to the prompt cache; None means the input price
+    addon: float = 0.0             # billed per token besides the model (Defender for AI), on all but cached input
 
 
 @dataclass

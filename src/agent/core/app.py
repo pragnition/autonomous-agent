@@ -22,6 +22,7 @@ from agent.connectors.linear import LinearClient, LinearPoller
 from agent.core.agent_api import make_agent_app
 from agent.core.agent_prs import AgentPrPoller
 from agent.core.agent_tools import AgentToolRouter
+from agent.core.azure_rates import AzureRates
 from agent.core.bundles import build_bundle
 from agent.core.cli_admin import DeviceCodeLogin, register_login_tools
 from agent.core.conversations import Conversations
@@ -175,6 +176,11 @@ class CoreApp:
                                    has_capacity=lambda: self._has_capacity(proxy), tasks_dir=self.data_dir / "tasks",
                                    projects={name: pack.project for name, pack in self.packs.items()})
         self.account_names = AccountNames(self.config_dir / NAMES_FILE)
+        # What Azure bills per token on each upstream's resource, read with the admin's az login ([cli.azure])
+        azure = self.config.cli.get("azure")
+        self.azure_rates = AzureRates(self.conn, self.config.llm_meter, timezone=self.config.timezone, rules=azure,
+                                      exec_fn=cli_exec, run_as=self.config.agent.uid if core_is_root() else None) \
+            if self.config.llm_meter.upstreams and azure is not None else None
         self.dashboard_app = make_dashboard_app(
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
             static_dir=DASHBOARD_STATIC if DASHBOARD_STATIC.is_dir() else None, permalink=self.permalink,
@@ -182,7 +188,8 @@ class CoreApp:
             person_name=self.person_name, **dict(zip(("llm_view", "llm_set_caps"), self.llm_meter())))
         # Model calls from the apps the agent runs and tests, metered against caps; only the stack's network reaches it
         self.meter_app = make_meter_app(self.conn, self.config.llm_meter, secrets=secrets,
-                                        timezone=self.config.timezone) if self.config.llm_meter.upstreams else None
+                                        timezone=self.config.timezone, rates=self.azure_rates) \
+            if self.config.llm_meter.upstreams else None
 
     @staticmethod
     def _haiku(proxy):
@@ -206,7 +213,7 @@ class CoreApp:
         settings = self.config.llm_meter
         if not settings.upstreams:
             return None, None
-        return (lambda: llm_meter.meter_view(self.conn, settings, self.config.timezone),
+        return (lambda: llm_meter.meter_view(self.conn, settings, self.config.timezone, rates=self.azure_rates),
                 lambda actor, daily_usd=None, monthly_usd=None: llm_meter.set_caps(
                     self.conn, actor=actor, daily_usd=daily_usd, monthly_usd=monthly_usd))
 
@@ -429,6 +436,8 @@ class CoreApp:
                  self._every(3600, self.maintenance),
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token),
                  self._every(300, self.labeler.sweep)]
+        if self.azure_rates:
+            loops.append(self._every(6 * 3600, self.azure_rates.refresh))
         if self.pr_stats:
             loops.append(self._every(300, self.pr_stats.poll_all))
         if self.issue_poller:

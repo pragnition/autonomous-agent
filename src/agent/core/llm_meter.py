@@ -2,6 +2,9 @@
 through core instead of directly. core adds the real key, reads the token usage from each answer, prices it, and
 refuses calls once the day's or the month's cap is spent, so a test loop can't run up a bill.
 
+The token counts are Foundry's own (the usage report on each answer). Their price is what Azure bills on the
+upstream's resource when core can read it (core/azure_rates.py), else agent.toml's [llm_meter.prices].
+
 Apps point their OpenAI-compatible base URL at http://172.30.0.10:<port>/llm/<upstream> (core's fixed address on
 the stack network; apps in the agent's own Docker can't resolve `core`) with any placeholder key. The caps
 start from agent.toml's [llm_meter] and can be changed at runtime (the dashboard calls set_caps); days and months
@@ -14,6 +17,7 @@ import json
 import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, NamedTuple
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -21,6 +25,9 @@ from aiohttp import web
 
 from agent import db, events
 from agent.config import LlmMeterSettings, LlmPrice
+
+if TYPE_CHECKING:
+    from agent.core.azure_rates import AzureRates
 
 log = logging.getLogger(__name__)
 CAP_KEYS = {"daily": "llm_meter.daily_usd", "monthly": "llm_meter.monthly_usd"}
@@ -92,9 +99,15 @@ def price_for(prices: dict[str, LlmPrice], model: str) -> LlmPrice:
     return prices.get("default", LlmPrice(0.0, 0.0, 0.0))
 
 
-def usage_of(answer) -> tuple[int, int, int] | None:
-    """(input, cached input, output) tokens from an OpenAI-style answer or stream event: chat completions,
-    responses or embeddings."""
+class Usage(NamedTuple):
+    input: int                     # every input token, including cached and cache-written ones
+    cached: int
+    output: int
+    cache_write: int = 0
+
+
+def usage_of(answer) -> Usage | None:
+    """The tokens an OpenAI-style answer or stream event reports: chat completions, responses or embeddings."""
     if not isinstance(answer, dict):
         return None
     usage = answer.get("usage")
@@ -105,13 +118,25 @@ def usage_of(answer) -> tuple[int, int, int] | None:
     tokens_in = usage.get("prompt_tokens", usage.get("input_tokens")) or 0
     tokens_out = usage.get("completion_tokens", usage.get("output_tokens")) or 0
     details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
-    cached = (details.get("cached_tokens") if isinstance(details, dict) else 0) or 0
-    return int(tokens_in), int(cached), int(tokens_out)
+    if not isinstance(details, dict):
+        details = {}
+    return Usage(int(tokens_in), int(details.get("cached_tokens") or 0), int(tokens_out),
+                 int(details.get("cache_write_tokens") or 0))
 
 
-def cost(price: LlmPrice, tokens_in: int, cached: int, tokens_out: int) -> float:
+def cost(price: LlmPrice, tokens_in: int, cached: int, tokens_out: int, cache_write: int = 0) -> float:
     cached = min(cached, tokens_in)
-    return ((tokens_in - cached) * price.input + cached * price.cached_input + tokens_out * price.output) / 1_000_000
+    cache_write = min(cache_write, tokens_in - cached)
+    fresh = tokens_in - cached - cache_write
+    write_price = price.input if price.cache_write is None else price.cache_write
+    return (fresh * price.input + cached * price.cached_input + cache_write * write_price + tokens_out * price.output
+            + (fresh + cache_write + tokens_out) * price.addon) / 1_000_000
+
+
+def price_of(settings: LlmMeterSettings, rates: AzureRates | None, upstream: str, model: str) -> LlmPrice:
+    """Azure's billed rates for the model on the upstream's resource when core has them, else agent.toml's price."""
+    listed = price_for(settings.prices, model)
+    return rates.price(upstream, model, listed) if rates is not None else listed
 
 
 class SseUsage:
@@ -160,25 +185,41 @@ def prepare_body(body: bytes, path: str) -> tuple[bytes, str]:
     return body, model
 
 
-def record(conn: sqlite3.Connection, *, upstream: str, model: str, status: int,
-           usage: tuple[int, int, int] | None, price: LlmPrice) -> float:
-    tokens_in, cached, tokens_out = usage or (0, 0, 0)
-    spent = cost(price, tokens_in, cached, tokens_out)
+def record(conn: sqlite3.Connection, *, upstream: str, model: str, status: int, usage: Usage | None,
+           price: LlmPrice) -> float:
+    tokens = usage or Usage(0, 0, 0)
+    spent = cost(price, *tokens)
     conn.execute("INSERT INTO llm_usage(at, upstream, model, status, input_tokens, cached_tokens, output_tokens, "
-                 "cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                 (db.utcnow(), upstream, model, status, tokens_in, cached, tokens_out, spent))
+                 "cache_write_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (db.utcnow(), upstream, model, status, tokens.input, tokens.cached, tokens.output, tokens.cache_write,
+                  spent))
     if usage is None and status < 400:
         log.warning("%s answered %s for %s without a usage report; the call is counted as free", upstream, status, model)
     return spent
 
 
-def meter_view(conn: sqlite3.Connection, settings: LlmMeterSettings, tz: str, now: datetime | None = None) -> dict:
-    """What the dashboard shows: caps, spend, this month by model, and spend per day for 30 days."""
+def reprice(conn: sqlite3.Connection, settings: LlmMeterSettings, rates: AzureRates | None, tz: str,
+            now: datetime | None = None) -> None:
+    """Price this month's calls again at the current rates, so the month's spend is all at what Azure bills."""
+    _, month = period_starts(tz, now or datetime.now(UTC))
+    rows = conn.execute("SELECT id, upstream, model, input_tokens, cached_tokens, output_tokens, cache_write_tokens "
+                        "FROM llm_usage WHERE at >= ?", (month,)).fetchall()
+    for r in rows:
+        spent = cost(price_of(settings, rates, r["upstream"], r["model"]), r["input_tokens"], r["cached_tokens"],
+                     r["output_tokens"], r["cache_write_tokens"])
+        conn.execute("UPDATE llm_usage SET cost_usd = ? WHERE id = ?", (spent, r["id"]))
+
+
+def meter_view(conn: sqlite3.Connection, settings: LlmMeterSettings, tz: str, now: datetime | None = None,
+               rates: AzureRates | None = None) -> dict:
+    """What the dashboard shows: caps, spend, this month by model, spend per day for 30 days, and where the prices
+    come from."""
     now = now or datetime.now(UTC)
     _, month = period_starts(tz, now)
     by_model = [dict(r) for r in conn.execute(
         "SELECT upstream, model, COUNT(*) AS calls, SUM(status >= 400) AS errors, SUM(input_tokens) AS input_tokens, "
-        "SUM(cached_tokens) AS cached_tokens, SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd "
+        "SUM(cached_tokens) AS cached_tokens, SUM(cache_write_tokens) AS cache_write_tokens, "
+        "SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd "
         "FROM llm_usage WHERE at >= ? GROUP BY upstream, model ORDER BY cost_usd DESC", (month,))]
     zone, days = ZoneInfo(tz), {}
     for row in conn.execute("SELECT at, cost_usd FROM llm_usage WHERE at >= ?", (_ts(now - timedelta(days=30)),)):
@@ -188,7 +229,9 @@ def meter_view(conn: sqlite3.Connection, settings: LlmMeterSettings, tz: str, no
     return {"caps": caps(conn, settings), "spend": spend(conn, tz, now),
             "capped": over_cap(conn, settings, tz, now), "upstreams": sorted(settings.upstreams),
             "by_model": by_model,
-            "daily": [{"day": d, "calls": c, "cost_usd": round(s, 6)} for d, (c, s) in sorted(days.items())]}
+            "daily": [{"day": d, "calls": c, "cost_usd": round(s, 6)} for d, (c, s) in sorted(days.items())],
+            "pricing": {name: rates.view(name) if rates is not None else {"source": "agent.toml"}
+                        for name in sorted(settings.upstreams)}}
 
 
 def _error(status: int, code: str, message: str) -> web.Response:
@@ -196,7 +239,7 @@ def _error(status: int, code: str, message: str) -> web.Response:
 
 
 def make_meter_app(conn: sqlite3.Connection, settings: LlmMeterSettings, *, secrets: dict[str, str], timezone: str,
-                   http: httpx.AsyncClient | None = None) -> web.Application:
+                   http: httpx.AsyncClient | None = None, rates: AzureRates | None = None) -> web.Application:
     client = http or httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10))
 
     def refuse_if_capped() -> web.Response | None:
@@ -224,7 +267,7 @@ def make_meter_app(conn: sqlite3.Connection, settings: LlmMeterSettings, *, secr
             return refusal
         body, model = prepare_body(await request.read(), tail)
         model = model or name
-        price = price_for(settings.prices, model)
+        price = price_of(settings, rates, name, model)
         headers = {k: v for k, v in request.headers.items() if k.lower() not in REQUEST_DROP}
         headers[upstream.header] = f"Bearer {key}" if upstream.header == "Authorization" else key
         outgoing = client.build_request(request.method, f"{upstream.base_url}/{tail}",
@@ -260,7 +303,7 @@ def make_meter_app(conn: sqlite3.Connection, settings: LlmMeterSettings, *, secr
             await answer.aclose()
 
     async def status(request: web.Request) -> web.Response:
-        return web.json_response(meter_view(conn, settings, timezone))
+        return web.json_response(meter_view(conn, settings, timezone, rates=rates))
 
     async def close_client(app: web.Application) -> None:
         if http is None:

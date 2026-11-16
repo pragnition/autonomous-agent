@@ -48,7 +48,7 @@ agent_origins = ["agent-core", "agent-sandbox"]   # the account proxy's origins 
 
 # Model calls from the apps the agent runs and tests (a project's own LLM features). Apps point their OpenAI-style
 # base URL at http://172.30.0.10:8087/llm/<upstream> (core's fixed address) with any placeholder key; core adds the real key (core.env), counts
-# each call's tokens at these prices, and refuses calls once the day's or month's cap is spent. The dashboard can
+# each call's tokens and prices them (below), and refuses calls once the day's or month's cap is spent. The dashboard can
 # change the caps at runtime. Without upstreams, the meter doesn't run.
 [llm_meter]
 daily_usd = 10
@@ -57,6 +57,9 @@ monthly_usd = 100
 # base_url = "https://<resource>.openai.azure.com/openai/v1"
 # key = "<PROJECT>_DEV_FOUNDRY_KEY"        # in core.env
 
+# Each call's tokens are Foundry's own count. Their price is what Azure bills per token on the upstream's resource
+# (Cost Management, last 30 days, with discounts, cache writes and Defender for AI), which core reads every 6 hours
+# with the [cli.azure] login. These list prices apply until that read works and to models Azure hasn't billed yet.
 [llm_meter.prices]                         # USD per million tokens: [input, cached input, output]
 "gpt-5.6-terra" = [2.0, 0.2, 12.0]         # Azure Global Standard, short context
 default = [5.0, 0.5, 30.0]                 # anything not listed: priced high on purpose
