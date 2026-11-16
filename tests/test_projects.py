@@ -1,16 +1,33 @@
 """Tests for core's long-projects table and its three tools: start_project, finish_project, tell_project."""
 
+import asyncio
+
 import pytest
 
 from agent.core import projects
 from agent.core.projects import register_project_tools
-from agent_fixtures import add_conversation, add_item
+from agent_fixtures import FakeSlack, add_conversation, add_item
 from test_agent_tools import conn, ctx_for, latest_item, router  # noqa: F401 (fixtures and helpers to reuse)
 
 
 @pytest.fixture(autouse=True)
 def _project_tools(router):  # noqa: F811 (router: the fixture imported above)
     register_project_tools(router)
+
+
+class GatedSlack(FakeSlack):
+    """A chat_getPermalink that waits on a gate, so a test can pause two start_project calls at the same point
+    (after the permalink lookup, before either has checked or written its row) and release them together."""
+
+    def __init__(self):
+        super().__init__()
+        self.waiting = 0
+        self.gate = asyncio.Event()
+
+    async def chat_getPermalink(self, **kw):
+        self.waiting += 1
+        await self.gate.wait()
+        return {"permalink": "https://slack/t"}
 
 
 async def test_start_project_registers_this_conversation_as_the_build(router):
@@ -26,6 +43,27 @@ async def test_a_name_another_build_holds_is_refused(router):
     await router.call(ctx_for(router), "start_project", {"name": "roster-demo", "repo": "o/r"})
     reply = await router.call(ctx_for(router), "start_project", {"name": "roster-demo", "repo": "o/r"})
     assert "already being built" in reply.text
+
+
+async def test_two_conversations_racing_to_register_the_same_new_name_has_exactly_one_winner(router):
+    """Both calls reach the (awaited) permalink lookup before either checks or writes the row, so this exercises
+    the real interleaving a TOCTOU race would need: the check and the write must still run as one atomic step."""
+    slack = GatedSlack()
+    router.slack = slack
+    a, b = ctx_for(router, actor="ann"), ctx_for(router, actor="bob")
+    task_a = asyncio.create_task(router.call(a, "start_project", {"name": "roster-demo", "repo": "o/r"}))
+    task_b = asyncio.create_task(router.call(b, "start_project", {"name": "roster-demo", "repo": "o/r"}))
+    while slack.waiting < 2:   # both parked on the gate, neither has checked or written yet
+        await asyncio.sleep(0)
+    slack.gate.set()
+    reply_a, reply_b = await asyncio.gather(task_a, task_b)
+
+    texts = [reply_a.text, reply_b.text]
+    assert sum("registered" in t for t in texts) == 1
+    assert sum("already being built" in t for t in texts) == 1
+    [p] = projects.active(router.conn)
+    winner = a if "registered" in reply_a.text else b
+    assert p["conversation_id"] == winner.conversation_id
 
 
 async def test_a_change_from_another_conversation_reaches_an_idle_build(router):

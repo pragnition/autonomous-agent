@@ -67,19 +67,23 @@ def register_project_tools(router: AgentToolRouter) -> None:
                              "with a letter or digit")
         if ctx.conversation_id is None:
             return ToolReply("this conversation can't run a project")
-        existing = get(conn, name)
-        if existing is not None and existing["status"] == "active" \
-                and existing["conversation_id"] != ctx.conversation_id:
-            return ToolReply(f"{name} is already being built in {existing['thread_link']}")
         thread_link = None
-        if ctx.channel:
+        if ctx.channel:   # looked up before the check below, so nothing awaits between it and the write
             try:
                 thread_link = (await router.slack.chat_getPermalink(
                     channel=ctx.channel, message_ts=ctx.thread_ts))["permalink"]
             except Exception:
                 thread_link = None
-        start(conn, name=name, repo=repo, conversation_id=ctx.conversation_id, started_by=ctx.actor,
-             thread_link=thread_link)
+        # the check and the write run as one step, with no await in between, so two conversations racing to
+        # register the same new name can't both pass the check before either has written its row
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = get(conn, name)
+            if existing is not None and existing["status"] == "active" \
+                    and existing["conversation_id"] != ctx.conversation_id:
+                return ToolReply(f"{name} is already being built in {existing['thread_link']}")
+            start(conn, name=name, repo=repo, conversation_id=ctx.conversation_id, started_by=ctx.actor,
+                 thread_link=thread_link)
         return ToolReply(f"{name} registered; every session now sees it.")
 
     async def finish_project(ctx: ToolContext, args: dict) -> ToolReply:
