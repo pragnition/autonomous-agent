@@ -30,13 +30,14 @@ This build runs on the current Python core, so the first project can start now. 
 5. Jensen merges its own PRs once tests and CI pass and its review found nothing blocking.
 6. Every hour, a scheduled run posts screenshots and progress in the project thread.
 7. Anyone who asks what it has done so far gets an answer, in the thread or anywhere else, built from the plan ledger, PRs and the thread.
-8. Anyone can steer the project from any conversation. For example, in a DM: "does the admin page have xyz?", "no", "add it". That session passes the change into the project thread, and the running build works it into the plan at its next step.
-9. The runner protocol is written down for the control-plane phase.
+8. Anyone can steer the project from any conversation. For example, in a DM: "does the admin page have xyz?", "no", "add it". Every session knows which projects are being built, and it passes the change to the build through core. The running build works it into the plan at its next step.
+9. Memory is a folder of one-fact files with a short index, not a CLAUDE.md that grows without limit.
+10. The runner protocol is written down for the control-plane phase.
 
 ## Non-goals
 
 - Replacing core's queue and state in this build. That's the control-plane phase.
-- Core tools, gates or a pipeline for projects. The workflow lives in a skill, and Jensen decides the steps.
+- Gates or a pipeline for projects. The workflow lives in a skill, and Jensen decides the steps. Core's only new tools are the three project tools, which hold state only core has.
 - ralph-loop. Its `/ralph-loop` command is marked `hide-from-slash-command-tool`, so the model can't start it, and Jensen's sessions have no person typing. Carry-ons plus the skill's rule (the turn ends when the last milestone ships) do the same job. Revisit if a live run ends early.
 - GitHub webhooks for PR comments or CI. Jensen waits on CI itself with `gh pr checks --watch`.
 - Deploying the product. Jensen runs it in its own environment and deploys only where it has credentials and the request asks; it says what access it would need otherwise. Production stays off limits.
@@ -76,22 +77,44 @@ How messages flow:
 - **The note** tells the session to answer now with post_update (a Linear thought in a Linear session), because its final reply only posts when the whole turn ends.
 - **Latency** is at most one heartbeat plus the step in progress. A foreground subagent counts as one step.
 
-### Steering from any conversation
+### Projects core knows about, and steering from any conversation
 
-A session in another conversation (a DM, another channel, a new thread) can answer questions about the project from its memory note, ledger, git and PRs. It isn't the build, though. When it settles a change with someone, it passes the change on through Slack, the same way Jensen already messages anyone:
-- It posts in the project thread with its bot token, starting with its own @mention, then who asked, what they want, what was established and a link to where they asked.
-- Core accepts that one kind of message from the bot itself as a new turn of the thread's conversation: a thread reply, in a thread core knows, that mentions the bot.
-- From there it's like any reply in the thread. The running build gets it at its next step (mid-turn messages above), or it runs as the next turn when the build is between turns. ⏳ and ✅ land on the passed-on post.
-- Every other post by the bot stays ignored, so Jensen's own updates never become turns.
+A long project's build runs in one conversation. Core keeps a `projects` table recording each project's name, repo, build conversation, thread link, who started it, and whether it's active or done. The build registers itself with `start_project` and closes with `finish_project`.
 
-A core tool that pushes a message into another conversation was the alternative. It isn't needed, because Jensen already posts to Slack itself and core only has to accept that one message shape.
+**Every session sees the active projects.** Core writes them into each session's system prompt when the turn starts, the same way it lists the packs: name, repo, thread link, and whether the build is running, queued or idle. So a session in Sam's DM knows "rosterrolo" is a running build before it reads Sam's message.
 
-When a change arrives this way or in the thread, the build follows the skill's change-of-direction steps:
+**Any session passes a change to the build** with `tell_project(name, message)`. Core queues it in the build's conversation:
+- It arrives as a message from the person who asked, with that person's origin line (who, where, link), taken from the asking turn. Core knows who asked, so it doesn't depend on what the message text says.
+- If the build is running, it reaches the build at its next step (mid-turn messages, above). If the build is idle, it runs now.
+- A wrong name is answered with the active projects. A done project goes back to active.
+
+**What's left to the model** is deciding that a message is a change for the build, not a question or separate work. The project list in its prompt gives it what it needs, and the skill tells it to ask once when that's unclear.
+
+Two other designs were considered:
+- **Posting into the project thread with a self-mention.** It depends on Slack echoing the bot's own posts and on parsing a mention, and the sender would only be named in the text.
+- **Automatic routing,** where core classifies every message against active projects with a quick model call. That puts an LLM call that can fail or misroute in front of every turn, and turns the build into a chat channel.
+
+When a change arrives, from the thread or through `tell_project`, the build follows the skill's change-of-direction steps:
 - commit the spec change
 - rewrite the milestones that aren't merged yet
 - close obsolete PRs
-- update the memory note and the progress schedule
+- update its memory note and the progress schedule
 - post what changed
+
+### Memory
+
+Today Jensen appends what it learns to `~/.claude/CLAUDE.md`, which loads in full into every session. The memory folder the runner sets up has never been used. The cause is the runner's own system prompt, which replaces Claude Code's, including Claude Code's memory instructions. That doesn't scale:
+- everything loads every turn
+- nothing removes stale facts
+- parallel sessions append to one file
+
+Memory becomes a folder:
+- **One file per fact,** with a name, a one-line description and the fact itself, including who said it, when and the link.
+- **A `MEMORY.md` index** with one line per fact.
+- **The runner adds the rules and the index to every session's system prompt.** The index is cut at 200 lines, with a note to tidy it. A session reads a fact's file when its line matters.
+- **CLAUDE.md** no longer receives learned facts.
+
+Jensen moves its current facts into the folder once, and a nightly schedule it sets up merges duplicates, fixes or deletes stale facts, and keeps the index short.
 
 ### Runner protocol
 
@@ -112,12 +135,12 @@ The project workflow lives in a core skill, written for Jensen:
 - **Repo.** Work in the repo the request names.
 - **Spec.** The spec may be a message, a file in the thread (PDF, Word) or a link. Jensen reads all of it and commits the original and a Markdown copy.
 - **Plan.** Read the repo's CLAUDE.md, roadmap and existing plans, then write milestone plans with writing-plans. Each milestone is something a person can run and see.
-- **Memory and schedule.** Save a project memory note (thread, repo, conversation folder, plans, ledger, schedule), and add an hourly `<project>-progress` schedule.
+- **Register, remember, schedule.** Call `start_project`, save a `project-<name>.md` memory file (conversation folder, plans, ledger, schedule), and add an hourly `<project>-progress` schedule.
 - **Each milestone.** Run it with subagent-driven-development, pushing after every task. Test it in the browser, open the PR, wait for CI and merge it. Then post what landed with screenshots.
 - **Status questions** are answered from the ledger, `git log` and `gh pr list`.
 - **Changes of direction**, from the thread or passed on, beat the plan (see Steering).
-- **From another conversation:** answer from the memory note and the code; pass a settled change into the project thread with a self-mention.
-- **Finish.** Delete the schedule, update the note, and report what shipped, how to run it and how it was verified.
+- **From another conversation:** answer from the project's memory note and the code; pass a settled change to the build with `tell_project`.
+- **Finish.** Call `finish_project`, delete the schedule, update the note, and report what shipped, how to run it and how it was verified.
 
 The hourly run posts screenshots of the newest pushed commit, plus what merged, what's in progress and what's next. It skips the post when nothing changed since the last one.
 
