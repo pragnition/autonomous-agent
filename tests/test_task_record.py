@@ -76,6 +76,16 @@ def test_pending_skips_smoke_running_and_labeled(conn):
     assert [r["id"] for r in pending(conn)] == ["W1", "W4"]
 
 
+def test_pending_skips_a_message_answered_inline_by_another_turn(conn):
+    """A message delivered into a running turn and read there becomes a done turn with no text of its own — the
+    turn that read it answered it. It must never show up as an unanswered request."""
+    item(conn, "W1", "V-a", "10:00")
+    item(conn, "W2", "V-a", "10:01")
+    conn.execute("UPDATE work_items SET result = ? WHERE id = 'W2'",
+                (json.dumps({"outcome": "done", "text": "", "read_by": "W1"}),))
+    assert [r["id"] for r in pending(conn)] == ["W1"]
+
+
 def test_a_try_keeps_a_request_pending(conn):
     r = item(conn, "W1", "V-a", "10:00")
     assert count_try(conn, r, source="slack", requester="ann", follows=None) == 1

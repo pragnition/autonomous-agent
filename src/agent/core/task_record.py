@@ -66,11 +66,13 @@ def _iso(value: datetime) -> str:
 
 def pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Finished turns with no label yet, or one from an older labeler, oldest first. Smoke-test conversations are
-    never labeled."""
+    never labeled. A message delivered into another turn and read there — its result carries `read_by` — was
+    answered inline by that turn, not left as a request of its own, so it is never pending."""
     return conn.execute(
         "SELECT w.* FROM work_items w LEFT JOIN request_labels l ON l.work_item_id = w.id "
         "WHERE w.kind = 'turn' AND w.status IN ('done', 'failed', 'cancelled') "
         "AND COALESCE(w.conversation_id, '') NOT LIKE 'V-smoke%' AND (l.label IS NULL OR l.version < ?) "
+        "AND json_extract(w.result, '$.read_by') IS NULL "
         "ORDER BY w.created_at, w.rowid", (LABEL_VERSION,)).fetchall()
 
 
