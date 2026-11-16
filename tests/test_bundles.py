@@ -78,7 +78,16 @@ def test_every_skill_has_name_and_description(skill):
 def test_core_skills_present():
     assert {p.parent.name for p in SKILL_DIRS[0].glob("*/SKILL.md")} == {
         "debugging", "build-feature", "browser-testing", "find-features", "playwright-cli", "review-before-pr",
-        "pr-description", "schedules", "task-history"}
+        "pr-description", "schedules", "task-history", "long-project"}
+
+
+def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
+    text = (ROOT / "src/agent/plugins/core/skills/long-project/SKILL.md").read_text()
+    for phrase in ("superpowers@anthropic-plugin-directory", "subagent-driven-development", "writing-plans",
+                   '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note",
+                   "When the team changes direction", "From another conversation", "start_project",
+                   "tell_project", "finish_project"):
+        assert phrase in text
 
 
 def test_core_skills_name_no_project():

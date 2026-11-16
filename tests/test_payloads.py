@@ -107,6 +107,12 @@ def test_a_turn_sees_the_projects_active_when_it_starts(payloads, conn):
     assert "tell_project" in started["system_prompt"]
 
 
+def test_shipped_system_prompt_sends_long_work_to_the_skill_and_lets_it_merge(payloads):
+    text = payloads.system_prompt()
+    assert "long-project skill" in text
+    assert "Merge your own PRs once the tests and CI pass" in text
+
+
 def test_payload_carries_mcp_servers(tmp_path, conn):
     cfg = make_config(tmp_path, '\n[mcp.linear]\ntype = "http"\nurl = "https://mcp.linear.app/mcp"\n'
                                 'headers = { Authorization = "Bearer ${LINEAR_APP_TOKEN}" }\n')
