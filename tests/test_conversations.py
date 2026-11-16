@@ -457,33 +457,35 @@ async def test_turn_at_the_step_limit_says_so(convos, queue, slack):
     assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
 
 
-async def test_turn_that_hits_a_limit_carries_on_by_itself(convos, queue, slack, conn):
+async def test_turn_that_hits_a_limit_carries_on_silently(convos, queue, slack, conn):
     await convos.handle_slack(mention("t40", "build it"))
     first = queue.claim()
+    posts, reactions = len(slack.posts), len(slack.reactions)
     result = {"outcome": "timeout", "error": "no result within 5400 s", "session_id": "sess-1"}
     queue.complete(first.id, result)
     await convos.on_result(queue.get(first.id), result)
-    assert slack.posts[-1]["text"] == ("Still on it: that turn hit its 90-minute limit, so I'm carrying on from where "
-                                       "I stopped.")
+    assert len(slack.posts) == posts            # no "Still on it"
+    assert len(slack.reactions) == reactions    # the message keeps its ⏳
     nxt = queue.claim()
     assert nxt.conversation_id == first.conversation_id and nxt.payload["continuation"] == 1
     assert nxt.payload["text"] == ("(Your last turn hit its 90-minute limit before you finished. Carry on from where "
                                    "you stopped.)")
-    assert (nxt.payload["actor"], nxt.payload["origin"]) == (first.payload["actor"], first.payload["origin"])
     assert conn.execute("SELECT session_id FROM conversations WHERE id = ?",
-                        (first.conversation_id,)).fetchone()[0] == "sess-1"   # the next turn resumes it
+                        (first.conversation_id,)).fetchone()[0] == "sess-1"
 
 
 async def test_carrying_on_stops_after_the_configured_number_of_times(convos, fake_linear, queue, slack, conn):
+    convos.config.limits.continuations = 3
     fake_linear.new = ["Export broken"]
     task_id = (await convos.intake_linear())[0]
+    posts_before = len(slack.posts)
     for n in range(4):
         item = queue.claim()
         assert item.payload.get("continuation", 0) == n and item.payload["unattended"] is True
         queue.complete(item.id, {"outcome": "max_turns"})
         await convos.on_result(queue.get(item.id), {"outcome": "max_turns"})
         if n < 3:
-            assert slack.posts[-1]["text"].startswith("Still on it: that turn hit its 400-step limit")
+            assert len(slack.posts) == posts_before
             assert tasks.get_task(conn, task_id).status == Status.working
     assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
     assert queue.claim() is None
@@ -746,6 +748,18 @@ async def test_scheduled_run_carries_on_without_posting(convos, slack, queue):
     await convos.on_result(queue.get(first.id), {"outcome": "max_turns"})
     assert slack.posts == []
     assert queue.claim().payload["report_to"] == first.payload["report_to"]
+
+
+async def test_a_scheduled_run_carries_on_at_most_three_times(convos, queue, slack):
+    convos.config.limits.continuations = 100
+    await convos.start_scheduled(scheduled())
+    for n in range(4):
+        item = queue.claim()
+        assert item.payload.get("continuation", 0) == n and item.payload["source"] == "schedule"
+        queue.complete(item.id, {"outcome": "timeout"})
+        await convos.on_result(queue.get(item.id), {"outcome": "timeout"})
+    assert queue.claim() is None
+    assert "didn't finish" in slack.posts[-1]["text"]      # the schedule's existing failure report
 
 
 async def test_failed_scheduled_run_says_so_and_replies_continue_it(convos, slack, queue, conn):

@@ -339,11 +339,12 @@ class Conversations:
         if convo is None:
             return
         outcome, step = result.get("outcome", "done"), int(item.payload.get("continuation") or 0)
-        continuing = outcome in LIMIT_OUTCOMES and step < self.config.limits.continuations
+        cap = self.config.limits.schedule_continuations if item.payload.get("source") == "schedule" \
+            else self.config.limits.continuations
+        continuing = outcome in LIMIT_OUTCOMES and step < cap
         failed = outcome in FAILED_OUTCOMES and not continuing
         if continuing:
-            text = f"Still on it: that turn hit its {limit_name(outcome, self.config.limits)}, so I'm carrying on " \
-                   "from where I stopped."
+            text = ""  # nothing to post: the thread's ⏳ stays, and the next turn carries on silently
         elif failed:
             text = failure_reply(outcome, result.get("error"))
         else:

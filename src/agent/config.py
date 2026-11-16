@@ -63,7 +63,8 @@ class Limits:
     max_tasks_per_day: int = 20
     task_minutes: int = 90
     max_turns: int = 400
-    continuations: int = 3         # times a turn that hit task_minutes or max_turns carries on by itself
+    continuations: int = 100       # times a turn that hit task_minutes or max_turns carries on by itself
+    schedule_continuations: int = 3  # the same, but for a scheduled run, which has no one watching it carry on
 
 
 @dataclass
@@ -302,7 +303,8 @@ def load_agent_config(path: Path) -> AgentConfig:
                     max_tasks_per_day=_int(lim, "max_tasks_per_day", 20, lw, problems),
                     task_minutes=_int(lim, "task_minutes", 90, lw, problems),
                     max_turns=_int(lim, "max_turns", 400, lw, problems),
-                    continuations=_int(lim, "continuations", 3, lw, problems))
+                    continuations=_int(lim, "continuations", 100, lw, problems),
+                    schedule_continuations=_int(lim, "schedule_continuations", 3, lw, problems))
 
     claude = (data.get("claude") or {}).get("models") or {}
     models = Models()
