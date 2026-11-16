@@ -441,6 +441,25 @@ async def test_result_marks_read_messages_before_completing(conn, queue, parts):
         await client.close()
 
 
+async def test_a_failing_on_beat_still_leaves_read_messages_done_not_requeued(conn, queue, parts):
+    """on_beat is best-effort (it only adds Slack's tick); queue.complete() itself must honour the result's own
+    `read` ids, so a message the result says this turn answered inline is never requeued to run again."""
+    async def on_beat(item, beat):
+        raise RuntimeError("boom")
+
+    client = await _client(conn, queue, parts, on_beat=on_beat)
+    try:
+        item, tok = await pull_one(client)
+        delivered_id = queue.enqueue("c1", "turn", {"text": "status?"})
+        queue.deliver("c1", item["id"])
+        r = await client.post("/agent/result", json={"result": {"outcome": "done", "read": [delivered_id]}},
+                              headers=bearer(tok))
+        assert r.status == 200
+        assert queue.get(delivered_id).status == "done"
+    finally:
+        await client.close()
+
+
 async def test_pull_reaps_an_expired_claim_blocking_its_conversation(conn, parts):
     """A dead runner's stale claim must not leave its conversation invisible to pull() forever: once its lease
     is in the past, has_claimable() surfaces the conversation again, so claim() gets the chance to reap it (or

@@ -152,9 +152,14 @@ class WorkQueue:
         return cur.rowcount == 1
 
     def complete(self, item_id: str, result: dict) -> None:
+        """A `"read"` id in the result is marked done before anything else, regardless of whatever the caller's
+        own on-beat handling did or didn't manage (that only adds Slack's tick and is never required for
+        correctness): a message the result says this turn answered inline must never be among the items
+        `_release` hands back to the queue below."""
         result_json, now = json.dumps(result), db.utcnow()
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
+            self._mark_read(result.get("read") or [], item_id)
             self.conn.execute("UPDATE work_items SET status = 'done', result = ?, lease_until = NULL, "
                               "updated_at = ? WHERE id = ? AND status IN ('queued', 'claimed')",
                               (result_json, now, item_id))
@@ -184,9 +189,7 @@ class WorkQueue:
                                   "WHERE id = ?", (into, now, row["id"]))
             return [self.get(row["id"]) for row in rows]
 
-    def mark_read(self, item_ids: list[str], into: str) -> list[WorkItem]:
-        """The listed items, delivered into this turn, become done: the turn answered them inline. Idempotent —
-        an id already turned done (by an earlier call, or read by a different turn) is simply skipped."""
+    def _mark_read(self, item_ids: list[str], into: str) -> list[WorkItem]:
         now, result = db.utcnow(), json.dumps({"outcome": "done", "text": "", "read_by": into})
         changed = []
         for item_id in item_ids:
@@ -196,6 +199,14 @@ class WorkQueue:
             if cur.rowcount:
                 changed.append(self.get(item_id))
         return changed
+
+    def mark_read(self, item_ids: list[str], into: str) -> list[WorkItem]:
+        """The listed items, delivered into this turn, become done: the turn answered them inline. Idempotent —
+        an id already turned done (by an earlier call, or read by a different turn) is simply skipped.
+        complete() calls _mark_read() directly, inside its own already-open transaction (see release())."""
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            return self._mark_read(item_ids, into)
 
     def _release(self, into: str) -> list[str]:
         rows = self.conn.execute(

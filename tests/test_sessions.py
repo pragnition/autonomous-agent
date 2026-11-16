@@ -88,6 +88,18 @@ def test_read_messages_are_done_once(conn):
     assert q.mark_read([b], a) == [] and q.mark_read([b], "W-other") == []
 
 
+def test_complete_marks_its_results_read_ids_done_even_without_mark_read(conn):
+    """complete() must mark a result's own `read` ids done before it releases anything delivered into the turn —
+    not just when the caller already called mark_read() itself (e.g. a failed or skipped on-beat call) — so a
+    message the result says this turn answered inline never comes back to run again as its own turn."""
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {}); q.claim()
+    b = q.enqueue("V1", "turn", {}); c = q.enqueue("V1", "turn", {})
+    q.deliver("V1", a)
+    q.complete(a, {"outcome": "done", "read": [b]})
+    assert q.get(b).status == "done" and q.get(c).status == "queued"
+
+
 def test_unread_messages_go_back_to_the_queue_when_the_turn_completes(conn):
     q = WorkQueue(conn)
     a = q.enqueue("V1", "turn", {}); q.claim()
