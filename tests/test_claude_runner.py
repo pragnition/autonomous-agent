@@ -357,8 +357,12 @@ async def test_read_of_reports_what_was_read_so_far_without_draining(tmp_path):
 
 
 async def test_a_fork_does_not_report_an_unread_message(tmp_path):
+    """A 403/503 result ends the attempt right there, even with a message pending: the stream keeps going past
+    it (its echo, then a clean result) to prove that tail is never consumed by this attempt — it would read on,
+    marking the message read and erasing the fork, if the forking status didn't end the attempt on its own."""
     forbidden = result("error_during_execution", api_error_status=403, errors=["account disabled: maple"])
-    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, forbidden], [assistant, result()]])
+    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, forbidden, replay, result()],
+                                             [assistant, result()]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     assert await runner.send("R1", "W-2", "how's it going?")

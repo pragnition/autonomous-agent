@@ -197,7 +197,10 @@ class ClaudeRunner:
                         results.append(msg)
                         # A message sent but not yet read runs as a next turn in this process, so read on to its
                         # result. An interrupted session stops here: what it didn't read goes back to the queue.
-                        if not state["pending"] or state["reason"]:
+                        # So does a result that forks to a new account: the session it would read on into is the
+                        # one about to be abandoned, not the one the pending message should land in.
+                        if not state["pending"] or state["reason"] or \
+                                (msg.is_error and msg.api_error_status in FORK_STATUSES):
                             state["accepting"] = False
                             break
         except TimeoutError:
