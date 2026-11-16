@@ -4,7 +4,7 @@
 
 **Goal:** Jensen takes a spec and ships the product over days. Its requests keep running, it survives restarts, it reads Slack messages mid-turn, and it works through a skill built on Superpowers. It works in the repo the request names and merges its own PRs there.
 
-**Architecture:** There's no new service. Carry-ons become silent and plentiful for requests, and stay capped for scheduled runs. The runner's 15-second heartbeat now carries the live session id and the messages that arrived mid-turn, in both directions. The runner writes those messages into the running Claude Code session and tracks which ones the model has read through `--replay-user-messages`. That protocol is written down for the control-plane phase. The project workflow is a core skill, `long-project`.
+**Architecture:** There's no new service. Carry-ons become silent and plentiful for requests, and stay capped for scheduled runs. The runner's 15-second heartbeat now carries the live session id and the messages that arrived mid-turn, in both directions. The runner writes those messages into the running Claude Code session and tracks which ones the model has read through `--replay-user-messages`. That protocol is written down for the control-plane phase. A session in any other conversation steers the build by posting in the project thread with a self-mention, which core accepts as a turn. The project workflow is a core skill, `long-project`.
 
 **Tech Stack:** Python 3.12, aiohttp, SQLite, claude-agent-sdk 0.2.180 (bundled Claude Code 2.1.321), pytest in the dev image.
 
@@ -24,7 +24,7 @@
 
 1. **Two messages sent seconds apart into a busy thread** must both reach the session in order, both be marked read, and both get ✅. Owned by Task 4 (`test_two_messages_are_both_read_in_order`).
 2. **A runner restart while a delivered message is still unread.** The message goes back to the queue, is delivered again to the retried turn, and is answered once. Owned by Task 2 (`test_a_lost_lease_releases_its_unread_messages`).
-3. **A message read just before core goes unreachable.** The heartbeat that would report it fails, but the result still carries it, so it ends up done, not run again. Owned by Task 5 (`test_result_reports_every_message_the_session_read`).
+3. **Jensen's own posts in a project thread** (milestone updates, hourly screenshots, answers) must never become turns. If they did, Jensen would talk to itself in a loop. Only a post that @mentions Jensen, in a thread core knows, counts. Owned by Task 6 (`test_jensens_own_posts_never_become_turns`).
 4. **A scheduled run that keeps hitting its limit** (a hung feedback triage every 30 minutes) must stop after 3 carry-ons, not 100, or its runs pile up and fill the session slots. Owned by Task 1 (`test_a_scheduled_run_carries_on_at_most_three_times`).
 5. **A message arrives while the runner can't take messages** (between attempts, or while a session is resuming). It stays queued with no ⏳, and a later beat delivers it. Owned by Task 3 (`test_a_runner_that_cannot_take_messages_gets_none`).
 
@@ -506,7 +506,86 @@ git commit -m "feat: the runner's heartbeat carries the live session and new mes
 
 ---
 
-### Task 6: The prompt and the long-project skill
+### Task 6: A change Jensen passes into a project's thread reaches that thread's build
+
+People talk to Jensen about a project anywhere. When a session in some other conversation settles a change with someone, it passes the change on by posting in the project thread with its own bot token, starting with its own @mention (the skill in Task 7 says how). Core treats that one kind of message from itself as a new message in the thread. Tasks 2–5 then deliver it into the running build like any other reply in the thread.
+
+**Files:**
+- Modify: `src/agent/core/conversations.py` (`handle_slack`, plus a new `_passed_on_origin`)
+- Test: `tests/test_conversations.py`
+
+**Interfaces:**
+- Consumes: Tasks 2–5 hand any queued turn of a running conversation to its session.
+- Produces, in `handle_slack`:
+  - A message becomes a turn of its thread's conversation (routed with `_route`) only when all of these hold:
+    - its `user` is `self.bot_user_id`
+    - it has a `thread_ts`
+    - `_known_thread(channel, thread_ts)` is true
+    - its text contains `<@{bot_user_id}>`
+  - The turn's fields:
+    - `text`: the message with the mention removed (`_MENTION.sub`)
+    - `origin`: from `_passed_on_origin(event)`
+    - `actor` and `requester`: `None`
+    - `source`: `"slack"`
+    - `message_ts`: the message's ts, so ⏳ and ✅ land on it
+  - Nothing is posted back: no NOT_AUTHORISED ephemeral and no SEEN reaction.
+  - Every other message from any bot, including Jensen's own posts without its mention, top-level posts and posts in unknown threads, is still ignored.
+- `async def _passed_on_origin(self, event: dict) -> str` returns `origin_line(where, who="another of your sessions", link=<permalink>)`. `where` and the link are worked out the way `_slack_origin` works them out.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def passed_on(thread, text, channel="C-SAMPLE"):
+    return {"type": "message", "user": "UBOT", "bot_id": "BBOT", "channel": channel, "ts": f"{thread}{next(_ts)}",
+            "thread_ts": thread, "text": f"<@UBOT> {text}"}
+
+async def test_a_change_passed_into_a_project_thread_reaches_its_running_build(convos, queue, slack):
+    await convos.handle_slack(mention("t60", "build the roster demo"))
+    first = queue.claim()
+    await convos.handle_slack(passed_on("t60", "sam asked in a DM: add xyz to the admin page"))
+    item = last_item(queue)
+    assert item.conversation_id == first.conversation_id and item.status == "queued"
+    assert item.payload["text"] == "sam asked in a DM: add xyz to the admin page"
+    assert item.payload["origin"].startswith("[from another of your sessions · #")
+    assert slack.ephemerals == []
+    [msg] = (await convos.on_beat(first, {"accepts_messages": True}))["messages"]
+    assert msg["id"] == item.id
+
+async def test_jensens_own_posts_never_become_turns(convos, queue):
+    await convos.handle_slack(mention("t61", "build it"))
+    count = lambda: queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+    before = count()
+    bot = {"type": "message", "user": "UBOT", "bot_id": "BBOT", "channel": "C-SAMPLE"}
+    await convos.handle_slack({**bot, "ts": "t61.1", "thread_ts": "t61", "text": "Milestone 1 merged"})
+    await convos.handle_slack({**bot, "ts": "t62", "text": "<@UBOT> top-level"})
+    await convos.handle_slack({**bot, "ts": "t63.1", "thread_ts": "t63", "text": "<@UBOT> unknown thread"})
+    await convos.handle_slack({"type": "message", "user": "UOTHER", "bot_id": "BOTHER", "channel": "C-SAMPLE",
+                               "ts": "t61.2", "thread_ts": "t61", "text": "<@UBOT> another bot"})
+    assert count() == before
+```
+
+- [ ] **Step 2: Run them to make sure they fail**
+
+Run: `just test tests/test_conversations.py -k "passed_into or own_posts"`
+Expected: FAIL (core drops every message from the bot)
+
+- [ ] **Step 3: Implement** as in Interfaces. Check for the passed-on case before the existing bot filter, so every other path stays as it is.
+
+- [ ] **Step 4: Run them to make sure they pass**
+
+Run: `just test tests/test_conversations.py`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/agent/core/conversations.py tests/test_conversations.py
+git commit -m "feat: a change Jensen passes into a project's thread from another conversation reaches that thread's running build"
+```
+
+---
+
+### Task 7: The prompt and the long-project skill
 
 **Files:**
 - Modify: `src/agent/defaults/system.md` (two lines under "How you work:")
@@ -533,7 +612,8 @@ def test_shipped_system_prompt_sends_long_work_to_the_skill_and_lets_it_merge(pa
 def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
     text = (ROOT / "src/agent/plugins/core/skills/long-project/SKILL.md").read_text()
     for phrase in ("superpowers@anthropic-plugin-directory", "subagent-driven-development", "writing-plans",
-                   '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note"):
+                   '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note",
+                   "When the team changes direction", "From another conversation", "auth.test", "thread_ts"):
         assert phrase in text
 ```
 
@@ -554,7 +634,7 @@ Expected: FAIL
 ````markdown
 ---
 name: long-project
-description: Use when someone hands you a spec or asks for a whole product, app or service to be built (work that takes hours or days), and when anyone asks how a project you're building is going.
+description: Use when someone hands you a spec or asks for a whole product, app or service to be built (work that takes hours or days), and whenever anyone, anywhere, asks about or asks for a change to a project you're building.
 ---
 
 # Building a project from a spec
@@ -570,7 +650,14 @@ You build the whole thing yourself, over as many hours or days as it takes, with
    - Split the work into milestones. Each one is something a person can run and see.
    - Give each milestone its own plan, in the folder where the repo keeps its plans (`docs/plans/` if it has none).
    - Settle the questions the skills would ask you yourself, and post what you assumed in the thread.
-5. **Memory note.** Save a memory note named after the project. Include the thread link, who asked, the repo, this conversation's folder (`pwd`), the plan files, where the ledger lives and the progress schedule's name. Any session that answers a question about the project starts from this note.
+5. **Memory note.** Save a memory note named after the project. Include:
+   - the thread link, plus its channel id and `thread_ts`
+   - who asked, and the repo
+   - this conversation's folder (`pwd`)
+   - the plan files and where the ledger lives
+   - the progress schedule's name
+
+   Any session that's asked about the project starts from this note.
 6. **Hourly progress.** Add a schedule named `<project>-progress` (schedules skill) with `cron = "0 * * * *"`, using the thread's channel as its channel. Write its prompt for a fresh session:
    - Read the project's memory note.
    - Fetch the repo and check out the newest pushed commit of the milestone in progress (main when none is).
@@ -589,7 +676,29 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 
 ## When someone asks how it's going
 
-Messages that arrive mid-turn reach you between steps. Answer at once with post_update: what's merged (PR links), what's in progress, what's next and anything blocked. Take it from the ledger, `git log` and `gh pr list`, not from what you remember. In any other conversation, start from the project's memory note and read the same sources.
+Messages that arrive mid-turn reach you between steps. Answer at once with post_update: what's merged (PR links), what's in progress, what's next and anything blocked. Take it from the ledger, `git log` and `gh pr list`, not from what you remember.
+
+## When the team changes direction
+
+A message that changes the spec or the priorities beats the plan, whether it was posted in the thread or passed on from another conversation. At the next step:
+
+1. Let the task in flight finish, or stop it. Don't merge work the change makes wrong.
+2. Commit the change to the spec in `docs/`, with who asked and the link.
+3. Rewrite the plans for the milestones that aren't merged yet. Close PRs and delete branches the change makes obsolete.
+4. Update the memory note, and the progress schedule's prompt if it names what changed.
+5. Post in the thread what changes, what's dropped and the new milestones.
+
+## From another conversation
+
+People talk to you about the project anywhere: a DM, another channel, a new thread. That conversation's session isn't the one building the project.
+
+1. Find the project's memory note. Answer from the ledger, `git log`, `gh pr list` and the code. Questions about what the product does ("does the admin page have xyz?") are answered from the code.
+2. When they ask for a change, settle with them what they want. Then pass it on to the build:
+   - Post it in the project thread with `$SLACK_BOT_TOKEN`: `chat.postMessage` with the note's channel and `thread_ts`.
+   - Start the message with your own mention, `<@your user id>` (Slack's `auth.test` gives your id).
+   - Then say who asked, what they want, what you two already established, and the link to where they asked.
+   - That mention is how core knows to give the message to the build, which picks it up between steps. Never mention yourself in any other post.
+3. Tell the person it's passed on, with the project thread's link.
 
 ## Finish
 
@@ -613,7 +722,7 @@ git commit -m "feat: a long-project skill, so Jensen builds a spec milestone by 
 
 ---
 
-### Task 7: Ship it and switch it on
+### Task 8: Ship it and switch it on
 
 This task runs on the live install. Every command on the workstation and every Slack message to Jensen goes to the user to run. The executor prepares the commands and checks the results.
 
@@ -661,7 +770,19 @@ Expected:
 - No "That was stopped" post.
 - About 2 minutes later the turn runs again, its prompt starts with the restart note (check the dashboard's session timeline), and it ends with "done".
 
-- [ ] **Step 7: Set up the first project (RosterRolo demo)**
+- [ ] **Step 7: Live check: steering from another conversation (the user sends these)**
+
+1. Start a turn that runs a while. DM Jensen: "run `sleep 300` in bash, then tell me done".
+2. In a separate DM (a new top-level message), ask Jensen to pass this on to that thread: "add the word PINEAPPLE to your final message there".
+
+Expected:
+- Jensen posts in the first thread, starting with its own mention.
+- A ✅ appears on that post within about a minute.
+- The first thread's final message includes PINEAPPLE.
+
+This also confirms that Slack sends core the bot's own messages. If nothing arrives, check core's log for the event.
+
+- [ ] **Step 8: Set up the first project (RosterRolo demo)**
 
 1. **The repo.** The team makes a new repo for Jensen. Check that Jensen's token reaches it:
    ```bash
@@ -671,7 +792,7 @@ Expected:
 2. **App keys.** Put the keys the app needs in `data/secrets/projects/<project>.env` on the workstation, then run `docker compose restart core`. For RosterRolo's code, that's `OPENROUTER_API_KEY` from its `.env.example`; its two other secrets have local fallbacks.
 3. **Handover message.** Posted in a Slack thread: the tender specification (attached or linked), the repo to build in, and what the demo has to show.
 
-- [ ] **Step 8: Watch the first run**
+- [ ] **Step 9: Watch the first run**
 
 The first run is the live check for the long-project skill, the hourly schedule and merging. Check:
 - the kickoff post

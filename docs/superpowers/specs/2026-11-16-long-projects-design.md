@@ -30,7 +30,8 @@ This build runs on the current Python core, so the first project can start now. 
 5. Jensen merges its own PRs once tests and CI pass and its review found nothing blocking.
 6. Every hour, a scheduled run posts screenshots and progress in the project thread.
 7. Anyone who asks what it has done so far gets an answer, in the thread or anywhere else, built from the plan ledger, PRs and the thread.
-8. The runner protocol is written down for the control-plane phase.
+8. Anyone can steer the project from any conversation. For example, in a DM: "does the admin page have xyz?", "no", "add it". That session passes the change into the project thread, and the running build works it into the plan at its next step.
+9. The runner protocol is written down for the control-plane phase.
 
 ## Non-goals
 
@@ -75,6 +76,23 @@ How messages flow:
 - **The note** tells the session to answer now with post_update (a Linear thought in a Linear session), because its final reply only posts when the whole turn ends.
 - **Latency** is at most one heartbeat plus the step in progress. A foreground subagent counts as one step.
 
+### Steering from any conversation
+
+A session in another conversation (a DM, another channel, a new thread) can answer questions about the project from its memory note, ledger, git and PRs. It isn't the build, though. When it settles a change with someone, it passes the change on through Slack, the same way Jensen already messages anyone:
+- It posts in the project thread with its bot token, starting with its own @mention, then who asked, what they want, what was established and a link to where they asked.
+- Core accepts that one kind of message from the bot itself as a new turn of the thread's conversation: a thread reply, in a thread core knows, that mentions the bot.
+- From there it's like any reply in the thread. The running build gets it at its next step (mid-turn messages above), or it runs as the next turn when the build is between turns. ⏳ and ✅ land on the passed-on post.
+- Every other post by the bot stays ignored, so Jensen's own updates never become turns.
+
+A core tool that pushes a message into another conversation was the alternative. It isn't needed, because Jensen already posts to Slack itself and core only has to accept that one message shape.
+
+When a change arrives this way or in the thread, the build follows the skill's change-of-direction steps:
+- commit the spec change
+- rewrite the milestones that aren't merged yet
+- close obsolete PRs
+- update the memory note and the progress schedule
+- post what changed
+
 ### Runner protocol
 
 `docs/runner-protocol.md` describes:
@@ -97,6 +115,8 @@ The project workflow lives in a core skill, written for Jensen:
 - **Memory and schedule.** Save a project memory note (thread, repo, conversation folder, plans, ledger, schedule), and add an hourly `<project>-progress` schedule.
 - **Each milestone.** Run it with subagent-driven-development, pushing after every task. Test it in the browser, open the PR, wait for CI and merge it. Then post what landed with screenshots.
 - **Status questions** are answered from the ledger, `git log` and `gh pr list`.
+- **Changes of direction**, from the thread or passed on, beat the plan (see Steering).
+- **From another conversation:** answer from the memory note and the code; pass a settled change into the project thread with a self-mention.
 - **Finish.** Delete the schedule, update the note, and report what shipped, how to run it and how it was verified.
 
 The hourly run posts screenshots of the newest pushed commit, plus what merged, what's in progress and what's next. It skips the post when nothing changed since the last one.
