@@ -18,12 +18,22 @@ def test_fresh_database_has_every_table_and_column(tmp_path):
                                          "AND name NOT LIKE 'sqlite_%'")}
     assert tables == TABLES
     assert columns(conn, "work_items") == {"id", "conversation_id", "kind", "payload", "status", "lease_until",
-                                           "attempts", "result", "created_at", "updated_at"}
+                                           "attempts", "result", "created_at", "updated_at", "delivered_into"}
     assert columns(conn, "tokens") == {"hash", "kind", "work_item_id", "expires_at", "revoked"}
     assert columns(conn, "conversations") == {"id", "channel", "thread_ts", "project", "task_id", "session_id",
                                               "is_primary", "waiting", "model", "created_at", "last_active_at"}
     assert columns(conn, "slack_messages") == {"channel", "ts", "conversation_id"}
     assert conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0
+
+
+def test_work_items_gain_delivered_into(tmp_path):
+    """A live install's work_items table predates the delivered_into column."""
+    conn = db.connect(tmp_path / "agent.db")
+    conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, conversation_id TEXT, kind TEXT NOT NULL, payload "
+                 "TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', lease_until TEXT, attempts INTEGER NOT NULL "
+                 "DEFAULT 0, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    db.create_schema(conn)
+    assert "delivered_into" in columns(conn, "work_items")
 
 
 def test_a_database_from_before_the_agent_made_its_own_clones_still_works(tmp_path):

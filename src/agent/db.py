@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS work_items (
     lease_until TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     result TEXT,
+    delivered_into TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -225,7 +226,8 @@ def connect(path: Path | str) -> sqlite3.Connection:
 
 # Columns added to tables a live install already has; CREATE TABLE IF NOT EXISTS leaves those tables as they were
 ADDED_COLUMNS = [("request_labels", "project", "TEXT"), ("request_labels", "version", "INTEGER NOT NULL DEFAULT 1"),
-                 ("task_records", "project", "TEXT"), ("llm_usage", "cache_write_tokens", "INTEGER NOT NULL DEFAULT 0")]
+                 ("task_records", "project", "TEXT"), ("llm_usage", "cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"),
+                 ("work_items", "delivered_into", "TEXT")]
 
 
 def create_schema(conn: sqlite3.Connection) -> None:

@@ -79,7 +79,7 @@ def _title(r: sqlite3.Row, issue: dict | None) -> str:
 
 
 def _state(status: str) -> str:
-    return "running" if status == "claimed" else status
+    return "running" if status in ("claimed", "delivered") else status
 
 
 def _row(r: sqlite3.Row, started_at: str | None) -> dict:

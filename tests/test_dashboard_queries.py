@@ -5,6 +5,7 @@ import pytest
 
 from agent import db, events, tasks
 from agent.core.sessions import WorkQueue
+from agent.dashboard import queries
 from agent.dashboard.queries import (SessionFilter, conversation_row, get_conversation, get_session, kpi_view,
                                      linear_issue, list_conversations, list_events, list_sessions, overview_counts,
                                      paused_by)
@@ -68,6 +69,10 @@ def test_state_maps_claimed_to_running(conn, queue):
     item = add_item(queue, cid)
     queue.claim()
     assert get_session(conn, item)["state"] == "running"
+
+
+def test_a_delivered_item_shows_as_running():
+    assert queries._state("delivered") == "running"
 
 
 def test_filter_by_state_project_source_account_q(conn, queue):

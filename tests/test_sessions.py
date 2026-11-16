@@ -67,6 +67,66 @@ def test_expired_lease_requeues_then_fails(conn):
     assert status_of(conn, i) == "failed"
 
 
+def test_deliver_hands_over_a_busy_conversations_queued_turns(conn):
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {"text": "build it"}); q.claim()
+    b = q.enqueue("V1", "turn", {"text": "how's it going?"})
+    c = q.enqueue("V1", "turn", {"text": "also add dark mode"})
+    d = q.enqueue("V2", "turn", {"text": "other thread"})
+    assert [i.id for i in q.deliver("V1", a)] == [b, c]
+    assert {q.get(b).status, q.get(c).status} == {"delivered"}
+    assert q.deliver("V1", a) == []
+    assert q.claim().id == d                     # delivered items are never claimed
+
+
+def test_read_messages_are_done_once(conn):
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {}); q.claim()
+    b = q.enqueue("V1", "turn", {}); q.deliver("V1", a)
+    assert [i.id for i in q.mark_read([b], a)] == [b]
+    assert q.get(b).status == "done" and q.get(b).result["read_by"] == a
+    assert q.mark_read([b], a) == [] and q.mark_read([b], "W-other") == []
+
+
+def test_unread_messages_go_back_to_the_queue_when_the_turn_completes(conn):
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {}); q.claim()
+    b = q.enqueue("V1", "turn", {}); c = q.enqueue("V1", "turn", {})
+    q.deliver("V1", a); q.mark_read([b], a)
+    q.complete(a, {"outcome": "timeout"})
+    assert q.get(c).status == "queued" and q.claim().id == c
+
+
+def test_unread_messages_go_back_to_the_queue_when_the_turn_is_cancelled(conn):
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {}); q.claim()
+    b = q.enqueue("V1", "turn", {}); c = q.enqueue("V1", "turn", {})
+    q.deliver("V1", a); q.mark_read([b], a)
+    q.cancel(a)
+    assert q.get(c).status == "queued" and q.claim().id == c
+
+
+def test_a_lost_lease_releases_its_unread_messages(conn):
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {}); q.claim()
+    b = q.enqueue("V1", "turn", {}); q.deliver("V1", a)
+    q.reap(datetime.now(UTC) + timedelta(seconds=200))
+    assert q.get(a).status == "queued" and q.get(b).status == "queued"
+    assert q.claim().id == a                     # the turn runs again first; b is delivered to it again
+    assert [i.id for i in q.deliver("V1", a)] == [b]
+
+
+def test_a_turn_survives_four_lost_leases(conn):
+    q = WorkQueue(conn)
+    a = q.enqueue("V1", "turn", {})
+    later = datetime.now(UTC)
+    for n in range(4):
+        q.claim(later); later += timedelta(seconds=200); q.reap(later)
+        assert q.get(a).status == "queued"
+    q.claim(later); q.reap(later + timedelta(seconds=200))
+    assert q.get(a).status == "failed"
+
+
 def test_heartbeat_extends_lease_and_reports_cancel(conn):
     q = WorkQueue(conn, lease_s=10)
     i = q.enqueue("c", "turn", {})

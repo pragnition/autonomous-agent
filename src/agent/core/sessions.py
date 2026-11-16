@@ -88,7 +88,7 @@ _CLAIMABLE = ("(w.status = 'queued' OR (w.status = 'claimed' AND w.lease_until <
 
 
 class WorkQueue:
-    def __init__(self, conn: sqlite3.Connection, lease_s: int = 90, max_attempts: int = 2):
+    def __init__(self, conn: sqlite3.Connection, lease_s: int = 90, max_attempts: int = 5):
         self.conn, self.lease_s, self.max_attempts = conn, lease_s, max_attempts
 
     def enqueue(self, conversation_id: str | None, kind: str, payload: dict) -> str:
@@ -110,6 +110,7 @@ class WorkQueue:
             self.conn.execute("UPDATE work_items SET status = ?, attempts = ?, lease_until = NULL, updated_at = ? "
                               "WHERE id = ?", (status, attempts, db.utcnow(), row["id"]))
             revoke_for_work_item(self.conn, row["id"])
+            self.release(row["id"])
 
     def reap(self, now: datetime | None = None) -> None:
         """Re-queue (or fail) items whose runner stopped heartbeating, whoever asks first."""
@@ -154,11 +155,51 @@ class WorkQueue:
         self.conn.execute("UPDATE work_items SET status = 'done', result = ?, lease_until = NULL, updated_at = ? "
                           "WHERE id = ? AND status IN ('queued', 'claimed')", (json.dumps(result), db.utcnow(), item_id))
         revoke_for_work_item(self.conn, item_id)
+        self.release(item_id)
 
     def cancel(self, item_id: str) -> None:
         self.conn.execute("UPDATE work_items SET status = 'cancelled', lease_until = NULL, updated_at = ? "
                           "WHERE id = ? AND status IN ('queued', 'claimed')", (db.utcnow(), item_id))
         revoke_for_work_item(self.conn, item_id)
+        self.release(item_id)
+
+    def deliver(self, conversation_id: str, into: str) -> list[WorkItem]:
+        """Hand a busy conversation's queued turns into the one already running, oldest first, so the runner can
+        read them as new messages instead of leaving them to wait behind it."""
+        now = db.utcnow()
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            rows = self.conn.execute(
+                "SELECT id FROM work_items WHERE conversation_id = ? AND kind = 'turn' AND status = 'queued' "
+                "AND id != ? ORDER BY created_at, rowid", (conversation_id, into)).fetchall()
+            for row in rows:
+                self.conn.execute("UPDATE work_items SET status = 'delivered', delivered_into = ?, updated_at = ? "
+                                  "WHERE id = ?", (into, now, row["id"]))
+            return [self.get(row["id"]) for row in rows]
+
+    def mark_read(self, item_ids: list[str], into: str) -> list[WorkItem]:
+        """The listed items, delivered into this turn, become done: the turn answered them inline. Idempotent —
+        an id already turned done (by an earlier call, or read by a different turn) is simply skipped."""
+        now, result = db.utcnow(), json.dumps({"outcome": "done", "text": "", "read_by": into})
+        changed = []
+        for item_id in item_ids:
+            cur = self.conn.execute(
+                "UPDATE work_items SET status = 'done', result = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'delivered' AND delivered_into = ?", (result, now, item_id, into))
+            if cur.rowcount:
+                changed.append(self.get(item_id))
+        return changed
+
+    def release(self, into: str) -> list[str]:
+        """Hand back every item still delivered into this turn — it ended without reading them — so they wait as
+        queued turns again, for whichever turn (this one restarted, or the next) runs the conversation next."""
+        rows = self.conn.execute(
+            "SELECT id FROM work_items WHERE status = 'delivered' AND delivered_into = ?", (into,)).fetchall()
+        now = db.utcnow()
+        for row in rows:
+            self.conn.execute("UPDATE work_items SET status = 'queued', delivered_into = NULL, updated_at = ? "
+                              "WHERE id = ?", (now, row["id"]))
+        return [row["id"] for row in rows]
 
     def cancel_running(self) -> list[str]:
         """Interrupt what is running; queued messages wait (they can't start while paused) and run after resume."""
