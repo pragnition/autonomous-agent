@@ -408,7 +408,7 @@ async def test_a_message_that_cannot_be_written_is_not_waited_for(tmp_path):
     assert out.outcome == "done" and out.read == []
 
 
-async def test_a_two_result_turn_keeps_both_answers_and_sums_its_turns_tokens_and_cost(tmp_path):
+async def test_a_two_result_turn_keeps_both_answers_sums_turns_and_tokens_and_takes_the_last_cost(tmp_path):
     runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, result(num_turns=2, cost=0.25, text="The PR is up."),
                                         replay, result(num_turns=1, cost=0.5, text="Told Sam it's nearly done.")]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
@@ -418,7 +418,7 @@ async def test_a_two_result_turn_keeps_both_answers_and_sums_its_turns_tokens_an
     assert out.summary == "The PR is up.\n\nTold Sam it's nearly done."
     assert (out.turns, out.input_tokens, out.output_tokens, out.cache_read_tokens, out.cache_write_tokens) == \
         (3, 200, 40, 10, 14)
-    assert out.cost_usd_est == 0.75
+    assert out.cost_usd_est == 0.5  # the CLI reports the session-wide cost so far, so the last result has it all
     assert out.outcome == "done" and out.read == ["W-2"]
 
 
