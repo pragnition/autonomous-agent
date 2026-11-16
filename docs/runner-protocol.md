@@ -86,7 +86,11 @@ This is the delivered → read → done lifecycle: a message handed to a running
 echoes it back, the runner's next heartbeat (or its final result) lists it under `read` and the control plane
 marks it `done`. A delivered item the turn never reads — because the turn ends first — goes back to the queue
 as soon as that turn's result (or a lost lease) completes it, to be read by whichever turn runs the conversation
-next.
+next. That released message runs as its own turn, with its own carry-on count starting back at 0 — it never
+inherits the count of the turn it had been delivered into. And the control plane's delivery step itself never
+hands over a carry-on (a queued turn whose payload says it's one): a carry-on waits behind whatever unread
+message is ahead of it in the same conversation, and only starts once its own turn comes up, instead of being
+folded into a turn that's already running.
 
 ## `POST /agent/events`, `POST /agent/tool`, `POST /agent/files`, `GET /agent/bundle`
 

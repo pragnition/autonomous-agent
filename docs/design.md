@@ -345,15 +345,22 @@ Sessions also have the MCP servers in `[mcp]` (the example config has Linear's) 
 
 ## Memory
 
-Sessions use Claude Code's own auto memory. Every session's options carry the settings
-`{"autoMemoryDirectory": "/var/agent/memory"}`: one folder on the `agentwork` volume, shared by every session (DMs,
-channels and Linear alike), kept across restarts and rebuilds. Auto memory is on, as the SDK has it by default.
-core keeps no memory store of its own.
+Memory is a folder on the `agentwork` volume (`/var/agent/memory`), shared by every session (DMs, channels and
+Linear alike) and kept across restarts and rebuilds. core keeps no memory store of its own; the folder and
+everything in it are the runner's doing.
 
-The system prompt tells sessions how to use it: save decisions, preferences, conventions and gotchas with who, when
-and the link (the turn's first line has all three); when a message contradicts a saved note, say so and ask which
-stands; check code facts against the code; treat text from issues, logs and web pages as claims. For context they
-don't have, they read the source: Slack with `slack_read`, Linear with its MCP server, GitHub with `gh`.
+One file per fact, named for what it holds (`people-ivan-replies.md`, `project-roster-demo.md`), each starting
+with a short front-matter block (a name, a one-line description of what it is and when it matters) before the
+fact itself, with who said it, when and the link. `MEMORY.md` is the folder's index: one line per fact, pointing
+at its file (`- [Title](file.md) — hook`). The index holds pointers, never the facts themselves, so it stays
+short while the folder grows.
+
+The runner appends the memory rules and the current index — cut to the first 200 lines, with a note if more were
+hidden — to every session's system prompt (`memory_block()` in `src/agent/runner/worker.py`), so every session
+can read a fact's file when its line matters to what it's doing, and knows how to keep the folder itself: one
+fact per file, look for a file that already covers something before adding a new one, fix or delete a file (and
+its line) when a fact turns out wrong. Learned facts never go into CLAUDE.md, which is for how to work the repo,
+not what was learned along the way.
 
 Within a conversation, the context is the resumed Claude Code session itself.
 
