@@ -208,6 +208,17 @@ CREATE TABLE IF NOT EXISTS task_records (
     record TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS task_records_started ON task_records(started_at);
+-- A long project's name, where its code is and which conversation is building it
+CREATE TABLE IF NOT EXISTS projects (
+    name TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    thread_link TEXT,
+    started_by TEXT,
+    status TEXT NOT NULL DEFAULT 'active',   -- active | done
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

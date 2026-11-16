@@ -2,7 +2,7 @@ from agent import db
 
 TABLES = {"tasks", "runs", "events", "pr_stats", "slack_events", "settings", "work_items", "tokens", "llm_usage",
           "conversations", "slack_messages", "linear_issues", "linear_issue_conversations",
-          "agent_prs", "request_labels", "task_records"}
+          "agent_prs", "request_labels", "task_records", "projects"}
 
 
 def columns(conn, table: str) -> set[str]:

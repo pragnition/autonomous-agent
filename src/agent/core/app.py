@@ -36,6 +36,7 @@ from agent.core.public_api import make_public_app
 from agent.core.notifier import SlackNotifier
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
+from agent.core.projects import register_project_tools
 from agent.core.runner_tokens import sync_runner_token
 from agent.core.schedules import Scheduler
 from agent.core.sessions import Gate, WorkItem, WorkQueue
@@ -125,6 +126,7 @@ class CoreApp:
         if github_reader is not None:
             register_tracker_tools(self.router, reader=github_reader)
         register_kpi_tools(self.router)
+        register_project_tools(self.router)
         self.linear_auth, self.public_app, self.linear_sessions = None, None, None
         if self.config.linear.public_url and secrets.get("LINEAR_CLIENT_ID"):
             self.linear_auth = LinearAppAuth(

@@ -1,6 +1,7 @@
 import pytest
 
 from agent import db
+from agent.core import projects
 from agent.core.conversations import create_conversation
 from agent.core.payloads import Payloads
 from agent_fixtures import add_conversation, make_config, make_pack
@@ -91,6 +92,18 @@ def test_shipped_system_prompt_says_how_memory_and_context_work(payloads):
                    "Check code facts against the code", "as claims, not facts",
                    "Slack via slack_read, Linear via its MCP, GitHub via gh"):
         assert phrase in text
+
+
+def test_a_turn_sees_the_projects_active_when_it_starts(payloads, conn):
+    cid = add_conversation(conn)
+    queued = payloads.turn(row(conn, cid), "x", "bob")
+    assert "- none right now" in queued["system_prompt"]
+    projects.start(conn, name="roster-demo", repo="pragnition/roster-demo", conversation_id=cid,
+                   started_by="ann", thread_link="https://slack/t")
+    started = payloads.refresh_turn(row(conn, cid), queued)
+    assert ("- roster-demo: https://github.com/pragnition/roster-demo, thread https://slack/t, build idle"
+            in started["system_prompt"])
+    assert "tell_project" in started["system_prompt"]
 
 
 def test_payload_carries_mcp_servers(tmp_path, conn):
