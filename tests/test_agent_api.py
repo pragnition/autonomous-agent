@@ -368,6 +368,79 @@ async def test_second_turn_of_running_conversation_waits(conn, parts):
         await client.close()
 
 
+async def test_heartbeat_passes_the_beat_and_returns_messages(conn, queue, parts):
+    beats = []
+
+    async def on_beat(item, beat):
+        beats.append((item.id, beat))
+        return {"messages": [{"id": "W-2", "payload": {"text": "hi"}}]}
+
+    client = await _client(conn, queue, parts, on_beat=on_beat)
+    try:
+        item, tok = await pull_one(client)
+        body = {"session_id": "s1", "read": ["W-9"], "accepts_messages": True}
+        r = await client.post("/agent/heartbeat", json=body, headers=bearer(tok))
+        assert r.status == 200
+        assert await r.json() == {"cancel": False, "messages": [{"id": "W-2", "payload": {"text": "hi"}}]}
+        assert beats[-1] == (item["id"], body)
+    finally:
+        await client.close()
+
+
+async def test_heartbeat_of_a_cancelled_turn_takes_no_messages(conn, queue, parts):
+    beats = []
+
+    async def on_beat(item, beat):
+        beats.append(beat)
+        return {"messages": []}
+
+    client = await _client(conn, queue, parts, on_beat=on_beat)
+    try:
+        item, tok = await pull_one(client)
+        # queue.heartbeat() only succeeds for a 'claimed' item; moving it off that status without going through
+        # queue.cancel() (which would also revoke the session token) isolates that one effect for this test
+        conn.execute("UPDATE work_items SET status = 'cancelled' WHERE id = ?", (item["id"],))
+        r = await client.post("/agent/heartbeat", json={"accepts_messages": True}, headers=bearer(tok))
+        assert r.status == 200
+        assert (await r.json())["cancel"] is True
+        assert beats[-1]["accepts_messages"] is False
+    finally:
+        await client.close()
+
+
+async def test_heartbeat_survives_a_failing_on_beat(conn, queue, parts):
+    async def on_beat(item, beat):
+        raise RuntimeError("boom")
+
+    client = await _client(conn, queue, parts, on_beat=on_beat)
+    try:
+        _, tok = await pull_one(client)
+        r = await client.post("/agent/heartbeat", json={"accepts_messages": True}, headers=bearer(tok))
+        assert r.status == 200
+        assert await r.json() == {"cancel": False, "messages": []}
+    finally:
+        await client.close()
+
+
+async def test_result_marks_read_messages_before_completing(conn, queue, parts):
+    statuses = []
+
+    async def on_beat(item, beat):
+        statuses.append((item.id, queue.get(item.id).status, beat))
+        return {"messages": []}
+
+    client = await _client(conn, queue, parts, on_beat=on_beat)
+    try:
+        item, tok = await pull_one(client)
+        r = await client.post("/agent/result", json={"result": {"outcome": "done", "read": ["W-2"]}},
+                              headers=bearer(tok))
+        assert r.status == 200
+        assert statuses == [(item["id"], "claimed", {"read": ["W-2"]})]
+        assert queue.get(item["id"]).status == "done"
+    finally:
+        await client.close()
+
+
 async def test_pull_reaps_an_expired_claim_blocking_its_conversation(conn, parts):
     """A dead runner's stale claim must not leave its conversation invisible to pull() forever: once its lease
     is in the past, has_claimable() surfaces the conversation again, so claim() gets the chance to reap it (or

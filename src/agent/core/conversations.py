@@ -320,6 +320,26 @@ class Conversations:
         if convo is not None and convo["channel"] and item.payload.get("message_ts"):
             await self._react(convo["channel"], item.payload["message_ts"], WORKING, replaces=SEEN)
 
+    async def on_beat(self, item: WorkItem, beat: dict) -> dict:
+        """A running turn's heartbeat: save its live session, mark whatever it already answered inline as done,
+        and hand it whatever else arrived in its conversation meanwhile."""
+        convo = self._row(item.conversation_id) if item.conversation_id else None
+        if beat.get("session_id") and convo is not None:
+            self.conn.execute("UPDATE conversations SET session_id = ? WHERE id = ?",
+                              (beat["session_id"], convo["id"]))
+        for read_item in self.queue.mark_read(beat.get("read") or [], item.id):
+            ts = read_item.payload.get("message_ts")
+            if ts and convo is not None and convo["channel"]:
+                await self._react(convo["channel"], ts, DONE, replaces=WORKING)
+        delivered = []
+        if beat.get("accepts_messages") and item.conversation_id:
+            delivered = self.queue.deliver(item.conversation_id, item.id)
+            for d in delivered:
+                ts = d.payload.get("message_ts")
+                if ts and convo is not None and convo["channel"]:
+                    await self._react(convo["channel"], ts, WORKING, replaces=SEEN)
+        return {"messages": [{"id": d.id, "payload": d.payload} for d in delivered]}
+
     async def _report_scheduled_failure(self, convo: sqlite3.Row, report_to: dict, text: str) -> None:
         """A scheduled run that failed says so in its schedule's channel, and that message's thread becomes the run's
         conversation, so replies there continue it."""

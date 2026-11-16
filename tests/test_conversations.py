@@ -817,3 +817,47 @@ async def test_continuation_follows_the_turn_it_continues(convos, queue):
     nxt = queue.claim()
     assert nxt.payload["follows"] == first.id
     assert (nxt.payload["source"], nxt.payload["requester"]) == ("slack", "ann")
+
+
+# heartbeats: a running turn's live session and the messages that arrive while it runs
+
+async def test_a_message_to_a_busy_thread_is_handed_to_the_running_turn(convos, queue, slack, conn):
+    await convos.handle_slack(mention("t50", "build the app"))
+    first = queue.claim()
+    await convos.handle_slack(reply("t50", "how's it going?"))
+    out = await convos.on_beat(first, {"session_id": "live-1", "read": [], "accepts_messages": True})
+    [msg] = out["messages"]
+    assert msg["payload"]["text"] == "how's it going?" and queue.get(msg["id"]).status == "delivered"
+    assert slack.reactions[-1]["name"] == "hourglass_flowing_sand"
+    assert convo(conn, "t50")["session_id"] == "live-1"     # a restarted turn resumes this session
+
+
+async def test_a_read_message_is_done_and_ticked(convos, queue, slack):
+    await convos.handle_slack(mention("t51", "build the app"))
+    first = queue.claim()
+    await convos.handle_slack(reply("t51", "status?"))
+    [msg] = (await convos.on_beat(first, {"accepts_messages": True}))["messages"]
+    await convos.on_beat(first, {"read": [msg["id"]], "accepts_messages": True})
+    assert queue.get(msg["id"]).status == "done"
+    assert slack.reactions[-1]["name"] == "white_check_mark"
+
+
+async def test_an_unread_message_runs_before_the_carry_on(convos, queue):
+    await convos.handle_slack(mention("t52", "build the app"))
+    first = queue.claim()
+    await convos.handle_slack(reply("t52", "status?"))
+    [msg] = (await convos.on_beat(first, {"accepts_messages": True}))["messages"]
+    result = {"outcome": "timeout", "session_id": "live-1"}
+    queue.complete(first.id, result)
+    await convos.on_result(queue.get(first.id), result)
+    assert queue.claim().id == msg["id"]
+
+
+async def test_a_runner_that_cannot_take_messages_gets_none(convos, queue, slack):
+    await convos.handle_slack(mention("t53", "build the app"))
+    first = queue.claim()
+    await convos.handle_slack(reply("t53", "status?"))
+    reactions = len(slack.reactions)
+    assert (await convos.on_beat(first, {"accepts_messages": False}))["messages"] == []
+    assert len(slack.reactions) == reactions
+    assert (await convos.on_beat(first, {"accepts_messages": True}))["messages"] != []

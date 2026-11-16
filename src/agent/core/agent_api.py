@@ -44,6 +44,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    on_files: Callable[[str, list[tuple[str, bytes]], str], Awaitable[bool | None]],
                    refresh: Callable[[str, dict], dict] | None = None,
                    on_start: Callable[[WorkItem], Awaitable[None]] | None = None,
+                   on_beat: Callable[[WorkItem, dict], Awaitable[dict]] | None = None,
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
                    runs_dir: Path | None = None) -> web.Application:
     """`refresh(conversation_id, payload)` re-reads a turn's conversation when the turn is claimed (see
@@ -90,7 +91,17 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
 
     async def heartbeat(request: web.Request) -> web.Response:
         info = resolved(request, "session")
-        return web.json_response({"cancel": not queue.heartbeat(info.work_item_id)})
+        body = await request.json()
+        alive = queue.heartbeat(info.work_item_id)
+        messages: list[dict] = []
+        if body and on_beat is not None:  # an empty body means no beat: an older runner just checking in
+            beat = {**body, "accepts_messages": bool(body.get("accepts_messages")) and alive}
+            try:
+                out = await on_beat(queue.get(info.work_item_id), beat)
+                messages = out.get("messages", [])
+            except Exception:  # the runner still needs its cancel flag; a Slack hiccup must not break that
+                log.exception("handling the heartbeat of %s failed", info.work_item_id)
+        return web.json_response({"cancel": not alive, "messages": messages})
 
     async def events(request: web.Request) -> web.Response:
         info = resolved(request, "session")
@@ -129,6 +140,11 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
     async def result(request: web.Request) -> web.Response:
         info = resolved(request, "session")
         outcome = (await request.json()).get("result") or {}
+        if "read" in outcome and on_beat is not None:
+            try:
+                await on_beat(queue.get(info.work_item_id), {"read": outcome["read"]})
+            except Exception:  # the item completes either way; a Slack hiccup must not lose the result
+                log.exception("marking %s's read messages failed", info.work_item_id)
         queue.complete(info.work_item_id, outcome)
         try:
             await on_result(queue.get(info.work_item_id), outcome)
