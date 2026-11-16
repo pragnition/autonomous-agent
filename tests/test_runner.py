@@ -347,6 +347,19 @@ async def test_fresh_session_prompt_still_starts_with_the_origin(tmp_path):
     assert claude.specs[1].prompt == f"{origin}\n{FRESH_NOTE}fix the export"
 
 
+async def test_a_restarted_turn_whose_session_is_also_dead_gets_only_the_fresh_note(tmp_path):
+    """A restarted attempt's prompt carries RESTARTED_NOTE. If its resumed session also turns out to be gone, the
+    fresh fallback must drop that note, not stack it under FRESH_NOTE: the two make contradictory claims."""
+    origin = "[from bob · DM]"
+    link, claude = FakeLink(), ResumeFailsClaude()
+    it = item(resume_session_id="sess-gone", origin=origin)
+    it["attempts"] = 1
+    await make_runner(tmp_path, link, claude).handle(it, "tok", [])
+    assert claude.specs[0].prompt == f"{origin}\n{RESTARTED_NOTE}fix the export"
+    assert claude.specs[1].prompt == f"{origin}\n{FRESH_NOTE}fix the export"
+    assert RESTARTED_NOTE not in claude.specs[1].prompt
+
+
 async def test_preparation_failure_reports_the_error(tmp_path):
     class NoBundleLink(FakeLink):
         async def bundle(self):

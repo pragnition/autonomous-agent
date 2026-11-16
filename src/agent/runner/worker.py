@@ -125,8 +125,11 @@ class Runner:
         if result.outcome == "error" and spec.resume_session_id and not result.turns:
             # The saved session is gone (the agent container was rebuilt, or its files were lost); the thread has
             # the history, so start a fresh session that reads it. The origin line stays first, the note after it.
+            # A restart note, if this attempt had one, is dropped: "your session picks up where it stopped" would
+            # contradict "your earlier session couldn't be resumed" right above it.
             log.warning("resuming %s failed (%s); starting a fresh session", spec.resume_session_id, result.error)
-            prompt = origin + FRESH_NOTE + spec.prompt.removeprefix(origin)
+            text = spec.prompt.removeprefix(origin).removeprefix(RESTARTED_NOTE)
+            prompt = origin + FRESH_NOTE + text
             result = await self._run(dataclasses.replace(spec, resume_session_id=None, prompt=prompt))
         return result
 
