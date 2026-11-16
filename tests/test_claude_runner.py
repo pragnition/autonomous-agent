@@ -81,7 +81,7 @@ def result(subtype="success", **kw):
                              num_turns=kw.pop("num_turns", 3), session_id=c.options.session_id or c.options.resume,
                              total_cost_usd=kw.pop("cost", 0.12),
                              usage={"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 5,
-                                    "cache_creation_input_tokens": 7}, result="final text", **kw)
+                                    "cache_creation_input_tokens": 7}, result=kw.pop("text", "final text"), **kw)
     return make
 
 
@@ -322,7 +322,7 @@ async def test_the_turn_keeps_reading_until_every_sent_message_is_read(tmp_path)
     await wait_until(lambda: runner.accepting("R1"))
     await runner.send("R1", "W-2", "also say hi")
     out = await task
-    assert out.read == ["W-2"] and out.turns == 7
+    assert out.read == ["W-2"] and out.turns == 8
 
 
 async def test_two_messages_are_both_read_in_order(tmp_path):
@@ -406,3 +406,27 @@ async def test_a_message_that_cannot_be_written_is_not_waited_for(tmp_path):
     assert not await runner.send("R1", "W-2", "how's it going?")
     out = await task
     assert out.outcome == "done" and out.read == []
+
+
+async def test_a_two_result_turn_keeps_both_answers_and_sums_its_turns_tokens_and_cost(tmp_path):
+    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, result(num_turns=2, cost=0.25, text="The PR is up."),
+                                        replay, result(num_turns=1, cost=0.5, text="Told Sam it's nearly done.")]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    await runner.send("R1", "W-2", "how's it going?")
+    out = await task
+    assert out.summary == "The PR is up.\n\nTold Sam it's nearly done."
+    assert (out.turns, out.input_tokens, out.output_tokens, out.cache_read_tokens, out.cache_write_tokens) == \
+        (3, 200, 40, 10, 14)
+    assert out.cost_usd_est == 0.75
+    assert out.outcome == "done" and out.read == ["W-2"]
+
+
+async def test_a_two_result_turn_skips_an_empty_answer_and_takes_its_outcome_from_the_last_result(tmp_path):
+    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, result(text=""), replay,
+                                        result("error_max_turns", text="Ran out of turns.")]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    await runner.send("R1", "W-2", "how's it going?")
+    out = await task
+    assert (out.summary, out.outcome) == ("Ran out of turns.", "max_turns")

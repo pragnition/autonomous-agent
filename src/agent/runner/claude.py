@@ -172,6 +172,7 @@ class ClaudeRunner:
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
         transcript = self.transcripts_dir / f"{spec.run_id}.jsonl"
         final: ResultMessage | None = None
+        results: list[ResultMessage] = []  # more than one when a message sent late ran as a next turn
         watchdog = asyncio.create_task(self._watch(client, state))
         try:
             async with asyncio.timeout(spec.timeout_s):
@@ -193,6 +194,7 @@ class ClaudeRunner:
                         read.append(state["pending"].pop(msg.uuid))
                     if isinstance(msg, ResultMessage):
                         final = msg
+                        results.append(msg)
                         # A message sent but not yet read runs as a next turn in this process, so read on to its
                         # result. An interrupted session stops here: what it didn't read goes back to the queue.
                         if not state["pending"] or state["reason"]:
@@ -213,12 +215,12 @@ class ClaudeRunner:
         result = RunResult(run_id=spec.run_id, session_id=state["sid"], outcome="error",
                            account_code=state["account"])
         fork_wanted = False
-        if final is not None:
-            result.turns = final.num_turns
+        if results:  # every answer the model gave is kept; the outcome comes from the last result
+            result.turns = sum(r.num_turns or 0 for r in results)
             (result.input_tokens, result.output_tokens, result.cache_read_tokens,
-             result.cache_write_tokens) = usage_tokens(final.usage)
-            result.cost_usd_est = final.total_cost_usd or 0.0
-            result.summary = final.result or ""
+             result.cache_write_tokens) = (sum(n) for n in zip(*(usage_tokens(r.usage) for r in results)))
+            result.cost_usd_est = sum(r.total_cost_usd or 0.0 for r in results)
+            result.summary = "\n\n".join(r.result for r in results if r.result)
         if state["reason"] == "timeout":
             result.outcome, result.error = "timeout", f"no result within {spec.timeout_s} s"
         elif state["reason"] == "external":
