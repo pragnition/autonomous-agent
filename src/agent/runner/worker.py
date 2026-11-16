@@ -21,6 +21,11 @@ from agent.runner.tools import remote_sdk_tools
 log = logging.getLogger(__name__)
 FRESH_NOTE = ("(Your earlier session in this conversation couldn't be resumed. Call read_thread to catch up on "
               "the conversation so far before you answer.)\n\n")
+MIDTURN_NOTE = ("(A new message arrived while you're working. Answer it now with post_update, or a Linear thought in a "
+                "Linear session, because your final reply only posts when this whole turn ends. Then carry on, and "
+                "change course if it asks you to.)\n\n")
+RESTARTED_NOTE = ("(Your machine restarted partway through this turn. Your session picks up where it stopped: check "
+                  "what you had already done, then carry on. The message you were working on:)\n\n")
 
 _VAR = re.compile(r"\$\{(\w+)\}")
 
@@ -87,14 +92,18 @@ class Runner:
         while True:
             await asyncio.sleep(self.heartbeat_s)
             try:
-                cancel = await self.link.heartbeat(tok)
+                beat = {"session_id": self.claude.session_of(item_id), "read": self.claude.read_of(item_id),
+                        "accepts_messages": self.claude.accepting(item_id)}
+                reply = await self.link.heartbeat(tok, beat)
             except SessionRevoked:
-                cancel = True
+                reply = {"cancel": True}
             except Exception:
                 continue
-            if cancel:
+            if reply.get("cancel"):
                 await self.claude.interrupt(item_id)
                 return
+            for m in reply.get("messages") or []:
+                await self.claude.send(item_id, m["id"], origin_of(m["payload"]) + MIDTURN_NOTE + m["payload"]["text"])
 
     def _forwarder(self, tok: str):
         async def forward(record: dict) -> None:
@@ -143,7 +152,7 @@ class Runner:
                "turns": result.turns, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
                "cache_read_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens,
                "cost_usd_est": result.cost_usd_est, "account_code": result.account_code, "forks": result.forks,
-               "error": result.error}
+               "error": result.error, "read": result.read}
         with contextlib.suppress(SessionRevoked):
             await self.link.result(tok, out)
 
@@ -159,8 +168,10 @@ class Runner:
         if self.memory_dir is not None:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             settings["autoMemoryDirectory"] = str(self.memory_dir)
-        # the message's origin (who, where, link) comes first, then the message
-        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + payload["text"], cwd=session,
+        # the message's origin (who, where, link) comes first, then the restart note (if this attempt is resuming
+        # a turn the machine restarted mid-way through), then the message
+        note = RESTARTED_NOTE if item.get("attempts") and payload.get("resume_session_id") else ""
+        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + note + payload["text"], cwd=session,
                        model=payload["model"], system_prompt=payload["system_prompt"], max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,

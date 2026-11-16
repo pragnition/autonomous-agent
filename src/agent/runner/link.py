@@ -34,8 +34,8 @@ class CoreLink:
                                                 timeout=40))
         return None if resp.status_code == 204 else resp.json()
 
-    async def heartbeat(self, tok: str) -> bool:
-        return bool((await self._post("/agent/heartbeat", tok, {})).get("cancel"))
+    async def heartbeat(self, tok: str, beat: dict) -> dict:
+        return await self._post("/agent/heartbeat", tok, beat)
 
     async def event(self, tok: str, event: dict) -> bool:
         return bool((await self._post("/agent/events", tok, {"event": event})).get("cancel"))

@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import tarfile
 
 import httpx
@@ -8,7 +9,15 @@ import pytest
 from agent.runner.base import RunResult
 from agent.runner.link import CoreLink, SessionRevoked
 from agent.runner.tools import remote_sdk_tools
-from agent.runner.worker import FRESH_NOTE, Runner
+from agent.runner.worker import FRESH_NOTE, MIDTURN_NOTE, RESTARTED_NOTE, Runner
+
+
+async def wait_until(cond):
+    for _ in range(200):
+        if cond():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out waiting")
 
 
 def bundle_bytes() -> bytes:
@@ -27,12 +36,14 @@ class FakeLink:
     def __init__(self, cancel=False, revoked=False):
         self.cancel, self.revoked = cancel, revoked
         self.tool_calls, self.files_sent, self.results, self.events = [], [], [], []
+        self.beats, self.messages = [], []  # messages: one list of messages per beat, consumed in order
         self.posted = True
 
-    async def heartbeat(self, tok):
+    async def heartbeat(self, tok, beat):
+        self.beats.append(beat)
         if self.revoked:
             raise SessionRevoked()
-        return self.cancel
+        return {"cancel": self.cancel, "messages": self.messages.pop(0) if self.messages else []}
 
     async def event(self, tok, ev):
         self.events.append(ev)
@@ -56,14 +67,34 @@ class FakeLink:
 class FakeClaude:
     def __init__(self, hang=False):
         self.specs, self.interrupted, self.hang = [], [], hang
+        self.read, self.sent = [], []  # read: what a beat (or the result) should report; sent: (run_id, item_id, text)
+        self._active: set[str] = set()
         self._stop = asyncio.Event()
 
     async def run(self, spec):
         self.specs.append(spec)
-        if self.hang:
-            await asyncio.wait_for(self._stop.wait(), 5)
-            return RunResult(spec.run_id, "sess-1", "interrupted", error="interrupted")
-        return RunResult(spec.run_id, "sess-1", "done", summary="all done", turns=3, cost_usd_est=0.5)
+        self._active.add(spec.run_id)
+        try:
+            if self.hang:
+                await asyncio.wait_for(self._stop.wait(), 5)
+                return RunResult(spec.run_id, "sess-1", "interrupted", error="interrupted", read=list(self.read))
+            return RunResult(spec.run_id, "sess-1", "done", summary="all done", turns=3, cost_usd_est=0.5,
+                             read=list(self.read))
+        finally:
+            self._active.discard(spec.run_id)
+
+    def accepting(self, run_id):
+        return run_id in self._active
+
+    def session_of(self, run_id):
+        return "live-1"
+
+    def read_of(self, run_id):
+        return list(self.read)
+
+    async def send(self, run_id, item_id, text):
+        self.sent.append((run_id, item_id, text))
+        return True
 
     async def interrupt(self, run_id):
         self.interrupted.append(run_id)
@@ -176,6 +207,53 @@ async def test_revoked_token_interrupts(tmp_path):
     assert claude.interrupted == ["W-V-1"]
 
 
+async def test_heartbeat_reports_the_live_session_and_what_was_read(tmp_path):
+    link, claude = FakeLink(), FakeClaude(hang=True)
+    claude.read = ["W-2"]
+    runner = make_runner(tmp_path, link, claude)
+    task = asyncio.create_task(runner.handle(item(), "tok", []))
+    await wait_until(lambda: link.beats)
+    assert link.beats[0] == {"session_id": "live-1", "read": ["W-2"], "accepts_messages": True}
+    await claude.interrupt("W-V-1")
+    await asyncio.wait_for(task, 2)
+
+
+async def test_messages_from_the_heartbeat_go_into_the_session(tmp_path):
+    link, claude = FakeLink(), FakeClaude(hang=True)
+    link.messages = [[{"id": "W-2", "payload": {"text": "how's it going?",
+                                                "origin": "[from Sam (sam) · DM · <link>]"}}]]
+    runner = make_runner(tmp_path, link, claude)
+    task = asyncio.create_task(runner.handle(item(), "tok", []))
+    await wait_until(lambda: claude.sent)
+    assert claude.sent == [("W-V-1", "W-2", "[from Sam (sam) · DM · <link>]\n" + MIDTURN_NOTE + "how's it going?")]
+    await claude.interrupt("W-V-1")
+    await asyncio.wait_for(task, 2)
+
+
+async def test_result_reports_every_message_the_session_read(tmp_path):
+    link, claude = FakeLink(), FakeClaude()
+    claude.read = ["W-2", "W-3"]
+    await make_runner(tmp_path, link, claude).handle(item(), "tok", [])
+    assert link.results[-1]["read"] == ["W-2", "W-3"]
+
+
+async def test_a_restarted_turn_is_told_and_resumes(tmp_path):
+    link, claude = FakeLink(), FakeClaude()
+    it = item(resume_session_id="live-1", origin="[from bob · DM]")
+    it["attempts"] = 1
+    await make_runner(tmp_path, link, claude).handle(it, "tok", [])
+    assert claude.specs[0].prompt == "[from bob · DM]\n" + RESTARTED_NOTE + "fix the export"
+    assert claude.specs[0].resume_session_id == "live-1"
+
+
+async def test_a_first_attempt_gets_no_restart_note(tmp_path):
+    link, claude = FakeLink(), FakeClaude()
+    it = item(resume_session_id="live-1")
+    it["attempts"] = 0
+    await make_runner(tmp_path, link, claude).handle(it, "tok", [])
+    assert claude.specs[0].prompt == "fix the export"
+
+
 MANIFEST = [{"name": "post_files", "description": "d", "input_schema": {"type": "object", "properties": {}}},
             {"name": "status", "description": "d", "input_schema": {"type": "object", "properties": {}}}]
 
@@ -226,15 +304,23 @@ async def test_post_files_says_when_nothing_reached_slack(session):
 
 
 async def test_link_maps_401_and_204():
+    posted = {}
+
     def handler(request):
         if request.url.path == "/agent/pull":
             return httpx.Response(204)
+        if request.url.path == "/agent/heartbeat":
+            posted["beat"] = json.loads(request.content)
+            return httpx.Response(200, json={"cancel": False, "messages": []})
         return httpx.Response(401, json={"error": "unauthorized"})
 
     link = CoreLink("http://core.test", "runner-token", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     assert await link.pull() is None
+    beat = {"session_id": None, "read": [], "accepts_messages": False}
+    assert await link.heartbeat("tok", beat) == {"cancel": False, "messages": []}
+    assert posted["beat"] == beat
     with pytest.raises(SessionRevoked):
-        await link.heartbeat("tok")
+        await link.event("tok", {})
 
 
 class ResumeFailsClaude(FakeClaude):
