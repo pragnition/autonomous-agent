@@ -3,6 +3,9 @@
 The proxy pins each session to one account and returns that account's limits to it. When the account is rejected
 or disabled (seen by the watchdog, or as a 403/503, or a 429 while the proxy reports the account rejected), the run
 is resumed as a fork: a new session id with the conversation intact, which the proxy pins to a fresh account.
+
+Messages that arrive while a run is going are written into its live session, each with its own uuid. The CLI echoes
+every message it reads, so a run knows which ones were read, and it reads on past a result until each one has been.
 """
 
 from __future__ import annotations
@@ -18,7 +21,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, create_sdk_mcp_server
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, UserMessage,
+                              create_sdk_mcp_server)
 
 from agent.proxy import PLACEHOLDER_TOKEN, ProxyClient, ProxyUnavailable
 from agent.runner.base import RunResult, RunSpec
@@ -46,6 +50,7 @@ class ClaudeRunner:
         self.uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
         self._active: dict[str, tuple[object, dict]] = {}
         self._stopped: set[str] = set()
+        self._read: dict[str, list[str]] = {}  # per run: the ids of the messages its sessions read, in order
 
     def _env(self, spec: RunSpec) -> dict[str, str]:
         redacted = {k: "" for k in os.environ if SECRETISH.search(k) and k not in PROXY_VARS}
@@ -65,7 +70,43 @@ class ClaudeRunner:
             setting_sources=["user", "project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
             session_id=session_id, resume=resume, fork_session=fork,
-            settings=json.dumps(spec.settings) if spec.settings else None)
+            settings=json.dumps(spec.settings) if spec.settings else None,
+            # the CLI echoes each user message it reads, with the uuid it was sent with
+            extra_args={"replay-user-messages": None})
+
+    def accepting(self, run_id: str) -> bool:
+        """True while an attempt of the run is reading and hasn't finished or been told to stop."""
+        active = self._active.get(run_id)
+        return bool(active and active[1]["accepting"] and not active[1]["reason"])
+
+    def session_of(self, run_id: str) -> str | None:
+        active = self._active.get(run_id)
+        return active[1]["sid"] if active else None
+
+    def read_of(self, run_id: str) -> list[str]:
+        return list(self._read.get(run_id, []))
+
+    async def send(self, run_id: str, item_id: str, text: str) -> bool:
+        """Write a message into the run's live session. It counts as read once the CLI echoes it back."""
+        if not self.accepting(run_id):
+            return False
+        client, state = self._active[run_id]
+        message_uuid = self.uuid_factory()
+        # Pending from before the write, with no await since the check: the receive loop either sees it at its next
+        # result and reads on, or had already stopped accepting
+        state["pending"][message_uuid] = item_id
+        message = {"type": "user", "uuid": message_uuid, "message": {"role": "user", "content": text},
+                   "parent_tool_use_id": None}
+
+        async def one():
+            yield message
+
+        try:
+            await client.query(one())
+        except Exception:
+            state["pending"].pop(message_uuid, None)
+            return False
+        return True
 
     async def interrupt(self, run_id: str) -> None:
         self._stopped.add(run_id)
@@ -79,13 +120,17 @@ class ClaudeRunner:
         forks, resume, fork = 0, spec.resume_session_id, False
         if spec.run_id in self._stopped:  # cancelled before (or between) its sessions: don't start another
             return RunResult(run_id=spec.run_id, session_id=resume, outcome="interrupted", error="interrupted")
-        while True:
-            attempt = await self._attempt(spec, resume=resume, fork=fork)
-            if attempt.fork_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
-                forks, resume, fork = forks + 1, attempt.result.session_id, True
-                continue
-            attempt.result.forks = forks
-            return attempt.result
+        self._read[spec.run_id] = []
+        try:
+            while True:
+                attempt = await self._attempt(spec, resume=resume, fork=fork)
+                if attempt.fork_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
+                    forks, resume, fork = forks + 1, attempt.result.session_id, True
+                    continue
+                attempt.result.forks, attempt.result.read = forks, self._read[spec.run_id]
+                return attempt.result
+        finally:
+            self._read.pop(spec.run_id, None)
 
     async def _watch(self, client, state: dict) -> None:
         while True:
@@ -119,8 +164,11 @@ class ClaudeRunner:
     async def _attempt(self, spec: RunSpec, *, resume: str | None, fork: bool) -> _Attempt:
         session_id = None if (resume and not fork) else self.uuid_factory()
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume, fork=fork))
-        state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False}
+        # pending: the uuid of each message sent into this session and not yet echoed -> its item id
+        state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False,
+                 "accepting": False, "pending": {}}
         self._active[spec.run_id] = (client, state)
+        read = self._read.setdefault(spec.run_id, [])
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
         transcript = self.transcripts_dir / f"{spec.run_id}.jsonl"
         final: ResultMessage | None = None
@@ -129,7 +177,8 @@ class ClaudeRunner:
             async with asyncio.timeout(spec.timeout_s):
                 await client.connect()
                 await client.query(spec.prompt)
-                async for msg in client.receive_response():
+                state["accepting"] = True
+                async for msg in client.receive_messages():
                     record = self._append(transcript, msg)
                     if spec.on_message is not None:
                         with contextlib.suppress(Exception):
@@ -140,12 +189,20 @@ class ClaudeRunner:
                         state["asked"] = True
                         with contextlib.suppress(ProxyUnavailable):
                             state["account"] = await self.proxy.whoami(state["sid"])
+                    if isinstance(msg, UserMessage) and msg.uuid in state["pending"]:
+                        read.append(state["pending"].pop(msg.uuid))
                     if isinstance(msg, ResultMessage):
                         final = msg
+                        # A message sent but not yet read runs as a next turn in this process, so read on to its
+                        # result. An interrupted session stops here: what it didn't read goes back to the queue.
+                        if not state["pending"] or state["reason"]:
+                            state["accepting"] = False
+                            break
         except TimeoutError:
             state["reason"] = "timeout"
             await client.interrupt()
         finally:
+            state["accepting"] = False
             watchdog.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await watchdog

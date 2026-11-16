@@ -2,13 +2,15 @@ import asyncio
 import json
 from pathlib import Path
 
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, tool
+from claude_agent_sdk import AssistantMessage, CLIConnectionError, ResultMessage, TextBlock, UserMessage, tool
 
 from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, Usage
 from agent.runner.base import RunSpec
 from agent.runner.claude import ClaudeRunner
 
 HANG = "HANG"
+WAIT_SENT = "WAIT_SENT"  # wait until the runner writes a message into the session
+WAIT_STOP = "WAIT_STOP"  # wait until the session is interrupted, then carry on with the script
 
 
 def sids():
@@ -33,20 +35,32 @@ class FakeProxy:
 class FakeClient:
     def __init__(self, options, script):
         self.options, self.script = options, script
-        self.interrupted, self.queries = False, []
-        self._stop = asyncio.Event()
+        self.interrupted, self.queries, self.sent = False, [], []
+        self._stop, self._sent = asyncio.Event(), asyncio.Event()
 
     async def connect(self):
         pass
 
     async def query(self, prompt):
-        self.queries.append(prompt)
+        if isinstance(prompt, str):
+            self.queries.append(prompt)
+            return
+        async for message in prompt:
+            self.sent.append(message)
+            self._sent.set()
 
-    async def receive_response(self):
+    async def receive_messages(self):
         for item in self.script:
             if item == HANG:
                 await self._stop.wait()
                 return
+            if item == WAIT_SENT:
+                await self._sent.wait()
+                self._sent.clear()
+                continue
+            if item == WAIT_STOP:
+                await self._stop.wait()
+                continue
             yield item(self) if callable(item) else item
 
     async def interrupt(self):
@@ -69,6 +83,19 @@ def result(subtype="success", **kw):
                              usage={"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 5,
                                     "cache_creation_input_tokens": 7}, result="final text", **kw)
     return make
+
+
+def replay(c, i=-1):
+    """The CLI's echo of a message the runner wrote: the same text, the same uuid."""
+    return UserMessage(content=c.sent[i]["message"]["content"], uuid=c.sent[i]["uuid"])
+
+
+async def wait_until(cond):
+    for _ in range(200):
+        if cond():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out waiting")
 
 
 def make_runner(tmp_path, attempts, proxy=None, watchdog_s=60):
@@ -268,3 +295,114 @@ async def test_messages_forwarded(tmp_path):
     runner, _ = make_plain_runner(tmp_path, [[assistant, result()]])
     await runner.run(spec(tmp_path, on_message=on_message))
     assert seen == ["AssistantMessage", "ResultMessage"]
+
+
+async def test_options_ask_the_cli_to_echo_messages(tmp_path):
+    runner, _ = make_runner(tmp_path, [[]])
+    assert runner.build_options(spec(tmp_path), session_id="s").extra_args == {"replay-user-messages": None}
+
+
+async def test_a_message_sent_mid_turn_reaches_the_session_and_is_read(tmp_path):
+    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, replay, result()]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    assert runner.session_of("R1") == "00000000-0000-4000-8000-000000000001"
+    assert await runner.send("R1", "W-2", "how's it going?")
+    out = await task
+    assert clients[0].sent[0]["message"]["content"] == "how's it going?" and clients[0].sent[0]["uuid"]
+    assert clients[0].sent[0]["type"] == "user" and clients[0].sent[0]["parent_tool_use_id"] is None
+    assert out.read == ["W-2"] and out.outcome == "done"
+    assert not runner.accepting("R1") and not await runner.send("R1", "W-3", "late")
+    assert runner.session_of("R1") is None and runner.read_of("R1") == []
+
+
+async def test_the_turn_keeps_reading_until_every_sent_message_is_read(tmp_path):
+    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, result(num_turns=1), replay, result(num_turns=7)]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    await runner.send("R1", "W-2", "also say hi")
+    out = await task
+    assert out.read == ["W-2"] and out.turns == 7
+
+
+async def test_two_messages_are_both_read_in_order(tmp_path):
+    def replay_first(c):
+        return replay(c, 0)
+
+    def replay_second(c):
+        return replay(c, 1)
+
+    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, WAIT_SENT, replay_first, replay_second,
+                                              result()]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    assert await runner.send("R1", "W-2", "first")
+    await wait_until(lambda: not clients[0]._sent.is_set())  # the session took the first before the second
+    assert await runner.send("R1", "W-3", "second")
+    out = await task
+    assert [m["message"]["content"] for m in clients[0].sent] == ["first", "second"]
+    assert clients[0].sent[0]["uuid"] != clients[0].sent[1]["uuid"]
+    assert out.read == ["W-2", "W-3"]
+
+
+async def test_read_of_reports_what_was_read_so_far_without_draining(tmp_path):
+    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, replay, HANG]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    await runner.send("R1", "W-2", "how's it going?")
+    await wait_until(lambda: runner.read_of("R1") == ["W-2"])
+    assert runner.read_of("R1") == ["W-2"]
+    await runner.interrupt("R1")
+    assert (await task).read == ["W-2"]
+
+
+async def test_a_fork_does_not_report_an_unread_message(tmp_path):
+    forbidden = result("error_during_execution", api_error_status=403, errors=["account disabled: maple"])
+    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, forbidden], [assistant, result()]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    assert await runner.send("R1", "W-2", "how's it going?")
+    out = await task
+    assert out.read == [] and out.forks == 1 and out.outcome == "done"
+    assert clients[1].sent == []
+
+
+async def test_a_fork_adds_its_reads_to_the_run(tmp_path):
+    forbidden = result("error_during_execution", api_error_status=403, errors=["account disabled: maple"])
+    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, replay, forbidden],
+                                             [assistant, WAIT_SENT, replay, result()]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    await runner.send("R1", "W-2", "first")
+    await wait_until(lambda: len(clients) == 2 and runner.accepting("R1"))
+    assert runner.session_of("R1") == clients[1].options.session_id
+    await runner.send("R1", "W-3", "second")
+    out = await task
+    assert out.read == ["W-2", "W-3"] and out.forks == 1
+
+
+async def test_a_cancelled_turn_stops_at_its_result_and_leaves_a_sent_message_unread(tmp_path):
+    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, WAIT_STOP, result("error_during_execution"),
+                                        replay, result()]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    assert await runner.send("R1", "W-2", "how's it going?")
+    await runner.interrupt("R1")
+    assert not runner.accepting("R1") and not await runner.send("R1", "W-3", "late")
+    out = await task
+    assert out.read == [] and out.outcome == "interrupted"
+
+
+async def test_a_message_that_cannot_be_written_is_not_waited_for(tmp_path):
+    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, result(), HANG]])
+    task = asyncio.create_task(runner.run(spec(tmp_path, timeout_s=2)))
+    await wait_until(lambda: runner.accepting("R1"))
+
+    async def broken(prompt):
+        clients[0]._sent.set()
+        raise CLIConnectionError("ProcessTransport is not ready for writing")
+
+    clients[0].query = broken
+    assert not await runner.send("R1", "W-2", "how's it going?")
+    out = await task
+    assert out.outcome == "done" and out.read == []

@@ -43,3 +43,4 @@ class RunResult:
     account_code: str | None = None
     forks: int = 0
     error: str | None = None
+    read: list[str] = field(default_factory=list)  # ids of the messages the session read mid-turn, in order
