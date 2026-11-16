@@ -112,8 +112,12 @@ def register_project_tools(router: AgentToolRouter) -> None:
         payload.update(origin=asked.get("origin"), source=asked.get("source") or "slack",
                        requester=asked.get("requester") or ctx.actor, follows=ctx.work_item_id)
         queue.enqueue(project["conversation_id"], "turn", payload)
-        step = " It's running, so it reads this at its next step." if state == "running" else \
-              " It was idle and starts on this now."
+        if state == "running":
+            step = " It's running, so it reads this at its next step."
+        elif state == "queued":
+            step = " It's about to start its next turn and reads this then."
+        else:
+            step = " It was idle and starts on this now."
         thread = project["thread_link"] or "(none)"
         return ToolReply(f"Passed to {name}'s build.{step} Thread: {thread}")
 

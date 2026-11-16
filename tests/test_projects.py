@@ -69,6 +69,8 @@ async def test_two_conversations_racing_to_register_the_same_new_name_has_exactl
 async def test_a_change_from_another_conversation_reaches_an_idle_build(router):
     build = ctx_for(router, actor="ann")
     await router.call(build, "start_project", {"name": "roster-demo", "repo": "o/r"})
+    router.queue.claim()                          # the build's own turn, finished: nothing left waiting for it
+    router.queue.complete(build.work_item_id, {"outcome": "done", "text": "ok"})
     side_id = add_item(router.queue, add_conversation(router.conn, channel="D-bob"), actor="bob",
                        origin="[from Bob (bob) · DM · https://slack/x]", source="slack", requester="bob")
     side = router.context_for(side_id)
@@ -79,6 +81,16 @@ async def test_a_change_from_another_conversation_reaches_an_idle_build(router):
     assert (item.payload["requester"], item.payload["follows"]) == ("bob", side_id)
     assert "message_ts" not in item.payload
     assert "starts on this now" in reply.text
+
+
+async def test_a_change_for_a_queued_build_says_so(router):
+    """start_project's own turn is still queued, unclaimed — nothing has run yet. tell_project must say that
+    the build is about to start, not report it as idle: a turn is already waiting for it."""
+    build = ctx_for(router, actor="ann")
+    await router.call(build, "start_project", {"name": "roster-demo", "repo": "o/r"})
+    reply = await router.call(ctx_for(router, actor="bob"), "tell_project",
+                              {"name": "roster-demo", "message": "add xyz"})
+    assert "about to start its next turn" in reply.text
 
 
 async def test_a_change_for_a_running_build_is_delivered_at_its_next_step(router):
