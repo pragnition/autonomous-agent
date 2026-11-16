@@ -1,11 +1,14 @@
 # Autonomous agent
 
-A self-hosted engineering agent for a team. Engineers message it in Slack or hand it Linear issues, and each
-conversation runs as a Claude Code session with a full development environment: it answers questions,
-investigates, fixes bugs and builds features, tests them end to end in its own Docker and a headless browser, and
-opens draft pull requests that a person reviews and merges. A core service holds every credential, puts every
-message on one work queue and applies the rules in the tools it gives the sessions; Claude access goes through a
-Claude account proxy on the host. The whole stack runs with Docker Compose on one machine.
+A self-hosted, fully autonomous engineering agent for a team. People message it in Slack, hand it Linear issues or
+put work on a schedule, and each conversation runs as a Claude Code session on the agent's own machine: a shell
+with sudo, the internet, its own Docker and headless browser, and its own GitHub, Azure and Slack logins. It does
+whatever its credentials reach, end to end and without a person in the loop: answers questions, investigates
+incidents, builds, tests and ships code, sweeps codebases and files issues, reports on schedules, messages people
+and works in any other system it has a key for. It installs its own skills, plugins and MCP servers, so giving it
+a credential is all it takes to give it a new ability. A core service puts every message on one work queue and
+holds the stack's own credentials; Claude access goes through a Claude account proxy on the host. The whole stack
+runs with Docker Compose on one machine.
 
 ## Quick start
 
@@ -41,8 +44,9 @@ sessions across the team's Claude accounts and reports their usage. Put it at
    LINEAR_API_KEY=lin_api_…
    GITHUB_READ_TOKEN=…
 
-   # data/secrets/agent.env: the agent's own keys, as environment variables in its container. GH_TOKEN is how it
-   # clones, pushes and opens PRs, so it needs write access to the projects' repos
+   # data/secrets/agent.env: the agent's own keys, as environment variables in its container. It can do whatever
+   # these allow, and any key added here is a new system it can work in. GH_TOKEN is how it clones, pushes and
+   # opens PRs, so it needs write access to the projects' repos
    GH_TOKEN=…
 
    # data/secrets/supervisor.env: optional, may be empty

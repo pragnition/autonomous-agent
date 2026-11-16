@@ -1,9 +1,12 @@
 # Design
 
-A self-hosted engineering agent for one team. Engineers message it in Slack (DMs, mentions, threads) or hand it
-Linear issues. Each conversation is a Claude Code session with a full development environment: it answers
-questions, investigates incidents, fixes bugs and builds features, tests them end to end, and opens draft pull
-requests that a person reviews and merges.
+A self-hosted, fully autonomous engineering agent for one team. People message it in Slack (DMs, mentions,
+threads), hand it Linear issues or put work on a schedule. Each conversation is a Claude Code session on the
+agent's own machine, with a full development environment and the agent's own logins. It does whatever its
+credentials reach, end to end and without a person in the loop: it answers questions, investigates incidents,
+builds, tests and ships code, sweeps codebases and files issues, reports on schedules, messages people and works in
+any other system it has a key for. Its abilities are its credentials plus the skills, plugins and MCP servers it
+installs for itself; core adds no gate in its way.
 
 It runs as one Docker Compose stack on a single host. Claude access goes through a Claude account proxy on the
 same host. The agent's name is `name` in `agent.toml`; it is the agent's display name and the Linear label it
@@ -15,7 +18,7 @@ refusal.
 ```text
  Slack (Socket Mode)      Linear (webhook, poller)                              GitHub
         |                         |                                                ^
-        v                         v                                                | draft PRs
+        v                         v                                                | PR stats
  +-- core  (agent-core, 172.30.0.10) ----------------------------------------------+---+
  |  intake -> work queue (agent.db) -> tools, git mirrors, every stack credential       |
  |  :8080 agent API + git   :8085 Linear (Funnel)   :8086 dashboard   :8087 meter       |
@@ -26,6 +29,7 @@ refusal.
  |  agent  (agent-runner)                       docker  (agent-docker, dind)            |
  |  runner -> Claude Code sessions              dockerd on 127.0.0.1:2375: the apps     |
  |  /var/agent: clones, sessions, memory        that sessions run and test              |
+ |  its own gh, az and Slack logins, the internet                                       |
  +-------+-----------------------------------------------------------------------------+
          | Claude API, placeholder token
          v
@@ -353,26 +357,18 @@ don't have, they read the source: Slack with `slack_read`, Linear with its MCP s
 
 Within a conversation, the context is the resumed Claude Code session itself.
 
-## The git endpoint and PRs
+## Code and PRs
 
-core keeps a bare mirror of each pack's repo in `data/git/<project>.git`, cloned and refreshed every 5 minutes from
-GitHub with `GITHUB_READ_TOKEN` (the agent's own branches are not overwritten). It serves them with
-`git http-backend` at `http://core:8080/git/<project>.git` to any live runner or session token. A pre-receive hook
-accepts pushes only to `refs/heads/<agent name>/*` and refuses deletes and tags. Runners clone from here.
+The agent works on code the way an engineer on the team does, with its own tools and no core step in between. It
+clones the repos it needs into the conversation's folder with `gh repo clone` and its own `GH_TOKEN` (`agent.env`),
+sets them up with the project's skills, branches the way each repo names its branches, pushes, and opens PRs to
+the default branch with `gh pr create`, following the repo's own conventions (its CLAUDE.md, AGENTS.md,
+CONTRIBUTING and PR template). Draft or ready, who reviews and whether the agent merges are up to the repo's rules
+and branch protection and what the token allows; core adds no gate.
 
-`open_pr(title, body, no_ui?)`:
-
-1. In the runner: commit everything in the checkout, run the pack's `[build] checks` on that commit, and push the
-   branch to core's git endpoint if they pass.
-2. In core: refuse unless the branch starts with `<agent name>/`, the commit is the branch's tip on the endpoint and
-   the checks passed. A feature's first PR also needs browser evidence: screenshots or a video posted with
-   `post_files` in the conversation, or `no_ui` with the reason nothing a user sees changed.
-3. core pushes that commit to GitHub with `GITHUB_WRITE_TOKEN` and opens a draft PR against the default branch (or
-   updates the open one). The body names the requester and lists the checks that passed. The PR is assigned to
-   the requester's GitHub login, else the pack's owner. The task becomes `ready_for_review`.
-
-There is no merge, delete or force-push path. People review and merge. The PR stats poller then records review and
-merge times, human commits and lines, and reverts within 30 days, and moves the task to `merged` or `closed`.
+core watches the result for the KPIs: every 5 minutes it searches GitHub for PRs by the agent's login and keeps
+each one current until it is merged or closed, tying it to a Linear issue whose key it mentions. The PR stats poller
+records review and merge times, human commits and lines, and reverts within 30 days.
 
 ## KPIs, the activity log and the dashboard
 
@@ -509,10 +505,10 @@ and loop errors; `just logs agent` shows the runner's.
 - **Azure is staging only.** The Azure login that `az_login` creates is shared with the agent; it should have access
   to staging resources only. The system prompt also tells sessions never to change production resources or data.
   The code doesn't check this; the account's role assignments do.
-- **Code reaches a pack's repo through open_pr.** Only `<agent name>/*` branches, only a commit whose checks
-  passed, only as a draft PR that a person reviews and merges. core holds the write token, and there is no merge,
-  delete or force-push path. The agent's own `GH_TOKEN` (`agent.env`) is outside these checks: `gh` can do whatever
-  that token allows, so scope it accordingly.
+- **The agent's reach is its credentials.** It clones, pushes, opens PRs and merges with its own `GH_TOKEN`, and
+  works in any other system with the keys in `agent.env`, its Azure login and its Slack bot token. core puts no
+  gate on any of it: what a token allows, the agent can do. Scope each credential, and protect branches, to what
+  the agent should be able to do.
 - **Secrets are scrubbed from what leaves core.** Every tool reply, `post_update` and other messages core's tools
   post, the session's final reply for each turn, the line of text sent with `post_files`, `slack_read` replies and
   the dashboard's transcript view have known secret values from `core.env` (8 characters or more) and token
