@@ -4,8 +4,10 @@ The proxy pins each session to one account and returns that account's limits to 
 or disabled (seen by the watchdog, or as a 403/503, or a 429 while the proxy reports the account rejected), the run
 is resumed as a fork: a new session id with the conversation intact, which the proxy pins to a fresh account.
 
-Messages that arrive while a run is going are written into its live session, each with its own uuid. The CLI echoes
-every message it reads, so a run knows which ones were read, and it reads on past a result until each one has been.
+Each attempt's prompt, and every message that arrives while the run is going, is written into the live session with its
+own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
+until each one has been: a result from before the prompt was read (a background task from an earlier turn finishing)
+doesn't answer this turn.
 """
 
 from __future__ import annotations
@@ -31,6 +33,12 @@ from agent.runner.outcome import ACCOUNT_TROUBLE, FORK_STATUSES, map_result, usa
 # The SDK hands the parent's whole environment to the CLI, so anything secret-looking is overridden with "".
 SECRETISH = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_KEY|_KEY)$|^(GH|GITHUB|SLACK|LINEAR|AWS)_", re.I)
 PROXY_VARS = {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
+
+
+async def _user_message(message_uuid: str, text: str):
+    """One stream-json user message; the CLI echoes it back with this uuid once it reads it."""
+    yield {"type": "user", "uuid": message_uuid, "message": {"role": "user", "content": text},
+           "parent_tool_use_id": None}
 
 
 @dataclass
@@ -95,14 +103,8 @@ class ClaudeRunner:
         # Pending from before the write, with no await since the check: the receive loop either sees it at its next
         # result and reads on, or had already stopped accepting
         state["pending"][message_uuid] = item_id
-        message = {"type": "user", "uuid": message_uuid, "message": {"role": "user", "content": text},
-                   "parent_tool_use_id": None}
-
-        async def one():
-            yield message
-
         try:
-            await client.query(one())
+            await client.query(_user_message(message_uuid, text))
         except Exception:
             state["pending"].pop(message_uuid, None)
             return False
@@ -163,21 +165,24 @@ class ClaudeRunner:
 
     async def _attempt(self, spec: RunSpec, *, resume: str | None, fork: bool) -> _Attempt:
         session_id = None if (resume and not fork) else self.uuid_factory()
+        prompt_uuid = self.uuid_factory()
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume, fork=fork))
-        # pending: the uuid of each message sent into this session and not yet echoed -> its item id
+        # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
+        # attempt's own prompt, which is no work item)
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False,
-                 "accepting": False, "pending": {}}
+                 "accepting": False, "pending": {prompt_uuid: None}}
         self._active[spec.run_id] = (client, state)
         read = self._read.setdefault(spec.run_id, [])
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
         transcript = self.transcripts_dir / f"{spec.run_id}.jsonl"
         final: ResultMessage | None = None
-        results: list[ResultMessage] = []  # more than one when a message sent late ran as a next turn
+        # the results from once the prompt was read: more than one when a message sent late ran as a next turn
+        results: list[ResultMessage] = []
         watchdog = asyncio.create_task(self._watch(client, state))
         try:
             async with asyncio.timeout(spec.timeout_s):
                 await client.connect()
-                await client.query(spec.prompt)
+                await client.query(_user_message(prompt_uuid, spec.prompt))
                 state["accepting"] = True
                 async for msg in client.receive_messages():
                     record = self._append(transcript, msg)
@@ -191,16 +196,20 @@ class ClaudeRunner:
                         with contextlib.suppress(ProxyUnavailable):
                             state["account"] = await self.proxy.whoami(state["sid"])
                     if isinstance(msg, UserMessage) and msg.uuid in state["pending"]:
-                        read.append(state["pending"].pop(msg.uuid))
+                        if (item_id := state["pending"].pop(msg.uuid)) is not None:
+                            read.append(item_id)
                     if isinstance(msg, ResultMessage):
-                        final = msg
-                        results.append(msg)
+                        forking = msg.is_error and msg.api_error_status in FORK_STATUSES
+                        # A result from before the prompt was read answers something else (a background task from
+                        # an earlier turn finishing): it doesn't count, unless it forks the attempt
+                        if prompt_uuid not in state["pending"] or forking:
+                            final = msg
+                            results.append(msg)
                         # A message sent but not yet read runs as a next turn in this process, so read on to its
                         # result. An interrupted session stops here: what it didn't read goes back to the queue.
                         # So does a result that forks to a new account: the session it would read on into is the
                         # one about to be abandoned, not the one the pending message should land in.
-                        if not state["pending"] or state["reason"] or \
-                                (msg.is_error and msg.api_error_status in FORK_STATUSES):
+                        if not state["pending"] or state["reason"] or forking:
                             state["accepting"] = False
                             break
         except TimeoutError:

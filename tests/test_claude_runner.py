@@ -35,17 +35,17 @@ class FakeProxy:
 class FakeClient:
     def __init__(self, options, script):
         self.options, self.script = options, script
-        self.interrupted, self.queries, self.sent = False, [], []
+        self.interrupted, self.prompt, self.sent = False, None, []
         self._stop, self._sent = asyncio.Event(), asyncio.Event()
 
     async def connect(self):
         pass
 
     async def query(self, prompt):
-        if isinstance(prompt, str):
-            self.queries.append(prompt)
-            return
-        async for message in prompt:
+        async for message in prompt:  # the turn's own prompt comes first, then each message written mid-turn
+            if self.prompt is None:
+                self.prompt = message
+                continue
             self.sent.append(message)
             self._sent.set()
 
@@ -85,6 +85,11 @@ def result(subtype="success", **kw):
     return make
 
 
+def echo_prompt(c):
+    """The CLI's echo of the turn's own prompt once it reads it: the same text, the same uuid."""
+    return UserMessage(content=c.prompt["message"]["content"], uuid=c.prompt["uuid"])
+
+
 def replay(c, i=-1):
     """The CLI's echo of a message the runner wrote: the same text, the same uuid."""
     return UserMessage(content=c.sent[i]["message"]["content"], uuid=c.sent[i]["uuid"])
@@ -121,7 +126,7 @@ async def test_options_env_and_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_WRITE_TOKEN", "ghp_secret")
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-secret")
     monkeypatch.setenv("HARMLESS_SETTING", "ok")
-    runner, clients = make_runner(tmp_path, [[result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
     await runner.run(spec(tmp_path, plugins=[Path("/plugins/core")]))
     o = clients[0].options
     assert o.env["ANTHROPIC_BASE_URL"] == "http://172.30.0.1:28091"
@@ -137,7 +142,7 @@ async def test_options_env_and_settings(tmp_path, monkeypatch):
 
 
 async def test_settings_go_to_the_session_as_inline_json(tmp_path):
-    runner, clients = make_runner(tmp_path, [[result()], [result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()], [echo_prompt, result()]])
     await runner.run(spec(tmp_path, settings={"autoMemoryDirectory": "/var/agent/memory"}))
     assert json.loads(clients[0].options.settings) == {"autoMemoryDirectory": "/var/agent/memory"}
     await runner.run(spec(tmp_path, run_id="R2"))
@@ -149,30 +154,30 @@ async def test_sdk_tools_become_the_agent_mcp_server(tmp_path):
     async def ping(args):
         return {"content": [{"type": "text", "text": "pong"}]}
 
-    runner, clients = make_runner(tmp_path, [[result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
     await runner.run(spec(tmp_path, sdk_tools=[ping]))
     assert "agent" in clients[0].options.mcp_servers
 
 
 async def test_no_sdk_tools_means_no_agent_server(tmp_path):
-    runner, clients = make_runner(tmp_path, [[result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
     await runner.run(spec(tmp_path))
     assert "agent" not in clients[0].options.mcp_servers
 
 
 async def test_result_mapping_success(tmp_path):
-    runner, _ = make_runner(tmp_path, [[result()]])
+    runner, _ = make_runner(tmp_path, [[echo_prompt, result()]])
     r = await runner.run(spec(tmp_path))
     assert (r.outcome, r.summary) == ("done", "final text")
 
 
 async def test_result_mapping_max_turns(tmp_path):
-    runner, _ = make_runner(tmp_path, [[result("error_max_turns")]])
+    runner, _ = make_runner(tmp_path, [[echo_prompt, result("error_max_turns")]])
     assert (await runner.run(spec(tmp_path))).outcome == "max_turns"
 
 
 async def test_tokens_and_cost_copied(tmp_path):
-    runner, _ = make_runner(tmp_path, [[result(cost=0.5, num_turns=7)]])
+    runner, _ = make_runner(tmp_path, [[echo_prompt, result(cost=0.5, num_turns=7)]])
     r = await runner.run(spec(tmp_path))
     assert (r.turns, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens, r.cost_usd_est) == \
         (7, 100, 20, 5, 7, 0.5)
@@ -180,57 +185,60 @@ async def test_tokens_and_cost_copied(tmp_path):
 
 
 async def test_transcript_written(tmp_path):
-    runner, _ = make_runner(tmp_path, [[assistant, result()]])
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, result()]])
     await runner.run(spec(tmp_path))
     lines = (tmp_path / "R1.jsonl").read_text().splitlines()
-    assert len(lines) == 2
-    assert json.loads(lines[0])["type"] == "AssistantMessage"
+    assert [json.loads(line)["type"] for line in lines] == ["UserMessage", "AssistantMessage", "ResultMessage"]
 
 
 async def test_account_code_from_whoami(tmp_path):
     proxy = FakeProxy(account="cedar")
-    runner, _ = make_runner(tmp_path, [[assistant, assistant, result()]], proxy=proxy)
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, assistant, result()]], proxy=proxy)
     r = await runner.run(spec(tmp_path))
     assert r.account_code == "cedar" and len(proxy.whoami_calls) == 1
 
 
 async def test_resume_without_fork(tmp_path):
-    runner, clients = make_runner(tmp_path, [[result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
     await runner.run(spec(tmp_path, resume_session_id="11111111-1111-4111-8111-111111111111"))
     o = clients[0].options
     assert o.resume == "11111111-1111-4111-8111-111111111111" and o.fork_session is False and o.session_id is None
 
 
 async def test_fork_on_403_then_success(tmp_path):
-    runner, clients = make_runner(tmp_path, [[result("error_during_execution", api_error_status=403,
-                                                     errors=["account disabled: maple"])], [result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result("error_during_execution", api_error_status=403,
+                                                                  errors=["account disabled: maple"])],
+                                             [echo_prompt, result()]])
     r = await runner.run(spec(tmp_path))
     assert (r.outcome, r.forks) == ("done", 1)
     second = clients[1].options
     assert second.resume == "00000000-0000-4000-8000-000000000001" and second.fork_session is True
-    assert second.session_id == "00000000-0000-4000-8000-000000000002"
+    assert second.session_id == "00000000-0000-4000-8000-000000000003"  # 002 was the first attempt's prompt
+    assert clients[1].prompt["message"]["content"] == "build it"  # a fork sends the prompt again, as its own
+    assert clients[1].prompt["uuid"] != clients[0].prompt["uuid"]
 
 
 async def test_fork_on_429_only_when_account_rejected(tmp_path):
     err = [result("error_during_execution", api_error_status=429)]
-    runner, clients = make_runner(tmp_path, [[assistant, *err], [result()]], proxy=FakeProxy(status="rejected"))
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, *err], [echo_prompt, result()]],
+                                  proxy=FakeProxy(status="rejected"))
     assert (await runner.run(spec(tmp_path))).forks == 1
-    runner2, clients2 = make_runner(tmp_path, [[assistant, *err]], proxy=FakeProxy(status="allowed"))
+    runner2, clients2 = make_runner(tmp_path, [[echo_prompt, assistant, *err]], proxy=FakeProxy(status="allowed"))
     r2 = await runner2.run(spec(tmp_path))
     assert (r2.outcome, r2.forks, len(clients2)) == ("error", 0, 1)
     assert "429" in r2.error
 
 
 async def test_fork_cap_two(tmp_path):
-    bad = [result("error_during_execution", api_error_status=503)]
+    bad = [echo_prompt, result("error_during_execution", api_error_status=503)]
     runner, clients = make_runner(tmp_path, [bad, bad, bad])
     r = await runner.run(spec(tmp_path))
     assert (r.outcome, r.forks, len(clients)) == ("error", 2, 3)
 
 
 async def test_watchdog_interrupts_on_rejected_account(tmp_path):
-    runner, clients = make_runner(tmp_path, [[assistant, HANG], [result()]], proxy=FakeProxy(status="rejected"),
-                                  watchdog_s=0.01)
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, HANG], [echo_prompt, result()]],
+                                  proxy=FakeProxy(status="rejected"), watchdog_s=0.01)
     r = await runner.run(spec(tmp_path))
     assert clients[0].interrupted is True
     assert (r.outcome, r.forks) == ("done", 1)
@@ -253,13 +261,13 @@ async def test_external_interrupt(tmp_path):
 
 
 async def test_mcp_servers_the_agent_adds_itself_are_loaded(tmp_path):
-    runner, clients = make_runner(tmp_path, [[result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
     await runner.run(spec(tmp_path))
     assert clients[0].options.strict_mcp_config is False
 
 
 async def test_interrupt_before_run_returns_interrupted(tmp_path):
-    runner, clients = make_runner(tmp_path, [[result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
     await runner.interrupt("R1")
     r = await runner.run(spec(tmp_path))
     assert r.outcome == "interrupted" and clients == []
@@ -278,7 +286,7 @@ def make_plain_runner(tmp_path, attempts):
 
 
 async def test_always_bypasses_permissions(tmp_path):
-    runner, clients = make_plain_runner(tmp_path, [[result()]])
+    runner, clients = make_plain_runner(tmp_path, [[echo_prompt, result()]])
     out = await runner.run(spec(tmp_path))
     o = clients[0].options
     assert o.permission_mode == "bypassPermissions" and o.can_use_tool is None
@@ -292,9 +300,9 @@ async def test_messages_forwarded(tmp_path):
     async def on_message(record):
         seen.append(record["type"])
 
-    runner, _ = make_plain_runner(tmp_path, [[assistant, result()]])
+    runner, _ = make_plain_runner(tmp_path, [[echo_prompt, assistant, result()]])
     await runner.run(spec(tmp_path, on_message=on_message))
-    assert seen == ["AssistantMessage", "ResultMessage"]
+    assert seen == ["UserMessage", "AssistantMessage", "ResultMessage"]
 
 
 async def test_options_ask_the_cli_to_echo_messages(tmp_path):
@@ -303,7 +311,7 @@ async def test_options_ask_the_cli_to_echo_messages(tmp_path):
 
 
 async def test_a_message_sent_mid_turn_reaches_the_session_and_is_read(tmp_path):
-    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, replay, result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, replay, result()]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     assert runner.session_of("R1") == "00000000-0000-4000-8000-000000000001"
@@ -317,7 +325,8 @@ async def test_a_message_sent_mid_turn_reaches_the_session_and_is_read(tmp_path)
 
 
 async def test_the_turn_keeps_reading_until_every_sent_message_is_read(tmp_path):
-    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, result(num_turns=1), replay, result(num_turns=7)]])
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, result(num_turns=1), replay,
+                                        result(num_turns=7)]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     await runner.send("R1", "W-2", "also say hi")
@@ -332,7 +341,7 @@ async def test_two_messages_are_both_read_in_order(tmp_path):
     def replay_second(c):
         return replay(c, 1)
 
-    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, WAIT_SENT, replay_first, replay_second,
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, WAIT_SENT, replay_first, replay_second,
                                               result()]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
@@ -346,7 +355,7 @@ async def test_two_messages_are_both_read_in_order(tmp_path):
 
 
 async def test_read_of_reports_what_was_read_so_far_without_draining(tmp_path):
-    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, replay, HANG]])
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, replay, HANG]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     await runner.send("R1", "W-2", "how's it going?")
@@ -361,8 +370,8 @@ async def test_a_fork_does_not_report_an_unread_message(tmp_path):
     it (its echo, then a clean result) to prove that tail is never consumed by this attempt — it would read on,
     marking the message read and erasing the fork, if the forking status didn't end the attempt on its own."""
     forbidden = result("error_during_execution", api_error_status=403, errors=["account disabled: maple"])
-    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, forbidden, replay, result()],
-                                             [assistant, result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, forbidden, replay, result()],
+                                             [echo_prompt, assistant, result()]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     assert await runner.send("R1", "W-2", "how's it going?")
@@ -373,8 +382,8 @@ async def test_a_fork_does_not_report_an_unread_message(tmp_path):
 
 async def test_a_fork_adds_its_reads_to_the_run(tmp_path):
     forbidden = result("error_during_execution", api_error_status=403, errors=["account disabled: maple"])
-    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, replay, forbidden],
-                                             [assistant, WAIT_SENT, replay, result()]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, replay, forbidden],
+                                             [echo_prompt, assistant, WAIT_SENT, replay, result()]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     await runner.send("R1", "W-2", "first")
@@ -386,7 +395,7 @@ async def test_a_fork_adds_its_reads_to_the_run(tmp_path):
 
 
 async def test_a_cancelled_turn_stops_at_its_result_and_leaves_a_sent_message_unread(tmp_path):
-    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, WAIT_STOP, result("error_during_execution"),
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, WAIT_STOP, result("error_during_execution"),
                                         replay, result()]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
@@ -398,7 +407,7 @@ async def test_a_cancelled_turn_stops_at_its_result_and_leaves_a_sent_message_un
 
 
 async def test_a_message_that_cannot_be_written_is_not_waited_for(tmp_path):
-    runner, clients = make_runner(tmp_path, [[assistant, WAIT_SENT, result(), HANG]])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, result(), HANG]])
     task = asyncio.create_task(runner.run(spec(tmp_path, timeout_s=2)))
     await wait_until(lambda: runner.accepting("R1"))
 
@@ -413,8 +422,9 @@ async def test_a_message_that_cannot_be_written_is_not_waited_for(tmp_path):
 
 
 async def test_a_two_result_turn_keeps_both_answers_sums_turns_and_tokens_and_takes_the_last_cost(tmp_path):
-    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, result(num_turns=2, cost=0.25, text="The PR is up."),
-                                        replay, result(num_turns=1, cost=0.5, text="Told Sam it's nearly done.")]])
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT,
+                                        result(num_turns=2, cost=0.25, text="The PR is up."), replay,
+                                        result(num_turns=1, cost=0.5, text="Told Sam it's nearly done.")]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     await runner.send("R1", "W-2", "how's it going?")
@@ -427,10 +437,29 @@ async def test_a_two_result_turn_keeps_both_answers_sums_turns_and_tokens_and_ta
 
 
 async def test_a_two_result_turn_skips_an_empty_answer_and_takes_its_outcome_from_the_last_result(tmp_path):
-    runner, _ = make_runner(tmp_path, [[assistant, WAIT_SENT, result(text=""), replay,
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, result(text=""), replay,
                                         result("error_max_turns", text="Ran out of turns.")]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     await runner.send("R1", "W-2", "how's it going?")
     out = await task
     assert (out.summary, out.outcome) == ("Ran out of turns.", "max_turns")
+
+
+async def test_a_result_before_the_prompt_is_read_does_not_end_the_turn(tmp_path):
+    """A resumed session whose background task finished between turns reports that first, with an empty result of
+    its own, and only then reads this turn's prompt: the turn ends at the prompt's answer, and only that counts."""
+    runner, clients = make_runner(tmp_path, [[result(num_turns=0, text=""), echo_prompt, assistant,
+                                              result(num_turns=3)]])
+    out = await runner.run(spec(tmp_path, resume_session_id="11111111-1111-4111-8111-111111111111"))
+    assert (out.outcome, out.summary, out.turns, out.input_tokens) == ("done", "final text", 3, 100)
+    assert clients[0].prompt == {"type": "user", "uuid": "00000000-0000-4000-8000-000000000001",
+                                 "message": {"role": "user", "content": "build it"}, "parent_tool_use_id": None}
+    assert out.read == []  # the prompt is the turn's own, not a work item it read
+
+
+async def test_a_forking_result_before_the_prompt_is_read_still_forks(tmp_path):
+    forbidden = result("error_during_execution", api_error_status=403, errors=["account disabled: maple"])
+    runner, _ = make_runner(tmp_path, [[forbidden, echo_prompt, result()], [echo_prompt, result()]])
+    out = await runner.run(spec(tmp_path))
+    assert (out.outcome, out.forks, out.read) == ("done", 1, [])

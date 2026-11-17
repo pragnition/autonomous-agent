@@ -81,6 +81,9 @@ lost (its lease reaped as dead), so a message is never delivered into a turn tha
 reading. A `SessionRevoked` reply (the token was already revoked) is treated as `{"cancel": true}`; any other
 error just skips that beat. A `cancel: true` reply interrupts the session and ends the turn. Each delivered
 message is written into the live session with `claude.send(run_id, item_id, origin + MIDTURN_NOTE + text)`.
+A turn ends at a result only after the CLI has echoed the turn's own prompt and every message sent into it; a
+result that comes before the prompt's echo (a background task from an earlier turn finishing) neither ends the
+turn nor counts toward its answer.
 
 This is the delivered → read → done lifecycle: a message handed to a running turn is `delivered`; once the CLI
 echoes it back, the runner's next heartbeat (or its final result) lists it under `read` and the control plane
