@@ -15,7 +15,13 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 4. **Plan.** Read the repo's CLAUDE.md, its roadmap and its existing plans first, so your milestones fit what's already there. Then use superpowers:writing-plans:
    - Split the work into milestones. Each one is something a person can run and see.
    - Give each milestone its own plan, in the folder where the repo keeps its plans (`docs/plans/` if it has none).
-   - For a new product, the first milestone scaffolds it and sets up its look (frontend-design), design doc, CLAUDE.md and CI, as your prompt describes. Point every later plan's UI tasks at the design doc and tokens, so each fresh subagent builds to the same design.
+   - For a new product (a new repo), the first milestone sets the standard every later screen and PR holds to:
+     - Scaffold it from the stack's official starter without prompts (`create-next-app --yes`, or FastAPI's full-stack template for a Python backend), and delete the template's workflows that need secrets or deploy targets you don't have.
+     - Set its look with frontend-design and commit it: design tokens (colour, type, spacing, radius) in code, the reasoning in a design doc, and a CLAUDE.md that points to both and lists the commands. In a React app, build dialogs, menus, comboboxes and tabs on unstyled accessible primitives (React Aria Components or Radix Primitives) styled with those tokens, not by hand.
+     - CI runs the type check, lint, unit and end-to-end tests, @axe-core/playwright on the main screens (WCAG 2.2 AA) and Playwright screenshot comparisons. CI never calls a real model or outside service; stub them. Screenshot tests use fixed time and data, no animations and bundled fonts, and run in Playwright's official Docker image locally and in CI, so the baselines match.
+     - Turn on CodeQL default setup and make all of these required checks on main where the repo's GitHub plan allows; where it doesn't, or your `gh` login can't, say so once and carry on.
+   - In a repo that already exists, build to its design, CI and conventions: new UI reuses its components and tokens, and you don't add a second design system or change its CI or settings unless asked.
+   - Point every UI task in the plans at the design doc and tokens (or the existing components), so each fresh subagent builds to the same design.
    - Settle the questions the skills would ask you yourself, and post what you assumed in the thread.
 5. **Register it.** Call `start_project` with a short name and the repo. Every session, in any conversation, then sees the project in its prompt and can pass you changes.
 6. **Memory note.** Save a memory file `project-<name>.md` with:
@@ -35,9 +41,9 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 ## Each milestone
 
 1. Branch from main, named the way the repo names its branches.
-2. Run its plan with superpowers:subagent-driven-development: a fresh implementer subagent and a reviewer for each task, with the ledger in the repo's `.superpowers/sdd/`. Push the branch after every task, so the hourly run and anyone else can see it.
-3. Test it end to end in a real browser (playwright-cli) as your prompt describes, and run the full suite.
-4. Get the fresh review your prompt describes (superpowers:requesting-code-review, the pr-review-toolkit agents, and the screenshot review for UI), fix what's real, then open the PR. Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
+2. Run its plan with superpowers:subagent-driven-development: a fresh implementer subagent and a reviewer for each task, with the ledger in the repo's `.superpowers/sdd/`. Push the branch after every task, so the hourly run and anyone else can see it. Its final whole-branch review is this milestone's superpowers:requesting-code-review.
+3. Test it end to end in a real browser, in a `playwright-cli` session named after the branch (`-s=<branch>`): the whole path, including an empty state, an error and a long value, at desktop and phone widths, with the console checked. Read every screenshot. Run the full suite.
+4. Review the whole branch with fresh eyes: the final review from step 2, the pr-review-toolkit agents the diff calls for when it changes logic, and for UI a fresh subagent comparing the screenshots with the design doc (or the product's existing design) and web-design-guidelines. Fix what's real, then open the PR. Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
 5. Post in the thread what landed, with the PR link and the screenshots (`post_files`).
 
 ## When someone asks how it's going

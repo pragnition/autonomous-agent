@@ -22,8 +22,8 @@ know: the agent's environment, core's features, and the few lines that wire the 
 
 - **G1** The agent's Claude home holds a vetted toolkit covering workflow, look and feel, UX rules, current library
   docs and independent review, and every piece of it is safe inside the agent's runner.
-- **G2** The core plugin's six homegrown process skills are gone, and nothing they did that the agent still needs is
-  lost.
+- **G2** The core plugin's homegrown build-process skills are gone, and nothing they did that the agent still needs
+  is lost.
 - **G3** A new product gets a deliberate, written design system and deterministic quality checks from its first
   milestone.
 - **G4** In an existing product the agent builds to the product's own design and conventions and changes nothing it
@@ -53,9 +53,10 @@ know: the agent's environment, core's features, and the few lines that wire the 
 
 | Where | Skills | This change |
 |---|---|---|
-| Core plugin (`src/agent/plugins/core/skills/`) | `build-feature`, `review-before-pr`, `find-features`, `debugging`, `pr-description`, `browser-testing` | Deleted; what the agent still needs from them moves into the prompt (below) |
+| Core plugin (`src/agent/plugins/core/skills/`) | `build-feature`, `review-before-pr`, `debugging`, `pr-description`, `browser-testing` | Deleted; what the agent still needs from them moves into the prompt (below) |
+| | `find-features` | Kept: the agent's own scouting workflow (Linear dedup, evidence, remembered rejections), with no standard equivalent |
 | | `long-project`, `schedules`, `task-history` (core's features), `playwright-cli` (vendored from Microsoft) | Kept; `long-project` wires in the toolkit |
-| Project packs (`examples/pack-templates/`, deployed under `data/config/packs/`) | `chilliclaw-local`, `chilliclaw-debugging`, `azure-debugging` | Kept |
+| Project packs (`examples/pack-templates/`, deployed under `data/config/packs/`) | `chilliclaw-local`, `chilliclaw-debugging`, `azure-debugging` | Kept; references to deleted skills and an undefined `$S` fixed |
 | The agent's Claude home (`/var/agent/claude/skills`) | skills the agent wrote itself | Untouched |
 
 ## The toolkit
@@ -111,36 +112,48 @@ Four layers. Each catches what the one before it lets through.
 3. **Checks that can't be talked around.** A new product's CI runs the type check, lint, unit and end-to-end tests,
    `@axe-core/playwright` (WCAG 2.2 AA) on its main screens, and Playwright screenshot comparisons, with CodeQL, as
    required checks before merge. Screenshot comparisons also stop a later change from silently altering screens it
-   wasn't meant to touch. Baselines are taken in Playwright's official Docker image so they match CI.
-4. **Fresh eyes.** An agent grading its own work skews positive. Before every PR: superpowers' `requesting-code-review`
-   (a reviewer that sees only the request and the diff, and checks all of it was done and nothing more), the
-   pr-review-toolkit agents the diff calls for, and, for a UI change, a fresh subagent comparing the screenshots with
-   the product's design and web-design-guidelines.
+   wasn't meant to touch. To keep CI green for the right reasons: scaffolding runs without prompts, template workflows
+   that need secrets or deploy targets are removed, CI stubs models and outside services, and screenshot tests use
+   fixed time and data, no animations and bundled fonts, in Playwright's official Docker image locally and in CI.
+   Interactive widgets are built on unstyled accessible primitives (React Aria Components or Radix Primitives), since
+   axe can't catch hand-rolled keyboard and focus bugs.
+4. **Fresh eyes.** An agent grading its own work skews positive. Before every PR, on the whole branch: superpowers'
+   `requesting-code-review` (a reviewer that sees only the request and the diff, and checks all of it was done and
+   nothing more; in a subagent-driven-development run its final whole-branch review is this review), the
+   pr-review-toolkit agents the diff calls for when it changes logic, and, for a UI change, a fresh subagent comparing
+   the screenshots with the product's design and web-design-guidelines.
+
+**Process scales with the work.** A spec, a new product or anything longer than a few hours runs through
+`long-project` (superpowers' design, plans and subagent-driven-development). Smaller work gets a short plan in the
+agent's notes, outside the repo, and test-first work it does itself, so a small fix doesn't pay for a design doc, a
+plan file and a dozen subagents.
 
 **On an existing product** the same layers apply with the product's own design and conventions as the standard:
 frontend-design is not used unless someone asks for a redesign, web-design-guidelines applies to the screens the
-agent builds or changes, best-practice skills apply to code it writes or touches, and the repo's own CI is used as is.
+agent builds or changes, best-practice skills apply to code it writes or touches, and the repo's CI, settings and
+branch protection are used as they are and changed only when someone asks. A "new product" always means a new repo.
 
 ## Prompt changes (`src/agent/defaults/system.md`)
 
-- **Forks.** After cloning a fork, `gh repo set-default` it: `gh repo clone` makes the parent the default target, so
-  `gh pr create` would open the PR there. The request names the repo; this keeps PRs in it.
-- **Planning files.** Superpowers' specs and plans for a single change stay in the conversation folder, out of the
-  repo, unless the repo keeps such docs. (`long-project` keeps its plans in the repo on purpose.)
-- **New product.** Official template; frontend-design look committed as tokens, design doc and `CLAUDE.md`; the CI
-  above; CodeQL and required checks where the repo's GitHub plan allows, otherwise said once and carried on.
-- **Existing product.** Its design is the design system; frontend-design only for a new product or a requested
-  redesign.
-- **Review.** The fresh review above before every PR, and merging only when it found nothing blocking.
-- **Browser testing.** What the deleted skills held that the agent still needs: one named `playwright-cli` session
-  per task; the whole path with an empty state, an error and a long value, at desktop and phone widths, console
-  checked; a before and an after for a change to an existing screen; screenshots read before posting with
-  `post_files` and attached to the PR (the playwright-cli skill shows how); an end-to-end test for the main path in
-  the project's own layout; stop on `cost_cap_reached`; bring down what you started.
-- **PR body.** What changed and how it was verified, besides who asked.
+- **Clones.** After cloning a fork, `gh repo set-default` it (`gh repo clone` makes the parent the PR target; the
+  request names the repo). Work on a branch in the clone, not in a git worktree: superpowers' worktree skill would
+  otherwise commit a `.gitignore` change into the repo.
+- **PR body.** Who asked, what changed and why, how it was verified, the calls made and anything left unchanged.
+- **New and existing products.** A new product means a new repo and is a long project. In an existing repo its design
+  is the design system, frontend-design is only for a requested redesign, and its CI, settings and branch protection
+  change only when someone asks.
+- **Review.** The fresh whole-branch review above before every PR; merge only when it found nothing blocking.
+- **Process size.** The long-project line also covers new products; smaller work gets a short plan in the agent's
+  notes, never in the repo, and test-first work done directly.
+- **Browser testing.** A `playwright-cli` session named after the branch; the whole path with an empty state, an
+  error and a long value, at desktop and phone widths, console checked; a before and an after for a change to an
+  existing screen; screenshots read, posted with `post_files` and attached to the PR; an end-to-end test where the
+  project has them, otherwise the steps in the PR; bring down what you started.
+- **Model meter.** Apps call models only through core's meter at `http://172.30.0.10:8087/llm/<upstream>`; stop on
+  `cost_cap_reached`; a missing upstream is an admin's to add. (This was only in the deleted browser-testing skill.)
 
-`long-project`: the first milestone of a new product sets up the design system and CI the prompt describes, every
-plan points UI tasks at the design doc, and each milestone gets the fresh review before its PR.
+`long-project` holds the new-product setup (the four layers above) and spells out each milestone's browser test and
+review itself, so a build already running on an older prompt still gets them.
 
 ## How it gets installed
 
@@ -168,4 +181,11 @@ for it before a session, so a failed install never fails a turn. Plugins or skil
 5. **Pilot C, fork:** ask the agent to clone a fork the team owns and say which repo `gh pr create` would target. Pass
    when it names the fork.
 
-New prompt lines reach new conversations; a resumed conversation keeps the prompt it started with.
+New prompt lines reach new conversations; a resumed conversation keeps the prompt it started with, which is why
+`long-project` repeats its milestone checks.
+
+## Known residual risks
+
+- Plugins from the official directory may update on their own, so a superpowers release can change the agent's
+  workflow without review. Rerunning the script doesn't pin versions.
+- web-design-guidelines fetches its rules from GitHub on every run; the agent applies them as a checklist.

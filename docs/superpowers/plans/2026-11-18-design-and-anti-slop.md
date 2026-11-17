@@ -235,3 +235,21 @@ git commit -m "feat: long-project commits a new product's design system in its f
 ### Task 6: Pilots
 
 Run by the team, or by a V-smoke conversation, after Task 5. Pass criteria are the spec's Verification 3 to 5.
+
+## Revisions after the regression review (Task 4 Step 4)
+
+The fresh review found eleven issues; these changed the tasks above:
+
+- `system.md`: the new-product lines moved into `long-project`; a new product is defined as a new repo, and an
+  existing repo's CI, settings and branch protection change only when asked. The review covers the whole branch.
+  pr-review-toolkit agents run when the diff changes logic. The long-project line also covers new products, and
+  smaller work skips design docs, plan files and subagent runs. No git worktrees. The e2e test is added only where the
+  project has e2e tests. A general model-meter line. The PR body also gives why, the calls made and what was left
+  unchanged.
+- `long-project`: self-contained first-milestone setup (non-interactive scaffolding, template workflows removed,
+  stubs in CI, deterministic screenshots, accessible primitives) and its own browser test and review per milestone;
+  subagent-driven-development's final review counts as the requesting-code-review.
+- `find-features` restored (no standard equivalent), with `browser-testing` replaced by `playwright-cli`.
+- ChilliClaw pack: `chilliclaw-debugging` points at superpowers:systematic-debugging; `chilliclaw-local` names its
+  browser session `-s=<branch>` instead of an undefined `$S`.
+- Task 5 Step 5 also covers `<project>-progress` schedule prompts in `data/schedules/schedules.toml`.

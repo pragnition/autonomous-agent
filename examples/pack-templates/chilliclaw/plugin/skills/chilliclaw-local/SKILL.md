@@ -45,9 +45,9 @@ bash <skill-dir>/setup.sh
 The dev impersonation switch signs the browser in as that user, with no SSO:
 
 ```bash
-playwright-cli -s=$S open http://localhost:5173
-playwright-cli -s=$S localstorage-set chilliclaw-dev-user-id <user-id>
-playwright-cli -s=$S goto http://localhost:5173
+playwright-cli -s=<branch> open http://localhost:5173
+playwright-cli -s=<branch> localstorage-set chilliclaw-dev-user-id <user-id>
+playwright-cli -s=<branch> goto http://localhost:5173
 ```
 
 Check the snapshot shows the app ("Good afternoon, Agent!"), not the landing page's sign-in buttons. A new user first sees the product tour (click Skip) and, after the first message, a Terms of Use dialog (click Close); clear them before you take screenshots. For API calls without a browser, send the header `x-dev-user-id: <user-id>`.

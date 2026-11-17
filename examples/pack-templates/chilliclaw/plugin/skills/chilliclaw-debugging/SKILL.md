@@ -5,7 +5,7 @@ description: Use when investigating or fixing anything in ChilliClaw (cclaw) - a
 
 # Debugging ChilliClaw
 
-Start from the general debugging skill; this one says where ChilliClaw keeps its signals.
+Start from superpowers:systematic-debugging; this one says where ChilliClaw keeps its signals.
 
 **The code.** A Bun and Turbo monorepo. `packages/gateway` is the server and API (`src/server.ts`). `packages/forge` is the web UI (React and Vite). `packages/agent` is the model loop. `packages/core` holds the config schema (`src/config.ts`). `packages/data` holds the database layer and SQL migrations (`migrations/`). Deployment config is in `deployments/<name>/config/*.toml`; dev runs the `ncs-dev-scaled` deployment. Read the repo's CLAUDE.md and AGENTS.md first.
 

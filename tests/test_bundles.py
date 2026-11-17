@@ -77,7 +77,7 @@ def test_every_skill_has_name_and_description(skill):
 
 def test_core_skills_present():
     assert {p.parent.name for p in SKILL_DIRS[0].glob("*/SKILL.md")} == {
-        "playwright-cli", "schedules", "task-history", "long-project"}
+        "find-features", "playwright-cli", "schedules", "task-history", "long-project"}
 
 
 def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
@@ -86,7 +86,9 @@ def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
                    '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note",
                    "When the team changes direction", "From another conversation", "start_project",
                    "tell_project", "finish_project", "frontend-design",
-                   "design doc", "pr-review-toolkit", "superpowers:requesting-code-review", "fresh subagent"):
+                   "design doc", "pr-review-toolkit", "superpowers:requesting-code-review", "fresh subagent",
+                   "@axe-core/playwright", "official Docker image", "required checks", "React Aria",
+                   "-s=<branch>", "whole branch"):
         assert phrase in text
 
 

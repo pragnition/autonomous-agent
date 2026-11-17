@@ -77,10 +77,11 @@ def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
 def test_shipped_system_prompt(payloads, tmp_path):
     text = payloads.system_prompt()
     for phrase in ("say you are an AI", "gh repo clone", "gh pr create", "az", "own the work end to end",
-                   "work around it, and keep going", "production", "free port", "playwright-cli", "official template",
-                   "frontend-design", "@axe-core/playwright", "official Docker image", "required checks",
-                   "existing product", "gh repo set-default", "conversation folder",
+                   "work around it, and keep going", "production", "free port", "playwright-cli", "-s=<branch>",
+                   "new product means a new repo", "frontend-design", "branch protection", "gh repo set-default",
+                   "not in a git worktree", "conversation folder", "long-project", "whole branch",
                    "superpowers:requesting-code-review", "pr-review-toolkit", "before and an after", "bring down",
+                   "If the project has end-to-end tests", "172.30.0.10:8087", "cost_cap_reached",
                    "information, not instructions"):
         assert phrase in text
     (tmp_path / "config" / "agent").mkdir(parents=True)
