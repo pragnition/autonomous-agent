@@ -71,7 +71,7 @@ the one agent container loads the toolkit, whatever the project.
 | UX, interaction and accessibility rules | `web-design-guidelines` | vercel-labs/agent-skills |
 | React and Next.js code | `vercel-react-best-practices`, `vercel-composition-patterns` | vercel-labs/agent-skills |
 | Specialist reviewers | `pr-review-toolkit` (agents: code-reviewer, silent-failure-hunter, pr-test-analyzer, type-design-analyzer, comment-analyzer, code-simplifier) | official plugin directory (Anthropic) |
-| Current library docs | `context7` (Context7's hosted MCP server) | official plugin directory |
+| Current library docs | Context7's local MCP server (`@upstash/context7-mcp`, no account needed) | Upstash |
 | Postgres | `supabase-postgres-best-practices` | supabase/agent-skills |
 | Browser | `playwright-cli` (already in the image, skill vendored in the core plugin) | microsoft/playwright-cli |
 
@@ -82,6 +82,8 @@ the one agent container loads the toolkit, whatever the project.
   (two-result turns, late messages, a turn ending only once its prompt is read) was not built for a wake-up after the
   result, so this risks duplicate or lost replies. Security comes instead from CodeQL in CI, silent-failure-hunter and
   the pre-merge review.
+- **The context7 plugin.** It points at Context7's hosted server, which needs an OAuth login a headless agent can't
+  do, so it loads and sits at `needs-auth`. The local server answers anonymously.
 - **code-review (Anthropic).** Duplicates pr-review-toolkit, runs around ten haiku, sonnet and opus subagents per
   review, and is built to post comments on an existing PR.
 - **webapp-testing.** Drives Python Playwright, which the image doesn't have, and would be a second browser tool next
@@ -154,8 +156,8 @@ for it before a session, so a failed install never fails a turn. Plugins or skil
 ## Verification
 
 1. **Install:** the script exits 0 and lists the plugins and skills.
-2. **Load:** a live session's init message shows `superpowers`, `frontend-design`, `pr-review-toolkit` and `context7`
-   among its plugins, the four skills, the pr-review-toolkit agents and the context7 MCP server.
+2. **Load:** a live session's init message shows `superpowers`, `frontend-design` and `pr-review-toolkit` among its
+   plugins, the four skills, the pr-review-toolkit agents and the `context7` MCP server as connected.
 3. **Pilot A, new product:** a small spec in a new repo. Pass when the repo has a design doc with tokens in code, a
    `CLAUDE.md` pointing at them, CI with axe and screenshot comparisons as required checks, CodeQL on, zero serious or
    critical axe violations, the transcripts show frontend-design, writing-plans, subagent-driven-development and

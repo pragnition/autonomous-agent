@@ -24,7 +24,11 @@ claude plugin marketplace list | grep -q -e anthropic-plugin-directory -e claude
 plugin superpowers        # design, plans, test-first, subagent execution with review, the pre-merge review
 plugin frontend-design    # a new product's look, chosen for it rather than the generated default
 plugin pr-review-toolkit  # specialist reviewer agents
-plugin context7           # current library docs
+
+# Current library docs: Context7's local MCP server, which works without an account. The context7 plugin's hosted
+# server needs an OAuth login, which a headless agent can't do.
+claude mcp get context7 >/dev/null 2>&1 \
+  || claude mcp add -s user context7 -- npx -y @upstash/context7-mcp@4.7.3 || failed+=("mcp context7")
 
 skill vercel-labs/agent-skills web-design-guidelines
 skill vercel-labs/agent-skills vercel-react-best-practices
@@ -32,6 +36,7 @@ skill vercel-labs/agent-skills vercel-composition-patterns
 skill supabase/agent-skills supabase-postgres-best-practices
 
 claude plugin list
+claude mcp list
 ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills"
 if [ ${#failed[@]} -gt 0 ]; then
   printf 'FAILED: %s\n' "${failed[@]}" >&2

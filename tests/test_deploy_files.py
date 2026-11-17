@@ -187,7 +187,9 @@ def test_agent_toolkit_installs_exactly_the_vetted_set():
     text = script.read_text()
     plugins = set(re.findall(r"^plugin (\S+)", text, re.M))
     skills = set(re.findall(r"^skill \S+ (\S+)", text, re.M))
-    assert plugins == {"superpowers", "frontend-design", "pr-review-toolkit", "context7"}
+    assert plugins == {"superpowers", "frontend-design", "pr-review-toolkit"}
     assert skills == {"web-design-guidelines", "vercel-react-best-practices", "vercel-composition-patterns",
                       "supabase-postgres-best-practices"}
+    # Context7 runs as its local MCP server: the plugin's hosted one needs a login a headless agent can't do
+    assert "claude mcp add -s user context7 -- npx -y @upstash/context7-mcp@" in text
     assert os.access(script, os.X_OK)

@@ -15,10 +15,10 @@ by `deploy/agent-toolkit.sh`; the wiring is a handful of lines in `src/agent/def
 
 ## Global Constraints
 
-- Toolkit, exactly: plugins `superpowers`, `frontend-design`, `pr-review-toolkit`, `context7`; skills
-  `web-design-guidelines`, `vercel-react-best-practices`, `vercel-composition-patterns`,
-  `supabase-postgres-best-practices`.
-- Never installed: `security-guidance`, `code-review-anthropics`, `webapp-testing`, shadcn.
+- Toolkit, exactly: plugins `superpowers`, `frontend-design`, `pr-review-toolkit`; skills `web-design-guidelines`,
+  `vercel-react-best-practices`, `vercel-composition-patterns`, `supabase-postgres-best-practices`; the user-scope MCP
+  server `context7` (`npx -y @upstash/context7-mcp@4.7.3`).
+- Never installed: `security-guidance`, `code-review-anthropics`, `webapp-testing`, the `context7` plugin, shadcn.
 - Prompt voice: second person, plain words, short sentences, no headers; match the lines around each edit.
 - No new core tools, no gates, no approval step.
 - Commits: conventional prefix, no co-author or tool attribution. The repo is public: no secrets in any file.
@@ -58,18 +58,22 @@ def test_agent_toolkit_installs_exactly_the_vetted_set():
     text = script.read_text()
     plugins = set(re.findall(r"^plugin (\S+)", text, re.M))
     skills = set(re.findall(r"^skill \S+ (\S+)", text, re.M))
-    assert plugins == {"superpowers", "frontend-design", "pr-review-toolkit", "context7"}
+    assert plugins == {"superpowers", "frontend-design", "pr-review-toolkit"}
     assert skills == {"web-design-guidelines", "vercel-react-best-practices", "vercel-composition-patterns",
                       "supabase-postgres-best-practices"}
+    assert "claude mcp add -s user context7 -- npx -y @upstash/context7-mcp@" in text
     assert os.access(script, os.X_OK)
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
 
 Run: `just test tests/test_deploy_files.py -k toolkit`
-Expected: FAIL, the plugin set still has `security-guidance` and `code-review-anthropics`.
+Expected: FAIL, the plugin set still has `security-guidance`, `code-review-anthropics` and `context7`.
 
-- [ ] **Step 3: Remove the `security-guidance`, `code-review-anthropics` and `webapp-testing` lines from the script**
+- [ ] **Step 3: Remove the `security-guidance`, `code-review-anthropics`, `webapp-testing` and `context7` plugin lines; add Context7's local MCP server**
+
+Add it with `claude mcp add -s user context7 -- npx -y @upstash/context7-mcp@4.7.3`, skipped when `claude mcp get
+context7` already finds it, and list `claude mcp list` at the end.
 
 Add one comment line above the plugin block naming what's left out and why, in a few words each (see the spec's
 "Left out").
@@ -78,7 +82,7 @@ Add one comment line above the plugin block naming what's left out and why, in a
 
 Run: `just test tests/test_deploy_files.py -k toolkit` → PASS.
 Run: `HOME=$T CLAUDE_CONFIG_DIR=$T/cfg bash deploy/agent-toolkit.sh` with `T` an empty scratch directory → exit 0,
-four plugins listed, four skills listed. Run it a second time → exit 0.
+three plugins, four skills and `context7` connected. Run it a second time → exit 0.
 
 - [ ] **Step 5: Commit**
 
@@ -209,8 +213,8 @@ git commit -m "feat: long-project commits a new product's design system in its f
 - [ ] **Step 2: Hooks of the kept plugins** — in the throwaway home from Task 1, list every `hooks.json` under
   `cfg/plugins/cache`. Expected: only superpowers', with a SessionStart hook and nothing on Stop.
 - [ ] **Step 3: Load check** — a headless `claude -p` with `--setting-sources user --output-format stream-json
-  --verbose` on the throwaway home. Expected in the init message: the four plugins, the four skills, the six
-  `pr-review-toolkit:*` agents and the `plugin:context7:context7` MCP server.
+  --verbose` on the throwaway home. Expected in the init message: the three plugins, the four skills, the six
+  `pr-review-toolkit:*` agents and the `context7` MCP server connected.
 - [ ] **Step 4: Fresh regression review** — a subagent with no context of this work gets the spec, this plan,
   `git diff 327f5d2..HEAD` and read access to the repo, and reports anything that would make the agent worse than
   before `f4a212b`: lost behaviour, contradictions with other prompt lines or skills, references to deleted skills,
