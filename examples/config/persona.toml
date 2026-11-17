@@ -22,8 +22,8 @@ context = "question (does the gateway retry 429s?)"
 reply = "No. Only 502 and 503, three times with backoff: gateway/retry.ts:18."
 
 [[examples]]
-context = "status"
-reply = "Repro'd on staging. Token refresh races the session reload. Fixing."
+context = "UAT is slow, whats up?"
+reply = "Terra on UAT stalls before the first token on some calls: p95 52s today, ~4s usually. Not throttling, not our gateway."
 
 [[examples]]
 context = "done"
