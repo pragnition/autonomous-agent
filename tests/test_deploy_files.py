@@ -1,3 +1,4 @@
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -179,3 +180,14 @@ def test_core_publishes_public_port(compose):
 def test_task_files_are_shared_read_only_with_the_agent(compose):
     assert "${AGENT_DATA:-./data}/tasks:/data/tasks" in volumes(compose, "core")
     assert "${AGENT_DATA:-./data}/tasks:/data/tasks:ro" in volumes(compose, "agent")
+
+
+def test_agent_toolkit_installs_exactly_the_vetted_set():
+    script = ROOT / "deploy" / "agent-toolkit.sh"
+    text = script.read_text()
+    plugins = set(re.findall(r"^plugin (\S+)", text, re.M))
+    skills = set(re.findall(r"^skill \S+ (\S+)", text, re.M))
+    assert plugins == {"superpowers", "frontend-design", "pr-review-toolkit", "context7"}
+    assert skills == {"web-design-guidelines", "vercel-react-best-practices", "vercel-composition-patterns",
+                      "supabase-postgres-best-practices"}
+    assert os.access(script, os.X_OK)

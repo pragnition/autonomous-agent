@@ -18,17 +18,17 @@ skill() {  # <repo> <skill>
 claude plugin marketplace list | grep -q -e anthropic-plugin-directory -e claude-plugins-official \
   || claude plugin marketplace add anthropics/claude-plugins-official
 
-plugin superpowers        # design, plan, test-first, subagent execution with review
-plugin frontend-design    # a deliberate look, not the generated one
-plugin pr-review-toolkit  # specialist reviewers before each PR
-plugin code-review-anthropics  # the directory lists Anthropic's code-review under this name
-plugin security-guidance
+# Left out: security-guidance (its hooks install the Agent SDK at every session start and wake a session after it has
+# ended, which the runner's turn handling doesn't expect), code-review (duplicates pr-review-toolkit) and
+# webapp-testing (Python Playwright, a second browser tool next to playwright-cli).
+plugin superpowers        # design, plans, test-first, subagent execution with review, the pre-merge review
+plugin frontend-design    # a new product's look, chosen for it rather than the generated default
+plugin pr-review-toolkit  # specialist reviewer agents
 plugin context7           # current library docs
 
 skill vercel-labs/agent-skills web-design-guidelines
 skill vercel-labs/agent-skills vercel-react-best-practices
 skill vercel-labs/agent-skills vercel-composition-patterns
-skill anthropics/skills webapp-testing
 skill supabase/agent-skills supabase-postgres-best-practices
 
 claude plugin list
