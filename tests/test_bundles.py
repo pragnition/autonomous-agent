@@ -86,7 +86,7 @@ def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
                    '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note",
                    "When the team changes direction", "From another conversation", "start_project",
                    "tell_project", "finish_project", "frontend-design",
-                   "web-design-guidelines", "pr-review-toolkit"):
+                   "design doc", "pr-review-toolkit", "superpowers:requesting-code-review", "fresh subagent"):
         assert phrase in text
 
 

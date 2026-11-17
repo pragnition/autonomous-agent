@@ -15,7 +15,7 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 4. **Plan.** Read the repo's CLAUDE.md, its roadmap and its existing plans first, so your milestones fit what's already there. Then use superpowers:writing-plans:
    - Split the work into milestones. Each one is something a person can run and see.
    - Give each milestone its own plan, in the folder where the repo keeps its plans (`docs/plans/` if it has none).
-   - For anything a user sees, set the UX direction with frontend-design before the first screen, and check every screen against web-design-guidelines.
+   - For a new product, the first milestone scaffolds it and sets up its look (frontend-design), design doc, CLAUDE.md and CI, as your prompt describes. Point every later plan's UI tasks at the design doc and tokens, so each fresh subagent builds to the same design.
    - Settle the questions the skills would ask you yourself, and post what you assumed in the thread.
 5. **Register it.** Call `start_project` with a short name and the repo. Every session, in any conversation, then sees the project in its prompt and can pass you changes.
 6. **Memory note.** Save a memory file `project-<name>.md` with:
@@ -36,8 +36,8 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 
 1. Branch from main, named the way the repo names its branches.
 2. Run its plan with superpowers:subagent-driven-development: a fresh implementer subagent and a reviewer for each task, with the ledger in the repo's `.superpowers/sdd/`. Push the branch after every task, so the hourly run and anyone else can see it.
-3. Test it end to end in a real browser (playwright-cli, webapp-testing) and run the full suite.
-4. Review the branch with pr-review-toolkit and fix what's real, then open the PR. Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
+3. Test it end to end in a real browser (playwright-cli) as your prompt describes, and run the full suite.
+4. Get the fresh review your prompt describes (superpowers:requesting-code-review, the pr-review-toolkit agents, and the screenshot review for UI), fix what's real, then open the PR. Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
 5. Post in the thread what landed, with the PR link and the screenshots (`post_files`).
 
 ## When someone asks how it's going
