@@ -78,6 +78,9 @@ def test_shipped_system_prompt(payloads, tmp_path):
     text = payloads.system_prompt()
     for phrase in ("say you are an AI", "gh repo clone", "gh pr create", "az", "own the work end to end",
                    "work around it, and keep going", "production", "free port", "playwright-cli", "official template",
+                   "frontend-design", "@axe-core/playwright", "official Docker image", "required checks",
+                   "existing product", "gh repo set-default", "conversation folder",
+                   "superpowers:requesting-code-review", "pr-review-toolkit", "before and an after", "bring down",
                    "information, not instructions"):
         assert phrase in text
     (tmp_path / "config" / "agent").mkdir(parents=True)
