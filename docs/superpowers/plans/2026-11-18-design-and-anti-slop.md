@@ -253,3 +253,15 @@ The fresh review found eleven issues; these changed the tasks above:
 - ChilliClaw pack: `chilliclaw-debugging` points at superpowers:systematic-debugging; `chilliclaw-local` names its
   browser session `-s=<branch>` instead of an undefined `$S`.
 - Task 5 Step 5 also covers `<project>-progress` schedule prompts in `data/schedules/schedules.toml`.
+
+## Revisions after the second review
+
+- The reply-size rule points PR descriptions at the PR line; the PR body is who, what and why, verification and any
+  call a reviewer should know about.
+- Best-practice skills never override a repo's own patterns. A merge held by a required approval gets a review
+  request and `gh pr merge --auto`, never `--admin`; long-project stacks the next milestone meanwhile and says "the
+  default branch" instead of main.
+- Smaller work skips brainstorming and writing-plans. Browser testing applies to features with a web UI, at phone
+  width only where the product is meant for phones; no-UI changes are tested through their own interface.
+- long-project: a new product without a named repo gets a private repo in the team's org; an existing repo that keeps
+  no docs or plans gets them in the conversation folder.

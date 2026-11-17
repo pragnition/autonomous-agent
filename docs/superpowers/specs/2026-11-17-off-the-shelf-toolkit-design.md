@@ -138,21 +138,28 @@ branch protection are used as they are and changed only when someone asks. A "ne
 - **Clones.** After cloning a fork, `gh repo set-default` it (`gh repo clone` makes the parent the PR target; the
   request names the repo). Work on a branch in the clone, not in a git worktree: superpowers' worktree skill would
   otherwise commit a `.gitignore` change into the repo.
-- **PR body.** Who asked, what changed and why, how it was verified, the calls made and anything left unchanged.
+- **PR body.** Who asked, what changed and why, how it was verified and any call a reviewer should know about, a
+  short line each in the repo's template (the reply-size rule now points PR descriptions at this line).
 - **New and existing products.** A new product means a new repo and is a long project. In an existing repo its design
   is the design system, frontend-design is only for a requested redesign, and its CI, settings and branch protection
   change only when someone asks.
-- **Review.** The fresh whole-branch review above before every PR; merge only when it found nothing blocking.
-- **Process size.** The long-project line also covers new products; smaller work gets a short plan in the agent's
-  notes, never in the repo, and test-first work done directly.
-- **Browser testing.** A `playwright-cli` session named after the branch; the whole path with an empty state, an
-  error and a long value, at desktop and phone widths, console checked; a before and an after for a change to an
+- **Review.** The fresh whole-branch review above before every PR; best-practice skills never override the repo's
+  own patterns. Merge only when it found nothing blocking; a merge held by a required approval gets a review request
+  and auto-merge, never `--admin`.
+- **Process size.** The long-project line also covers new products; smaller work skips brainstorming and
+  writing-plans, keeps a short plan in the agent's notes, never in the repo, and is built test-first directly.
+- **Browser testing.** For features with a web UI: a `playwright-cli` session named after the branch; the whole path
+  with an empty state, an error and a long value, at desktop width and phone width where the product is meant for
+  phones, console checked; a before and an after for a change to an
   existing screen; screenshots read, posted with `post_files` and attached to the PR; an end-to-end test where the
-  project has them, otherwise the steps in the PR; bring down what you started.
+  project has them, otherwise the steps in the PR; bring down what you started. A change with no UI is tested through
+  its own interface.
 - **Model meter.** Apps call models only through core's meter at `http://172.30.0.10:8087/llm/<upstream>`; stop on
   `cost_cap_reached`; a missing upstream is an admin's to add. (This was only in the deleted browser-testing skill.)
 
-`long-project` holds the new-product setup (the four layers above) and spells out each milestone's browser test and
+`long-project` also: a new product with no repo named gets a private repo in the team's org; an existing repo that
+keeps no docs or plans gets the spec and plans in the conversation folder, not committed; milestones stack on the
+previous branch while a PR waits on a required review. It holds the new-product setup (the four layers above) and spells out each milestone's browser test and
 review itself, so a build already running on an older prompt still gets them.
 
 ## How it gets installed
@@ -189,3 +196,5 @@ New prompt lines reach new conversations; a resumed conversation keeps the promp
 - Plugins from the official directory may update on their own, so a superpowers release can change the agent's
   workflow without review. Rerunning the script doesn't pin versions.
 - web-design-guidelines fetches its rules from GitHub on every run; the agent applies them as a checklist.
+- The memory rule "when a message contradicts a saved note, ask which stands" predates this change and can pause a
+  long build on an `ask`; left as designed.

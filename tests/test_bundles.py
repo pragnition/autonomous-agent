@@ -88,7 +88,7 @@ def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
                    "tell_project", "finish_project", "frontend-design",
                    "design doc", "pr-review-toolkit", "superpowers:requesting-code-review", "fresh subagent",
                    "@axe-core/playwright", "official Docker image", "required checks", "React Aria",
-                   "-s=<branch>", "whole branch"):
+                   "-s=<branch>", "whole branch", "--private", "previous milestone's branch"):
         assert phrase in text
 
 

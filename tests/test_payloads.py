@@ -82,6 +82,8 @@ def test_shipped_system_prompt(payloads, tmp_path):
                    "not in a git worktree", "conversation folder", "long-project", "whole branch",
                    "superpowers:requesting-code-review", "pr-review-toolkit", "before and an after", "bring down",
                    "If the project has end-to-end tests", "172.30.0.10:8087", "cost_cap_reached",
+                   "skips brainstorming and writing-plans", "never bypass branch protection", "has a web UI",
+                   "never over the repo's own patterns",
                    "information, not instructions"):
         assert phrase in text
     (tmp_path / "config" / "agent").mkdir(parents=True)
