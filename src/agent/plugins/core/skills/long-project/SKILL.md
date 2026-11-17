@@ -15,6 +15,7 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 4. **Plan.** Read the repo's CLAUDE.md, its roadmap and its existing plans first, so your milestones fit what's already there. Then use superpowers:writing-plans:
    - Split the work into milestones. Each one is something a person can run and see.
    - Give each milestone its own plan, in the folder where the repo keeps its plans (`docs/plans/` if it has none).
+   - For anything a user sees, set the UX direction with frontend-design before the first screen, and check every screen against web-design-guidelines.
    - Settle the questions the skills would ask you yourself, and post what you assumed in the thread.
 5. **Register it.** Call `start_project` with a short name and the repo. Every session, in any conversation, then sees the project in its prompt and can pass you changes.
 6. **Memory note.** Save a memory file `project-<name>.md` with:
@@ -26,7 +27,7 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 7. **Hourly progress.** Add a schedule named `<project>-progress` (schedules skill) with `cron = "0 * * * *"`, using the thread's channel as its channel. Write its prompt for a fresh session:
    - Read the project's memory note.
    - Fetch the repo and check out the newest pushed commit of the milestone in progress (main when none is).
-   - Run the app on a free port and screenshot its main screens (browser-testing).
+   - Run the app on a free port and screenshot its main screens (playwright-cli).
    - Post the screenshots in the project thread with two or three lines: what merged since the last update, what's being built now, and what's next, taken from the ledger and `git log`. A scheduled run has no thread of its own, so upload with Slack's `files.getUploadURLExternal` and `files.completeUploadExternal` using `$SLACK_BOT_TOKEN`, the channel and the thread's `thread_ts`.
    - Skip the post when nothing changed since the last one.
 8. **Kickoff.** Post a short message in the thread: the milestones, and when the first one should land.
@@ -35,8 +36,8 @@ You build the whole thing yourself, over as many hours or days as it takes, with
 
 1. Branch from main, named the way the repo names its branches.
 2. Run its plan with superpowers:subagent-driven-development: a fresh implementer subagent and a reviewer for each task, with the ledger in the repo's `.superpowers/sdd/`. Push the branch after every task, so the hourly run and anyone else can see it.
-3. Test it end to end in a real browser (browser-testing) and run the full suite.
-4. Open the PR (review-before-pr, pr-description). Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
+3. Test it end to end in a real browser (playwright-cli, webapp-testing) and run the full suite.
+4. Review the branch with pr-review-toolkit and fix what's real, then open the PR. Wait for CI with `gh pr checks --watch` and fix what fails. Then merge it with `gh pr merge --squash --delete-branch` (or the repo's own style), and check that main still builds and runs.
 5. Post in the thread what landed, with the PR link and the screenshots (`post_files`).
 
 ## When someone asks how it's going

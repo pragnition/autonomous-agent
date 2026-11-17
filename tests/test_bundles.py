@@ -35,7 +35,7 @@ def test_bundle_has_core_effortless_and_pack_plugins(config_dir):
     _, data = build_bundle(config_dir)
     files = names(data)
     assert "plugins/core/.claude-plugin/plugin.json" in files
-    assert "plugins/core/skills/debugging/SKILL.md" in files
+    assert "plugins/core/skills/long-project/SKILL.md" in files
     assert "plugins/effortless/.claude-plugin/plugin.json" in files
     assert "plugins/effortless/hooks/register.tsx" in files
     assert "plugins/packs/sample/skills/sample-debugging/SKILL.md" in files
@@ -52,7 +52,7 @@ def test_bundle_has_every_pack_plugin(tmp_path):
 
 def test_no_packs_dir_has_core_and_effortless_only(tmp_path):
     files = names(build_bundle(tmp_path)[1])
-    assert "plugins/core/skills/debugging/SKILL.md" in files
+    assert "plugins/core/skills/long-project/SKILL.md" in files
     assert "plugins/effortless/.claude-plugin/plugin.json" in files
     assert not any(f.startswith("plugins/packs") for f in files)
 
@@ -77,8 +77,7 @@ def test_every_skill_has_name_and_description(skill):
 
 def test_core_skills_present():
     assert {p.parent.name for p in SKILL_DIRS[0].glob("*/SKILL.md")} == {
-        "debugging", "build-feature", "browser-testing", "find-features", "playwright-cli", "review-before-pr",
-        "pr-description", "schedules", "task-history", "long-project"}
+        "playwright-cli", "schedules", "task-history", "long-project"}
 
 
 def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
@@ -86,7 +85,8 @@ def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
     for phrase in ("superpowers@anthropic-plugin-directory", "subagent-driven-development", "writing-plans",
                    '"0 * * * *"', "gh pr checks --watch", "gh pr merge", "memory note",
                    "When the team changes direction", "From another conversation", "start_project",
-                   "tell_project", "finish_project"):
+                   "tell_project", "finish_project", "frontend-design",
+                   "web-design-guidelines", "pr-review-toolkit"):
         assert phrase in text
 
 

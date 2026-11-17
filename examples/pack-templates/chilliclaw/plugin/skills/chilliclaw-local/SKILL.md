@@ -1,6 +1,6 @@
 ---
 name: chilliclaw-local
-description: Use when running ChilliClaw locally to build, test, debug or demo a change - before using the browser-testing skill on ChilliClaw, or when its UI, API or model calls need checking end to end.
+description: Use when running ChilliClaw locally to build, test, debug or demo a change - before testing ChilliClaw in a browser, or when its UI, API or model calls need checking end to end.
 ---
 
 # Running ChilliClaw locally
