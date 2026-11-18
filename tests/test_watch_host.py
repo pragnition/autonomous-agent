@@ -46,10 +46,12 @@ def test_core_python_pipes_file_and_raises_on_error(tmp_path):
     expected_text = (Path(host_module.__file__).parent / "state.py").read_text()
     assert calls2[0][1]["input"] == expected_text
 
+    # The return code is in the message too: stderr alone can be empty.
     calls3, run3 = _fake_run([_cp(returncode=1, stderr="boom")])
     host3 = Host(run=run3, live=tmp_path)
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(RuntimeError, match="boom") as excinfo:
         host3.core_python(mod, [])
+    assert "1" in str(excinfo.value)
 
 
 # -- transcripts --
@@ -57,22 +59,45 @@ def test_core_python_pipes_file_and_raises_on_error(tmp_path):
 
 def test_transcripts_skips_missing(tmp_path):
     dest = tmp_path / "out"
-    calls, run = _fake_run([_cp(stdout="line1\n"), _cp(returncode=1, stderr="cat: No such file or directory")])
+    calls, run = _fake_run([_cp(stdout=b"line1\n"),
+                            _cp(returncode=1, stderr=b"cat: No such file or directory")])
     host = Host(run=run, live=tmp_path)
 
     result = host.transcripts(["W-ok", "W-missing"], dest)
 
     assert set(result) == {"W-ok"}
-    assert result["W-ok"].read_text() == "line1\n"
+    assert result["W-ok"].read_bytes() == b"line1\n"
     assert not (dest / "W-missing.jsonl").exists()
     assert calls[0][0] == ["docker", "exec", "agent-runner", "cat", "/var/agent/transcripts/W-ok.jsonl"]
     assert calls[1][0] == ["docker", "exec", "agent-runner", "cat", "/var/agent/transcripts/W-missing.jsonl"]
+    # Captured as bytes, never decoded by `run`'s own kwargs.
+    assert "text" not in calls[0][1]
+
+
+def test_transcripts_raises_when_container_unreachable(tmp_path):
+    calls, run = _fake_run([_cp(returncode=1, stderr=b"Error: No such container: agent-runner")])
+    host = Host(run=run, live=tmp_path)
+
+    with pytest.raises(RuntimeError, match="No such container"):
+        host.transcripts(["W-1"], tmp_path / "out")
+
+
+def test_transcripts_writes_bytes_even_with_a_split_multibyte_char(tmp_path):
+    # A transcript caught mid-write can end on a truncated UTF-8 sequence; writing raw bytes must never decode it.
+    dest = tmp_path / "out"
+    calls, run = _fake_run([_cp(stdout=b"hello \xe2\x98")])  # a truncated 3-byte UTF-8 character
+    host = Host(run=run, live=tmp_path)
+
+    result = host.transcripts(["W-1"], dest)
+
+    assert result["W-1"].read_bytes() == b"hello \xe2\x98"
 
 
 # -- jensen_gh --
 
 
-def test_jensen_gh_token_only_in_env(tmp_path):
+def test_jensen_gh_token_only_in_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "leaked-login-token")
     secrets_dir = tmp_path / "data" / "secrets"
     secrets_dir.mkdir(parents=True)
     (secrets_dir / "agent.env").write_text("GH_TOKEN=tok123\n# a comment\nOTHER=x\n")
@@ -85,3 +110,54 @@ def test_jensen_gh_token_only_in_env(tmp_path):
     assert "tok123" not in args
     assert args == ["gh", "pr", "list"]
     assert kwargs["env"]["GH_TOKEN"] == "tok123"
+    # GITHUB_TOKEN never rides along: gh must not have a second identity to fall back to.
+    assert "GITHUB_TOKEN" not in kwargs["env"]
+
+
+def test_jensen_gh_raises_when_token_missing(tmp_path):
+    secrets_dir = tmp_path / "data" / "secrets"
+    secrets_dir.mkdir(parents=True)
+    (secrets_dir / "agent.env").write_text("OTHER=x\n")  # no GH_TOKEN at all
+
+    calls, run = _fake_run([])
+    host = Host(run=run, live=tmp_path)
+
+    with pytest.raises(RuntimeError, match="GH_TOKEN missing"):
+        host.jensen_gh(["pr", "list"])
+    assert calls == []  # never falls through to running gh as whoever is logged in
+
+
+def test_jensen_gh_raises_when_agent_env_missing(tmp_path):
+    calls, run = _fake_run([])
+    host = Host(run=run, live=tmp_path)
+
+    with pytest.raises(RuntimeError, match="GH_TOKEN missing"):
+        host.jensen_gh(["pr", "list"])
+    assert calls == []
+
+
+# -- secret_values --
+
+
+def test_secret_values_handles_quotes_export_and_inline_comments(tmp_path):
+    secrets_dir = tmp_path / "data" / "secrets"
+    secrets_dir.mkdir(parents=True)
+    (secrets_dir / "core.env").write_text(
+        'export GH_TOKEN="tok with space" # a trailing comment\n'
+        "OTHER='single quoted'\n"
+        "BARE=plain # another comment\n"
+    )
+    host = Host(run=lambda *a, **k: None, live=tmp_path)
+
+    values = host.secret_values()
+
+    assert "tok with space" in values
+    assert "single quoted" in values
+    assert "plain" in values
+    # Never the raw, still-quoted or still-commented line: scrub matches the bare value only.
+    assert not any('"' in v or "'" in v or "#" in v for v in values)
+
+
+def test_secret_values_missing_folder(tmp_path):
+    host = Host(run=lambda *a, **k: None, live=tmp_path)
+    assert host.secret_values() == []

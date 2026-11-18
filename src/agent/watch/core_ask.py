@@ -25,20 +25,31 @@ ORIGIN = "improve-jensen review"
 def enqueue_turn(conn, payloads, conversation_id: str | None, text: str) -> str:
     """Queue `text` as a turn in `conversation_id`, or in a fresh `V-review-<8 hex>` conversation (no channel,
     the way `scripts/smoke.py` creates its own) when `conversation_id` is `None`. Raises `KeyError` for a
-    `conversation_id` that doesn't exist."""
-    if conversation_id is None:
-        conversation_id, now = f"V-review-{uuid.uuid4().hex[:8]}", db.utcnow()
-        conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, is_primary, created_at, "
-                     "last_active_at) VALUES (?, NULL, NULL, NULL, 0, ?, ?)", (conversation_id, now, now))
+    `conversation_id` that doesn't exist.
 
-    convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
-    if convo is None:
-        raise KeyError(conversation_id)
+    The new conversation (when one is created) and the queued item go in one explicit transaction — `conn` is
+    autocommit (`isolation_level=None`, see `agent.db.connect`), so without this, a `payloads.turn` that raises
+    would still leave the just-inserted `V-review-*` conversation committed, with no turn ever queued into it."""
+    conn.execute("BEGIN")
+    try:
+        if conversation_id is None:
+            conversation_id, now = f"V-review-{uuid.uuid4().hex[:8]}", db.utcnow()
+            conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, is_primary, created_at, "
+                         "last_active_at) VALUES (?, NULL, NULL, NULL, 0, ?, ?)", (conversation_id, now, now))
 
-    payload = payloads.turn(convo, text, None, unattended=True)
-    payload["source"] = SOURCE
-    payload["origin"] = ORIGIN
-    return WorkQueue(conn).enqueue(conversation_id, "turn", payload)
+        convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        if convo is None:
+            raise KeyError(conversation_id)
+
+        payload = payloads.turn(convo, text, None, unattended=True)
+        payload["source"] = SOURCE
+        payload["origin"] = ORIGIN
+        item_id = WorkQueue(conn).enqueue(conversation_id, "turn", payload)
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+    return item_id
 
 
 def main(argv: list[str]) -> int:

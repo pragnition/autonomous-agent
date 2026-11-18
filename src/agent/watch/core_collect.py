@@ -85,6 +85,7 @@ def main(argv: list[str]) -> int:
 
     conn = sqlite3.connect(f"file:{_DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")  # core writes this DB concurrently; wait rather than fail on a lock
     print(json.dumps(collect(conn, args.since, args.until)))
     return 0
 

@@ -91,6 +91,18 @@ def test_collect_pool_defaults_to_normal(conn):
     assert core_collect.collect(conn, since, until)["pool"] == "normal"
 
 
+def test_collect_window_is_half_open(conn):
+    """`(since, until]`: the instant equal to `since` is excluded, the instant equal to `until` is included."""
+    since, until = _iso(T0), _iso(T0 + timedelta(hours=1))
+
+    on_since = _insert_item(conn, conversation_id="V-since", status="done", updated_at=since)
+    on_until = _insert_item(conn, conversation_id="V-until", status="done", updated_at=until)
+
+    ids = {item["id"] for item in core_collect.collect(conn, since, until)["items"]}
+    assert on_until in ids
+    assert on_since not in ids
+
+
 # -- core_ask --
 
 
@@ -104,6 +116,9 @@ def test_enqueue_into_existing_and_new_conversation(conn):
     item = WorkQueue(conn).get(item_id)
     assert item.conversation_id == "V-abc"
     assert item.payload == {"text": "hello", "source": "improve-jensen", "origin": "improve-jensen review"}
+    # payloads.turn(convo, text, actor, *, unattended) — queued as an unattended turn, with no actor.
+    _, call_text, call_actor, call_unattended = payloads.calls[-1]
+    assert call_text == "hello" and call_actor is None and call_unattended is True
 
     new_item_id = core_ask.enqueue_turn(conn, payloads, None, "hi")
     new_item = WorkQueue(conn).get(new_item_id)
@@ -113,3 +128,15 @@ def test_enqueue_into_existing_and_new_conversation(conn):
 
     with pytest.raises(KeyError):
         core_ask.enqueue_turn(conn, payloads, "V-missing", "x")
+
+
+def test_enqueue_rolls_back_new_conversation_when_turn_fails(conn):
+    class FailingPayloads:
+        def turn(self, convo, text, actor, *, unattended=False):
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        core_ask.enqueue_turn(conn, FailingPayloads(), None, "hi")
+
+    rows = conn.execute("SELECT id FROM conversations WHERE id LIKE 'V-review-%'").fetchall()
+    assert rows == []  # no orphan conversation left behind by the failed turn
