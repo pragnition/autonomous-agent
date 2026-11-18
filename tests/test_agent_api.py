@@ -214,6 +214,45 @@ async def test_files_upload_and_limit(api, parts):
     assert (await api.post("/agent/files", data=many, headers=bearer(tok))).status == 413
 
 
+async def test_slack_file_serves_only_files_sent_to_the_conversation(conn, queue, parts):
+    fetched = []
+
+    async def slack_file(file_id):
+        fetched.append(file_id)
+        return b"png-bytes"
+
+    api = await _client(conn, queue, parts, slack_file=slack_file)
+    try:
+        item, tok = await pull_one(api, {"text": "look", "files": [{"id": "F1", "size": 9}]})
+        WorkQueue(conn).enqueue("c2", "turn", {"text": "elsewhere", "files": [{"id": "FOTHER", "size": 1}]})
+        WorkQueue(conn).enqueue("c1", "turn", {"text": "and this", "files": [{"id": "F2", "size": 1}]})
+        r = await api.get("/agent/slack_file/F1", headers=bearer(tok))
+        assert r.status == 200 and await r.read() == b"png-bytes"
+        # a later message in the same conversation (delivered mid-turn) is the session's too
+        assert (await api.get("/agent/slack_file/F2", headers=bearer(tok))).status == 200
+        # another conversation's file, or one nobody sent, is not
+        assert (await api.get("/agent/slack_file/FOTHER", headers=bearer(tok))).status == 404
+        assert (await api.get("/agent/slack_file/FNONE", headers=bearer(tok))).status == 404
+        assert (await api.get("/agent/slack_file/F1")).status == 401
+        assert fetched == ["F1", "F2"]
+    finally:
+        await api.close()
+
+
+async def test_slack_file_too_big_or_failing(conn, queue, parts):
+    async def slack_file(file_id):
+        raise RuntimeError("slack said no")
+
+    api = await _client(conn, queue, parts, slack_file=slack_file)
+    try:
+        item, tok = await pull_one(api, {"text": "look", "files": [{"id": "FBIG", "size": 26 * 1024 * 1024},
+                                                                   {"id": "FBAD", "size": 1}]})
+        assert (await api.get("/agent/slack_file/FBIG", headers=bearer(tok))).status == 413
+        assert (await api.get("/agent/slack_file/FBAD", headers=bearer(tok))).status == 502
+    finally:
+        await api.close()
+
+
 async def test_bundle_needs_runner_token(api, conn):
     tok = mint_token(conn, "runner", ttl_s=3600)
     r = await api.get("/agent/bundle", headers=bearer(tok))

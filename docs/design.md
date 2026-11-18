@@ -151,8 +151,11 @@ dashboard](#kpis-the-activity-log-and-the-dashboard).
 ### Slack intake
 
 core handles a Slack message when it is a DM to the agent, mentions the agent, or is a reply in a thread core knows
-(one with a conversation, or one under a message core received or posted). It ignores bots, edits and other
-subtypes, and handles each message once. A sender who isn't in `[people]` gets an ephemeral refusal in DMs and on
+(one with a conversation, or one under a message core received or posted). It ignores bots, edits and every
+subtype except `file_share` (a message with files attached), and handles each message once. A message's files ride
+in its turn's payload (`files`: id, name, mimetype, size); before the session sees the message, the runner fetches
+each one through core (`GET /agent/slack_file/{id}`, core's bot token, `files:read`) into the session folder under
+`slack-files/` and adds their paths to the prompt. A sender who isn't in `[people]` gets an ephemeral refusal in DMs and on
 mentions. Each accepted message gets an `eyes` reaction.
 
 Routing picks the message's conversation (one row in `conversations`, one Claude Code session):

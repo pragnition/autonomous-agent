@@ -52,6 +52,45 @@ def origin_of(payload: dict) -> str:
     return f"{payload['origin']}\n" if payload.get("origin") else ""
 
 
+SLACK_FILES_DIR = "slack-files"  # in the session folder: each attachment at slack-files/<file id>/<name>
+
+
+def _size(n: int) -> str:
+    return f"{n / 1024 / 1024:.1f} MB" if n >= 1024 * 1024 else f"{max(1, n // 1024)} KB"
+
+
+async def save_slack_files(link, tok: str, session: Path, files: list[dict]) -> str:
+    """Save a message's attachments into the session folder and return the note that tells the session where they
+    are ("" when the message has none). A file that can't be fetched is named in the note with the reason, so the
+    session can say so rather than answer as if it had seen it."""
+    if not files:
+        return ""
+    lines = []
+    for f in files:
+        file_id = str(f.get("id") or "")
+        name = Path(str(f.get("name") or "")).name or file_id  # never a path out of its folder
+        if not file_id or "/" in file_id or file_id in (".", ".."):
+            continue
+        kind = ", ".join(p for p in (f.get("mimetype") or "", _size(int(f.get("size") or 0)) if f.get("size") else "")
+                         if p)
+        path = session / SLACK_FILES_DIR / file_id / name
+        try:
+            if not path.is_file():  # already saved when a restarted turn runs again
+                data = await link.slack_file(tok, file_id)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            lines.append(f"- {path}" + (f" ({kind})" if kind else ""))
+        except SessionRevoked:
+            raise
+        except Exception as e:
+            log.warning("couldn't fetch Slack file %s", file_id, exc_info=True)
+            lines.append(f"- {name}: couldn't be fetched ({type(e).__name__}: {e})")
+    if not lines:
+        return ""
+    return ("\n\n(The message came with these files attached, saved in your session folder. Read them before you "
+            "answer:\n" + "\n".join(lines) + ")")
+
+
 def read_env_files(paths: list[Path]) -> dict[str, str]:
     env = {}
     for path in paths:
@@ -123,7 +162,7 @@ class Runner:
         return [dest / "plugins" / "core", dest / "plugins" / "effortless",
                 *sorted((dest / "plugins" / "packs").glob("*"))]
 
-    async def _heartbeat(self, tok: str, item_id: str) -> None:
+    async def _heartbeat(self, tok: str, item_id: str, convo: str) -> None:
         while True:
             await asyncio.sleep(self.heartbeat_s)
             try:
@@ -138,7 +177,14 @@ class Runner:
                 await self.claude.interrupt(item_id)
                 return
             for m in reply.get("messages") or []:
-                await self.claude.send(item_id, m["id"], origin_of(m["payload"]) + MIDTURN_NOTE + m["payload"]["text"])
+                try:
+                    attached = await save_slack_files(self.link, tok, self.scratch_root / convo,
+                                                      m["payload"].get("files") or [])
+                except SessionRevoked:
+                    await self.claude.interrupt(item_id)
+                    return
+                await self.claude.send(item_id, m["id"],
+                                       origin_of(m["payload"]) + MIDTURN_NOTE + m["payload"]["text"] + attached)
 
     def _forwarder(self, tok: str):
         async def forward(record: dict) -> None:
@@ -179,7 +225,7 @@ class Runner:
                 await self.link.result(tok, {"outcome": "error", "text": "", "session_id": None, "turns": 0,
                                              "error": f"preparing the session failed: {type(e).__name__}: {e}"})
             return
-        beat = asyncio.create_task(self._heartbeat(tok, item_id))
+        beat = asyncio.create_task(self._heartbeat(tok, item_id, convo))
         try:
             result = await self._run_or_start_fresh(spec, origin_of(item["payload"]))
         finally:
@@ -211,7 +257,8 @@ class Runner:
         # the message's origin (who, where, link) comes first, then the restart note (if this attempt is resuming
         # a turn the machine restarted mid-way through), then the message
         note = RESTARTED_NOTE if item.get("attempts") and payload.get("resume_session_id") else ""
-        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + note + payload["text"], cwd=session,
+        attached = await save_slack_files(self.link, tok, session, payload.get("files") or [])
+        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + note + payload["text"] + attached, cwd=session,
                        model=payload["model"], system_prompt=system_prompt, max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,
