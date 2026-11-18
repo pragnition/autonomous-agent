@@ -1,4 +1,5 @@
 from agent.dashboard.accounts import HOURS, accounts_view, history_view
+from agent.proxy import SoftCap
 
 AGENT = ("agent-core", "agent-sandbox")
 
@@ -54,6 +55,14 @@ def test_util_and_reset_pairs():
     assert (a["badger"]["util_7d"], a["badger"]["reset_7d"]) == (0.55, 1794585600)
     assert a["comet"]["util_5h"] is None and a["comet"]["reset_7d"] is None and a["comet"]["rank"] is None
     assert a["badger"]["pace"] == "on" and a["badger"]["active"] == 4 and a["badger"]["cap_5h"] == 2.0
+
+
+def test_effective_soft_cap_per_account():
+    def badger(now):
+        view = accounts_view(RAW, AGENT, soft_cap=SoftCap(), now=now)
+        return {x["code"]: x for x in view["accounts"]}["badger"]   # 6% of its 5h window, resets at 1794571200
+    assert (badger(1794571200 - 3 * 3600)["soft_cap"], badger(1794571200 - 3 * 3600)["over_soft_cap"]) == (0.65, False)
+    assert badger(1794571200 - 3600)["soft_cap"] == 1.0              # lifted in the last 1h30m
 
 
 def test_agent_vs_people_split():

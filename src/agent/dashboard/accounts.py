@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import time
 
+from agent.proxy import SoftCap
+
 HOURS = (6, 24, 168, 720)
 ERROR_KINDS = ("429", "limit", "5xx", "upstream_error")
 TOKEN_KINDS = ("in", "out", "cache_read", "cache_write")
@@ -43,7 +45,7 @@ def _window(rec: dict, w: str) -> tuple[float | None, float | None]:
     return None, None
 
 
-def _account(code: str, rec: dict, agent_origins: tuple[str, ...]) -> dict:
+def _account(code: str, rec: dict, agent_origins: tuple[str, ...], soft_cap: SoftCap, now: float) -> dict:
     util_5h, reset_5h = _window(rec, "5h")
     util_7d, reset_7d = _window(rec, "7d")
     by_origin = {name: _tokens(_d(o).get("tokens_60m")) for name, o in _d(rec.get("by_origin")).items()}
@@ -60,6 +62,8 @@ def _account(code: str, rec: dict, agent_origins: tuple[str, ...]) -> dict:
         "pace": rec.get("pace") if rec.get("pace") in ("ahead", "on", "behind") else None,
         "target_7d": _num(rec.get("target_7d")), "pace_delta": _num(rec.get("pace_delta")),
         "cap_5h": _num(rec.get("cap_5h")),
+        # the share of the 5-hour window the account may use now: the soft cap, or 1 in the last stretch before reset
+        "soft_cap": soft_cap.cap(reset_5h, now), "over_soft_cap": soft_cap.over(util_5h, reset_5h, now),
         "tokens_60m": _tokens(rec.get("tokens_60m")), "agent_60m": agent, "people_60m": people,
         "by_origin": by_origin,
         "errors_60m": {k: _num(errors.get(k)) or 0 for k in ERROR_KINDS},
@@ -68,11 +72,13 @@ def _account(code: str, rec: dict, agent_origins: tuple[str, ...]) -> dict:
     }
 
 
-def accounts_view(raw: dict | None, agent_origins: tuple[str, ...], error: str | None = None) -> dict:
+def accounts_view(raw: dict | None, agent_origins: tuple[str, ...], error: str | None = None,
+                  soft_cap: SoftCap | None = None, now: float | None = None) -> dict:
     if not isinstance(raw, dict):
         return {"available": False, "error": error or "no usage from the proxy", "agent_origins": list(agent_origins),
                 "pool": None, "accounts": [], "origins": []}
-    accounts = [_account(code, _d(rec), agent_origins) for code, rec in raw.items() if code != "_all"]
+    soft_cap, now = soft_cap or SoftCap.from_env(), time.time() if now is None else now
+    accounts = [_account(code, _d(rec), agent_origins, soft_cap, now) for code, rec in raw.items() if code != "_all"]
     accounts.sort(key=lambda a: (a["rank"] is None, a["rank"] or 0, a["code"]))
 
     pool_raw = _d(raw.get("_all"))

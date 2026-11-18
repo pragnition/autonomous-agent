@@ -28,6 +28,8 @@ services:
       - "127.0.0.1:18086:8086"    # the dashboard; `just dashboard-serve` puts it on the tailnet only, never Funnel
     environment:
       PROXY_URL: http://172.30.0.1:28090
+      SOFT_CAP_5H: ${SOFT_CAP_5H:-0.65}            # an account counts as full at this share of its 5-hour window...
+      SOFT_CAP_LIFT_S: ${SOFT_CAP_LIFT_S:-5400}    # ...until this many seconds before the window resets
     volumes:
       - ${AGENT_DATA:-./data}/config:/data/config
       - ${AGENT_DATA:-./data}/db:/data/db
@@ -74,6 +76,9 @@ services:
     # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables. Compose reads
     # the file as the laptop user, so it can stay 0600, and `docker compose exec agent` shells see the keys too.
     env_file: ["${AGENT_DATA:-./data}/secrets/agent.env"]
+    environment:                                   # the watchdog's soft cap, the same as core's
+      SOFT_CAP_5H: ${SOFT_CAP_5H:-0.65}
+      SOFT_CAP_LIFT_S: ${SOFT_CAP_LIFT_S:-5400}
     volumes:
       - ${AGENT_DATA:-./data}/runner:/run/agent:ro
       - ${AGENT_DATA:-./data}/cli/azure:/data/cli/azure

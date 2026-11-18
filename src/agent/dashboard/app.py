@@ -204,7 +204,7 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
             raw = await asyncio.wait_for(proxy.raw_usage(), PROXY_TIMEOUT_S)
         except Exception as e:
             return web.json_response(accounts_view(None, origins, error=str(e) or type(e).__name__))
-        view = accounts_view(raw, origins)
+        view = accounts_view(raw, origins, soft_cap=getattr(proxy, "soft_cap", None))
         known = account_names.all() if account_names else {}
         for account in view["accounts"]:
             rec = known.get(account["code"]) or {}

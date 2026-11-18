@@ -123,6 +123,11 @@ When the proxy reports the account of a running session as rejected or disabled 
 while the account is rejected), the runner does the same within the turn: a fresh session, which the proxy pins
 to another account, with the handoff note. Its digest comes from the runner's transcript `transcripts/<run id>.jsonl`
 (the earlier session's own messages), whose path the note also gives.
+The watchdog also hands off when the account goes over its 5-hour soft cap (below, under Usage watch), in the same
+way: a fresh session with the handoff note, never `--resume`. It does this only when the run has a fork left and the
+proxy's top-ranked account (the one a fresh session lands on) is another account under its own cap. Otherwise the
+session keeps running where it is rather than ending the turn, and it doesn't hand off just to land on a capped
+account and hand off again.
 It does this up to twice per turn (the run's `forks` count). If a turn can't resume its saved session and fails
 before its first model turn, the runner starts a fresh session with a note to call `read_thread` first.
 
@@ -234,20 +239,30 @@ requests still start.
 
 ### Usage watch
 
+Each account has a soft cap on its 5-hour window (`proxy.SoftCap`), so no account is run to its Anthropic limit
+early in a window. It counts as full at `SOFT_CAP_5H` (default 0.65) of the window until `SOFT_CAP_LIFT_S` (default
+5400, 1h30m) before the window resets. From then on the cap is 100%, since what is left would go unused at the reset
+anyway. The reset time is the proxy's 5-hour window data; when it isn't known, the 65% cap applies. Both values are
+environment variables of core and the agent container (`compose.yaml`, taken from the host's `.env`).
+
 Every 60 s core reads `/proxy/usage` (`core/usage_watch.py`) and gives each account a state:
 
 - `out`: the proxy gives it no rank (no capacity);
-- `hot`: its 5-hour window is at least 85% used, or its `pace_delta` is above 0.05 (ahead of its 7-day pace, so
-  it will run out before the window resets). It is `ok` again only once it is below 75% and back on pace, so it
-  doesn't flap;
+- `hot`: its 5-hour window is at its effective cap (the soft cap, or 100% once lifted), or its `pace_delta` is above
+  0.05 (ahead of its 7-day pace, so it will run out before the window resets). It is `ok` again only once it is 10
+  points below its soft cap and back on pace, so it doesn't flap; once the cap is lifted there is no margin;
 - `ok`: otherwise.
 
 The pool, counted in `ok` accounts: with two or more (or all the verified accounts, in a smaller pool) nothing
 changes. With fewer, scheduled runs (and their carry-ons) wait in the queue. With none, the admins get one DM
-with the earliest reset, and another when capacity is back. The proxy already ranks accounts for new sessions, so
-the watch doesn't steer sessions itself. An account whose `verified` goes false, or that has been `out` for over
+with the earliest reset, and another when capacity is back. With every account over its soft cap, people's requests
+still start (the gate only needs an account with a rank) and scheduled runs wait. The proxy ranks accounts for new
+sessions and isn't in this repository, so the soft cap doesn't steer new sessions: one can still land on a capped
+account while the proxy ranks it first, and the runner's watchdog then moves it if another account is under its cap. An account whose `verified` goes false, or that has been `out` for over
 5 hours, is reported to the admins once. Every change of state is an event (`usage_account`, `usage_pool`,
-`usage_unverified`, `usage_out_too_long`), shown on the dashboard's Events page. The last state is kept in
+`usage_unverified`, `usage_out_too_long`, and `usage_cap_reached` / `usage_cap_lifted` when an account reaches its
+soft cap or the cap lifts to 100%), shown on the dashboard's Events page. The Accounts page shows each account's
+effective cap. The last state is kept in
 `settings`, so a restart neither repeats an alert nor misses one.
 
 A turn cut off by a usage limit (a 429, or the runner giving up on an account the proxy reports rejected or

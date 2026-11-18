@@ -159,6 +159,10 @@ export function Accounts() {
                             {acc.name && <span className="font-mono">{acc.code} · </span>}
                             {acc.rank != null ? `rank ${acc.rank}` : acc.verified ? "closed" : "not used yet"}
                             {acc.status && acc.status !== "allowed" && ` · ${acc.status}`}
+                            <span className={acc.over_soft_cap ? "text-foreground" : ""}
+                              title="The share of the 5-hour window the agent may use now: the soft cap, lifted to 100% shortly before the reset">
+                              {` · cap ${fmtPct(acc.soft_cap)}`}{acc.over_soft_cap && " reached"}
+                            </span>
                           </div>
                         </TableCell>
                         <TableCell><UsageBars account={acc} now={now} /></TableCell>

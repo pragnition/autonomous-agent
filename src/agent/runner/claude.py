@@ -3,8 +3,10 @@
 The proxy pins each session to one account and returns that account's limits to it. When the account is rejected
 or disabled (seen by the watchdog, or as a 403/503, or a 429 while the proxy reports the account rejected), the run
 moves to a fresh session (new id, empty history), which the proxy pins to another account, with a note naming the
-earlier session and where its record is. A session is never resumed on a different account from the one it ran on:
-not here, and not on a later turn (can_resume).
+earlier session and where its record is. The watchdog does the same when the account goes over its soft cap on the
+5-hour window (proxy.SoftCap), but only while the proxy's top-ranked account is another one under its own cap and the
+run has a fork left; otherwise the run carries on where it is. A session is never resumed on a different account
+from the one it ran on: not here, and not on a later turn (can_resume).
 
 Each attempt's prompt, and every message that arrives while the run is going, is written into the live session with its
 own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
@@ -158,7 +160,7 @@ class ClaudeRunner:
         self._read[spec.run_id] = []
         try:
             while True:
-                attempt = await self._attempt(spec, resume=resume, prompt=prompt)
+                attempt = await self._attempt(spec, resume=resume, prompt=prompt, can_fork=forks < self.max_forks)
                 if attempt.switch_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
                     # Never resume (or fork) the session onto another account: start a fresh one, which the proxy
                     # pins to a working account, and tell it which session to pick up from
@@ -178,11 +180,18 @@ class ClaudeRunner:
             if not state.get("account"):
                 continue
             try:
-                status = (await self.proxy.usage()).status_of(state["account"])
+                usage = await self.proxy.usage()
             except ProxyUnavailable:
                 continue
+            status = usage.status_of(state["account"])
             if status in ACCOUNT_TROUBLE:
                 state["reason"], state["trouble"] = "watchdog", status
+                await client.interrupt()
+                return
+            # Over the soft cap: hand off like a rejected account, but only when the fresh session would land on an
+            # account under its cap and the run may still fork; otherwise keep going here rather than end the run
+            if state["can_fork"] and usage.over_cap(state["account"]) and usage.handoff_target(state["account"]):
+                state["reason"], state["trouble"] = "watchdog", "over its 5-hour soft cap"
                 await client.interrupt()
                 return
 
@@ -201,13 +210,13 @@ class ClaudeRunner:
             f.write(json.dumps(record, default=str) + "\n")
         return record
 
-    async def _attempt(self, spec: RunSpec, *, resume: str | None, prompt: str) -> _Attempt:
+    async def _attempt(self, spec: RunSpec, *, resume: str | None, prompt: str, can_fork: bool = True) -> _Attempt:
         session_id = None if resume else self.uuid_factory()
         prompt_uuid = self.uuid_factory()
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume))
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
-        state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False,
+        state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False, "can_fork": can_fork,
                  "accepting": False, "pending": {prompt_uuid: None}}
         self._active[spec.run_id] = (client, state)
         read = self._read.setdefault(spec.run_id, [])
