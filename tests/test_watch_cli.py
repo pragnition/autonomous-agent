@@ -187,6 +187,46 @@ def test_plan_outputs_real_plan_to_stdout(tmp_path, capsys):
     assert saved == [{"url": "https://github.com/acme/widgets/pull/1", "conversation": "C1"}]
 
 
+def test_plan_drops_prs_an_earlier_run_already_reviewed(tmp_path, capsys):
+    state_dir = tmp_path / "state"
+    state = State(state_dir)
+    reviewed, fresh = "https://github.com/acme/widgets/pull/1", "https://github.com/acme/widgets/pull/2"
+    state.write_run_reviews("41", [{"url": reviewed, "conversation": "C1"}])
+    (state_dir / "plan.json").write_text(json.dumps({"reviews": [
+        {"url": reviewed, "conversation": "C1"}, {"url": fresh, "conversation": None},
+        {"url": fresh, "conversation": None}]}))  # listed twice: still one review
+
+    rc = main(["plan", "--run-id", "42"], host=object(), state=state, now=T0)
+
+    assert rc == 0
+    assert json.loads(_kv(capsys.readouterr().out)["review_indices"]) == [0]
+    assert json.loads((state_dir / "runs" / "42-reviews.json").read_text()) == [{"url": fresh, "conversation": None}]
+
+    # Run 42 attempted again (a re-run keeps its run id): its own earlier file doesn't count as "already reviewed".
+    rc = main(["plan", "--run-id", "42"], host=object(), state=state, now=T0)
+    assert rc == 0
+    assert json.loads(_kv(capsys.readouterr().out)["review_indices"]) == [0]
+
+
+def test_measure_with_work_clears_last_hours_plan(tmp_path, monkeypatch, capsys):
+    # Nothing else consumes plan.json: if Claude's run this hour succeeds without writing one, `plan` must not
+    # dispatch last hour's fix and reviews again.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/widgets")
+    state_dir = tmp_path / "state"
+    state = State(state_dir)
+    (state_dir / "plan.json").write_text(json.dumps(
+        {"reviews": [{"url": "https://github.com/acme/widgets/pull/1", "conversation": None}], "fix": 9}))
+    host = _MeasureHost(_cp(stdout=json.dumps([{"number": 7, "title": "Some deployed fix"}])))
+
+    assert main(["measure"], host=host, state=state, now=T0) == 0
+    assert _kv(capsys.readouterr().out)["has_work"] == "true"
+
+    assert not (state_dir / "plan.json").exists()
+    assert main(["plan", "--run-id", "43"], host=object(), state=state, now=T0) == 0
+    kv = _kv(capsys.readouterr().out)
+    assert kv["review_indices"] == "[]" and kv["has_fix"] == "false"
+
+
 def test_plan_run_id_defaults_to_the_github_run_id_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_RUN_ID", "555")
     state_dir = tmp_path / "state"

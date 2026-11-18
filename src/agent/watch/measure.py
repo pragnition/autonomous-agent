@@ -408,6 +408,10 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     if not items and not pr_records and not open_deployed and not deploy_alert and not core_down:
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
+    # Claude gets a new hour: the last hour's plan is spent. Nothing else consumes plan.json, so a run that
+    # succeeds without writing one would otherwise have `plan` dispatch last hour's fix and reviews again.
+    state.clear_plan()
+
     produced = turn_records + midturn_records + pr_records
     # Staged, not appended: committing this window (merging into metrics.jsonl/known_clones for good) is a
     # separate step, taken only once Claude's own run against this digest succeeds. A re-measure of the same

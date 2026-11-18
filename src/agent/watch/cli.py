@@ -10,11 +10,11 @@ to `host.jensen_gh`, untouched.
 `--github-output FILE` (appended, never truncated); without that flag the same lines print to stdout instead, for
 a person running this by hand.
 
-`plan` never puts a PR URL into its own output: it validates `plan.json` (see `state.plan()`) and writes the
-review list to `<state>/runs/<run id>-reviews.json`, emitting only `review_indices` (`[0, 1, ...]`) -- a scheduled
-review job's prompt can then name an index instead of a URL, and `review-target --run <run id> --index <i>`
-(called by Claude itself, inside that job, not by a workflow step whose output a public Actions log would show)
-looks the URL and conversation back up.
+`plan` never puts a PR URL into its own output: it validates `plan.json` (see `state.plan()`, which also drops a PR
+an earlier run already reviewed) and writes the review list to `<state>/runs/<run id>-reviews.json`, emitting only
+`review_indices` (`[0, 1, ...]`) -- a scheduled review job's prompt can then name an index instead of a URL, and
+`review-target --run <run id> --index <i>` (called by Claude itself, inside that job, not by a workflow step whose
+output a public Actions log would show) looks the URL and conversation back up.
 
 `seed` and the open-`fix-deployed`-issues lookup inside `measure` always go through the plain `gh` the job itself
 is logged in as (`host.run`), never through `host.jensen_gh` -- that call is reading the record of Jensen's work
@@ -164,7 +164,7 @@ def _cmd_note(state: State, issue: int, ref: str, line: str, now: datetime) -> i
 
 
 def _cmd_plan(state: State, github_output: str | None, run_id: str) -> int:
-    plan = state.plan()
+    plan = state.plan(run_id)
     reviews, fix = plan["reviews"], plan["fix"]
     state.write_run_reviews(run_id, reviews)
     _emit([

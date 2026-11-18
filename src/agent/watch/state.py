@@ -7,10 +7,10 @@ with when it happened and read back by `count`), `pending-metrics.jsonl`/`pendin
 not-yet-final measurement, written by `stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line
 per `log_deploy`), `deploy-pending` (present means a deploy is pending -- its own file, not a `state.json` key,
 since `deploy.py` runs as a separate process from the hourly watch and a shared read-modify-write could race
-against this watch's own `commit()`),
-`plan.json` (written by Claude, read and validated by `plan`), and `digest-<end>.md` files. Every whole-file write
-replaces the previous value atomically (`*.tmp` then `os.replace`), so a process killed mid-write never leaves a
-torn file for the next hourly run to trip over.
+against this watch's own `commit()`), `plan.json` (written by Claude, read and validated by `plan`, removed by
+`clear_plan` once a new hour is handed to Claude), and `digest-<end>.md` files. Every whole-file write replaces the
+previous value atomically (`*.tmp` then `os.replace`), so a process killed mid-write never leaves a torn file for
+the next hourly run to trip over.
 
 Measuring a window and committing it are two separate steps, because the digest a measurement produces is meant
 to be acted on (by Claude, against that digest) before the window is final -- and that action can fail. `stage`
@@ -361,15 +361,22 @@ class State:
 
     # -- plan --
 
-    def plan(self) -> dict:
+    def clear_plan(self) -> None:
+        """Remove `plan.json`. `measure` calls this whenever it hands Claude a new hour, so a run that succeeds
+        without writing a plan never re-dispatches the previous hour's fix and reviews."""
+        (self.root / _PLAN_FILE).unlink(missing_ok=True)
+
+    def plan(self, run_id: str | None = None) -> dict:
         """The validated `plan.json`: `{"reviews": [...], "fix": int | None}`.
 
         A missing file or invalid JSON falls back to `{"reviews": [], "fix": None}`. Otherwise: each review is
         normalised to exactly `{"url": str, "conversation": str | None}` -- a review without a string `url` is
         dropped entirely, and its own `conversation` is kept only when it's a string (never a plan-level field
-        shared across every review -- each review names its own conversation, or none). The list is cut to the
-        first 10 that remain. `fix` is kept only when it's a positive int (a bool doesn't count, even though
-        `bool` is an `int` subclass).
+        shared across every review -- each review names its own conversation, or none). A URL listed twice is kept
+        once, and a URL already in another run's `runs/*-reviews.json` is dropped (that PR was already reviewed;
+        `run_id`'s own file doesn't count, so the same run attempted again plans the same reviews). The list is
+        cut to the first 10 that remain. `fix` is kept only when it's a positive int (a bool doesn't count, even
+        though `bool` is an `int` subclass).
         """
         fallback = {"reviews": [], "fix": None}
         path = self.root / _PLAN_FILE
@@ -384,10 +391,12 @@ class State:
         if not isinstance(data, dict):
             return fallback
 
+        skip = self._reviewed_urls(except_run=run_id)
         reviews = []
         for entry in (data.get("reviews") or []):
-            if not isinstance(entry, dict) or not isinstance(entry.get("url"), str):
+            if not isinstance(entry, dict) or not isinstance(entry.get("url"), str) or entry["url"] in skip:
                 continue
+            skip.add(entry["url"])
             conversation = entry.get("conversation")
             reviews.append({"url": entry["url"],
                             "conversation": conversation if isinstance(conversation, str) else None})
@@ -411,6 +420,24 @@ class State:
         path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(path, json.dumps(reviews))
         return path
+
+    def _reviewed_urls(self, except_run: str | None) -> set[str]:
+        """Every review URL in `runs/*-reviews.json`, leaving out `except_run`'s own file."""
+        urls: set[str] = set()
+        runs_dir = self.root / _RUNS_DIR
+        if not runs_dir.is_dir():
+            return urls
+        own = self._run_reviews_path(except_run).name if except_run is not None else None
+        for path in runs_dir.glob(f"*{_RUN_REVIEWS_SUFFIX}"):
+            if path.name == own:
+                continue
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, list):
+                urls.update(item["url"] for item in data if isinstance(item, dict) and isinstance(item.get("url"), str))
+        return urls
 
     def read_run_review(self, run_id: str, index: int) -> dict | None:
         """The review at `index` in `runs/<run_id>-reviews.json`, or `None` if the file is missing, unreadable,
