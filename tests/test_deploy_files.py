@@ -284,7 +284,7 @@ def test_jobs_run_on_the_right_runners(improve_jensen):
     jobs = improve_jensen["jobs"]
     for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"), ("respond", "work")):
         labels = _runs_on_labels(jobs[name])
-        assert {"self-hosted", "improve-jensen", want_label} <= labels, name
+        assert labels == {"self-hosted", "improve-jensen", want_label}, name
 
 
 def test_fix_is_serialised(improve_jensen):
@@ -308,3 +308,48 @@ def test_watch_commits_only_after_success_and_not_on_pool_hold(improve_jensen):
     steps = improve_jensen["jobs"]["watch"]["steps"]
     commit_step = next(s for s in steps if "jensen_watch.py commit" in str(s.get("run", "")))
     assert "pool_hold" in commit_step["if"]
+    assert "steps.claude.outcome" in commit_step["if"]
+
+
+def test_dispatch_branches_key_on_inputs_mode_not_just_event_name(improve_jensen):
+    """A manual dispatch defaults `mode` to `watch`; the review/fix jobs' own `if` and their matrix/target
+    expressions must all key on `inputs.mode`, not merely on `github.event_name == 'workflow_dispatch'` -- else
+    a plain watch dispatch (with an empty `target`) would feed that empty value into review/fix instead of
+    falling through to what `watch`'s own plan produced."""
+    review_job = improve_jensen["jobs"]["review"]
+    fix_job = improve_jensen["jobs"]["fix"]
+
+    review_if = review_job["if"]
+    assert "inputs.mode == 'review'" in review_if
+    assert "inputs.target != ''" in review_if
+
+    matrix_index = review_job["strategy"]["matrix"]["index"]
+    assert "inputs.mode == 'review'" in matrix_index
+
+    fix_if = fix_job["if"]
+    assert "inputs.mode == 'fix'" in fix_if
+    assert "inputs.target != ''" in fix_if
+
+    target_source = str(fix_job.get("env", {}).get("TARGET", ""))
+    assert "inputs.mode == 'fix'" in target_source
+
+    # inputs.target is never interpolated directly into a run: script (shell-injection risk); every script
+    # reads it through the quoted $TARGET env var instead.
+    for step in fix_job["steps"]:
+        run = str(step.get("run", ""))
+        assert "inputs.target" not in run
+        if "$TARGET" in run:
+            assert '"$TARGET"' in run, run
+
+
+def test_fixing_label_is_created_before_it_is_used(improve_jensen):
+    steps = improve_jensen["jobs"]["fix"]["steps"]
+    label_step = next(s for s in steps if "--add-label fixing" in str(s.get("run", "")))
+    assert "gh label create fixing" in label_step["run"]
+    assert label_step["run"].index("label create") < label_step["run"].index("--add-label fixing")
+
+
+def test_fix_claude_step_leaves_room_for_the_always_cleanup(improve_jensen):
+    claude_step = next(s for _, s in _claude_steps(improve_jensen) if s["with"].get("prompt", "").startswith(
+        "Fix issue"))
+    assert claude_step.get("timeout-minutes", 0) < improve_jensen["jobs"]["fix"]["timeout-minutes"]

@@ -43,6 +43,8 @@ _PLAN_FILE = "plan.json"
 _DIGEST_PREFIX = "digest-"
 _DIGEST_SUFFIX = ".md"
 _DIGEST_FMT = "%Y%m%dT%H%MZ"
+_RUNS_DIR = "runs"
+_RUN_REVIEWS_SUFFIX = "-reviews.json"
 
 # Numeric per-turn/per-midturn signals `count` reports as n/median/p90/max, and which record `kind` they live on.
 _TURN_NUMERIC = {"context_first", "context_peak", "inline_code_chars"}
@@ -290,7 +292,8 @@ class State:
         return path
 
     def prune(self, now: datetime, days: int = 30) -> None:
-        """Drop digests older than `days`, and metric lines whose `ts` is older than `days`."""
+        """Drop digests older than `days`, metric lines whose `ts` is older than `days`, and `runs/*-reviews.json`
+        files older than `days` (a run id isn't a timestamp, so age there is the file's own mtime)."""
         cutoff = now - timedelta(days=days)
         for path in self.root.glob(f"{_DIGEST_PREFIX}*{_DIGEST_SUFFIX}"):
             stamp = path.name[len(_DIGEST_PREFIX):-len(_DIGEST_SUFFIX)]
@@ -306,16 +309,27 @@ class State:
             kept = [r for r in _read_jsonl(metrics_path) if r.get("ts") and _parse(r["ts"]) >= cutoff]
             _atomic_write(metrics_path, "".join(json.dumps(r) + "\n" for r in kept))
 
+        runs_dir = self.root / _RUNS_DIR
+        if runs_dir.exists():
+            for path in runs_dir.glob(f"*{_RUN_REVIEWS_SUFFIX}"):
+                try:
+                    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+                except OSError:
+                    continue
+                if mtime < cutoff:
+                    path.unlink()
+
     # -- plan --
 
     def plan(self) -> dict:
-        """The validated `plan.json`: `{"reviews": [...], "fix": int | None, "conversation": str | None}`.
+        """The validated `plan.json`: `{"reviews": [...], "fix": int | None}`.
 
-        A missing file or invalid JSON falls back to `{"reviews": [], "fix": None}` (no `conversation` key at all —
-        there was nothing to read a conversation out of). Otherwise: reviews that aren't a dict with a string `url`
-        are dropped, and the list is cut to the first 10 that remain; `fix` is kept only when it's a positive int
-        (a bool doesn't count, even though `bool` is a `int` subclass); `conversation` is kept only when it's a
-        string.
+        A missing file or invalid JSON falls back to `{"reviews": [], "fix": None}`. Otherwise: each review is
+        normalised to exactly `{"url": str, "conversation": str | None}` -- a review without a string `url` is
+        dropped entirely, and its own `conversation` is kept only when it's a string (never a plan-level field
+        shared across every review -- each review names its own conversation, or none). The list is cut to the
+        first 10 that remain. `fix` is kept only when it's a positive int (a bool doesn't count, even though
+        `bool` is an `int` subclass).
         """
         fallback = {"reviews": [], "fix": None}
         path = self.root / _PLAN_FILE
@@ -330,14 +344,45 @@ class State:
         if not isinstance(data, dict):
             return fallback
 
-        reviews = [r for r in (data.get("reviews") or []) if isinstance(r, dict) and isinstance(r.get("url"), str)]
+        reviews = []
+        for entry in (data.get("reviews") or []):
+            if not isinstance(entry, dict) or not isinstance(entry.get("url"), str):
+                continue
+            conversation = entry.get("conversation")
+            reviews.append({"url": entry["url"],
+                            "conversation": conversation if isinstance(conversation, str) else None})
+
         fix = data.get("fix")
         if isinstance(fix, bool) or not isinstance(fix, int) or fix <= 0:
             fix = None
-        conversation = data.get("conversation")
-        if not isinstance(conversation, str):
-            conversation = None
-        return {"reviews": reviews[:_MAX_PLAN_REVIEWS], "fix": fix, "conversation": conversation}
+        return {"reviews": reviews[:_MAX_PLAN_REVIEWS], "fix": fix}
+
+    # -- run reviews (so a scheduled review job never names a PR URL in the workflow's own prompt/logs) --
+
+    def _run_reviews_path(self, run_id: str) -> Path:
+        return self.root / _RUNS_DIR / f"{run_id}{_RUN_REVIEWS_SUFFIX}"
+
+    def write_run_reviews(self, run_id: str, reviews: list[dict]) -> Path:
+        """Write this run's validated review list (see `plan()`) to `runs/<run_id>-reviews.json`. A later
+        `review-target --run <run_id> --index <i>` call -- made by Claude itself, inside the review job, never
+        printed into a prompt a public Actions log would show -- looks a review's URL and conversation back up
+        from this file."""
+        path = self._run_reviews_path(run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, json.dumps(reviews))
+        return path
+
+    def read_run_review(self, run_id: str, index: int) -> dict | None:
+        """The review at `index` in `runs/<run_id>-reviews.json`, or `None` if the file is missing, unreadable,
+        not a list, or `index` is out of range."""
+        try:
+            data = json.loads(self._run_reviews_path(run_id).read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, list) or not (0 <= index < len(data)):
+            return None
+        item = data[index]
+        return item if isinstance(item, dict) else None
 
     # -- known clones --
 

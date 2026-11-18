@@ -155,31 +155,78 @@ def test_plan_outputs_fallback(tmp_path):
     (state_dir / "plan.json").write_text("{not valid json")
     output_file = tmp_path / "out.txt"
 
-    rc = main(["plan", "--github-output", str(output_file)], host=object(), state=state, now=T0)
+    rc = main(["plan", "--github-output", str(output_file), "--run-id", "42"], host=object(), state=state, now=T0)
 
     assert rc == 0
     kv = _kv(output_file.read_text())
-    assert kv["reviews"] == "[]"
+    assert kv["review_indices"] == "[]"
     assert kv["fix"] == ""
     assert kv["has_reviews"] == "false"
     assert kv["has_fix"] == "false"
+    assert "reviews" not in kv    # plan never outputs raw PR URLs -- see review-target
+    assert json.loads((state_dir / "runs" / "42-reviews.json").read_text()) == []
 
 
 def test_plan_outputs_real_plan_to_stdout(tmp_path, capsys):
     state_dir = tmp_path / "state"
     state = State(state_dir)
     (state_dir / "plan.json").write_text(json.dumps({
-        "reviews": [{"url": "https://github.com/acme/widgets/pull/1"}], "fix": 9,
+        "reviews": [{"url": "https://github.com/acme/widgets/pull/1", "conversation": "C1"}], "fix": 9,
     }))
+
+    rc = main(["plan", "--run-id", "77"], host=object(), state=state, now=T0)
+
+    assert rc == 0
+    kv = _kv(capsys.readouterr().out)
+    assert json.loads(kv["review_indices"]) == [0]
+    assert kv["fix"] == "9"
+    assert kv["has_reviews"] == "true"
+    assert kv["has_fix"] == "true"
+    assert "reviews" not in kv
+    saved = json.loads((state_dir / "runs" / "77-reviews.json").read_text())
+    assert saved == [{"url": "https://github.com/acme/widgets/pull/1", "conversation": "C1"}]
+
+
+def test_plan_run_id_defaults_to_the_github_run_id_env_var(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "555")
+    state_dir = tmp_path / "state"
+    state = State(state_dir)
+    (state_dir / "plan.json").write_text(json.dumps({"reviews": [{"url": "https://github.com/x/y/pull/1"}]}))
 
     rc = main(["plan"], host=object(), state=state, now=T0)
 
     assert rc == 0
-    kv = _kv(capsys.readouterr().out)
-    assert json.loads(kv["reviews"]) == [{"url": "https://github.com/acme/widgets/pull/1"}]
-    assert kv["fix"] == "9"
-    assert kv["has_reviews"] == "true"
-    assert kv["has_fix"] == "true"
+    assert (state_dir / "runs" / "555-reviews.json").exists()
+
+
+# -- review-target --
+
+
+def test_review_target_prints_url_and_conversation(tmp_path, capsys):
+    state = State(tmp_path / "state")
+    state.write_run_reviews("42", [{"url": "https://github.com/acme/widgets/pull/1", "conversation": "C1"},
+                                   {"url": "https://github.com/acme/widgets/pull/2", "conversation": None}])
+
+    rc = main(["review-target", "--run", "42", "--index", "0"], host=object(), state=state, now=T0)
+    assert rc == 0
+    assert capsys.readouterr().out == "url=https://github.com/acme/widgets/pull/1\nconversation=C1\n"
+
+    rc2 = main(["review-target", "--run", "42", "--index", "1"], host=object(), state=state, now=T0)
+    assert rc2 == 0
+    assert capsys.readouterr().out == "url=https://github.com/acme/widgets/pull/2\nconversation=none\n"
+
+
+def test_review_target_missing_file_or_index_exits_2(tmp_path, capsys):
+    state = State(tmp_path / "state")
+
+    rc = main(["review-target", "--run", "no-such-run", "--index", "0"], host=object(), state=state, now=T0)
+    assert rc == 2
+    assert "no-such-run" in capsys.readouterr().err
+
+    state.write_run_reviews("42", [{"url": "https://github.com/acme/widgets/pull/1", "conversation": None}])
+    rc2 = main(["review-target", "--run", "42", "--index", "5"], host=object(), state=state, now=T0)
+    assert rc2 == 2
+    assert "42" in capsys.readouterr().err
 
 
 # -- gh passthrough --

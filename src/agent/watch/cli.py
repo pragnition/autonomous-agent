@@ -10,6 +10,12 @@ to `host.jensen_gh`, untouched.
 `--github-output FILE` (appended, never truncated); without that flag the same lines print to stdout instead, for
 a person running this by hand.
 
+`plan` never puts a PR URL into its own output: it validates `plan.json` (see `state.plan()`) and writes the
+review list to `<state>/runs/<run id>-reviews.json`, emitting only `review_indices` (`[0, 1, ...]`) -- a scheduled
+review job's prompt can then name an index instead of a URL, and `review-target --run <run id> --index <i>`
+(called by Claude itself, inside that job, not by a workflow step whose output a public Actions log would show)
+looks the URL and conversation back up.
+
 `seed` and the open-`fix-deployed`-issues lookup inside `measure` always go through the plain `gh` the job itself
 is logged in as (`host.run`), never through `host.jensen_gh` -- that call is reading the record of Jensen's work
 from the outside, not acting as Jensen.
@@ -68,6 +74,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     plan_p = sub.add_parser("plan")
     plan_p.add_argument("--github-output")
+    plan_p.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID") or "local")
+
+    review_target_p = sub.add_parser("review-target")
+    review_target_p.add_argument("--run", required=True)
+    review_target_p.add_argument("--index", type=int, required=True)
 
     seed_p = sub.add_parser("seed")
     seed_p.add_argument("file")
@@ -152,15 +163,30 @@ def _cmd_note(state: State, issue: int, ref: str, line: str, now: datetime) -> i
 # -- plan --
 
 
-def _cmd_plan(state: State, github_output: str | None) -> int:
+def _cmd_plan(state: State, github_output: str | None, run_id: str) -> int:
     plan = state.plan()
     reviews, fix = plan["reviews"], plan["fix"]
+    state.write_run_reviews(run_id, reviews)
     _emit([
-        f"reviews={json.dumps(reviews)}",
+        f"review_indices={json.dumps(list(range(len(reviews))))}",
         f"fix={fix if fix is not None else ''}",
         f"has_reviews={_bool_str(bool(reviews))}",
         f"has_fix={_bool_str(fix is not None)}",
     ], github_output)
+    return 0
+
+
+# -- review-target --
+
+
+def _cmd_review_target(state: State, run_id: str, index: int) -> int:
+    review = state.read_run_review(run_id, index)
+    if review is None:
+        print(f"no review at run {run_id!r} index {index}", file=sys.stderr)
+        return 2
+    conversation = review.get("conversation")
+    print(f"url={review['url']}")
+    print(f"conversation={conversation if conversation else 'none'}")
     return 0
 
 
@@ -239,7 +265,9 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
     if args.command == "note":
         return _cmd_note(state, args.issue, args.ref, args.line, now)
     if args.command == "plan":
-        return _cmd_plan(state, args.github_output)
+        return _cmd_plan(state, args.github_output, args.run_id)
+    if args.command == "review-target":
+        return _cmd_review_target(state, args.run, args.index)
     if args.command == "seed":
         return _cmd_seed(host, args.file, args.repo)
     raise AssertionError(f"unhandled command: {args.command!r}")  # pragma: no cover - argparse already validated

@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -199,23 +200,28 @@ def test_plan_validation(tmp_path):
     (tmp_path / "plan.json").write_text("{not valid json")
     assert state.plan() == {"reviews": [], "fix": None}
 
-    # Reviews without a string url are dropped; more than 10 are cut to 10; fix and conversation are kept when valid.
-    reviews = [{"url": f"https://github.com/x/y/pull/{i}"} for i in range(12)]
+    # Reviews without a string url are dropped; more than 10 are cut to 10; fix is kept when valid; each review's
+    # own conversation is kept only when it's a string -- there is no plan-level conversation field.
+    reviews = [{"url": f"https://github.com/x/y/pull/{i}", "conversation": f"C{i}"} for i in range(12)]
     reviews.append({"notes": "no url here"})
     reviews.append({"url": 123})
-    (tmp_path / "plan.json").write_text(json.dumps({"reviews": reviews, "fix": 42, "conversation": "C123"}))
+    reviews.append({"url": "https://github.com/x/y/pull/bad-conversation", "conversation": 5})
+    (tmp_path / "plan.json").write_text(json.dumps({"reviews": reviews, "fix": 42}))
     result = state.plan()
     assert len(result["reviews"]) == 10
-    assert all(isinstance(r["url"], str) for r in result["reviews"])
-    assert result["reviews"][0]["url"] == "https://github.com/x/y/pull/0"
+    assert all(set(r) == {"url", "conversation"} for r in result["reviews"])
+    assert result["reviews"][0] == {"url": "https://github.com/x/y/pull/0", "conversation": "C0"}
     assert result["fix"] == 42
-    assert result["conversation"] == "C123"
+    assert "conversation" not in result
 
-    # fix that isn't a positive int, and a conversation that isn't a string, both fall back to None.
-    (tmp_path / "plan.json").write_text(json.dumps({"reviews": [], "fix": -1, "conversation": 5}))
-    result = state.plan()
-    assert result["fix"] is None
-    assert result["conversation"] is None
+    # A review missing `conversation` entirely falls back to None per-review, not an error.
+    (tmp_path / "plan.json").write_text(json.dumps(
+        {"reviews": [{"url": "https://github.com/x/y/pull/9"}], "fix": 1}))
+    assert state.plan()["reviews"] == [{"url": "https://github.com/x/y/pull/9", "conversation": None}]
+
+    # fix that isn't a positive int falls back to None.
+    (tmp_path / "plan.json").write_text(json.dumps({"reviews": [], "fix": -1}))
+    assert state.plan()["fix"] is None
 
     # A bool is an int subclass in Python but doesn't count as a positive int here.
     (tmp_path / "plan.json").write_text(json.dumps({"reviews": [], "fix": True}))
@@ -224,6 +230,37 @@ def test_plan_validation(tmp_path):
     # A JSON value that parses but isn't an object.
     (tmp_path / "plan.json").write_text(json.dumps([1, 2, 3]))
     assert state.plan() == {"reviews": [], "fix": None}
+
+
+def test_run_reviews_round_trip_and_out_of_range(tmp_path):
+    state = State(tmp_path)
+    reviews = [{"url": "https://github.com/x/y/pull/1", "conversation": "C1"},
+              {"url": "https://github.com/x/y/pull/2", "conversation": None}]
+
+    path = state.write_run_reviews("123", reviews)
+
+    assert path == tmp_path / "runs" / "123-reviews.json"
+    assert state.read_run_review("123", 0) == reviews[0]
+    assert state.read_run_review("123", 1) == reviews[1]
+    assert state.read_run_review("123", 2) is None    # out of range
+    assert state.read_run_review("123", -1) is None    # negative index never matches
+    assert state.read_run_review("no-such-run", 0) is None
+
+
+def test_prune_drops_old_run_reviews(tmp_path):
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+
+    old_path = state.write_run_reviews("old-run", [{"url": "https://github.com/x/y/pull/1", "conversation": None}])
+    recent_path = state.write_run_reviews("recent-run",
+                                          [{"url": "https://github.com/x/y/pull/2", "conversation": None}])
+    old_mtime = (now - timedelta(days=31)).timestamp()
+    os.utime(old_path, (old_mtime, old_mtime))
+
+    state.prune(now, days=30)
+
+    assert not old_path.exists()
+    assert recent_path.exists()
 
 
 def test_known_clones_round_trip(tmp_path):
