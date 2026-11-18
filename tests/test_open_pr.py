@@ -44,4 +44,4 @@ def test_reuses_open_pr(monkeypatch):
 
 def test_charter_says_to_open_the_pr():
     charter = (ROOT / ".github" / "improve-jensen.md").read_text()
-    assert "scripts/open_pr.py" in charter and "Closes #" in charter
+    assert "scripts/open_pr.py" in charter and "Refs #" in charter

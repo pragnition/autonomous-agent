@@ -353,3 +353,22 @@ def test_fix_claude_step_leaves_room_for_the_always_cleanup(improve_jensen):
     claude_step = next(s for _, s in _claude_steps(improve_jensen) if s["with"].get("prompt", "").startswith(
         "Fix issue"))
     assert claude_step.get("timeout-minutes", 0) < improve_jensen["jobs"]["fix"]["timeout-minutes"]
+
+
+# -- improve-jensen's instructions --
+
+
+def test_instructions_carry_the_key_rules():
+    anchors = {
+        ".github/improve-jensen-watch.md": ("jensen_watch.py note", "jensen_watch.py count", "plan.json", "fixing"),
+        ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit"),
+        ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #"),
+    }
+    for path, wanted in anchors.items():
+        text = (ROOT / path).read_text()
+        for anchor in wanted:
+            assert anchor in text, (path, anchor)
+
+
+def test_charter_drops_the_old_rules():
+    assert "Don't merge your own PRs" not in (ROOT / ".github" / "improve-jensen.md").read_text()
