@@ -142,9 +142,24 @@ class AgentToolRouter:
         today = db.utcnow()[:10]
         return self.conn.execute("SELECT COUNT(*) FROM tasks WHERE created_at >= ?", (today,)).fetchone()[0]
 
+    def _long_project(self, name: str) -> sqlite3.Row | None:
+        """A long project registered with start_project (active or finished), by name."""
+        return self.conn.execute("SELECT * FROM projects WHERE name = ?", (name,)).fetchone()
+
+    def _known_projects(self) -> list[str]:
+        """What a task's project may be: a pack, or a long project registered with start_project."""
+        return sorted({*self.packs, *(r["name"] for r in self.conn.execute("SELECT name FROM projects"))})
+
+    def _owner(self, project: str) -> str | None:
+        """A pack's owner; a long project with no pack is owned by whoever started its build."""
+        if project in self.packs:
+            return self.packs[project].project.owner
+        row = self._long_project(project)
+        return row["started_by"] if row else None
+
     def _new_task_problem(self, project: str, kind: str) -> str | None:
-        if project not in self.packs:
-            return f"unknown project '{project}' (known: {', '.join(sorted(self.packs)) or 'none'})"
+        if project not in self.packs and self._long_project(project) is None:
+            return f"unknown project '{project}' (known: {', '.join(self._known_projects()) or 'none'})"
         if kind not in KINDS:
             return f"kind must be one of {', '.join(KINDS)}"
         if self._tasks_today() >= self.config.limits.max_tasks_per_day:
@@ -158,7 +173,7 @@ class AgentToolRouter:
         return tasks.create_task(self.conn, project=project, title=title, description=description, kind=kind,
                                  source="linear" if ctx.unattended else "slack",
                                  source_ref=f"{ctx.channel}/{thread_ts}" if ctx.channel else None,
-                                 requester=ctx.actor, owner=self.packs[project].project.owner,
+                                 requester=ctx.actor, owner=self._owner(project),
                                  slack_channel=ctx.channel, slack_thread_ts=thread_ts)
 
     def ensure_task(self, ctx: ToolContext, title: str, kind: str = "feature"):
@@ -193,7 +208,8 @@ class AgentToolRouter:
         reg(ToolSpec("finish_task", "Mark this conversation's task done, with its outcome (a PR link, say).",
                      s({"outcome": "string"}), "act"), self._finish_task)
         reg(ToolSpec("start_task", "Start a separate session for a piece of work, with a self-contained brief, to "
-                                   "split one request into parallel tasks.",
+                                   "split one request into parallel tasks. project is a configured project or a "
+                                   "long project registered with start_project.",
                      s({"project": "string", "title": "string", "kind": "string", "brief": "string"}), "act"),
             self._start_task)
         reg(ToolSpec("status", "What is running and queued, and whether the agent is paused.", s(), "read"),

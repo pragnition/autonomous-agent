@@ -335,7 +335,9 @@ tier. Every reply is scrubbed of secrets.
   then call core.
 - `ask` posts the question and marks the conversation as waiting; the person's reply arrives as the next turn.
 - `start_task(project, title, kind, brief)` starts a separate session with a self-contained brief, in the same
-  thread (or, from a DM, in a new thread under a "Working on <title>" message).
+  thread (or, from a DM, in a new thread under a "Working on <title>" message). `project` (here and in
+  `track_task`) is a pack or a long project registered with `start_project`; a long project's task is owned by
+  whoever started its build.
 - `read_thread` reads the conversation's thread, or a DM chat's messages since it started.
 - `slack_read(method, params)` makes one read-only Slack Web API call with core's bot token. Allowed methods:
   `conversations.history`, `conversations.replies`, `conversations.list`, `conversations.info`, `users.info`,
