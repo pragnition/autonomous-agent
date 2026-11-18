@@ -66,5 +66,7 @@ class Payloads:
         the turn, because a turn queued while the one before it ran must resume the session that turn ended with,
         and must see the projects as they are when it actually starts, not when it was queued. The text stays as
         it was when the turn was queued."""
-        return {**payload, "resume_session_id": convo["session_id"], "project": convo["project"],
+        # the account the session last ran on: the runner resumes it only if it would stay there
+        return {**payload, "resume_session_id": convo["session_id"], "resume_account": convo["session_account"],
+                "project": convo["project"],
                 "test_secrets": self.test_secrets(), "system_prompt": self._full_prompt()}

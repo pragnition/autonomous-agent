@@ -8,6 +8,7 @@ import pytest
 
 from agent.runner.base import RunResult
 from agent.runner.claude import ClaudeRunner
+from agent.runner.handoff import handoff_note
 from agent.runner.link import CoreLink, SessionRevoked
 from agent.runner.tools import remote_sdk_tools
 from agent.runner.worker import FRESH_NOTE, MIDTURN_NOTE, RESTARTED_NOTE, Runner, memory_block
@@ -79,6 +80,7 @@ class FakeClaude:
         self.read, self.sent = [], []  # read: what a beat (or the result) should report; sent: (run_id, item_id, text)
         self._active: set[str] = set()
         self._stop = asyncio.Event()
+        self.resumable, self.resume_checks = True, []  # what can_resume answers, and what it was asked
 
     async def run(self, spec):
         self.specs.append(spec)
@@ -97,6 +99,13 @@ class FakeClaude:
 
     def session_of(self, run_id):
         return "live-1"
+
+    def account_of(self, run_id):
+        return "maple"
+
+    async def can_resume(self, session_id, account):
+        self.resume_checks.append((session_id, account))
+        return self.resumable
 
     def read_of(self, run_id):
         return list(self.read)
@@ -282,7 +291,8 @@ async def test_heartbeat_reports_the_live_session_and_what_was_read(tmp_path):
     runner = make_runner(tmp_path, link, claude)
     task = asyncio.create_task(runner.handle(item(), "tok", []))
     await wait_until(lambda: link.beats)
-    assert link.beats[0] == {"session_id": "live-1", "read": ["W-2"], "accepts_messages": True}
+    assert link.beats[0] == {"session_id": "live-1", "account": "maple", "read": ["W-2"],
+                             "accepts_messages": True}
     await claude.interrupt("W-V-1")
     await asyncio.wait_for(task, 2)
 
@@ -346,6 +356,42 @@ async def test_a_restarted_turn_is_told_and_resumes(tmp_path):
     await make_runner(tmp_path, link, claude).handle(it, "tok", [])
     assert claude.specs[0].prompt == "[from bob · DM]\n" + RESTARTED_NOTE + "fix the export"
     assert claude.specs[0].resume_session_id == "live-1"
+
+
+async def test_a_session_resumes_when_it_stays_on_its_account(tmp_path):
+    link, claude = FakeLink(), FakeClaude()
+    await make_runner(tmp_path, link, claude).handle(item(resume_session_id="sess-1", resume_account="maple"),
+                                                     "tok", [])
+    assert claude.resume_checks == [("sess-1", "maple")]
+    assert claude.specs[0].resume_session_id == "sess-1" and claude.specs[0].prompt == "fix the export"
+
+
+async def test_a_session_that_would_land_on_another_account_hands_off_to_a_fresh_one(tmp_path):
+    origin = "[from Ann Lee (ann) · DM · https://team.slack.com/archives/D1/p51]"
+    log = tmp_path / "claude" / "projects" / "-var-agent-scratch-V-1" / "sess-1.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text("{}\n")
+    link, claude = FakeLink(), FakeClaude()
+    claude.resumable = False
+    it = item(resume_session_id="sess-1", resume_account="maple", origin=origin)
+    it["attempts"] = 1  # a restarted turn: the fresh session doesn't pick up where it stopped, so no restart note
+    await make_runner(tmp_path, link, claude).handle(it, "tok", [])
+    assert claude.resume_checks == [("sess-1", "maple")]
+    assert len(claude.specs) == 1 and claude.specs[0].resume_session_id is None  # never resumed elsewhere
+    prompt = claude.specs[0].prompt
+    assert prompt == f"{origin}\n{handoff_note('sess-1', tmp_path / 'claude')}fix the export"
+    assert prompt.splitlines()[0] == origin  # the who/where/link line stays first
+    assert "sess-1" in prompt and str(log) in prompt and "read_thread" in prompt and RESTARTED_NOTE not in prompt
+
+
+async def test_the_handoff_inside_a_run_keeps_the_origin_first(tmp_path):
+    origin = "[from bob · DM]"
+    link, claude = FakeLink(), FakeClaude()
+    await make_runner(tmp_path, link, claude).handle(item(origin=origin), "tok", [])
+    transcript = tmp_path / "transcripts" / "W-V-1.jsonl"
+    prompt = claude.specs[0].handoff("sess-1", transcript)
+    assert prompt == f"{origin}\n{handoff_note('sess-1', tmp_path / 'claude', transcript)}fix the export"
+    assert str(transcript) in prompt
 
 
 async def test_a_first_attempt_gets_no_restart_note(tmp_path):

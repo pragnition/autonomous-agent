@@ -105,10 +105,19 @@ would otherwise inherit), plus a git identity (`AGENT_NAME`, `AGENT_GIT_EMAIL`),
 `data/runner/linear.env`, the project's test keys, `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`
 (the effortless plugin, which picks each prompt's reasoning effort, needs it). The last two cannot be overridden.
 
-If a turn can't resume its saved session and fails before its first model turn, the runner starts a fresh session
-with a note to call `read_thread` first, placed after the prompt's who, where and link line. When the proxy reports
-the session's account as rejected or disabled, the runner forks the session (same history, new session id, which
-the proxy pins to another account), up to twice.
+A Claude session is never resumed (`--resume`, with or without `--fork-session`) on a different account from the
+one it ran on. Core keeps the account each conversation's session last ran on (`conversations.session_account`, from
+the runner's heartbeat and result) and hands it to the next turn as `resume_account`. Before resuming, the runner
+asks the proxy's `/proxy/whoami` which account the session is pinned to. It resumes only when that is
+`resume_account` and the account isn't rejected or disabled. Otherwise (another account, an expired pin, an unknown
+last account or an unreachable proxy) it starts a fresh session (new id, empty history) with a handoff note
+placed after the prompt's who, where and link line. The note names the earlier session and its Claude Code log
+(`CLAUDE_CONFIG_DIR/projects/…/<session id>.jsonl`), and tells the session to read it, call `read_thread` and carry on.
+When the proxy reports the account of a running session as rejected or disabled (the watchdog, a 403/503, or a 429
+while the account is rejected), the runner does the same within the turn: a fresh session, which the proxy pins
+to another account, with the handoff note, which also names the runner's transcript `transcripts/<run id>.jsonl`.
+It does this up to twice per turn (the run's `forks` count). If a turn can't resume its saved session and fails
+before its first model turn, the runner starts a fresh session with a note to call `read_thread` first.
 
 ### docker (dind)
 
@@ -139,7 +148,8 @@ accounts and reports their usage: it holds the accounts, pins each session to on
 placeholder token that sessions send. Each origin has its own port; `deploy/proxy-origins.example.toml` lists the
 two this stack uses. core (origin `agent-core`) reads `/proxy/usage` for the queue's gate and `/proxy/usage`,
 `/proxy/perf` and `/proxy/whoami` for the dashboard. The runner (origin `agent-sandbox`) reads `/proxy/usage` and
-`/proxy/whoami` to decide when to fork a session.
+`/proxy/whoami` to decide when a session must move to a fresh one on another account, and whether a saved session
+would resume on the account it last ran on.
 
 ### The dashboard
 

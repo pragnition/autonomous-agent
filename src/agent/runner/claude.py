@@ -2,7 +2,9 @@
 
 The proxy pins each session to one account and returns that account's limits to it. When the account is rejected
 or disabled (seen by the watchdog, or as a 403/503, or a 429 while the proxy reports the account rejected), the run
-is resumed as a fork: a new session id with the conversation intact, which the proxy pins to a fresh account.
+moves to a fresh session (new id, empty history), which the proxy pins to another account, with a note naming the
+earlier session and where its record is. A session is never resumed on a different account from the one it ran on:
+not here, and not on a later turn (can_resume).
 
 Each attempt's prompt, and every message that arrives while the run is going, is written into the live session with its
 own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
@@ -28,6 +30,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 
 from agent.proxy import PLACEHOLDER_TOKEN, ProxyClient, ProxyUnavailable
 from agent.runner.base import RunResult, RunSpec
+from agent.runner.handoff import handoff_note
 from agent.runner.outcome import ACCOUNT_TROUBLE, FORK_STATUSES, map_result, usage_tokens
 
 # The SDK hands the parent's whole environment to the CLI, so anything secret-looking is overridden with "".
@@ -47,7 +50,7 @@ async def _user_message(message_uuid: str, text: str):
 @dataclass
 class _Attempt:
     result: RunResult
-    fork_wanted: bool
+    switch_wanted: bool  # the account is in trouble: carry on in a fresh session on another one
 
 
 class ClaudeRunner:
@@ -70,8 +73,7 @@ class ClaudeRunner:
         return {**redacted, **spec.env, "ANTHROPIC_BASE_URL": self.base_url,
                 "CLAUDE_CODE_OAUTH_TOKEN": PLACEHOLDER_TOKEN, "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}
 
-    def build_options(self, spec: RunSpec, *, session_id: str | None, resume: str | None = None,
-                      fork: bool = False) -> ClaudeAgentOptions:
+    def build_options(self, spec: RunSpec, *, session_id: str | None, resume: str | None = None) -> ClaudeAgentOptions:
         tools = [*spec.sdk_tools]
         servers = {**spec.mcp_servers, **({"agent": create_sdk_mcp_server("agent", tools=tools)} if tools else {})}
         return ClaudeAgentOptions(
@@ -80,7 +82,7 @@ class ClaudeRunner:
             # "user" is the agent's own Claude home (CLAUDE_CONFIG_DIR): the skills, plugins and MCP servers it adds
             setting_sources=["user", "project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
-            session_id=session_id, resume=resume, fork_session=fork,
+            session_id=session_id, resume=resume,
             settings=json.dumps(spec.settings) if spec.settings else None, max_buffer_size=MAX_BUFFER_SIZE,
             # the CLI echoes each user message it reads, with the uuid it was sent with
             extra_args={"replay-user-messages": None})
@@ -93,6 +95,30 @@ class ClaudeRunner:
     def session_of(self, run_id: str) -> str | None:
         active = self._active.get(run_id)
         return active[1]["sid"] if active else None
+
+    def account_of(self, run_id: str) -> str | None:
+        """The account the run's live session is on, once the proxy has said."""
+        active = self._active.get(run_id)
+        return active[1]["account"] if active else None
+
+    async def can_resume(self, session_id: str, account: str | None) -> bool:
+        """Whether resuming the session keeps it on the account it last ran on: the proxy has it pinned to that
+        account, and that account isn't rejected or disabled (the proxy would move it). Anything not known, the
+        last account, the pin, or the proxy itself, means no: a fresh session is the safe side."""
+        if not account:
+            return False
+        try:
+            pinned = await self.proxy.whoami(session_id)
+            if pinned != account:
+                return False
+            return (await self.proxy.usage()).status_of(pinned) not in ACCOUNT_TROUBLE
+        except ProxyUnavailable:
+            return False
+
+    def _handoff(self, spec: RunSpec, earlier: str, transcript: Path) -> str:
+        if spec.handoff is not None:
+            return spec.handoff(earlier, transcript)
+        return handoff_note(earlier, spec.env.get("CLAUDE_CONFIG_DIR"), transcript) + spec.prompt
 
     def read_of(self, run_id: str) -> list[str]:
         return list(self._read.get(run_id, []))
@@ -126,15 +152,20 @@ class ClaudeRunner:
         self._stopped.discard(run_id)
 
     async def run(self, spec: RunSpec) -> RunResult:
-        forks, resume, fork = 0, spec.resume_session_id, False
+        forks, resume, prompt = 0, spec.resume_session_id, spec.prompt
         if spec.run_id in self._stopped:  # cancelled before (or between) its sessions: don't start another
             return RunResult(run_id=spec.run_id, session_id=resume, outcome="interrupted", error="interrupted")
         self._read[spec.run_id] = []
         try:
             while True:
-                attempt = await self._attempt(spec, resume=resume, fork=fork)
-                if attempt.fork_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
-                    forks, resume, fork = forks + 1, attempt.result.session_id, True
+                attempt = await self._attempt(spec, resume=resume, prompt=prompt)
+                if attempt.switch_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
+                    # Never resume (or fork) the session onto another account: start a fresh one, which the proxy
+                    # pins to a working account, and tell it which session to pick up from
+                    earlier = attempt.result.session_id or resume
+                    forks, resume = forks + 1, None
+                    if earlier:
+                        prompt = self._handoff(spec, earlier, self.transcripts_dir / f"{spec.run_id}.jsonl")
                     continue
                 attempt.result.forks, attempt.result.read = forks, self._read[spec.run_id]
                 return attempt.result
@@ -170,10 +201,10 @@ class ClaudeRunner:
             f.write(json.dumps(record, default=str) + "\n")
         return record
 
-    async def _attempt(self, spec: RunSpec, *, resume: str | None, fork: bool) -> _Attempt:
-        session_id = None if (resume and not fork) else self.uuid_factory()
+    async def _attempt(self, spec: RunSpec, *, resume: str | None, prompt: str) -> _Attempt:
+        session_id = None if resume else self.uuid_factory()
         prompt_uuid = self.uuid_factory()
-        client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume, fork=fork))
+        client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume))
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False,
@@ -189,7 +220,7 @@ class ClaudeRunner:
         try:
             async with asyncio.timeout(spec.timeout_s):
                 await client.connect()
-                await client.query(_user_message(prompt_uuid, spec.prompt))
+                await client.query(_user_message(prompt_uuid, prompt))
                 state["accepting"] = True
                 async for msg in client.receive_messages():
                     record = self._append(transcript, msg)
@@ -206,17 +237,17 @@ class ClaudeRunner:
                         if (item_id := state["pending"].pop(msg.uuid)) is not None:
                             read.append(item_id)
                     if isinstance(msg, ResultMessage):
-                        forking = msg.is_error and msg.api_error_status in FORK_STATUSES
+                        switching = msg.is_error and msg.api_error_status in FORK_STATUSES
                         # A result from before the prompt was read answers something else (a background task from
-                        # an earlier turn finishing): it doesn't count, unless it forks the attempt
-                        if prompt_uuid not in state["pending"] or forking:
+                        # an earlier turn finishing): it doesn't count, unless it moves the run to another account
+                        if prompt_uuid not in state["pending"] or switching:
                             final = msg
                             results.append(msg)
                         # A message sent but not yet read runs as a next turn in this process, so read on to its
                         # result. An interrupted session stops here: what it didn't read goes back to the queue.
-                        # So does a result that forks to a new account: the session it would read on into is the
-                        # one about to be abandoned, not the one the pending message should land in.
-                        if not state["pending"] or state["reason"] or forking:
+                        # So does a result that moves the run to another account: the session it would read on into
+                        # is the one about to be abandoned, not the one the pending message should land in.
+                        if not state["pending"] or state["reason"] or switching:
                             state["accepting"] = False
                             break
         except TimeoutError:
@@ -233,7 +264,7 @@ class ClaudeRunner:
 
         result = RunResult(run_id=spec.run_id, session_id=state["sid"], outcome="error",
                            account_code=state["account"])
-        fork_wanted = False
+        switch_wanted = False
         if results:  # every answer the model gave is kept; the outcome comes from the last result
             result.turns = sum(r.num_turns or 0 for r in results)
             (result.input_tokens, result.output_tokens, result.cache_read_tokens,
@@ -247,14 +278,14 @@ class ClaudeRunner:
             result.outcome, result.error = "interrupted", "interrupted"
         elif state["reason"] == "watchdog":
             result.error = f"account {state['account']} is {state.get('trouble')}"
-            fork_wanted = True
+            switch_wanted = True
         elif final is None:
             result.error = "the session ended without a result"
         else:
             result.outcome, result.error = map_result(final)
             if result.outcome == "error":
                 if final.api_error_status in FORK_STATUSES:
-                    fork_wanted = True
+                    switch_wanted = True
                 elif final.api_error_status == 429:
-                    fork_wanted = await self._account_status(state) in ACCOUNT_TROUBLE
-        return _Attempt(result, fork_wanted)
+                    switch_wanted = await self._account_status(state) in ACCOUNT_TROUBLE
+        return _Attempt(result, switch_wanted)

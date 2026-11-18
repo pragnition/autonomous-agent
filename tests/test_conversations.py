@@ -421,6 +421,27 @@ async def test_on_result_posts_reply_and_session(convos, queue, slack, conn):
     assert convo(conn, "t8")["session_id"] == "sess-1"
 
 
+async def test_the_session_is_saved_with_the_account_it_ran_on(convos, queue, conn):
+    await convos.handle_slack(mention("t9", "question"))
+    item = queue.claim()
+    await convos.on_beat(item, {"session_id": "live-1", "account": "maple", "read": [], "accepts_messages": False})
+    assert (convo(conn, "t9")["session_id"], convo(conn, "t9")["session_account"]) == ("live-1", "maple")
+    # the run moved to a fresh session on another account: the next turn may only resume it there
+    result = {"outcome": "done", "text": "ok", "session_id": "sess-2", "account_code": "cedar"}
+    queue.complete(item.id, result)
+    await convos.on_result(queue.get(item.id), result)
+    assert (convo(conn, "t9")["session_id"], convo(conn, "t9")["session_account"]) == ("sess-2", "cedar")
+
+
+async def test_a_session_whose_account_is_not_known_yet_is_saved_without_one(convos, queue, conn):
+    await convos.handle_slack(mention("t10", "question"))
+    item = queue.claim()
+    conn.execute("UPDATE conversations SET session_id = 'old', session_account = 'maple' WHERE id = ?",
+                 (item.conversation_id,))
+    await convos.on_beat(item, {"session_id": "live-2", "read": [], "accepts_messages": False})
+    assert (convo(conn, "t10")["session_id"], convo(conn, "t10")["session_account"]) == ("live-2", None)
+
+
 async def test_on_result_reply_is_scrubbed(conn, queue, slack, tmp_path):
     """The session's final reply goes through the same scrub as every tool reply: configured secret values and
     token patterns."""
@@ -597,8 +618,8 @@ async def test_failed_turn_forgets_the_session(convos, queue, conn):
     conn.execute("UPDATE conversations SET session_id = 'sess-old' WHERE id = ?", (item.conversation_id,))
     queue.complete(item.id, {"outcome": "error"})
     await convos.on_result(queue.get(item.id), {"outcome": "error", "error": "boom"})
-    assert conn.execute("SELECT session_id FROM conversations WHERE id = ?",
-                        (item.conversation_id,)).fetchone()[0] is None
+    assert tuple(conn.execute("SELECT session_id, session_account FROM conversations WHERE id = ?",
+                              (item.conversation_id,)).fetchone()) == (None, None)
 
 
 async def test_linear_task_is_reattached_after_a_slack_failure(convos, fake_linear, queue, slack, conn):

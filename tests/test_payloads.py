@@ -62,9 +62,11 @@ def test_system_prompt_lists_the_projects(conn, tmp_path):
 
 def test_use_fable_model(payloads, conn):
     cid = add_conversation(conn)
-    conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9' WHERE id = ?", (cid,))
+    conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9', "
+                 "session_account = 'maple' WHERE id = ?", (cid,))
     p = payloads.turn(row(conn, cid), "x", "bob")
     assert p["model"] == "claude-fable-5-1" and p["resume_session_id"] == "sess-9"
+    assert p["resume_account"] == "maple"  # the runner resumes it only if it stays on this account
 
 
 def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):

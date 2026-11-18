@@ -352,8 +352,9 @@ class Conversations:
         and hand it whatever else arrived in its conversation meanwhile."""
         convo = self._row(item.conversation_id) if item.conversation_id else None
         if beat.get("session_id") and convo is not None:
-            self.conn.execute("UPDATE conversations SET session_id = ? WHERE id = ?",
-                              (beat["session_id"], convo["id"]))
+            # the account goes with the session: NULL until the proxy has said, so it's never resumed elsewhere
+            self.conn.execute("UPDATE conversations SET session_id = ?, session_account = ? WHERE id = ?",
+                              (beat["session_id"], beat.get("account"), convo["id"]))
         for read_item in self.queue.mark_read(beat.get("read") or [], item.id):
             ts = read_item.payload.get("message_ts")
             if ts and convo is not None and convo["channel"]:
@@ -404,11 +405,14 @@ class Conversations:
         # Saved before anything is awaited: the next turn can be claimed as soon as this one completed, and it
         # resumes whatever session the conversation has at that moment
         if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
-            self.conn.execute("UPDATE conversations SET session_id = NULL, last_active_at = ? WHERE id = ?",
-                              (db.utcnow(), convo["id"]))
+            self.conn.execute("UPDATE conversations SET session_id = NULL, session_account = NULL, last_active_at = ? "
+                              "WHERE id = ?", (db.utcnow(), convo["id"]))
+        elif result.get("session_id"):  # the session and the account it ran on, which the next turn checks
+            self.conn.execute("UPDATE conversations SET session_id = ?, session_account = ?, last_active_at = ? "
+                              "WHERE id = ?", (result["session_id"], result.get("account_code"), db.utcnow(),
+                                               convo["id"]))
         else:
-            self.conn.execute("UPDATE conversations SET session_id = COALESCE(?, session_id), last_active_at = ? "
-                              "WHERE id = ?", (result.get("session_id"), db.utcnow(), convo["id"]))
+            self.conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (db.utcnow(), convo["id"]))
         if continuing:  # resumes the session this turn ended with (a fresh one after an error), like any next turn
             p = item.payload
             if retrying:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from claude_agent_sdk import AssistantMessage, CLIConnectionError, ResultMessage, TextBlock, UserMessage, tool
 
-from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, Usage
+from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, ProxyUnavailable, Usage
 from agent.runner.base import RunSpec
 from agent.runner.claude import ClaudeRunner
 
@@ -24,8 +24,11 @@ def sids():
 class FakeProxy:
     def __init__(self, account="maple", status="allowed"):
         self.account, self.status, self.whoami_calls = account, status, []
+        self.down = False
 
     async def whoami(self, sid):
+        if self.down:
+            raise ProxyUnavailable("proxy unreachable")
         self.whoami_calls.append(sid)
         return self.account
 
@@ -199,24 +202,65 @@ async def test_account_code_from_whoami(tmp_path):
     assert r.account_code == "cedar" and len(proxy.whoami_calls) == 1
 
 
-async def test_resume_without_fork(tmp_path):
+async def test_resume_keeps_the_session_id(tmp_path):
     runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
     await runner.run(spec(tmp_path, resume_session_id="11111111-1111-4111-8111-111111111111"))
     o = clients[0].options
     assert o.resume == "11111111-1111-4111-8111-111111111111" and o.fork_session is False and o.session_id is None
 
 
-async def test_fork_on_403_then_success(tmp_path):
+async def test_a_rejected_account_moves_to_a_fresh_session_never_a_resume(tmp_path):
     runner, clients = make_runner(tmp_path, [[echo_prompt, result("error_during_execution", api_error_status=403,
                                                                   errors=["account disabled: maple"])],
                                              [echo_prompt, result()]])
-    r = await runner.run(spec(tmp_path))
+    home = tmp_path / "claude"
+    r = await runner.run(spec(tmp_path, env={"CLAUDE_CONFIG_DIR": str(home)}))
     assert (r.outcome, r.forks) == ("done", 1)
     second = clients[1].options
-    assert second.resume == "00000000-0000-4000-8000-000000000001" and second.fork_session is True
+    assert second.resume is None and second.fork_session is False  # no history carried onto the new account
     assert second.session_id == "00000000-0000-4000-8000-000000000003"  # 002 was the first attempt's prompt
-    assert clients[1].prompt["message"]["content"] == "build it"  # a fork sends the prompt again, as its own
+    handoff = clients[1].prompt["message"]["content"]
+    assert handoff.endswith("build it") and "fresh session" in handoff and "read_thread" in handoff
+    earlier = "00000000-0000-4000-8000-000000000001"  # the earlier session, to read from inside the chat
+    assert str(home / "projects" / "*" / (earlier + ".jsonl")) in handoff
+    assert str(tmp_path / "R1.jsonl") in handoff  # the runner's transcript of it
     assert clients[1].prompt["uuid"] != clients[0].prompt["uuid"]
+
+
+async def test_a_resumed_session_on_a_rejected_account_hands_off_without_resuming(tmp_path):
+    unavailable = result("error_during_execution", api_error_status=503)
+    runner, clients = make_runner(tmp_path, [[echo_prompt, unavailable], [echo_prompt, result()]])
+    r = await runner.run(spec(tmp_path, resume_session_id="11111111-1111-4111-8111-111111111111",
+                              handoff=lambda sid, transcript: "HANDOFF " + sid + " " + transcript.name))
+    assert clients[0].options.resume == "11111111-1111-4111-8111-111111111111"
+    assert clients[1].options.resume is None and clients[1].options.fork_session is False
+    assert clients[1].prompt["message"]["content"] == "HANDOFF 11111111-1111-4111-8111-111111111111 R1.jsonl"
+    assert r.outcome == "done" and r.session_id == clients[1].options.session_id
+
+
+async def test_can_resume_only_on_the_account_the_session_last_ran_on(tmp_path):
+    sid = "11111111-1111-4111-8111-111111111111"
+    proxy = FakeProxy(account="maple")
+    runner, _ = make_runner(tmp_path, [], proxy=proxy)
+    assert await runner.can_resume(sid, "maple") is True
+    assert proxy.whoami_calls == [sid]
+    assert await runner.can_resume(sid, "cedar") is False  # the proxy has it pinned elsewhere now
+    assert await runner.can_resume(sid, None) is False  # the last account isn't known: don't guess
+    proxy.account = None  # the pin expired: the proxy would pick an account on the first request
+    assert await runner.can_resume(sid, "maple") is False
+    proxy.account, proxy.status = "maple", "rejected"  # still pinned, but the proxy would move it
+    assert await runner.can_resume(sid, "maple") is False
+    proxy.status, proxy.down = "allowed", True
+    assert await runner.can_resume(sid, "maple") is False
+
+
+async def test_account_of_reports_the_live_sessions_account(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, HANG]], proxy=FakeProxy(account="cedar"))
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.account_of("R1") == "cedar")
+    await runner.interrupt("R1")
+    await task
+    assert runner.account_of("R1") is None
 
 
 async def test_fork_on_429_only_when_account_rejected(tmp_path):
