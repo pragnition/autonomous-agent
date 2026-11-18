@@ -34,7 +34,7 @@ refusal.
          | Claude API, placeholder token
          v
  relay (host network, 172.30.0.1:28090/28091) --> account proxy (host, 127.0.0.1:18090/18091) --> Claude
- supervisor: polls core's /health every minute; restarts agent-core and alerts in Slack
+ supervisor + supervisor-standby: poll core's /health and each other's every minute; restart and alert in Slack
 ```
 
 The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.1. core has the fixed address
@@ -42,7 +42,8 @@ The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.
 
 | Listener | Where | Reached by |
 |---|---|---|
-| core :8080 | stack network only | the runner (`http://core:8080`): agent API, git endpoint; the supervisor: `/health` |
+| core :8080 | stack network only | the runner (`http://core:8080`): agent API, git endpoint; the supervisors: `/health` |
+| supervisor :8090 | stack network only | the other supervisor: `/health` |
 | core :8085 | host 127.0.0.1:18085 | Linear, through Tailscale Funnel: `/linear/webhook`, `/linear/oauth/callback` |
 | core :8086 | host 127.0.0.1:18086 | people on the tailnet, through `tailscale serve` on :9443 |
 | core :8087 | stack network only | apps under test, at `http://172.30.0.10:8087/llm/<upstream>` |
@@ -118,12 +119,20 @@ container shares its network namespace, so an app published on 127.0.0.1:<port> 
 `agentwork` volume is mounted at the same path in both containers, so compose bind mounts of a checkout resolve.
 Images and volumes live in the `agentdocker` volume.
 
-### supervisor
+### supervisor and supervisor-standby
 
-`python -m agent supervisor`, container `agent-supervisor`. Every 60 s it checks core's `/health`. After three
-failures in a row it alerts and restarts `agent-core` once through the Docker socket; it alerts again when core is
-back. Alerts go to the Slack incoming webhook `SLACK_ALERT_WEBHOOK` (`data/secrets/supervisor.env`), or to its own
-log when that isn't set. It is the only service with the host's Docker socket.
+`python -m agent supervisor`, run twice: containers `agent-supervisor` (`SUPERVISOR_ROLE=primary`) and
+`agent-supervisor-standby` (`standby`). They watch core and each other. Every 60 s each checks core's `/health`
+and its peer's `/health` (`:8090`, stack network only). After three failures in a row, it alerts and restarts the
+target once through the Docker socket, and alerts again when the target is back. Each restarts its peer. Only the
+primary acts on core; the standby leaves core alone while the primary is up and takes core over once the primary is
+down, so core is never restarted twice and the same alert is never sent twice.
+
+A supervisor's own `/health` answers 503 once its watch loop hasn't finished a tick for three minutes, so a
+supervisor whose loop has hung counts as down, not just one whose process is gone. A tick that raises ends the
+process and Docker restarts it. Alerts go to the Slack incoming webhook `SLACK_ALERT_WEBHOOK`
+(`data/secrets/supervisor.env`, shared by both), prefixed with the role, or to the supervisor's own log when that
+isn't set. The supervisors are the only services with the host's Docker socket.
 
 ### relay
 
@@ -501,7 +510,7 @@ account's noreply address.
 | `just doctor` | in core: config, packs, each required secret, the proxy (verified accounts, capacity), each pack's checks, GitHub read access per repo, Linear states per pack, the runner token. In the agent container: `gh auth status` and `az account show` |
 | `just smoke` | queues one turn ("reply with pong") with no Slack thread and waits up to 5 minutes for the answer: core, runner, proxy and Claude end to end |
 | `just dashboard-serve` | `tailscale serve --bg --https=9443 http://127.0.0.1:18086`: the dashboard at `https://<node>.<tailnet>.ts.net:9443`, tailnet only |
-| `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `relay`) |
+| `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `supervisor-standby`, `relay`) |
 | `just kpis [--days N] [--project P]` | prints the KPIs |
 | `just schedules` | checks the schedules file and prints each schedule's next three run times |
 | `just stop`, `just resume` | the kill switch from the host, for when Slack isn't an option |
@@ -538,7 +547,7 @@ and loop errors; `just logs agent` shows the runner's.
   patterns (Anthropic, GitHub, Slack, Linear, AWS keys, private key blocks) replaced with `[redacted]`. The files
   that `post_files` sends are not scrubbed. Values in `agent.env` are unknown to core, so only the patterns catch
   them.
-- **Each service has its own secrets.** Each service mounts only its own secrets file. core and the supervisor read
+- **Each service has its own secrets.** Each service mounts only its own secrets file. core and the supervisors read
   theirs into memory, never into their environment; the agent container gets `agent.env` as plain environment
   variables.
 - **People and tiers.** In Slack, only people in `[people]` get answers, and their role sets the tools a session is

@@ -1,23 +1,40 @@
-"""The supervisor's watchdog: health-checks core and speaks up, independently of core."""
+"""The supervisors' watchdog: health-checks core and the other supervisor, and speaks up, independently of core.
+
+Two supervisors run, `primary` and `standby`, and each watches core and the other (its peer). Each answers its own
+`/health`, which turns unhealthy when its watch loop stops ticking, so a hung supervisor looks down too. Either one
+restarts its peer when the peer is down. Only the primary acts on core; the standby takes over core only while the
+primary is down, so core is never restarted twice and nobody gets the same alert twice.
+"""
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 
 import aiohttp
+from aiohttp import web
+
+INTERVAL_S = 60
 
 
 class Watchdog:
     def __init__(self, targets: dict[str, str], *, alert: Callable[[str], Awaitable[None]],
                  restart: Callable[[str], Awaitable[None]], check: Callable[[str], Awaitable[bool]],
-                 threshold: int = 3):
+                 threshold: int = 3, defer_to: dict[str, str] | None = None):
+        """defer_to maps a target to a peer: this watchdog acts on the target only while that peer is down."""
         self.targets, self.alert, self.restart, self.check, self.threshold = targets, alert, restart, check, threshold
+        self.defer_to = defer_to or {}
         self.failures = {name: 0 for name in targets}
         self.down: set[str] = set()
 
+    def _deferred(self, name: str) -> bool:
+        peer = self.defer_to.get(name)
+        return peer is not None and peer not in self.down
+
     async def tick(self) -> None:
-        for name, url in self.targets.items():
-            healthy = await self.check(url)
+        # peers first, so a target deferred to a peer sees whether the peer is down on this tick
+        for name in sorted(self.targets, key=lambda n: n in self.defer_to):
+            healthy = await self.check(self.targets[name])
             if healthy:
                 self.failures[name] = 0
                 if name in self.down:
@@ -25,10 +42,34 @@ class Watchdog:
                     await self.alert(f"{name} is back up.")
                 continue
             self.failures[name] += 1
-            if self.failures[name] == self.threshold and name not in self.down:
+            if self.failures[name] >= self.threshold and name not in self.down and not self._deferred(name):
                 self.down.add(name)
-                await self.alert(f"{name} is down ({self.threshold} failed health checks); restarting it once.")
+                await self.alert(f"{name} is down ({self.failures[name]} failed health checks); restarting it once.")
                 await self.restart(name)
+
+
+class Heartbeat:
+    """When the watch loop last finished a tick; /health is healthy only while that is recent."""
+
+    def __init__(self, max_age_s: float, clock: Callable[[], float] = time.monotonic):
+        self.max_age_s, self.clock = max_age_s, clock
+        self.last = clock()  # a fresh supervisor gets one window to finish its first tick
+
+    def beat(self) -> None:
+        self.last = self.clock()
+
+    def healthy(self) -> bool:
+        return self.clock() - self.last <= self.max_age_s
+
+
+def health_app(heartbeat: Heartbeat) -> web.Application:
+    async def health(request: web.Request) -> web.Response:
+        ok = heartbeat.healthy()
+        return web.json_response({"ok": ok}, status=200 if ok else 503)
+
+    app = web.Application()
+    app.router.add_get("/health", health)
+    return app
 
 
 async def http_check(url: str) -> bool:
@@ -45,18 +86,36 @@ async def docker_restart(name: str, socket: str = "/var/run/docker.sock") -> Non
             resp.raise_for_status()
 
 
-def webhook_alert(url: str) -> Callable[[str], Awaitable[None]]:
+def webhook_alert(url: str, who: str) -> Callable[[str], Awaitable[None]]:
     async def alert(text: str) -> None:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-            async with s.post(url, json={"text": text}) as resp:
+            async with s.post(url, json={"text": f"[{who}] {text}"}) as resp:
                 resp.raise_for_status()
 
     return alert
 
 
 def health_targets(environ) -> dict[str, str]:
-    """The one thing to watch: core."""
-    return {"core": environ.get("CORE_HEALTH", "http://core:8080/health")}
+    """What to watch: core, and the other supervisor when PEER_HEALTH is set."""
+    targets = {"core": environ.get("CORE_HEALTH", "http://core:8080/health")}
+    if environ.get("PEER_HEALTH"):
+        targets["peer"] = environ["PEER_HEALTH"]
+    return targets
+
+
+def restartable(environ) -> dict[str, str]:
+    """Target name to container: the only containers a supervisor restarts."""
+    containers = {"core": environ.get("CORE_CONTAINER", "agent-core")}
+    if environ.get("PEER_HEALTH") and environ.get("PEER_CONTAINER"):
+        containers["peer"] = environ["PEER_CONTAINER"]
+    return containers
+
+
+def deferrals(environ, targets: dict[str, str]) -> dict[str, str]:
+    """The standby leaves core to the primary while the primary (its peer) is up."""
+    if environ.get("SUPERVISOR_ROLE", "primary") == "standby" and "peer" in targets:
+        return {"core": "peer"}
+    return {}
 
 
 def main() -> int:
@@ -67,24 +126,33 @@ def main() -> int:
     from agent.secrets import load_secrets
 
     secrets = load_secrets(paths.SECRETS_FILE)
-    containers = {"core": os.environ.get("CORE_CONTAINER", "agent-core")}  # the only container the watchdog restarts
+    role = os.environ.get("SUPERVISOR_ROLE", "primary")
     targets = health_targets(os.environ)
+    containers = restartable(os.environ)
+    port = int(os.environ.get("SUPERVISOR_PORT", "8090"))
 
     async def print_alert(text: str) -> None:
-        print(text, flush=True)
+        print(f"[supervisor {role}] {text}", flush=True)
 
-    alert = webhook_alert(secrets["SLACK_ALERT_WEBHOOK"]) if secrets.get("SLACK_ALERT_WEBHOOK") else print_alert
+    hook = secrets.get("SLACK_ALERT_WEBHOOK")
+    alert = webhook_alert(hook, f"supervisor {role}") if hook else print_alert
 
     async def restart(name: str) -> None:
         if name in containers:
             await docker_restart(containers[name])
 
-    watchdog = Watchdog(targets, alert=alert, restart=restart, check=http_check)
+    watchdog = Watchdog(targets, alert=alert, restart=restart, check=http_check,
+                        defer_to=deferrals(os.environ, targets))
+    heartbeat = Heartbeat(max_age_s=3 * INTERVAL_S)
 
     async def loop() -> None:
+        runner = web.AppRunner(health_app(heartbeat))
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", port).start()
         while True:
-            await watchdog.tick()
-            await asyncio.sleep(60)
+            await watchdog.tick()  # if it raises, the process exits and Docker restarts the container
+            heartbeat.beat()
+            await asyncio.sleep(INTERVAL_S)
 
     asyncio.run(loop())
     return 0

@@ -81,14 +81,34 @@ services:
       - ${AGENT_DATA:-./data}/tasks:/data/tasks:ro          # the task record core keeps; the agent only reads it
       - agentwork:/var/agent
 
+  # Two supervisors that watch core and each other. Each restarts the other when it is down or its loop has
+  # stalled; only the primary acts on core, and the standby takes core over only while the primary is down.
   supervisor:
     build: {context: ., target: supervisor}
     container_name: agent-supervisor
     restart: unless-stopped
     networks: [agentnet]
     environment:
+      SUPERVISOR_ROLE: primary
       CORE_HEALTH: http://core:8080/health
       CORE_CONTAINER: agent-core
+      PEER_HEALTH: http://supervisor-standby:8090/health
+      PEER_CONTAINER: agent-supervisor-standby
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro
+
+  supervisor-standby:
+    build: {context: ., target: supervisor}
+    container_name: agent-supervisor-standby
+    restart: unless-stopped
+    networks: [agentnet]
+    environment:
+      SUPERVISOR_ROLE: standby
+      CORE_HEALTH: http://core:8080/health
+      CORE_CONTAINER: agent-core
+      PEER_HEALTH: http://supervisor:8090/health
+      PEER_CONTAINER: agent-supervisor
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro
