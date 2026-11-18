@@ -111,11 +111,17 @@ the runner's heartbeat and result) and hands it to the next turn as `resume_acco
 asks the proxy's `/proxy/whoami` which account the session is pinned to. It resumes only when that is
 `resume_account` and the account isn't rejected or disabled. Otherwise (another account, an expired pin, an unknown
 last account or an unreachable proxy) it starts a fresh session (new id, empty history) with a handoff note
-placed after the prompt's who, where and link line. The note names the earlier session and its Claude Code log
-(`CLAUDE_CONFIG_DIR/projects/…/<session id>.jsonl`), and tells the session to read it, call `read_thread` and carry on.
+placed after the prompt's who, where and link line. The earlier session's full history is never loaded into the
+fresh one, by `/resume` or any other route. The runner reads the earlier record itself and the note carries only a
+short digest of it (`agent/runner/handoff.py`): the earlier session id, the text of its last 3 assistant messages
+(4,000 characters in all at most) and the files it edited or wrote (its Edit/Write calls). The note gives the
+record's path (the Claude Code log `CLAUDE_CONFIG_DIR/projects/…/<session id>.jsonl`) for looking up one specific
+detail with grep or tail, and says not to read or load it whole and not to use `/resume` or `--resume`. The session
+catches up with `read_thread` and from the conversation folder's own state (git status, its notes), then carries on.
 When the proxy reports the account of a running session as rejected or disabled (the watchdog, a 403/503, or a 429
 while the account is rejected), the runner does the same within the turn: a fresh session, which the proxy pins
-to another account, with the handoff note, which also names the runner's transcript `transcripts/<run id>.jsonl`.
+to another account, with the handoff note. Its digest comes from the runner's transcript `transcripts/<run id>.jsonl`
+(the earlier session's own messages), whose path the note also gives.
 It does this up to twice per turn (the run's `forks` count). If a turn can't resume its saved session and fails
 before its first model turn, the runner starts a fresh session with a note to call `read_thread` first.
 

@@ -221,6 +221,7 @@ async def test_a_rejected_account_moves_to_a_fresh_session_never_a_resume(tmp_pa
     assert second.session_id == "00000000-0000-4000-8000-000000000003"  # 002 was the first attempt's prompt
     handoff = clients[1].prompt["message"]["content"]
     assert handoff.endswith("build it") and "fresh session" in handoff and "read_thread" in handoff
+    assert "don't read or load its record whole" in handoff and "--resume" in handoff
     earlier = "00000000-0000-4000-8000-000000000001"  # the earlier session, to read from inside the chat
     assert str(home / "projects" / "*" / (earlier + ".jsonl")) in handoff
     assert str(tmp_path / "R1.jsonl") in handoff  # the runner's transcript of it

@@ -212,7 +212,7 @@ class Runner:
         earlier = spec.resume_session_id
         if earlier and not await self._can_resume(earlier, spec.resume_account):
             # Resuming would put the session on another account (or on one we can't confirm): never do that. A fresh
-            # session reads the earlier one's record instead.
+            # session starts with a short digest of the earlier one instead, never its full history.
             log.info("not resuming %s: it last ran on %s and the proxy won't keep it there; starting a fresh session",
                      earlier, spec.resume_account or "an unknown account")
             spec = dataclasses.replace(spec, resume_session_id=None, prompt=spec.handoff(earlier, None))
