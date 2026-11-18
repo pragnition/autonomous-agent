@@ -134,7 +134,21 @@ def test_count_numeric_and_counted_and_pr(tmp_path):
 
     assert state.count("pr", since) == \
         ("pr since 2026-11-19T00:00:00Z: prs=2 merged_without_passing_ci=1 "
-         "median_lines=40 median_open_to_merge_s=300")
+         "median_lines=40 median_open_to_merge_s=300 coauthor_trailers=1")
+
+
+def test_count_pr_sums_coauthor_trailers_and_defaults_missing_to_zero(tmp_path):
+    state = State(tmp_path)
+    since = _dt(2026, 11, 19, 0, 0, 0)
+    state.append_metrics([
+        {"ts": "2026-11-19T00:05:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/3", "repo": "x/y",
+         "lines": 10, "open_to_merge_s": 60, "ci": "passed", "coauthor_trailers": 2, "conversation": None},
+        # No `coauthor_trailers` key at all -- missing must count as 0, not crash `_count_pr`.
+        {"ts": "2026-11-19T00:10:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/4", "repo": "x/y",
+         "lines": 20, "open_to_merge_s": 90, "ci": "passed", "conversation": None},
+    ])
+
+    assert state.count("pr", since).endswith("coauthor_trailers=2")
 
 
 def test_count_unknown_signal_raises(tmp_path):

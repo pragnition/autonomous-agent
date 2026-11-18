@@ -130,8 +130,10 @@ def _count_pr(records: list[dict], label: str) -> str:
     _, median_lines, _, _ = _stat([r["lines"] for r in prs if r.get("lines") is not None])
     _, median_open_to_merge_s, _, _ = _stat([r["open_to_merge_s"] for r in prs
                                              if r.get("open_to_merge_s") is not None])
+    coauthor_trailers = sum(r.get("coauthor_trailers") or 0 for r in prs)
     return (f"pr since {label}: prs={len(prs)} merged_without_passing_ci={merged_without_passing_ci} "
-            f"median_lines={median_lines} median_open_to_merge_s={median_open_to_merge_s}")
+            f"median_lines={median_lines} median_open_to_merge_s={median_open_to_merge_s} "
+            f"coauthor_trailers={coauthor_trailers}")
 
 
 def summarize(records: list[dict], signal: str, label: str) -> str:
@@ -148,7 +150,8 @@ def summarize(records: list[dict], signal: str, label: str) -> str:
     `reclone`, `tool_errors`, `missing_tools`, all from `kind == "turn"` records) print `total` (the sum -- for
     `tool_errors`/`missing_tools`, the sum of each record's list length) and `turns` (records greater than zero,
     or with a non-empty list). `pr` (from `kind == "pr"` records) prints `prs`, `merged_without_passing_ci`
-    (`open_to_merge_s` is not null and `ci != "passed"`), `median_lines` and `median_open_to_merge_s`.
+    (`open_to_merge_s` is not null and `ci != "passed"`), `median_lines`, `median_open_to_merge_s` and
+    `coauthor_trailers` (the sum of each record's `coauthor_trailers`, a record missing it counted as 0).
     An unknown signal raises `ValueError`.
     """
     if signal == "pr":
