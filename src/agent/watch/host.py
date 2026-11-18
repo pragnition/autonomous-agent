@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +25,9 @@ RUNNER_CONTAINER = "agent-runner"
 # docker exec's own complaints about the container, as opposed to the command inside it failing (a missing
 # transcript file): seen verbatim in its stderr, lowercased for a case-insensitive match.
 _CONTAINER_UNREACHABLE = ("no such container", "is not running")
+
+# The runner token as `agent-runner` sees it: compose mounts `<live>/data/runner` at `/run/agent`, read-only.
+_RUNNER_TOKEN_IN_RUNNER = "/run/agent/runner-token"
 
 
 class Host:
@@ -101,17 +105,54 @@ class Host:
         those exist yet. The `.env` files are parsed with `agent.secrets.load_secrets`, the same stdlib-only parser
         core itself uses, so a quoted or `export`-prefixed value here is handled the same way it is everywhere
         else — a quoted `GH_TOKEN` doesn't silently break `jensen_gh`, and a value returned here never carries its
-        surrounding quotes, which would make `scrub` miss the bare token inside a transcript or digest."""
+        surrounding quotes, which would make `scrub` miss the bare token inside a transcript or digest.
+
+        Never raises: the hourly measure calls this first thing, and a crash there would wedge every hour after.
+        Each source is read on its own; one that can't be read is skipped with a line on stderr naming only the
+        source and the exception's type. The runner token is written 0600 for the agent container's own uid, which
+        the watch on the host may not be, so a token file that can't be read here is read as its owner instead,
+        through `docker exec agent-runner cat /run/agent/runner-token`."""
         secrets = self.live / "data" / "secrets"
-        values = []
+        values: list[str] = []
         for folder in (secrets, secrets / "projects"):
-            if folder.is_dir():
-                for path in sorted(folder.glob("*.env")):
+            try:
+                paths = sorted(folder.glob("*.env")) if folder.is_dir() else []
+            except Exception as exc:
+                self._skip_secret_source(folder, exc)
+                continue
+            for path in paths:
+                try:
                     values.extend(load_secrets(path).values())
-        runner_token = self.live / "data" / "runner" / "runner-token"
-        if runner_token.is_file():
-            values.append(runner_token.read_text().strip())
+                except Exception as exc:
+                    self._skip_secret_source(path, exc)
+        token = self._runner_token()
+        if token:
+            values.append(token)
         return [value for value in values if value]
+
+    def _runner_token(self) -> str | None:
+        path = self.live / "data" / "runner" / "runner-token"
+        try:
+            return path.read_text().strip() if path.is_file() else None
+        except Exception as exc:
+            unreadable = exc
+        try:
+            result = self.run(["docker", "exec", RUNNER_CONTAINER, "cat", _RUNNER_TOKEN_IN_RUNNER],
+                              capture_output=True, text=True)
+            if result.returncode == 0 and (result.stdout or "").strip():
+                return result.stdout.strip()
+        except Exception:
+            pass
+        self._skip_secret_source(path, unreadable, also="reading it inside agent-runner failed too")
+        return None
+
+    def _skip_secret_source(self, path: Path, exc: BaseException, also: str = "") -> None:
+        try:
+            source = path.relative_to(self.live)
+        except ValueError:
+            source = path.name
+        extra = f"; {also}" if also else ""
+        print(f"warning: skipped {source} in the secret scrub ({type(exc).__name__}{extra})", file=sys.stderr)
 
     def compose(self, args: list[str]) -> subprocess.CompletedProcess:
         """Run `docker compose <args>` from the live install's own directory, the way a person would by hand."""

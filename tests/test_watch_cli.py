@@ -105,6 +105,31 @@ def test_measure_warns_and_skips_when_gh_call_fails(tmp_path, monkeypatch, capsy
     assert kv["skip_reason"] == "quiet"
 
 
+def test_open_deployed_lookup_failures_log_only_the_exit_code_or_type(tmp_path, monkeypatch, capsys):
+    # The workflow log is public: gh's own stderr or an exception's message (a path, a token error) never goes in it.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/widgets")
+    host = _MeasureHost(_cp(returncode=4, stderr="HTTP 401: Bad credentials (/home/someone/.config/gh/hosts.yml)"))
+    assert main(["measure"], host=host, state=State(tmp_path / "a"), now=T0) == 0
+    err = capsys.readouterr().err
+    assert "gh issue list failed (exit 4)" in err
+    assert "Bad credentials" not in err and "/home/someone" not in err
+
+    class _NoGhHost(_MeasureHost):
+        def run(self, args, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "/opt/private/bin/gh")
+
+    assert main(["measure"], host=_NoGhHost(None), state=State(tmp_path / "b"), now=T0) == 0
+    err = capsys.readouterr().err
+    assert "gh issue list failed (FileNotFoundError)" in err
+    assert "/opt/private" not in err
+
+    host = _MeasureHost(_cp(stdout="not json at /srv/private/thing"))
+    assert main(["measure"], host=host, state=State(tmp_path / "c"), now=T0) == 0
+    err = capsys.readouterr().err
+    assert "gh issue list returned unparseable output" in err
+    assert "Expecting value" not in err
+
+
 # -- commit --
 
 

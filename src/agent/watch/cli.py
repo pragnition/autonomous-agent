@@ -93,7 +93,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _fetch_open_deployed(host: Host) -> list[dict]:
     """The open `fix-deployed` issues, with the job's own plain `gh` -- never Jensen's token. An unset
     `GITHUB_REPOSITORY`, a non-zero exit or unparseable JSON all fall back to `[]`, with a warning on stderr;
-    one hour's `measure` is never worth losing over this lookup alone."""
+    one hour's `measure` is never worth losing over this lookup alone. The warning names only the exit code or the
+    exception's type: stderr is the public workflow log, and `gh`'s own message can carry a path or a token error."""
     repo = os.environ.get("GITHUB_REPOSITORY")
     if not repo:
         print("warning: GITHUB_REPOSITORY is not set; treating open fix-deployed issues as none", file=sys.stderr)
@@ -102,15 +103,15 @@ def _fetch_open_deployed(host: Host) -> list[dict]:
         result = host.run(["gh", "issue", "list", "-R", repo, "--label", "fix-deployed", "--state", "open",
                            "--json", "number,title"], capture_output=True, text=True)
     except OSError as exc:
-        print(f"warning: gh issue list failed: {exc}", file=sys.stderr)
+        print(f"warning: gh issue list failed ({type(exc).__name__})", file=sys.stderr)
         return []
     if result.returncode != 0:
-        print(f"warning: gh issue list failed ({result.returncode}): {result.stderr}", file=sys.stderr)
+        print(f"warning: gh issue list failed (exit {result.returncode})", file=sys.stderr)
         return []
     try:
         data = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        print(f"warning: gh issue list returned unparseable output: {exc}", file=sys.stderr)
+    except json.JSONDecodeError:
+        print("warning: gh issue list returned unparseable output", file=sys.stderr)
         return []
     return data if isinstance(data, list) else []
 

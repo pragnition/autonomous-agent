@@ -846,6 +846,23 @@ def test_a_pr_opened_by_a_turn_still_running_maps_to_that_turns_conversation(tmp
         result.digest.read_text()
 
 
+def test_a_running_turn_whose_transcript_breaks_turn_facts_costs_nothing_else(tmp_path, capsys):
+    # A usage count that isn't a number makes turn_facts raise; for a running turn that must be caught the same way
+    # a finished turn's is, never crash the hour.
+    state = State(tmp_path)
+    broken = [_line(type="AssistantMessage", parent_tool_use_id=None, usage={"input_tokens": "12k"}, content=[])]
+    host = FakeHost(collect={**_EMPTY, "items": [_item("W-done", conversation_id="C-1")],
+                             "running": [{"id": "W-run", "conversation_id": "C-run"}]},
+                    transcripts={"W-run": broken, "W-done": _bash_calls(1)}, **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    assert [r["id"] for r in state.read_metrics(_since(T0)) if r["kind"] == "turn"] == ["W-done"]
+    err = capsys.readouterr().err
+    assert "TypeError" in err and "12k" not in err
+
+
 # -- improve-jensen's own traffic (m1) --
 
 

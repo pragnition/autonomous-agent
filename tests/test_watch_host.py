@@ -173,6 +173,58 @@ def test_secret_values_include_product_secrets_and_the_runner_token(tmp_path):
     assert {"agent-token-0001", "product-secret-0002", "runner-token-value-0003"} <= set(values)
 
 
+def _secrets_tree(tmp_path):
+    (tmp_path / "data" / "secrets" / "projects").mkdir(parents=True)
+    (tmp_path / "data" / "secrets" / "agent.env").write_text("GH_TOKEN=agent-token-0001\n")
+    (tmp_path / "data" / "secrets" / "projects" / "sample.env").write_text("DB_PASSWORD=product-secret-0002\n")
+    (tmp_path / "data" / "runner").mkdir(parents=True)
+    token = tmp_path / "data" / "runner" / "runner-token"
+    token.write_text("runner-token-value-0003\n")
+    return token
+
+
+def _unreadable(monkeypatch, *paths):
+    """Make `paths` raise PermissionError on read, the way a 0600 file owned by another uid does -- whatever uid
+    the tests run as (root can read a 0600 file, so a chmod alone wouldn't prove anything there)."""
+    real_read_text = Path.read_text
+    blocked = {Path(p) for p in paths}
+
+    def read_text(self, *args, **kwargs):
+        if self in blocked:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+def test_secret_values_reads_an_unreadable_runner_token_as_its_owner(tmp_path, monkeypatch):
+    # Core writes the runner token 0600 for the agent container's own uid; the watch on the host may not be that uid.
+    token = _secrets_tree(tmp_path)
+    _unreadable(monkeypatch, token)
+    calls, run = _fake_run([_cp(stdout="runner-token-value-0003\n")])
+    host = Host(run=run, live=tmp_path)
+
+    values = host.secret_values()
+
+    assert {"agent-token-0001", "product-secret-0002", "runner-token-value-0003"} <= set(values)
+    assert calls[0][0] == ["docker", "exec", "agent-runner", "cat", "/run/agent/runner-token"]
+
+
+def test_secret_values_never_raises_when_a_source_cannot_be_read(tmp_path, monkeypatch, capsys):
+    token = _secrets_tree(tmp_path)
+    _unreadable(monkeypatch, token, tmp_path / "data" / "secrets" / "agent.env")
+    calls, run = _fake_run([_cp(returncode=1, stderr="Error: No such container: agent-runner")])
+    host = Host(run=run, live=tmp_path)
+
+    values = host.secret_values()
+
+    assert values == ["product-secret-0002"]
+    err = capsys.readouterr().err
+    assert "data/runner/runner-token" in err and "data/secrets/agent.env" in err
+    assert "PermissionError" in err
+    assert "No such container" not in err and "Permission denied" not in err and str(tmp_path) not in err
+
+
 def test_secret_values_missing_folder(tmp_path):
     host = Host(run=lambda *a, **k: None, live=tmp_path)
     assert host.secret_values() == []

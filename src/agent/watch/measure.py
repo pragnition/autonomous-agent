@@ -373,7 +373,12 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     # transcript so far (a half-written last line is skipped), so that PR names the conversation that made it now,
     # rather than none -- by the time the turn finishes, the PR has already been planned for review.
     for turn in running:
-        for url in _facts(transcripts.get(turn["id"]), secrets).prs_created:
+        try:
+            prs_created = _facts(transcripts.get(turn["id"]), secrets).prs_created
+        except Exception as exc:  # the same guard a finished turn gets below: one bad transcript costs only itself
+            _warn("reading a running turn's transcript", exc)
+            continue
+        for url in prs_created:
             pr_to_conversation[url] = turn.get("conversation_id")
 
     for item in items:
