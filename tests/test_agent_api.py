@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import aiohttp
@@ -8,7 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from agent import db
 from agent.config import Limits
 from agent.core.agent_api import CONN_KEY, make_agent_app
-from agent.core.sessions import Gate, WorkQueue, mint_token
+from agent.core.sessions import Gate, WorkQueue, mint_token, resolve_token
 from agent_fixtures import add_conversation
 
 
@@ -163,6 +164,16 @@ async def test_heartbeat_reports_cancel(api, queue):
     assert (await (await api.post("/agent/heartbeat", json={}, headers=bearer(tok))).json())["cancel"] is False
     queue.cancel(item["id"])
     assert (await api.post("/agent/heartbeat", json={}, headers=bearer(tok))).status == 401
+
+
+async def test_a_heartbeat_keeps_the_session_token_alive_past_its_first_lifetime(api, conn):
+    """A turn can outlive the token it was claimed with (an account fork restarts the turn's timer), so each beat
+    of a live item renews the token rather than letting the next beat get a 401 mid-turn."""
+    _, tok = await pull_one(api)
+    almost_gone = (datetime.now(UTC) + timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn.execute("UPDATE tokens SET expires_at = ? WHERE kind = 'session'", (almost_gone,))
+    assert (await api.post("/agent/heartbeat", json={}, headers=bearer(tok))).status == 200
+    assert resolve_token(conn, tok, now=datetime.now(UTC) + timedelta(minutes=30)) is not None
 
 
 async def test_pull_respects_gate(api_paused):
