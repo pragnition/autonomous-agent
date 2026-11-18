@@ -1,5 +1,7 @@
 # improve-jensen: the agent that owns this repo. It answers issues labelled `improve-jensen`
 # and comments that mention @improve-jensen, and opens PRs. Its charter is .github/improve-jensen.md.
+# It runs on a self-hosted runner on the stack's host and reaches Claude through the account proxy's
+# `improve-jensen` origin, so it shares the team's account pool. Host setup: deploy/improve-jensen.md.
 name: improve-jensen
 
 on:
@@ -30,7 +32,9 @@ jobs:
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@improve-jensen'))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, improve-jensen]
+    env:
+      ANTHROPIC_BASE_URL: http://127.0.0.1:18092   # the proxy's improve-jensen origin
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +46,7 @@ jobs:
       - run: pip install -e '.[dev]'
       - uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
           trigger_phrase: "@improve-jensen"
           label_trigger: "improve-jensen"
           branch_prefix: "improve-jensen/"
