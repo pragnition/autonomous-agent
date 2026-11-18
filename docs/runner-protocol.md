@@ -8,7 +8,7 @@ implements the same contract, so the runner, its skills and its prompt carry ove
 
 Two kinds. The **runner token** is long-lived and pulls work and fetches bundles (`/agent/pull`, `/agent/bundle`).
 A **session token** is minted per work item when it's claimed and does everything else for that item
-(`/agent/heartbeat`, `/agent/events`, `/agent/tool`, `/agent/files`, `/agent/result`). Finishing, cancelling or
+(`/agent/heartbeat`, `/agent/events`, `/agent/tool`, `/agent/files`, `/agent/slack_file`, `/agent/result`). Finishing, cancelling or
 losing an item revokes its session token; a 401 means the item is gone.
 
 ## `POST /agent/pull`
@@ -103,6 +103,9 @@ folded into a turn that's already running.
   own tool registry. Reply: `{"text": "ran status"}`.
 - **`/agent/files`**: multipart upload (a `text` field plus up to 10 `file` parts) to post to the conversation's
   thread. Reply: `{"ok": true, "posted": true}` (`posted` is `false` when there's no thread to post into).
+- **`GET /agent/slack_file/{id}`**: the bytes of a Slack file attached to a message in this item's conversation
+  (one listed in a work item's `files`), downloaded by core with its bot token. 404 for any other file, 413 over
+  25 MB, 502 when Slack won't serve it.
 - **`/agent/bundle`**: `GET`, runner token only. Replies with the plugins tarball (gzip bytes) and an
   `X-Bundle-Version` header the runner caches by.
 

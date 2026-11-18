@@ -52,6 +52,12 @@ class CoreLink:
                                                 data={"text": text}, files=files))
         return resp.json().get("posted", True)
 
+    async def slack_file(self, tok: str, file_id: str) -> bytes:
+        """A file attached to a Slack message in this item's conversation, downloaded by core."""
+        resp = self._check(await self.http.get(f"{self.base}/agent/slack_file/{file_id}", headers=self._auth(tok),
+                                               timeout=httpx.Timeout(120, connect=10)))
+        return resp.content
+
     async def result(self, tok: str, result: dict) -> None:
         await self._post("/agent/result", tok, {"result": result})
 

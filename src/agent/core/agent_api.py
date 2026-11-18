@@ -46,9 +46,11 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    on_start: Callable[[WorkItem], Awaitable[None]] | None = None,
                    on_beat: Callable[[WorkItem, dict], Awaitable[dict]] | None = None,
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
-                   runs_dir: Path | None = None) -> web.Application:
+                   runs_dir: Path | None = None,
+                   slack_file: Callable[[str], Awaitable[bytes]] | None = None) -> web.Application:
     """`refresh(conversation_id, payload)` re-reads a turn's conversation when the turn is claimed (see
-    Payloads.refresh_turn); what it returns is handed out and kept as the item's payload."""
+    Payloads.refresh_turn); what it returns is handed out and kept as the item's payload. `slack_file(id)`
+    downloads a Slack file with core's bot token, for a session whose conversation was sent it."""
     def resolved(request: web.Request, kind: str) -> TokenInfo:
         tok = _token(request)
         info = resolve_token(conn, tok) if tok else None
@@ -137,6 +139,36 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         posted = await on_files(info.work_item_id, items, text)
         return web.json_response({"ok": True, "posted": posted is not False})
 
+    def _sent_to(work_item_id: str, file_id: str) -> dict | None:
+        """The file, if a message in this item's conversation carried it: a session reads only what it was sent."""
+        item = queue.get(work_item_id)
+        if item is None:
+            return None
+        rows = conn.execute("SELECT payload FROM work_items WHERE (id = ? OR conversation_id IS ?) AND payload LIKE ?",
+                            (item.id, item.conversation_id or item.id, f'%"{file_id}"%')).fetchall()
+        for row in rows:
+            for f in json.loads(row["payload"]).get("files") or []:
+                if isinstance(f, dict) and f.get("id") == file_id:
+                    return f
+        return None
+
+    async def fetch_slack_file(request: web.Request) -> web.Response:
+        info = resolved(request, "session")
+        file_id = request.match_info["file_id"]
+        f = _sent_to(info.work_item_id, file_id) if slack_file is not None else None
+        if f is None:
+            return web.json_response({"error": "no such file in this conversation"}, status=404)
+        if int(f.get("size") or 0) > MAX_FILE_BYTES:
+            return web.json_response({"error": "over 25 MB"}, status=413)
+        try:
+            data = await slack_file(file_id)
+        except Exception as e:
+            log.warning("couldn't fetch Slack file %s", file_id, exc_info=True)
+            return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
+        if len(data) > MAX_FILE_BYTES:
+            return web.json_response({"error": "over 25 MB"}, status=413)
+        return web.Response(body=data, content_type="application/octet-stream")
+
     async def result(request: web.Request) -> web.Response:
         info = resolved(request, "session")
         outcome = (await request.json()).get("result") or {}
@@ -162,5 +194,6 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
     app.add_routes([web.post("/agent/pull", pull), web.post("/agent/heartbeat", heartbeat),
                     web.post("/agent/events", events), web.post("/agent/tool", tool),
                     web.post("/agent/files", files), web.post("/agent/result", result),
+                    web.get("/agent/slack_file/{file_id}", fetch_slack_file),
                     web.get("/agent/bundle", bundle), web.get("/health", health)])
     return app

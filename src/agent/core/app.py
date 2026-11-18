@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
+import httpx
 from aiohttp import web
 
 from agent import db, events
@@ -171,7 +172,7 @@ class CoreApp:
             bundles=lambda: build_bundle(self.config_dir),
             on_result=self.on_result, on_files=self.on_files, refresh=self._refresh_turn,
             on_start=self.conversations.on_start, on_beat=self.conversations.on_beat,
-            runs_dir=self.data_dir / "runs",
+            runs_dir=self.data_dir / "runs", slack_file=self.slack_file,
             session_ttl_s=(self.config.limits.task_minutes + 10) * 60)
         # The task record: Haiku labels each answered request in the background, and the agent reads data/tasks
         self.labeler = TaskLabeler(self.conn, self.config, complete=self._haiku(proxy),
@@ -321,6 +322,21 @@ class CoreApp:
                       data={"conversation_id": ctx.conversation_id, "files": [name for name, _ in files],
                             "text": text, "slack": posted})
         return posted
+
+    async def slack_file(self, file_id: str) -> bytes:
+        """A Slack file's bytes, downloaded with the bot token (the files:read scope), for a session that was sent
+        it. Slack answers a download it won't authorise with its HTML login page, so that counts as a failure."""
+        info = (await self.slack.files_info(file=file_id))["file"]
+        url = info.get("url_private_download") or info.get("url_private")
+        if not url:
+            raise ValueError(f"Slack gave no download link for {file_id}")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), follow_redirects=True) as http:
+            resp = await http.get(url, headers={"Authorization": f"Bearer {self.slack.token}"})
+        resp.raise_for_status()
+        if resp.headers.get("content-type", "").startswith("text/html") and \
+                not (info.get("mimetype") or "").startswith("text/html"):
+            raise ValueError("Slack refused the download (is the files:read scope granted?)")
+        return resp.content
 
     # the agent container
 

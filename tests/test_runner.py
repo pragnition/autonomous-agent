@@ -38,6 +38,13 @@ class FakeLink:
         self.tool_calls, self.files_sent, self.results, self.events = [], [], [], []
         self.beats, self.messages = [], []  # messages: one list of messages per beat, consumed in order
         self.posted = True
+        self.slack_files = {}  # file id -> bytes core serves; any other id fails like a 404
+
+    async def slack_file(self, tok, file_id):
+        if file_id not in self.slack_files:
+            raise httpx.HTTPStatusError("404", request=httpx.Request("GET", "http://core"),
+                                        response=httpx.Response(404))
+        return self.slack_files[file_id]
 
     async def heartbeat(self, tok, beat):
         self.beats.append(beat)
@@ -261,6 +268,39 @@ async def test_messages_from_the_heartbeat_go_into_the_session(tmp_path):
     task = asyncio.create_task(runner.handle(item(), "tok", []))
     await wait_until(lambda: claude.sent)
     assert claude.sent == [("W-V-1", "W-2", "[from Sam (sam) · DM · <link>]\n" + MIDTURN_NOTE + "how's it going?")]
+    await claude.interrupt("W-V-1")
+    await asyncio.wait_for(task, 2)
+
+
+async def test_attached_files_are_saved_and_named_in_the_prompt(tmp_path):
+    link, claude = FakeLink(), FakeClaude()
+    link.slack_files = {"F1": b"png-bytes"}
+    files = [{"id": "F1", "name": "../shot.png", "mimetype": "image/png", "size": 2048},
+             {"id": "F2", "name": "gone.pdf", "mimetype": "application/pdf", "size": 10}]
+    await make_runner(tmp_path, link, claude).handle(item(text="what's this?", files=files), "tok", [])
+    saved = tmp_path / "scratch" / "V-1" / "slack-files" / "F1" / "shot.png"
+    assert saved.read_bytes() == b"png-bytes"
+    prompt = claude.specs[0].prompt
+    assert prompt.startswith("what's this?\n\n(The message came with these files attached")
+    assert f"- {saved} (image/png, 2 KB)" in prompt
+    assert "- gone.pdf: couldn't be fetched (HTTPStatusError" in prompt
+
+
+async def test_a_message_without_files_gets_no_attachment_note(tmp_path):
+    claude = FakeClaude()
+    await make_runner(tmp_path, FakeLink(), claude).handle(item(), "tok", [])
+    assert claude.specs[0].prompt == "fix the export"
+
+
+async def test_files_on_a_message_arriving_midturn_are_saved_too(tmp_path):
+    link, claude = FakeLink(), FakeClaude(hang=True)
+    link.slack_files = {"F9": b"img"}
+    link.messages = [[{"id": "W-2", "payload": {"text": "", "files": [{"id": "F9", "name": "a.png"}]}}]]
+    runner = make_runner(tmp_path, link, claude)
+    task = asyncio.create_task(runner.handle(item(), "tok", []))
+    await wait_until(lambda: claude.sent)
+    saved = tmp_path / "scratch" / "V-1" / "slack-files" / "F9" / "a.png"
+    assert saved.read_bytes() == b"img" and f"- {saved}" in claude.sent[0][2]
     await claude.interrupt("W-V-1")
     await asyncio.wait_for(task, 2)
 
