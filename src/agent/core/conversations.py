@@ -28,9 +28,9 @@ log = logging.getLogger(__name__)
 NOT_AUTHORISED = "Sorry, I only work with people on this team's list."
 FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 LIMIT_OUTCOMES = {"timeout", "max_turns"}  # a turn that ran out of time or steps carries on in a new one
-# A long project's build also carries on after a turn that failed (an API error, a lost session), so one bad turn
-# doesn't end days of work; after this many failures in a row it stops like any other turn
-RETRY_OUTCOMES, BUILD_RETRIES = {"error", "interrupted"}, 3
+# A long project's build also carries on after a turn that ended in an error (an API error, a lost session), so one
+# bad turn doesn't end days of work; after this many failures in a row it stops like any other turn
+RETRY_OUTCOMES, BUILD_RETRIES = {"error"}, 3  # not "interrupted": a real stop never posts a result
 # A message's progress: seen -> working -> done or failed
 SEEN, WORKING, DONE, FAILED = "eyes", "hourglass_flowing_sand", "white_check_mark", "warning"
 _FABLE = re.compile(r"\buse fable\b", re.I)

@@ -550,11 +550,18 @@ async def test_a_build_turn_that_fails_says_so_and_carries_on(convos, queue, sla
 async def test_a_build_stops_after_three_failed_turns_in_a_row(convos, queue, slack, conn):
     item = await start_build(convos, queue, conn, "t61")
     for _ in range(3):
-        await fail(convos, queue, item, {"outcome": "interrupted", "error": "interrupted"})
+        await fail(convos, queue, item, {"outcome": "error", "error": "boom"})
         item = queue.claim()
+    await fail(convos, queue, item, {"outcome": "error", "error": "boom"})
+    assert queue.claim() is None
+    assert "boom" in slack.posts[-1]["text"]
+
+
+async def test_an_interrupted_build_turn_stops(convos, queue, slack, conn):
+    # a person's stop never posts a result; one that does is a stale claim, and retrying it would run two at once
+    item = await start_build(convos, queue, conn, "t64")
     await fail(convos, queue, item, {"outcome": "interrupted", "error": "interrupted"})
     assert queue.claim() is None
-    assert slack.posts[-1]["text"] == "That was stopped before I finished it."
 
 
 async def test_a_limit_carry_on_resets_the_failures_in_a_row(convos, queue, slack, conn):
