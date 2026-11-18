@@ -6,13 +6,18 @@ the turn's end, and `SystemMessage` for events such as a PR being opened. The ma
 `parent_tool_use_id` is null; everything else is a subagent's own thread. A line that isn't valid JSON, or isn't the
 object we expect, is skipped: a transcript still being written, or truncated mid-line, must never crash the
 measurement.
+
+`turn_facts` can take a `clean` function (the watch passes a secret scrubber), applied to each decoded tool input,
+tool output and error text before anything is cut to length: a secret holding a `"` or `\\` is escaped in the raw
+JSON line, where a scrub of the raw line can't match it, and once a line is cut a prefix of it is too short to
+match at all.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,12 +125,17 @@ def _extract_clone(command: str) -> str | None:
     return None
 
 
-def turn_facts(lines: Iterable[str], *, tool_chars: int = 300, error_chars: int = 500) -> TurnFacts:
+def turn_facts(lines: Iterable[str], *, tool_chars: int = 300, error_chars: int = 500,
+               clean: Callable[[str], str] | None = None) -> TurnFacts:
     """Read one turn's transcript lines into the facts the hourly watch counts.
 
     A bad line (not JSON, truncated, or not an object) is skipped rather than raised, since the transcript may still
-    be being written when this runs.
+    be being written when this runs. `clean`, when given, runs on each tool input, tool output and error text once
+    it's decoded and before it's cut to `tool_chars`/`error_chars` (see the module docstring).
     """
+    if clean is None:
+        def clean(text: str) -> str:
+            return text
     facts = TurnFacts()
     pending_tools: dict[str, tuple[str, Any]] = {}
     started_tasks: dict[str, str] = {}
@@ -187,8 +197,8 @@ def turn_facts(lines: Iterable[str], *, tool_chars: int = 300, error_chars: int 
                 if not isinstance(block, dict) or "tool_use_id" not in block:
                     continue
                 name, tool_input = pending_tools.pop(block["tool_use_id"], ("?", None))
-                output_text = _result_text(block.get("content"))
-                input_text = _input_text(name, tool_input)
+                output_text = clean(_result_text(block.get("content")))
+                input_text = clean(_input_text(name, tool_input))
                 facts.tool_lines.append(f"{name}: {input_text[:tool_chars]} -> {output_text[:tool_chars]}")
 
                 if block.get("is_error"):

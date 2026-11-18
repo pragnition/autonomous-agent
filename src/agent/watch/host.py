@@ -94,19 +94,24 @@ class Host:
         return self.run(["gh", *args], **kwargs)
 
     def secret_values(self) -> list[str]:
-        """Every secret value under `<live>/data/secrets/*.env` (not its subfolders), for `agent.scrub.scrub` to
-        redact out of anything improve-jensen posts in public. An empty list when the folder doesn't exist yet.
-        Parsed with `agent.secrets.load_secrets`, the same stdlib-only parser core itself uses, so a quoted or
-        `export`-prefixed value here is handled the same way it is everywhere else — a quoted `GH_TOKEN` doesn't
-        silently break `jensen_gh`, and a value returned here never carries its surrounding quotes, which would
-        make `scrub` miss the bare token inside a transcript or digest."""
-        folder = self.live / "data" / "secrets"
-        if not folder.is_dir():
-            return []
+        """Every secret value the live install holds, for `agent.scrub.scrub` to redact out of anything
+        improve-jensen posts in public: each value in `<live>/data/secrets/*.env` (core's, Jensen's, the
+        supervisors'), in `<live>/data/secrets/projects/*.env` (each product's own), and the whole of
+        `<live>/data/runner/runner-token`. Any of them can turn up in a transcript. An empty list when none of
+        those exist yet. The `.env` files are parsed with `agent.secrets.load_secrets`, the same stdlib-only parser
+        core itself uses, so a quoted or `export`-prefixed value here is handled the same way it is everywhere
+        else — a quoted `GH_TOKEN` doesn't silently break `jensen_gh`, and a value returned here never carries its
+        surrounding quotes, which would make `scrub` miss the bare token inside a transcript or digest."""
+        secrets = self.live / "data" / "secrets"
         values = []
-        for path in sorted(folder.glob("*.env")):
-            values.extend(load_secrets(path).values())
-        return values
+        for folder in (secrets, secrets / "projects"):
+            if folder.is_dir():
+                for path in sorted(folder.glob("*.env")):
+                    values.extend(load_secrets(path).values())
+        runner_token = self.live / "data" / "runner" / "runner-token"
+        if runner_token.is_file():
+            values.append(runner_token.read_text().strip())
+        return [value for value in values if value]
 
     def compose(self, args: list[str]) -> subprocess.CompletedProcess:
         """Run `docker compose <args>` from the live install's own directory, the way a person would by hand."""

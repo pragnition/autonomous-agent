@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agent.watch.digest import SIGNAL_KEYS, ConvoView, render
+from agent.watch.host import Host
 from agent.watch.measure import measure
 from agent.watch.state import State
 from agent.watch.transcript import TurnFacts
@@ -582,6 +583,36 @@ def test_digest_never_leaks_a_secret_prefix_across_the_truncation_boundary(tmp_p
     text = result.digest.read_text()
     assert secret not in text
     assert secret[:4] not in text  # not even a short prefix of the secret survives the 300-char cut
+
+
+def test_digest_never_leaks_a_product_secret_or_one_with_json_escapes_across_the_cut(tmp_path):
+    # A product's own secret (data/secrets/projects/*.env) must be scrubbed like Jensen's; and a secret holding a
+    # `"` or `\\` is escaped in the raw JSON line, so only a scrub of the decoded text, before the 300-char cut,
+    # keeps even its first few characters out.
+    live = tmp_path / "live"
+    (live / "data" / "secrets" / "projects").mkdir(parents=True)
+    (live / "data" / "secrets" / "agent.env").write_text("GH_TOKEN=agent-token-0001\n")
+    product = "Qz7productdbpw-0042"
+    escaped_in, escaped_out = 'in"put\\secret-0123', 'ou"tput\\secret-4567'
+    (live / "data" / "secrets" / "projects" / "sample.env").write_text(
+        f"DB_PASSWORD={product}\nAPI_KEY={escaped_in}\nOTHER_KEY={escaped_out}\n")
+    secrets = Host(run=lambda *a, **k: None, live=live).secret_values()
+    leaking_lines = [
+        _assistant([{"id": "t1", "name": "Bash", "input": {"command": "x" * 296 + escaped_in}}]),
+        _result_line("t1", "y" * 296 + escaped_out + " trailing", is_error=True),
+        _assistant([{"id": "t2", "name": "Bash", "input": {"command": "cat .env"}}]),
+        _result_line("t2", "z" * 297 + product),
+    ]
+    host = FakeHost(collect={**_EMPTY, "items": [_item("W-a", conversation_id="C-a")]},
+                    transcripts={"W-a": leaking_lines}, secrets=secrets, **_NO_PRS)
+
+    result = measure(state := State(tmp_path / "state"), host, T0, open_deployed=[])
+
+    text = result.digest.read_text()
+    for secret in (product, escaped_in, escaped_out):
+        assert secret not in text
+        assert secret[:3] not in text, secret[:3]  # not even a prefix across the 300-char cut
+    assert state.read_metrics(_since(T0))  # and the turn was still measured
 
 
 # -- digest totals and deployed issues --

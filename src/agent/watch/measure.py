@@ -7,9 +7,9 @@ one's size, CI result and co-author trail with `gh pr view`/`gh pr checks` (or, 
 the Actions runs on the PR's head commit, then its commit statuses), then stages what `agent.watch.state.State`
 keeps (`State.stage`) and writes a digest file for improve-jensen to read next. Every piece of free text that lands
 in the digest -- a person's ask, Jensen's reply, a tool or error line, a deployed issue's title -- is scrubbed of
-secrets first, since it might end up quoted back out in a public issue; so is every raw transcript line *before*
-`turn_facts` ever truncates it, since a secret that straddles that cut would otherwise leak a prefix no exact-value
-or pattern match could catch after the fact.
+secrets first, since it might end up quoted back out in a public issue; so is every tool input, tool output and
+error text *before* `turn_facts` truncates it (its `clean` hook, on the decoded strings), since a secret that
+straddles that cut would otherwise leak a prefix no exact-value or pattern match could catch after the fact.
 
 Every record is stamped with when its event happened, not when it was measured: a turn or midturn with its
 `updated_at`, a PR with its `mergedAt`, else its `createdAt`. So `count --since <deploy time>` reads only what
@@ -280,10 +280,12 @@ def _fetch_transcripts(host: Host, ids: list[str]) -> tuple[dict[str, bytes], st
 def _facts(raw_bytes: bytes | None, secrets: list[str]) -> TurnFacts:
     if raw_bytes is None:
         return TurnFacts()
-    # Scrub each raw line *before* turn_facts builds (and truncates to 300/300/500) its tool/error lines from
-    # it: a secret that straddles that cut would otherwise leak a prefix too short for any exact-value or
-    # pattern match to catch once it's already been cut.
-    return turn_facts([scrub(line, secrets) for line in raw_bytes.decode(errors="replace").splitlines()])
+    # Scrub *before* turn_facts truncates its tool/error lines to 300/300/500: a secret that straddles that cut would
+    # otherwise leak a prefix too short for any exact-value or pattern match to catch once it's already been cut.
+    # The decoded strings are what matter (`clean`): a secret holding a `"` or `\` is escaped in the raw JSON line,
+    # where an exact match can't see it. The raw lines are scrubbed too, which costs nothing.
+    return turn_facts([scrub(line, secrets) for line in raw_bytes.decode(errors="replace").splitlines()],
+                      clean=lambda text: scrub(text, secrets))
 
 
 def _deploy_alert(state: State) -> str | None:

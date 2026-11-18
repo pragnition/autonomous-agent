@@ -158,6 +158,21 @@ def test_secret_values_handles_quotes_export_and_inline_comments(tmp_path):
     assert not any('"' in v or "'" in v or "#" in v for v in values)
 
 
+def test_secret_values_include_product_secrets_and_the_runner_token(tmp_path):
+    # Jensen's products keep their own secrets in data/secrets/projects/*.env, and the runner's token is a bare
+    # file: any of them can turn up in a transcript.
+    (tmp_path / "data" / "secrets" / "projects").mkdir(parents=True)
+    (tmp_path / "data" / "secrets" / "agent.env").write_text("GH_TOKEN=agent-token-0001\n")
+    (tmp_path / "data" / "secrets" / "projects" / "sample.env").write_text("DB_PASSWORD=product-secret-0002\n")
+    (tmp_path / "data" / "runner").mkdir(parents=True)
+    (tmp_path / "data" / "runner" / "runner-token").write_text("runner-token-value-0003\n")
+    host = Host(run=lambda *a, **k: None, live=tmp_path)
+
+    values = host.secret_values()
+
+    assert {"agent-token-0001", "product-secret-0002", "runner-token-value-0003"} <= set(values)
+
+
 def test_secret_values_missing_folder(tmp_path):
     host = Host(run=lambda *a, **k: None, live=tmp_path)
     assert host.secret_values() == []

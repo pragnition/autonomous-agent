@@ -143,6 +143,22 @@ def test_tool_and_error_lines_are_capped():
     assert facts.error_lines[0] == "e" * 500 and len(facts.error_lines[0]) == 500
 
 
+def test_clean_runs_on_each_decoded_string_before_the_cut():
+    # A secret with a `"` or `\\` is escaped in the raw JSON line, so a scrub of the raw line can't match it; it has
+    # to be cleaned out of the decoded text, before the 300/500 cut can leave a prefix too short to match.
+    secret = 'se"cr\\et-value-0123'
+    lines = [
+        _assistant([_tool_use("t1", "Bash", {"command": "a" * 296 + secret})]),
+        _result("t1", "b" * 296 + secret + " and more", is_error=True),
+    ]
+
+    facts = turn_facts(lines, clean=lambda text: text.replace(secret, "[redacted]"))
+
+    assert facts.tool_lines == [f"Bash: {'a' * 296}[red -> {'b' * 296}[red"]
+    assert facts.error_lines == ["b" * 296 + "[redacted] and more"]
+    assert not any(secret[:4] in line for line in facts.tool_lines + facts.error_lines)
+
+
 def test_skips_bad_lines():
     lines = ["not json", '{"type": "Assistant', _assistant([_tool_use("t1", "Bash", {"command": "ls"})])]
     facts = turn_facts(lines)
