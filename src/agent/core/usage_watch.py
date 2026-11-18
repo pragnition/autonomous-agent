@@ -2,8 +2,10 @@
 
 Each account is `ok`, `hot` or `out`:
 - `out` while the proxy gives it no rank (no capacity);
-- `hot` once its 5-hour window is HOT_AT used, or it is ahead of its 7-day pace by more than PACE_HOT (it will run
-  out before the window resets); it is `ok` again only below COOL_BELOW and back on pace, so it doesn't flap.
+- `hot` once its 5-hour window is at its soft cap (proxy.SoftCap: SOFT_CAP_5H, 65%, until SOFT_CAP_LIFT_S, 1h30m,
+  before the window resets, then 100%), or it is ahead of its 7-day pace by more than PACE_HOT (it will run out before
+  the window resets); it is `ok` again only COOL_MARGIN below the soft cap and back on pace, so it doesn't flap. Once
+  the cap is lifted there is no margin: the account is `ok` while it has any of its window left.
 
 The pool, counted in `ok` accounts:
 - two or more (or every verified account, in a pool smaller than that): normal;
@@ -12,9 +14,12 @@ The pool, counted in `ok` accounts:
 
 Turns a usage limit cut off (Conversations marks them in limit_waits) are each carried on once, as soon as an account
 is `ok` again. An account whose `verified` goes false, or that has been `out` for longer than its 5-hour window, is
-reported to the admins. Every change goes to the events log, where the dashboard's Events page shows it.
+reported to the admins. An account reaching its soft cap (usage_cap_reached) and its cap being lifted
+(usage_cap_lifted) are logged too. Every change goes to the events log, where the dashboard's Events page shows it.
 
-The proxy picks each new session's account by its own ranking, so this doesn't steer sessions between accounts.
+The proxy picks each new session's account by its own ranking, so this doesn't steer new sessions between accounts:
+a capped account can still be given a new session while the proxy ranks it first. The runner's watchdog moves a
+running session off a capped account (runner/claude.py).
 """
 
 from __future__ import annotations
@@ -29,11 +34,11 @@ from zoneinfo import ZoneInfo
 
 from agent import db, events
 from agent.core.sessions import HOLD_SCHEDULED
-from agent.proxy import ProxyUnavailable
+from agent.proxy import ProxyUnavailable, SoftCap
 
 log = logging.getLogger(__name__)
 
-HOT_AT, COOL_BELOW = 0.85, 0.75   # 5-hour window used
+COOL_MARGIN = 0.10                # a hot account is ok again this far below its soft cap
 PACE_HOT = 0.05                   # this far ahead of the 7-day pace counts as running out before the reset
 OUT_TOO_LONG_S = 5 * 3600         # out for longer than the 5-hour window: something is wrong with the account
 STATE_KEY = "usage_watch"         # the last state seen, so a restart neither repeats nor misses a change
@@ -52,14 +57,16 @@ def _window(rec: dict, w: str) -> tuple[float | None, float | None]:
     return None, None
 
 
-def account_state(rec: dict, previous: str | None) -> str:
+def account_state(rec: dict, previous: str | None, *, now: float, soft_cap: SoftCap = SoftCap()) -> str:
     if not isinstance(rec.get("rank"), int):
         return OUT
-    used_5h, _ = _window(rec, "5h")
+    used_5h, reset_5h = _window(rec, "5h")
+    cap = soft_cap.cap(reset_5h, now)
     pace = _num(rec.get("pace_delta"))
-    if (used_5h is not None and used_5h >= HOT_AT) or (pace is not None and pace > PACE_HOT):
+    if soft_cap.over(used_5h, reset_5h, now) or (pace is not None and pace > PACE_HOT):
         return HOT
-    if previous == HOT and ((used_5h is not None and used_5h >= COOL_BELOW) or (pace is not None and pace > 0)):
+    cooling = cap < 1 and used_5h is not None and used_5h >= cap - COOL_MARGIN
+    if previous == HOT and (cooling or (pace is not None and pace > 0)):
         return HOT
     return OK
 
@@ -80,10 +87,11 @@ def pool_level(ok: int, verified: int) -> str:
 class UsageWatch:
     def __init__(self, conn: sqlite3.Connection, proxy, *, alert: Callable[[str], Awaitable[None]],
                  resume: Callable[[str], str | None], timezone: str = "UTC",
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, soft_cap: SoftCap | None = None):
         """alert(text) tells the admins; resume(work_item_id) carries on one turn a limit cut off."""
         self.conn, self.proxy, self.alert, self.resume = conn, proxy, alert, resume
         self.tz, self.clock = ZoneInfo(timezone), clock
+        self.soft_cap = soft_cap or getattr(proxy, "soft_cap", None) or SoftCap.from_env()
 
     def _load(self) -> dict:
         try:
@@ -116,14 +124,21 @@ class UsageWatch:
         seen: dict[str, dict] = {}
         for code, rec in sorted(accounts.items()):
             before = old["accounts"].get(code) or {}
-            state = account_state(rec, before.get("state"))
+            state = account_state(rec, before.get("state"), now=now, soft_cap=self.soft_cap)
             verified = bool(rec.get("verified"))
+            used_5h, reset_5h = _window(rec, "5h")
+            cap, capped = self.soft_cap.cap(reset_5h, now), self.soft_cap.over(used_5h, reset_5h, now)
             entry = {"state": state, "since": before.get("since", now) if before.get("state") == state else now,
-                     "verified": verified, "out_alerted": bool(before.get("out_alerted")) and state == OUT}
-            used_5h, _ = _window(rec, "5h")
+                     "verified": verified, "out_alerted": bool(before.get("out_alerted")) and state == OUT,
+                     "cap": cap, "capped": capped}
             if before.get("state") and before["state"] != state:
-                self._event("usage_account", {"account": code, "from": before["state"], "to": state,
-                                              "used_5h": used_5h, "pace_delta": _num(rec.get("pace_delta"))})
+                self._event("usage_account", {"account": code, "from": before["state"], "to": state, "used_5h": used_5h,
+                                              "cap": cap, "pace_delta": _num(rec.get("pace_delta"))})
+            cap_data = {"account": code, "used_5h": used_5h, "cap": cap, "reset_5h": reset_5h}
+            if before.get("state") and capped and not before.get("capped"):
+                self._event("usage_cap_reached", cap_data)
+            if before.get("state") and cap >= 1 > before.get("cap", self.soft_cap.limit):
+                self._event("usage_cap_lifted", cap_data)
             if before.get("verified") and not verified:
                 self._event("usage_unverified", {"account": code})
                 await self._tell(f"Account {code} is no longer verified by the proxy; it gets no new sessions until "
@@ -144,8 +159,9 @@ class UsageWatch:
         if level == EMPTY and old["pool"] != EMPTY:  # once, including a core that starts with the pool empty
             resets = [r for code, rec in accounts.items() if seen[code]["verified"]
                       if (r := next_reset(rec)) is not None]
-            await self._tell("Every Claude account is hot or out of capacity. People's requests still start on a "
-                             "hot account while one has room; scheduled runs wait. Earliest reset: "
+            await self._tell("Every Claude account is at its 5-hour soft cap, hot or out of capacity. People's "
+                             "requests still start on an account while one has room; scheduled runs wait. "
+                             "Earliest reset: "
                              f"{self._when(min(resets) if resets else None)}.")
         elif old["pool"] == EMPTY and level != EMPTY:
             await self._tell(f"Claude capacity is back: {ok} account{'s' if ok != 1 else ''} with room.")

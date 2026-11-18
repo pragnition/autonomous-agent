@@ -88,6 +88,8 @@ export type Account = {
   target_7d: number | null
   pace_delta: number | null
   cap_5h: number | null
+  soft_cap: number
+  over_soft_cap: boolean
   tokens_60m: Tokens
   agent_60m: Tokens
   people_60m: Tokens

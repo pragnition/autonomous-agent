@@ -5,7 +5,7 @@ from pathlib import Path
 
 from claude_agent_sdk import AssistantMessage, CLIConnectionError, ResultMessage, TextBlock, UserMessage, tool
 
-from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, ProxyUnavailable, Usage
+from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, ProxyUnavailable, SoftCap, Usage
 from agent.runner.base import RunSpec
 from agent.runner.claude import ClaudeRunner
 
@@ -64,6 +64,9 @@ class FakeClient:
                 continue
             if item == WAIT_STOP:
                 await self._stop.wait()
+                continue
+            if isinstance(item, float):  # the session works this long before its next message
+                await asyncio.sleep(item)
                 continue
             yield item(self) if callable(item) else item
 
@@ -288,6 +291,71 @@ async def test_watchdog_interrupts_on_rejected_account(tmp_path):
     r = await runner.run(spec(tmp_path))
     assert clients[0].interrupted is True
     assert (r.outcome, r.forks) == ("done", 1)
+
+
+NOW, RESET_IN_3H = 1794560000.0, 1794560000.0 + 3 * 3600
+
+
+class CapProxy(FakeProxy):
+    """The session is on maple; each account is (rank, 5-hour window used), with 3h to the reset."""
+
+    def __init__(self, accounts):
+        super().__init__(account="maple")
+        self.accounts = accounts
+
+    async def usage(self):
+        return Usage({code: AccountUsage("allowed", rank, True, used, RESET_IN_3H)
+                      for code, (rank, used) in self.accounts.items()}, soft_cap=SoftCap(), now=NOW)
+
+
+def test_handoff_target_is_the_top_ranked_account_under_its_cap():
+    def target(accounts):
+        return Usage({c: AccountUsage("allowed", r, True, u, RESET_IN_3H) for c, (r, u) in accounts.items()},
+                     soft_cap=SoftCap(), now=NOW).handoff_target("maple")
+    assert target({"maple": (2, 0.7), "oak": (1, 0.1)}) == "oak"
+    assert target({"maple": (2, 0.7), "oak": (1, 0.8)}) is None   # the top-ranked account is capped too
+    assert target({"maple": (1, 0.7), "oak": (2, 0.1)}) is None   # a fresh session would land on maple again
+    capped = Usage({"maple": AccountUsage("allowed", 1, True, 0.9, RESET_IN_3H)}, soft_cap=SoftCap(), now=NOW)
+    assert capped.over_cap("maple") and capped.has_capacity()      # capped still has room: people's requests start
+
+
+async def test_watchdog_hands_off_an_account_over_its_soft_cap(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, HANG], [echo_prompt, result()]],
+                                  proxy=CapProxy({"maple": (2, 0.66), "oak": (1, 0.1)}), watchdog_s=0.01)
+    r = await runner.run(spec(tmp_path, handoff=lambda sid, transcript: "HANDOFF " + sid))
+    assert clients[0].interrupted is True and clients[1].options.resume is None   # a fresh session, never --resume
+    assert clients[1].prompt["message"]["content"] == "HANDOFF " + clients[0].options.session_id
+    assert (r.outcome, r.forks) == ("done", 1)
+
+
+async def test_watchdog_keeps_running_over_the_soft_cap_with_no_account_free(tmp_path):
+    for accounts in ({"maple": (1, 0.66), "oak": (2, 0.8)},    # every account capped
+                     {"maple": (1, 0.66), "oak": (2, 0.1)}):   # the proxy would put a fresh session on maple again
+        runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, 0.1, result()]],
+                                      proxy=CapProxy(accounts), watchdog_s=0.01)
+        r = await runner.run(spec(tmp_path))
+        assert clients[0].interrupted is False and (r.outcome, r.forks) == ("done", 0)
+
+
+async def test_watchdog_keeps_running_over_the_soft_cap_with_no_fork_left(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, 0.1, result()]],
+                                  proxy=CapProxy({"maple": (2, 0.66), "oak": (1, 0.1)}), watchdog_s=0.01)
+    runner.max_forks = 0
+    r = await runner.run(spec(tmp_path))
+    assert clients[0].interrupted is False and (r.outcome, r.forks) == ("done", 0)
+
+
+async def test_soft_cap_lifted_keeps_the_session_where_it_is(tmp_path):
+    proxy = CapProxy({"maple": (2, 0.9), "oak": (1, 0.1)})
+    lifted = proxy.usage
+
+    async def usage():
+        u = await lifted()
+        return Usage(u.accounts, soft_cap=u.soft_cap, now=RESET_IN_3H - 3600)   # 1h to the reset
+    proxy.usage = usage
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, 0.1, result()]], proxy=proxy, watchdog_s=0.01)
+    r = await runner.run(spec(tmp_path))
+    assert clients[0].interrupted is False and (r.outcome, r.forks) == ("done", 0)
 
 
 async def test_timeout_interrupts(tmp_path):
