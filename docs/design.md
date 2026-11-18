@@ -199,9 +199,10 @@ Before claiming, core's gate checks three things:
 - the account proxy reports capacity on at least one account;
 - fewer than `[limits] max_concurrent_sessions` items are running (default 10).
 
-A claimed item has a 90 s lease that heartbeats extend. An item whose runner stops heartbeating is re-queued once,
-then marked failed. Finishing, cancelling or losing an item revokes its session token, and the runner interrupts
-the session at its next heartbeat. Each turn is limited to `[limits] task_minutes` (default 90) of wall time and
+A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
+whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or
+losing an item revokes its session token, and the runner interrupts the session at its next heartbeat; a later
+claim of the same item runs afresh. Each turn is limited to `[limits] task_minutes` (default 90) of wall time and
 `max_turns` (default 400) model turns.
 
 When the runner claims a turn, core refreshes its payload from the conversation as it is at that moment: the
@@ -212,8 +213,11 @@ resumes the session that turn ended with.
 
 The runner reports the outcome, the session's final text, the session id and token counts. core records a row in
 `runs`, saves the session id on the conversation and posts the text, scrubbed of secrets, in the thread as
-Markdown. A failed turn (error, timeout, turn limit, interrupted) gets a short failure reply, and its task, if any,
-becomes `failed`. After an error the next turn starts a fresh session.
+Markdown. A turn that hit its time or turn limit carries on silently in a new turn (`[limits] continuations`,
+default 100; 3 for a scheduled run). An active long project's build also carries on after an error or an
+interrupted turn, up to three in a row, and the thread gets the error. Otherwise a failed turn (error, timeout,
+turn limit, interrupted) gets a short failure reply, and its task, if any, becomes `failed`. After an error the
+next turn starts a fresh session.
 
 ### Linear
 

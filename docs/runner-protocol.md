@@ -9,7 +9,8 @@ implements the same contract, so the runner, its skills and its prompt carry ove
 Two kinds. The **runner token** is long-lived and pulls work and fetches bundles (`/agent/pull`, `/agent/bundle`).
 A **session token** is minted per work item when it's claimed and does everything else for that item
 (`/agent/heartbeat`, `/agent/events`, `/agent/tool`, `/agent/files`, `/agent/slack_file`, `/agent/result`). Finishing, cancelling or
-losing an item revokes its session token; a 401 means the item is gone.
+losing an item revokes its session token; a 401 means the item is gone. Each heartbeat of a live item renews its
+token, so it lasts as long as the turn does, however many times the turn forks to another account.
 
 ## `POST /agent/pull`
 
