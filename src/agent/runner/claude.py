@@ -11,7 +11,9 @@ from the one it ran on: not here, and not on a later turn (can_resume).
 Each attempt's prompt, and every message that arrives while the run is going, is written into the live session with its
 own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
 until each one has been: a result from before the prompt was read (a background task from an earlier turn finishing)
-doesn't answer this turn.
+doesn't answer this turn. It also reads on past a result while the session has background agents running: that turn
+end is interim, and each agent wakes the session again when it finishes. A Bash call that only waits is turned away
+(idle_wait), since nothing sent into the session is read until the call returns.
 """
 
 from __future__ import annotations
@@ -27,12 +29,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, UserMessage,
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage,
+                              TaskNotificationMessage, TaskStartedMessage, TaskUpdatedMessage, UserMessage,
                               create_sdk_mcp_server)
 
 from agent.proxy import PLACEHOLDER_TOKEN, ProxyClient, ProxyUnavailable
 from agent.runner.base import RunResult, RunSpec
 from agent.runner.handoff import handoff_note
+from agent.runner.idle_wait import block_idle_waits
 from agent.runner.outcome import ACCOUNT_TROUBLE, FORK_STATUSES, map_result, usage_tokens
 
 # The SDK hands the parent's whole environment to the CLI, so anything secret-looking is overridden with "".
@@ -41,6 +45,14 @@ PROXY_VARS = {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
 # The most the SDK reads of one message from the CLI. Its default, 1 MiB, ends the session on an image of ~750 KB
 # (a tool result carries it as base64, a third larger): a Slack screenshot or a full-page Playwright one.
 MAX_BUFFER_SIZE = 20 * 1024 * 1024
+# The terminal states of a background task, from a task_notification ("stopped") or a task_updated ("killed")
+TASK_DONE = {"completed", "failed", "stopped", "killed"}
+
+
+def _waits_for(task_type: str | None) -> bool:
+    """Whether the run stays open for a background task of this type: agents and workflows, which finish by
+    themselves and wake the session when they do. Not background shells (a dev server runs until it's stopped)."""
+    return bool(task_type) and ("agent" in task_type or task_type == "workflow")
 
 
 async def _user_message(message_uuid: str, text: str):
@@ -86,6 +98,8 @@ class ClaudeRunner:
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
             session_id=session_id, resume=resume,
             settings=json.dumps(spec.settings) if spec.settings else None, max_buffer_size=MAX_BUFFER_SIZE,
+            # a foreground Bash call that only waits holds the turn, and no message reaches the session meanwhile
+            hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[block_idle_waits])]},
             # the CLI echoes each user message it reads, with the uuid it was sent with
             extra_args={"replay-user-messages": None})
 
@@ -216,8 +230,9 @@ class ClaudeRunner:
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume))
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
+        # tasks: the background agents the session has running; a result while any is running is an interim end of turn
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False, "can_fork": can_fork,
-                 "accepting": False, "pending": {prompt_uuid: None}}
+                 "accepting": False, "pending": {prompt_uuid: None}, "tasks": set()}
         self._active[spec.run_id] = (client, state)
         read = self._read.setdefault(spec.run_id, [])
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -245,6 +260,10 @@ class ClaudeRunner:
                     if isinstance(msg, UserMessage) and msg.uuid in state["pending"]:
                         if (item_id := state["pending"].pop(msg.uuid)) is not None:
                             read.append(item_id)
+                    if isinstance(msg, TaskStartedMessage) and _waits_for(msg.task_type):
+                        state["tasks"].add(msg.task_id)
+                    elif isinstance(msg, (TaskNotificationMessage, TaskUpdatedMessage)) and msg.status in TASK_DONE:
+                        state["tasks"].discard(msg.task_id)
                     if isinstance(msg, ResultMessage):
                         switching = msg.is_error and msg.api_error_status in FORK_STATUSES
                         # A result from before the prompt was read answers something else (a background task from
@@ -256,7 +275,10 @@ class ClaudeRunner:
                         # result. An interrupted session stops here: what it didn't read goes back to the queue.
                         # So does a result that moves the run to another account: the session it would read on into
                         # is the one about to be abandoned, not the one the pending message should land in.
-                        if not state["pending"] or state["reason"] or switching:
+                        # Background agents still running make this an interim end of turn: ending the run here
+                        # would post it as the final reply and close the CLI, and the agents with it. Read on: each
+                        # agent wakes the session when it finishes, and messages sent meanwhile are read at once.
+                        if (not state["pending"] and not state["tasks"]) or state["reason"] or switching:
                             state["accepting"] = False
                             break
         except TimeoutError:
