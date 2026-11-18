@@ -534,6 +534,22 @@ def test_digest_lists_deployed_issues_and_totals(tmp_path):
         assert f"{signal} since" in text
 
 
+def test_digest_names_the_conversation_behind_each_new_pr():
+    # The watch copies this into plan.json, so a review's findings reach the session that made the PR.
+    window = (T0, T0 + timedelta(hours=1))
+    prs = [{"url": "https://github.com/o/r/pull/1", "repo": "o/r", "lines": 10, "ci": "passed",
+            "open_to_merge_s": 60.0, "conversation": "C-made-it"},
+           {"url": "https://github.com/o/r/pull/2", "repo": "o/r", "lines": 5, "ci": "none",
+            "open_to_merge_s": None, "conversation": None}]
+
+    text = render(window, [], {}, prs, [])
+
+    assert ("- https://github.com/o/r/pull/1 (o/r): 10 lines, ci=passed, open_to_merge_s=60.0, "
+            "conversation=C-made-it") in text
+    assert ("- https://github.com/o/r/pull/2 (o/r): 5 lines, ci=none, open_to_merge_s=None, "
+            "conversation=none") in text
+
+
 # -- digest budget shrinking (Review Focus 3) --
 
 

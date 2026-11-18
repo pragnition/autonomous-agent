@@ -89,8 +89,11 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
     out += ["", "## New PRs"]
     if prs:
         for pr in prs:
+            # `conversation` is the one that made the PR (or the build's project conversation); the watch copies it
+            # into plan.json so a review's findings go back into that session.
             out.append(f"- {pr.get('url')} ({pr.get('repo')}): {pr.get('lines')} lines, "
-                        f"ci={pr.get('ci')}, open_to_merge_s={pr.get('open_to_merge_s')}")
+                        f"ci={pr.get('ci')}, open_to_merge_s={pr.get('open_to_merge_s')}, "
+                        f"conversation={pr.get('conversation') or 'none'}")
     else:
         out.append("- none")
 
