@@ -403,7 +403,7 @@ tier. Every reply is scrubbed of secrets.
 | Tier | Tools |
 |---|---|
 | read | `status`, `list_tasks`, `get_task`, `read_thread`, `slack_read`, `kpis`, `gh_prs`, `gh_checks`, `gh_ci_log`, `gh_issue`, `gh_file`, `linear_issue` |
-| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
+| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `spawn_agent`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
 | admin | `resume_all`, `az_login` (one `<cli>_login` per `[cli.<name>]` with a `login` command), `linear_install` |
 
 - `work_on`, `open_pr` and `post_files` do local work in the runner (checkout, checks and push, reading files) and
@@ -411,6 +411,16 @@ tier. Every reply is scrubbed of secrets.
 - `ask` posts the question and marks the conversation as waiting; the person's reply arrives as the next turn.
 - `start_task(project, title, kind, brief)` starts a separate session with a self-contained brief, in the same
   thread (or, from a DM, in a new thread under a "Working on <title>" message).
+- `spawn_agent(prompt, cwd)` starts a background agent: its own conversation, with no Slack thread, whose turns
+  don't depend on the calling turn, so it keeps running after that turn ends (the Agent tool's `run_in_background`
+  subagents don't). It returns the agent's id at once. `cwd` is resolved in the runner, relative to the calling
+  session's folder; it must exist, and it stays the agent's working directory on every turn. By default the agent
+  gets its own folder. The agent carries on after limits like any conversation. When its last turn ends, its outcome
+  and final message are queued in the calling conversation as an `<agent-notification>` message, with the calling
+  turn's actor and origin line. If that conversation is idle, the message starts a new turn that answers in its
+  thread; if it is running, the message reaches it mid-turn. A spawned agent can't spawn agents of its own, and a
+  conversation can have at most 10 running at once. An agent whose turn is cancelled (`stop_all`) doesn't report
+  back. `spawned_agents` in `agent.db` records each one (`core/spawned.py`).
 - `read_thread` reads the conversation's thread, or a DM chat's messages since it started.
 - `slack_read(method, params)` makes one read-only Slack Web API call with core's bot token. Allowed methods:
   `conversations.history`, `conversations.replies`, `conversations.list`, `conversations.info`, `users.info`,
