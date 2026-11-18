@@ -19,6 +19,31 @@ def compose():
     return yaml.safe_load((ROOT / "compose.yaml").read_text())
 
 
+@pytest.fixture(scope="module")
+def ci():
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+
+
+@pytest.fixture(scope="module")
+def improve_jensen():
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text())
+
+
+def _runs_on_labels(job):
+    runs_on = job["runs-on"]
+    return {runs_on} if isinstance(runs_on, str) else set(runs_on)
+
+
+def _claude_steps(wf):
+    """Every step, across every job, that calls the claude-code-action -- as `(job_name, step)` pairs."""
+    steps = []
+    for job_name, job in wf["jobs"].items():
+        for step in job.get("steps", []):
+            if str(step.get("uses", "")).startswith("anthropics/claude-code-action@"):
+                steps.append((job_name, step))
+    return steps
+
+
 def test_relay_binds_only_gateway_ip(compose):
     relay = compose["services"]["relay"]
     assert relay["network_mode"] == "host"
@@ -227,3 +252,59 @@ def test_agent_toolkit_runs_every_install_when_piped_into_bash(tmp_path):
     installed = [line.split("--skill ")[1].split()[0] for line in log.read_text().splitlines() if "skills@" in line]
     assert installed == ["web-design-guidelines", "vercel-react-best-practices", "vercel-composition-patterns",
                          "supabase-postgres-best-practices"]
+
+
+# -- ci.yml / improve-jensen.yml --
+
+
+def test_ci_runs_tests_on_github_hosted_runners_only(ci):
+    assert ci["name"] == "ci"
+    on = ci[True]  # YAML 1.1 parses the unquoted `on:` key as the boolean True
+    assert on["push"]["branches"] == ["main"]
+    assert "pull_request" in on
+    assert set(ci["jobs"]) == {"python", "dashboard"}
+    assert ci["permissions"] == {"contents": "read"}
+    for name, job in ci["jobs"].items():
+        assert "self-hosted" not in _runs_on_labels(job), name
+
+
+def test_improve_jensen_triggers_and_jobs(improve_jensen):
+    on = improve_jensen[True]
+    assert on["schedule"] == [{"cron": "17 * * * *"}]
+    dispatch_inputs = on["workflow_dispatch"]["inputs"]
+    assert dispatch_inputs["mode"]["default"] == "watch"
+    assert set(dispatch_inputs["mode"]["options"]) == {"watch", "review", "fix"}
+    assert dispatch_inputs["target"]["type"] == "string"
+    for trigger in ("issues", "issue_comment", "pull_request_review_comment", "pull_request_review"):
+        assert trigger in on
+    assert set(improve_jensen["jobs"]) == {"watch", "review", "fix", "respond"}
+
+
+def test_jobs_run_on_the_right_runners(improve_jensen):
+    jobs = improve_jensen["jobs"]
+    for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"), ("respond", "work")):
+        labels = _runs_on_labels(jobs[name])
+        assert {"self-hosted", "improve-jensen", want_label} <= labels, name
+
+
+def test_fix_is_serialised(improve_jensen):
+    concurrency = improve_jensen["jobs"]["fix"]["concurrency"]
+    assert concurrency["group"] == "improve-jensen-fix"
+    assert concurrency["cancel-in-progress"] is False
+
+
+def test_every_claude_step_uses_opus_and_an_instructions_file_that_exists(improve_jensen):
+    claude_steps = _claude_steps(improve_jensen)
+    assert len(claude_steps) == 4
+    for job_name, step in claude_steps:
+        claude_args = step["with"]["claude_args"]
+        assert "--model claude-opus-5-5" in claude_args, job_name
+        match = re.search(r"--append-system-prompt-file (\S+)", claude_args)
+        assert match, (job_name, claude_args)
+        assert (ROOT / match.group(1)).is_file(), (job_name, match.group(1))
+
+
+def test_watch_commits_only_after_success_and_not_on_pool_hold(improve_jensen):
+    steps = improve_jensen["jobs"]["watch"]["steps"]
+    commit_step = next(s for s in steps if "jensen_watch.py commit" in str(s.get("run", "")))
+    assert "pool_hold" in commit_step["if"]

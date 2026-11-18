@@ -1,10 +1,30 @@
-# improve-jensen: the agent that owns this repo. It answers issues labelled `improve-jensen`
-# and comments that mention @improve-jensen, and opens PRs. Its charter is .github/improve-jensen.md.
-# It runs on a self-hosted runner on the stack's host and reaches Claude through the account proxy's
-# `improve-jensen` origin, so it shares the team's account pool. Host setup: deploy/improve-jensen.md.
+# improve-jensen: the agent that owns this repo. It runs on self-hosted runners on the stack's host and reaches
+# Claude through the account proxy's `improve-jensen` origin, so it shares the team's account pool.
+# Host setup: deploy/improve-jensen.md.
+#
+#   watch   - hourly (and on manual dispatch): deploys a pending change, measures what's outstanding, lets
+#             Claude work through the watch instructions, then plans what the review/fix jobs should pick up.
+#   review  - one run per open Jensen PR the watch job's plan names (or the single PR a manual dispatch names);
+#             reads the PR and the conversation it came from.
+#   fix     - the one issue the watch job's plan picked for a fix (or a manual dispatch's target), serialised so
+#             only one runs at a time.
+#   respond - answers issues labelled `improve-jensen` and comments that mention @improve-jensen, and opens PRs.
+#             Its charter is .github/improve-jensen.md.
 name: improve-jensen
 
 on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        description: Which job to run
+        options: [watch, review, fix]
+        default: watch
+      target:
+        type: string
+        description: PR URL (review) or issue number (fix); ignored for watch
   issues:
     types: [opened, labeled, assigned]
   issue_comment:
@@ -20,22 +40,147 @@ permissions:
   issues: write
   id-token: write
   actions: read
+  checks: read
 
-concurrency:
-  group: improve-jensen-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
+env:
+  ANTHROPIC_BASE_URL: http://127.0.0.1:18092   # the proxy's improve-jensen origin
 
 jobs:
-  improve-jensen:
+  watch:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'watch')
+    runs-on: [self-hosted, improve-jensen, watch]
+    timeout-minutes: 60
+    outputs:
+      reviews: ${{ steps.plan.outputs.reviews }}
+      fix: ${{ steps.plan.outputs.fix }}
+      has_reviews: ${{ steps.plan.outputs.has_reviews }}
+      has_fix: ${{ steps.plan.outputs.has_fix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: deploy a pending change, if one is waiting
+        continue-on-error: true
+        run: python scripts/deploy.py --if-pending --wait-idle-s 0
+      - name: measure
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/jensen_watch.py measure --github-output "$GITHUB_OUTPUT"
+      - name: claude
+        id: claude
+        if: steps.measure.outputs.has_work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Run the hourly watch. Digest: ${{ steps.measure.outputs.digest }}. State folder:
+            ~/.local/state/improve-jensen. Follow .github/improve-jensen-watch.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 120
+            --append-system-prompt-file .github/improve-jensen-watch.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: plan
+        id: plan
+        if: steps.measure.outputs.has_work == 'true' && steps.claude.outcome == 'success'
+        run: python scripts/jensen_watch.py plan --github-output "$GITHUB_OUTPUT"
+      - name: commit
+        if: steps.measure.outputs.skip_reason != 'pool_hold' && (steps.claude.outcome == 'success' || steps.claude.outcome == 'skipped')
+        run: python scripts/jensen_watch.py commit
+
+  review:
+    needs: watch
+    if: >
+      !cancelled() &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'review') || needs.watch.outputs.has_reviews == 'true')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        pr: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{{"url":"{0}","conversation":null}}]', inputs.target) || needs.watch.outputs.reviews) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Review ${{ matrix.pr.url }}. Conversation: ${{ matrix.pr.conversation || 'none' }}.
+            Follow .github/improve-jensen-review.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 200
+            --append-system-prompt-file .github/improve-jensen-review.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+
+  fix:
+    needs: watch
+    if: >
+      !cancelled() &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'fix') || needs.watch.outputs.has_fix == 'true')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 120
+    concurrency:
+      group: improve-jensen-fix
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: add the fixing label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh issue edit ${{ github.event_name == 'workflow_dispatch' && inputs.target || needs.watch.outputs.fix }}
+          --add-label fixing -R ${{ github.repository }}
+      - name: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: >
+            Fix issue #${{ github.event_name == 'workflow_dispatch' && inputs.target || needs.watch.outputs.fix }}.
+            Follow .github/improve-jensen.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 300
+            --append-system-prompt-file .github/improve-jensen.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: remove the fixing label
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh issue edit ${{ github.event_name == 'workflow_dispatch' && inputs.target || needs.watch.outputs.fix }}
+          --remove-label fixing -R ${{ github.repository }}
+
+  respond:
     if: >
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen')) ||
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@improve-jensen'))
-    runs-on: [self-hosted, improve-jensen]
-    env:
-      ANTHROPIC_BASE_URL: http://127.0.0.1:18092   # the proxy's improve-jensen origin
-    timeout-minutes: 60
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 120
+    concurrency:
+      group: improve-jensen-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,4 +200,4 @@ jobs:
             --model claude-opus-5-5
             --max-turns 200
             --append-system-prompt-file .github/improve-jensen.md
-            --allowedTools "Bash(pytest:*),Bash(python:*),Bash(pip:*),Bash(git:*),Bash(gh:*),Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
