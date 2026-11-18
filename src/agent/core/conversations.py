@@ -17,7 +17,7 @@ import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable, Iterable
 
-from agent import db, tasks
+from agent import db, events, tasks
 from agent.connectors.linear import issue_link
 from agent.core.sessions import WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
@@ -31,6 +31,9 @@ LIMIT_OUTCOMES = {"timeout", "max_turns"}  # a turn that ran out of time or step
 # A long project's build also carries on after a turn that ended in an error (an API error, a lost session), so one
 # bad turn doesn't end days of work; after this many failures in a row it stops like any other turn
 RETRY_OUTCOMES, BUILD_RETRIES = {"error"}, 3  # not "interrupted": a real stop never posts a result
+# A turn a usage limit cut off: the API's 429, or the runner giving up on an account the proxy reports rejected or
+# disabled. It waits for capacity (limit_waits) and is carried on once, by the usage watch (core/usage_watch.py).
+_LIMIT_ERROR = re.compile(r"^429\b|\baccount \S+ is (rejected|disabled)\b|rate.?limit", re.I)
 # A message's progress: seen -> working -> done or failed
 SEEN, WORKING, DONE, FAILED = "eyes", "hourglass_flowing_sand", "white_check_mark", "warning"
 _FABLE = re.compile(r"\buse fable\b", re.I)
@@ -58,6 +61,15 @@ def origin_line(where: str, *, who: str | None = None, link: str | None = None) 
 
 def limit_name(outcome: str, limits) -> str:
     return f"{limits.task_minutes}-minute limit" if outcome == "timeout" else f"{limits.max_turns}-step limit"
+
+
+def cut_by_limit(outcome: str, error: str | None) -> bool:
+    return outcome == "error" and bool(error) and bool(_LIMIT_ERROR.search(error))
+
+
+def limit_wait_reply(error: str | None) -> str:
+    return (f"A usage limit cut me off ({(error or '').strip()}). I'll carry on from where I stopped once an account "
+            "has capacity again.")
 
 
 def failure_reply(outcome: str, error: str | None) -> str:
@@ -221,7 +233,8 @@ class Conversations:
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, source: str,
                       requester: str | None, follows: str | None = None, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0,
-                      report_to: dict | None = None, files: list[dict] | None = None, failures: int = 0) -> str:
+                      report_to: dict | None = None, files: list[dict] | None = None, failures: int = 0,
+                      limit_resume: bool = False) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
         if files:  # the message's attachments; the runner saves them into the session folder
             payload["files"] = files
@@ -232,6 +245,8 @@ class Conversations:
             payload["continuation"] = continuation
         if failures:  # the failed turns in a row this one carries on from
             payload["failures"] = failures
+        if limit_resume:  # carries on a turn a usage limit cut off; cut off again, it fails like any other turn
+            payload["limit_resume"] = 1
         if message_ts:
             payload["message_ts"] = message_ts
         if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
@@ -391,8 +406,13 @@ class Conversations:
         failures = int(item.payload.get("failures") or 0)
         retrying = outcome in RETRY_OUTCOMES and step < cap and failures < BUILD_RETRIES and self._builds(convo["id"])
         continuing = (outcome in LIMIT_OUTCOMES and step < cap) or retrying
-        failed = outcome in FAILED_OUTCOMES and not continuing
-        if retrying:
+        # cut off by a usage limit: waits for capacity and is carried on once (see resume_after_limit)
+        waiting = not continuing and not item.payload.get("limit_resume") and \
+            cut_by_limit(outcome, result.get("error"))
+        failed = outcome in FAILED_OUTCOMES and not continuing and not waiting
+        if waiting:
+            text = limit_wait_reply(result.get("error"))  # the ⏳ stays
+        elif retrying:
             text = failure_reply(outcome, result.get("error"))  # the thread sees the real error; the ⏳ stays
         elif continuing:
             text = ""  # nothing to post: the thread's ⏳ stays, and the next turn carries on silently
@@ -403,7 +423,7 @@ class Conversations:
         text = scrub(text, self.secret_values)
         # Saved before anything is awaited: the next turn can be claimed as soon as this one completed, and it
         # resumes whatever session the conversation has at that moment
-        if outcome == "error":  # a broken or missing session must not be resumed again; the next turn starts fresh
+        if outcome == "error" and not waiting:  # a broken or missing session must not be resumed; the next starts fresh
             self.conn.execute("UPDATE conversations SET session_id = NULL, last_active_at = ? WHERE id = ?",
                               (db.utcnow(), convo["id"]))
         else:
@@ -423,16 +443,43 @@ class Conversations:
                                unattended=bool(p.get("unattended")), message_ts=p.get("message_ts"),
                                reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1,
                                report_to=p.get("report_to"), failures=failures + 1 if retrying else 0)
+        if waiting:
+            self.conn.execute("INSERT OR IGNORE INTO limit_waits(work_item_id, conversation_id, error, created_at) "
+                              "VALUES (?, ?, ?, ?)", (item.id, convo["id"], result.get("error"), db.utcnow()))
+            events.append(self.conn, "usage_limit_cut", task_id=convo["task_id"], actor=None,
+                          data={"work_item": item.id, "conversation_id": convo["id"], "error": result.get("error")})
         if failed and not convo["channel"] and item.payload.get("report_to"):
             await self._report_scheduled_failure(convo, item.payload["report_to"], text)
         elif text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
             reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
             for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
                 record_message(self.conn, convo["channel"], ts, convo["id"])
-        if not continuing and convo["channel"] and item.payload.get("message_ts"):
+        if not continuing and not waiting and convo["channel"] and item.payload.get("message_ts"):
             await self._react(convo["channel"], item.payload["message_ts"], FAILED if failed else DONE,
                               replaces=WORKING)
         task = tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None
         if failed and task is not None and task.status == Status.working:
             await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.failed, actor="agent",
                                                               data={"outcome": outcome}))
+
+    def resume_after_limit(self, work_item_id: str) -> str | None:
+        """Carry on a turn a usage limit cut off, once: a new turn in its conversation that resumes its session.
+        Returns the new item's id, or None when there is nothing to carry on (the conversation is gone)."""
+        wait = self.conn.execute("SELECT * FROM limit_waits WHERE work_item_id = ? AND resumed_at IS NULL",
+                                 (work_item_id,)).fetchone()
+        if wait is None:
+            return None
+        item, convo, new_id = self.queue.get(work_item_id), self._row(wait["conversation_id"]), None
+        if item is not None and convo is not None:
+            p = item.payload
+            note = (f"(A usage limit cut your last turn off: {wait['error'] or 'no error text'}. An account has "
+                    "capacity again; carry on from where you stopped.)")
+            new_id = self._enqueue_turn(convo, note, p.get("actor"), origin=p.get("origin") or "",
+                                        source=p.get("source") or "slack", requester=p.get("requester"),
+                                        follows=item.id, unattended=bool(p.get("unattended")),
+                                        message_ts=p.get("message_ts"), reply_thread_ts=p.get("reply_thread_ts"),
+                                        continuation=int(p.get("continuation") or 0) + 1,
+                                        report_to=p.get("report_to"), limit_resume=True)
+        self.conn.execute("UPDATE limit_waits SET resumed_at = ?, resumed_as = ? WHERE work_item_id = ?",
+                          (db.utcnow(), new_id, work_item_id))
+        return new_id

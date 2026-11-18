@@ -34,7 +34,7 @@ refusal.
          | Claude API, placeholder token
          v
  relay (host network, 172.30.0.1:28090/28091) --> account proxy (host, 127.0.0.1:18090/18091) --> Claude
- supervisor: polls core's /health every minute; restarts agent-core and alerts in Slack
+ supervisor + supervisor-standby: poll core, the runner's heartbeat and each other every minute; restart and alert
 ```
 
 The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.1. core has the fixed address
@@ -42,7 +42,8 @@ The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.
 
 | Listener | Where | Reached by |
 |---|---|---|
-| core :8080 | stack network only | the runner (`http://core:8080`): agent API, git endpoint; the supervisor: `/health` |
+| core :8080 | stack network only | the runner (`http://core:8080`): agent API, git endpoint; the supervisors: `/health`, `/health/runner` |
+| supervisor :8090 | stack network only | the other supervisor: `/health` |
 | core :8085 | host 127.0.0.1:18085 | Linear, through Tailscale Funnel: `/linear/webhook`, `/linear/oauth/callback` |
 | core :8086 | host 127.0.0.1:18086 | people on the tailnet, through `tailscale serve` on :9443 |
 | core :8087 | stack network only | apps under test, at `http://172.30.0.10:8087/llm/<upstream>` |
@@ -118,12 +119,25 @@ container shares its network namespace, so an app published on 127.0.0.1:<port> 
 `agentwork` volume is mounted at the same path in both containers, so compose bind mounts of a checkout resolve.
 Images and volumes live in the `agentdocker` volume.
 
-### supervisor
+### supervisor and supervisor-standby
 
-`python -m agent supervisor`, container `agent-supervisor`. Every 60 s it checks core's `/health`. After three
-failures in a row it alerts and restarts `agent-core` once through the Docker socket; it alerts again when core is
-back. Alerts go to the Slack incoming webhook `SLACK_ALERT_WEBHOOK` (`data/secrets/supervisor.env`), or to its own
-log when that isn't set. It is the only service with the host's Docker socket.
+`python -m agent supervisor`, run twice: containers `agent-supervisor` (`SUPERVISOR_ROLE=primary`) and
+`agent-supervisor-standby` (`standby`). They watch core, the runner and each other. Every 60 s each checks core's
+`/health`, the runner's heartbeat as core sees it (`core:8080/health/runner`, 503 once the runner hasn't pulled or
+heartbeated for 2 minutes) and its peer's `/health` (`:8090`, stack network only). The runner isn't checked while
+core is failing, since its heartbeat is read from core. After three failures in a row, a supervisor alerts and
+restarts the target through the Docker socket (`agent-core`, `agent-runner`, or the peer's container), and alerts
+again when the target is back. A target that is down again within 30 minutes of that restart gets an alert and no
+restart, so nothing is restarted in a loop. Each restarts its peer. Only the primary acts on core and the runner;
+the standby leaves them alone while the primary is up and takes them over once the primary is down, so nothing is
+restarted twice and the same alert is never sent twice. If both supervisors die together, compose's
+`restart: unless-stopped` brings them back.
+
+A supervisor's own `/health` answers 503 once its watch loop hasn't finished a tick for three minutes, so a
+supervisor whose loop has hung counts as down, not just one whose process is gone. A tick that raises ends the
+process and Docker restarts it. Alerts go to the Slack incoming webhook `SLACK_ALERT_WEBHOOK`
+(`data/secrets/supervisor.env`, shared by both), prefixed with the role, or to the supervisor's own log when that
+isn't set. The supervisors are the only services with the host's Docker socket.
 
 ### relay
 
@@ -198,6 +212,34 @@ Before claiming, core's gate checks three things:
 - the agent isn't paused (stop);
 - the account proxy reports capacity on at least one account;
 - fewer than `[limits] max_concurrent_sessions` items are running (default 10).
+
+While the usage watch holds scheduled runs (below), the pull skips turns whose `source` is `schedule`; people's
+requests still start.
+
+### Usage watch
+
+Every 60 s core reads `/proxy/usage` (`core/usage_watch.py`) and gives each account a state:
+
+- `out`: the proxy gives it no rank (no capacity);
+- `hot`: its 5-hour window is at least 85% used, or its `pace_delta` is above 0.05 (ahead of its 7-day pace, so
+  it will run out before the window resets). It is `ok` again only once it is below 75% and back on pace, so it
+  doesn't flap;
+- `ok`: otherwise.
+
+The pool, counted in `ok` accounts: with two or more (or all the verified accounts, in a smaller pool) nothing
+changes. With fewer, scheduled runs (and their carry-ons) wait in the queue. With none, the admins get one DM
+with the earliest reset, and another when capacity is back. The proxy already ranks accounts for new sessions, so
+the watch doesn't steer sessions itself. An account whose `verified` goes false, or that has been `out` for over
+5 hours, is reported to the admins once. Every change of state is an event (`usage_account`, `usage_pool`,
+`usage_unverified`, `usage_out_too_long`), shown on the dashboard's Events page. The last state is kept in
+`settings`, so a restart neither repeats an alert nor misses one.
+
+A turn cut off by a usage limit (a 429, or the runner giving up on an account the proxy reports rejected or
+disabled) doesn't fail. The thread is told it was cut off, the message keeps its ⏳, the session is kept and the
+turn goes into `limit_waits` (event `usage_limit_cut`). Once an account is `ok`, the watch re-queues it as a new
+turn that resumes the session with a "you were cut off by a usage limit" note (event `usage_limit_resumed`). That
+happens once: a resumed turn that is cut off again fails like any other. A long project's build keeps its own
+retries (below) instead, and the gate holds them until there is capacity.
 
 A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
 whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or
@@ -501,7 +543,7 @@ account's noreply address.
 | `just doctor` | in core: config, packs, each required secret, the proxy (verified accounts, capacity), each pack's checks, GitHub read access per repo, Linear states per pack, the runner token. In the agent container: `gh auth status` and `az account show` |
 | `just smoke` | queues one turn ("reply with pong") with no Slack thread and waits up to 5 minutes for the answer: core, runner, proxy and Claude end to end |
 | `just dashboard-serve` | `tailscale serve --bg --https=9443 http://127.0.0.1:18086`: the dashboard at `https://<node>.<tailnet>.ts.net:9443`, tailnet only |
-| `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `relay`) |
+| `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `supervisor-standby`, `relay`) |
 | `just kpis [--days N] [--project P]` | prints the KPIs |
 | `just schedules` | checks the schedules file and prints each schedule's next three run times |
 | `just stop`, `just resume` | the kill switch from the host, for when Slack isn't an option |
@@ -538,7 +580,7 @@ and loop errors; `just logs agent` shows the runner's.
   patterns (Anthropic, GitHub, Slack, Linear, AWS keys, private key blocks) replaced with `[redacted]`. The files
   that `post_files` sends are not scrubbed. Values in `agent.env` are unknown to core, so only the patterns catch
   them.
-- **Each service has its own secrets.** Each service mounts only its own secrets file. core and the supervisor read
+- **Each service has its own secrets.** Each service mounts only its own secrets file. core and the supervisors read
   theirs into memory, never into their environment; the agent container gets `agent.env` as plain environment
   variables.
 - **People and tiers.** In Slack, only people in `[people]` get answers, and their role sets the tools a session is

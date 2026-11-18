@@ -27,8 +27,11 @@ CONN_KEY = web.AppKey("conn", sqlite3.Connection)
 MAX_FILE_BYTES = 25 * 1024 * 1024
 
 
+RUNNER_STALE_S = 120  # the runner pulls at least every 25 s, and heartbeats each running item every 15 s
+
+
 async def health(request: web.Request) -> web.Response:
-    """The supervisor's health check."""
+    """The supervisors' health check."""
     return web.json_response({"ok": True})
 
 
@@ -47,10 +50,21 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    on_beat: Callable[[WorkItem, dict], Awaitable[dict]] | None = None,
                    pull_wait_s: float = 25.0, session_ttl_s: int = 100 * 60,
                    runs_dir: Path | None = None,
-                   slack_file: Callable[[str], Awaitable[bytes]] | None = None) -> web.Application:
+                   slack_file: Callable[[str], Awaitable[bytes]] | None = None,
+                   runner_stale_s: float = RUNNER_STALE_S,
+                   clock: Callable[[], float] = time.monotonic) -> web.Application:
     """`refresh(conversation_id, payload)` re-reads a turn's conversation when the turn is claimed (see
     Payloads.refresh_turn); what it returns is handed out and kept as the item's payload. `slack_file(id)`
-    downloads a Slack file with core's bot token, for a session whose conversation was sent it."""
+    downloads a Slack file with core's bot token, for a session whose conversation was sent it.
+    `/health/runner` is the runner's heartbeat for the supervisors: 503 once the runner hasn't pulled or
+    heartbeated for runner_stale_s. A fresh core gives the runner that long to show up."""
+    runner_seen = [clock()]
+
+    async def runner_health(request: web.Request) -> web.Response:
+        age = clock() - runner_seen[0]
+        ok = age <= runner_stale_s
+        return web.json_response({"ok": ok, "seen_s_ago": round(age)}, status=200 if ok else 503)
+
     def resolved(request: web.Request, kind: str) -> TokenInfo:
         tok = _token(request)
         info = resolve_token(conn, tok) if tok else None
@@ -60,6 +74,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
 
     async def pull(request: web.Request) -> web.Response:
         resolved(request, "runner")
+        runner_seen[0] = clock()
         deadline = time.monotonic() + pull_wait_s
         while True:
             item = None
@@ -93,6 +108,7 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
 
     async def heartbeat(request: web.Request) -> web.Response:
         info = resolved(request, "session")
+        runner_seen[0] = clock()
         body = await request.json()
         alive = queue.heartbeat(info.work_item_id)
         if alive:  # a turn can outlive the token it was claimed with: an account fork restarts its timer
@@ -197,5 +213,6 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                     web.post("/agent/events", events), web.post("/agent/tool", tool),
                     web.post("/agent/files", files), web.post("/agent/result", result),
                     web.get("/agent/slack_file/{file_id}", fetch_slack_file),
-                    web.get("/agent/bundle", bundle), web.get("/health", health)])
+                    web.get("/agent/bundle", bundle), web.get("/health", health),
+                    web.get("/health/runner", runner_health)])
     return app

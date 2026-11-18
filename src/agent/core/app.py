@@ -44,6 +44,7 @@ from agent.core.sessions import Gate, WorkItem, WorkQueue
 from agent.core.task_labeler import HaikuUnavailable, TaskLabeler, make_haiku
 from agent.core.task_record import export_all
 from agent.core.tracker_tools import register_tracker_tools
+from agent.core.usage_watch import UsageWatch
 from agent.dashboard.app import make_dashboard_app
 from agent.dashboard.names import NAMES_FILE, AccountNames
 from agent.dashboard.transcript import make_scrubber
@@ -164,6 +165,9 @@ class CoreApp:
         self.scheduler = Scheduler(self.conn, path=self.data_dir / "schedules" / "schedules.toml",
                                    timezone=self.config.timezone, fire=self.conversations.start_scheduled,
                                    report=self._report_schedules)
+        # The account pool's state each minute: holds scheduled runs when it runs low, carries on limit-cut turns
+        self.usage_watch = UsageWatch(self.conn, proxy, alert=self.dm_admins,
+                                      resume=self.conversations.resume_after_limit, timezone=self.config.timezone)
         self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
                                       on_change=self.notifier.task_changed) if github_reader else None
         self.agent_app = make_agent_app(
@@ -451,6 +455,7 @@ class CoreApp:
             await meter.setup()
             await web.TCPSite(meter, "0.0.0.0", self.config.llm_meter.port).start()
         loops = [self._every(60, self.conversations.intake_linear), self._every(60, self.scheduler.tick),
+                 self._every(60, self.usage_watch.tick),
                  self._every(3600, self.maintenance),
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token),
                  self._every(300, self.labeler.sweep)]
