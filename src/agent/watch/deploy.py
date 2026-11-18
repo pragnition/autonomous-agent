@@ -13,12 +13,37 @@ Git state is read and changed with `host.run(["git", ...], cwd=host.live)` -- ne
 so a test's fake `Host` can tell a `git` command from a `docker`/`docker compose` one apart and let the former
 run for real against a tmp checkout while only the latter gets faked.
 
-A checkout that is dirty or has drifted from `origin/main` (an uncommitted change, a local commit never pushed,
-a failed fetch, a non-fast-forward) fails loudly with exit 2 before anything is rebuilt, and every such failure
-is logged to `deploys.jsonl` as `not_deployable: <reason>` -- this is Review Focus 4 of the plan: a drifted live
+**The fetch target is pinned.** Right after `git fetch origin main` succeeds, `target = git rev-parse
+origin/main` is read exactly once and used for everything downstream (every diff, every ancestor check, `merge
+--ff-only <target>`, the log's `to`) -- never the symbolic `origin/main` again. A concurrent `git fetch` from
+another process (a person's `just deploy --dry-run`, say) can move that ref mid-run; pinning means this run
+only ever lands the commit it actually planned around.
+
+A checkout that is dirty or has drifted from `target` (an uncommitted change, a local commit never pushed, a
+failed fetch, a non-fast-forward) fails loudly with exit 2 before anything is rebuilt, and every such failure is
+logged to `deploys.jsonl` as `not_deployable: <reason>` -- this is Review Focus 4 of the plan: a drifted live
 install must never get silently papered over by a deploy. Since waiting for an idle runner can take up to
 `wait_idle_s` (30 minutes), the drift check runs twice: once right after the fetch, and again right before the
 fast-forward merge, in case the checkout itself moved while this run was waiting.
+
+**What gets rebuilt is not a single `HEAD`-vs-`target` diff.** It is the union, over every *base* in a small set
+of candidate commits, of `services_for(git diff --name-only --no-renames <base> target)`. The candidates are
+`HEAD`; the `to` sha of the most recent `"result": "ok"` deploy record (if any); and the `from`/`to` shas of
+every `pending` or `check_failed` record logged since that last `"ok"` one (or, if there has never been one, of
+every such record ever) -- each kept only if it still exists and is an ancestor of `target`. A single `HEAD`- or
+last-ok-only diff misses real cases: a deploy that fast-forwarded `HEAD` onto a commit whose build or check then
+failed leaves `HEAD` sitting past that commit, so a later commit that reverts the change back to the last-ok
+content diffs as empty against the last-ok sha even though `HEAD` (and the services it actually needs) moved in
+between -- the `HEAD` base in the union catches exactly that. Symmetrically, a deploy whose fast-forward
+succeeded but whose *second*, post-build idle wait then timed out (pending) also leaves `HEAD` at the new
+commit; with no `"ok"` record yet to anchor to, a plain `HEAD`-vs-`target` diff on the retry would see nothing
+and the pending rebuild would be lost -- the pending record's own `from` sha (the pre-merge commit) is in the
+union specifically to keep that change visible as something still to rebuild. Diffing with `--no-renames`
+matters for the same "don't miss real work" reason from another angle: a file moved from one service's
+directory to another's must show up as both its old and new path (a plain rename line would carry only the new
+path, hiding whichever side the old path's own rule would have triggered). If the union ends up empty but `HEAD`
+is still behind `target` (a docs-only change, or nothing outstanding needs rebuilding), the checkout still
+fast-forwards and logs `"ok"` -- `HEAD` and `target` stay level either way.
 
 The rebuild itself is two steps, not one, so a multi-minute image build can never recreate a running container
 out from under a turn that started mid-build: `docker compose build <services>` first (builds images, touches no
@@ -27,25 +52,17 @@ running container), then, only if `agent`'s own queue needs to be idle for this 
 -d --no-build <services>` to actually recreate containers. Every Compose step's exit code is checked; a
 non-zero one is `check_failed: compose <step> exited N`, never silently treated as `ok`.
 
-What actually gets rebuilt is decided from a different diff than "HEAD vs origin/main": it is `<base> vs
-origin/main`, where `<base>` is the `to` sha of the last deploy that logged `"ok"`, if that sha is still an
-ancestor of `origin/main` -- not plain `HEAD`. A deploy whose fast-forward succeeded but whose build or check
-then failed still leaves `HEAD` sitting at the new commit; diffing from `HEAD` on the next run would see no
-difference and quietly never retry the services that never actually came up. Diffing with `--no-renames` matters
-for the same reason from the other direction: a file moved from one service's directory to another's must show
-up as both its old and new path (a plain rename line would carry only the new path, hiding whichever side the
-old path's own rule would have triggered).
-
 A rebuild is "pending" (exit 3, retried by the next hourly run) when the host-wide lock is held by another
 deploy for the whole `wait_idle_s` wait, or when `agent`'s queue never goes idle in time, in which case
 `state.set_deploy_pending(True)` and a `"pending"` log record are both written. The flag converges back to
 `False` as soon as a run commits to actually landing the pending change -- right after the pre-merge drift
-check passes, not at the very end -- and also on the "nothing new since the last attempt" path, so a pending
-flag never outlives whatever it was flagging. A `claimed` probe that raises counts as "still busy" the way any
-other busy reading does -- *unless every single poll in one wait raised*, which means core itself was
-unreachable for the entire wait: nothing can have been dispatched to the runner in that case, so proceeding
-(rather than going pending) is the safer failure mode -- the deploy might be exactly the revert that brings core
-back.
+check passes, not at the very end -- and also on the "nothing outstanding" path, so a pending flag never
+outlives whatever it was flagging. A `claimed` probe that raises counts as "still busy" the way any other busy
+reading does -- *unless every single poll in one wait raised, and that wait ran for at least 300s* -- which
+means core itself was genuinely unreachable for a meaningful stretch, not just one flaky reading (the hourly
+watch's own `--wait-idle-s 0` call must never let a single failed probe recreate `agent` blindly): nothing can
+have been dispatched to the runner in that case, so proceeding (rather than going pending) is the safer failure
+mode -- the deploy might be exactly the revert that brings core back.
 """
 
 from __future__ import annotations
@@ -93,6 +110,10 @@ CONTAINER_NAMES = {
 
 _LOCK_POLL_S = 5
 _IDLE_POLL_S = 30
+# A probe that raises for an entire idle wait only counts as "core is down" (proceed) rather than "still busy"
+# (pending) once the wait has run at least this long -- one flaky reading under a short `--wait-idle-s` (the
+# hourly watch calls with 0) must never be read as "core is down for good."
+_CORE_DOWN_MIN_WAIT_S = 300
 
 
 def _services_for_one(path: str) -> frozenset[str]:
@@ -140,12 +161,12 @@ def _rev_parse_or_none(host: Host, ref: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def _drift_reason(host: Host) -> str | None:
-    """`None` if the checkout is clean and `HEAD` is an ancestor of `origin/main`; otherwise a short reason."""
+def _drift_reason(host: Host, target: str) -> str | None:
+    """`None` if the checkout is clean and `HEAD` is an ancestor of `target`; otherwise a short reason."""
     status = _git(host, ["status", "--porcelain"])
     if status.stdout.strip():
         return "the checkout has uncommitted changes"
-    ancestor = _git(host, ["merge-base", "--is-ancestor", "HEAD", "origin/main"])
+    ancestor = _git(host, ["merge-base", "--is-ancestor", "HEAD", target])
     if ancestor.returncode != 0:
         return "HEAD is not an ancestor of origin/main"
     return None
@@ -170,17 +191,66 @@ def _last_ok_sha(state: State) -> str | None:
     return last
 
 
-def _base_sha(host: Host, state: State) -> str:
-    """What to diff `origin/main` against to decide what needs rebuilding: the last successful deploy's `to`
-    sha, if the deploys log has one and it is still an ancestor of `origin/main` (so a build or check that
-    failed after an earlier fast-forward gets retried, rather than looking like "nothing changed" because `HEAD`
-    already sits at that commit); `HEAD` otherwise."""
+def _non_ok_shas_since_last_ok(state: State) -> set[str]:
+    """`from`/`to` shas of every `"pending"` or `"check_failed: ..."` deploy record logged after the most
+    recent `"ok"` one -- or, if there has never been one, of every such record in the whole log. These mark
+    git states an earlier, not-fully-successful attempt already moved through, so a later run still needs to
+    diff against them even when `HEAD` already sits at `target` and a last-ok/HEAD-only diff would show
+    nothing left to do."""
+    path = state.root / "deploys.jsonl"
+    if not path.exists():
+        return set()
+    records: list[dict] = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+
+    last_ok_index = -1
+    for i, record in enumerate(records):
+        if record.get("result") == "ok":
+            last_ok_index = i
+
+    shas: set[str] = set()
+    for record in records[last_ok_index + 1:]:
+        result = record.get("result")
+        if result == "pending" or (isinstance(result, str) and result.startswith("check_failed")):
+            for key in ("from", "to"):
+                value = record.get(key)
+                if isinstance(value, str):
+                    shas.add(value)
+    return shas
+
+
+def _change_bases(host: Host, state: State, target: str, head: str) -> set[str]:
+    """Every candidate base (see the module docstring) that still exists and is an ancestor of `target`."""
+    candidates = {head, *_non_ok_shas_since_last_ok(state)}
     last_ok = _last_ok_sha(state)
     if last_ok:
-        ancestor = _git(host, ["merge-base", "--is-ancestor", last_ok, "origin/main"])
+        candidates.add(last_ok)
+
+    valid: set[str] = set()
+    for sha in candidates:
+        if not sha:
+            continue
+        ancestor = _git(host, ["merge-base", "--is-ancestor", sha, target])
         if ancestor.returncode == 0:
-            return last_ok
-    return _rev_parse(host, "HEAD")
+            valid.add(sha)
+    return valid
+
+
+def _changed_paths(host: Host, state: State, target: str, head: str) -> set[str]:
+    paths: set[str] = set()
+    for base in _change_bases(host, state, target, head):
+        diff = _git(host, ["diff", "--name-only", "--no-renames", base, target])
+        paths.update(line for line in diff.stdout.splitlines() if line)
+    return paths
 
 
 # -- the idle-runner probe --
@@ -198,9 +268,11 @@ def _claimed(host: Host) -> int | None:
 
 def _wait_for_idle(host: Host, wait_idle_s: int, sleep, clock) -> bool:
     """Poll `claimed` every 30s until it is 0, or `wait_idle_s` runs out. A probe that raises counts as busy --
-    *unless every single poll in this call raised*, meaning core was unreachable for the entire wait: nothing
-    could have been dispatched in that case, so this returns `True` (proceed) rather than `False` (pending)."""
-    deadline = clock() + wait_idle_s
+    *unless every single poll in this call raised, and the wait ran for at least `_CORE_DOWN_MIN_WAIT_S`* --
+    meaning core was genuinely unreachable, not just one flaky reading under a short wait: nothing could have
+    been dispatched in that case, so this returns `True` (proceed) rather than `False` (pending)."""
+    start = clock()
+    deadline = start + wait_idle_s
     saw_a_real_reading = False
     while True:
         claimed = _claimed(host)
@@ -209,7 +281,9 @@ def _wait_for_idle(host: Host, wait_idle_s: int, sleep, clock) -> bool:
             if claimed == 0:
                 return True
         if clock() >= deadline:
-            return not saw_a_real_reading
+            if saw_a_real_reading:
+                return False
+            return (clock() - start) >= _CORE_DOWN_MIN_WAIT_S
         sleep(_IDLE_POLL_S)
 
 
@@ -293,11 +367,10 @@ def _iso_now() -> str:
     return datetime.now(UTC).strftime(FMT)
 
 
-def _log_not_deployable(host: Host, state: State, reason: str) -> int:
+def _log_not_deployable(host: Host, state: State, reason: str, target: str | None) -> int:
     print(f"deploy: not deployable: {reason}")
-    state.log_deploy({"ts": _iso_now(), "from": _rev_parse_or_none(host, "HEAD"),
-                       "to": _rev_parse_or_none(host, "origin/main"), "services": [],
-                       "result": f"not_deployable: {reason}"})
+    state.log_deploy({"ts": _iso_now(), "from": _rev_parse_or_none(host, "HEAD"), "to": target,
+                       "services": [], "result": f"not_deployable: {reason}"})
     return 2
 
 
@@ -318,7 +391,7 @@ def deploy(host: Host, state: State, *, wait_idle_s: int = 1800, if_pending: boo
            sleep=time.sleep, clock=time.monotonic) -> int:
     """Fetch, decide what to rebuild, wait for an idle runner if needed, fast-forward, rebuild and check.
 
-    Exit codes: 0 deployed and checked (or nothing to deploy); 1 the post-deploy check failed; 2 the checkout
+    Exit codes: 0 deployed and checked (or nothing outstanding); 1 the post-deploy check failed; 2 the checkout
     isn't deployable (dirty, diverged, a failed fetch or a failed fast-forward -- Review Focus 4); 3 pending (the
     lock held by another deploy, or `agent` never went idle within `wait_idle_s`).
     """
@@ -350,45 +423,57 @@ def deploy(host: Host, state: State, *, wait_idle_s: int = 1800, if_pending: boo
 def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) -> int:
     fetch = _git(host, ["fetch", "origin", "main"])
     if fetch.returncode != 0:
-        return _log_not_deployable(host, state, "fetch failed")
+        return _log_not_deployable(host, state, "fetch failed", None)
 
-    reason = _drift_reason(host)
+    # Pin the target once, right after the fetch: everything below reads and acts on this sha, never the
+    # symbolic `origin/main` again, so a concurrent fetch from another process can't move the goalposts.
+    target = _rev_parse_or_none(host, "origin/main")
+    if target is None:
+        return _log_not_deployable(host, state, "origin/main could not be resolved after fetch", None)
+
+    reason = _drift_reason(host, target)
     if reason:
-        return _log_not_deployable(host, state, reason)
+        return _log_not_deployable(host, state, reason, target)
 
-    base = _base_sha(host, state)
-    diff = _git(host, ["diff", "--name-only", "--no-renames", base, "origin/main"])
-    paths = [line for line in diff.stdout.splitlines() if line]
-    if not paths:
+    head = _rev_parse(host, "HEAD")
+    services = services_for(_changed_paths(host, state, target, head))
+
+    if not services:
+        if head == target:
+            state.set_deploy_pending(False)
+            return 0
+        # Nothing needs rebuilding, but there's still something to fast-forward onto (a docs-only change, or
+        # the union of outstanding bases happened to net out to nothing) -- land it and log `ok` regardless.
+        merge = _git(host, ["merge", "--ff-only", target])
+        if merge.returncode != 0:
+            failure = (merge.stderr or merge.stdout).strip()
+            return _log_not_deployable(host, state, f"merge --ff-only failed: {failure}", target)
         state.set_deploy_pending(False)
+        state.log_deploy({"ts": _iso_now(), "from": head, "to": target, "services": [], "result": "ok"})
         return 0
-
-    services = services_for(paths)
 
     if services & {"agent", "*"}:
         if not _wait_for_idle(host, wait_idle_s, sleep, clock):
-            return _log_pending(state, _rev_parse_or_none(host, "HEAD"), _rev_parse_or_none(host, "origin/main"),
-                                 services)
+            return _log_pending(state, head, target, services)
 
     # The checkout may have moved while this run was waiting for the runner to go idle; re-check right before
     # committing to the fast-forward (Review Focus 4).
-    reason = _drift_reason(host)
+    reason = _drift_reason(host, target)
     if reason:
-        return _log_not_deployable(host, state, reason)
+        return _log_not_deployable(host, state, reason, target)
 
-    # Past this point the run is committed to landing everything up to `origin/main` -- clear pending here, not
-    # at the end, so a pending flag never outlives the attempt it was flagging.
+    # Past this point the run is committed to landing everything up to `target` -- clear pending here, not at
+    # the end, so a pending flag never outlives the attempt it was flagging.
     state.set_deploy_pending(False)
 
+    # Re-read HEAD fresh rather than reusing the pre-wait `head`: the drift check just confirmed it's still an
+    # ancestor of `target`, but only a fresh read is guaranteed to be the exact commit this merge starts from.
     old_sha = _rev_parse(host, "HEAD")
-    merge = _git(host, ["merge", "--ff-only", "origin/main"])
+    merge = _git(host, ["merge", "--ff-only", target])
     if merge.returncode != 0:
-        return _log_not_deployable(host, state, f"merge --ff-only failed: {(merge.stderr or merge.stdout).strip()}")
-    new_sha = _rev_parse(host, "HEAD")
-
-    if not services:
-        state.log_deploy({"ts": _iso_now(), "from": old_sha, "to": new_sha, "services": [], "result": "ok"})
-        return 0
+        failure = (merge.stderr or merge.stdout).strip()
+        return _log_not_deployable(host, state, f"merge --ff-only failed: {failure}", target)
+    new_sha = target
 
     build_args = ["build"] + ([] if "*" in services else sorted(services))
     build_result = host.compose(build_args)
@@ -419,14 +504,20 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
 
 
 def _dry_run(host: Host, state: State) -> int:
-    _git(host, ["fetch", "origin", "main"])
-    base = _base_sha(host, state)
-    diff = _git(host, ["diff", "--name-only", "--no-renames", base, "origin/main"])
-    paths = [line for line in diff.stdout.splitlines() if line]
+    fetch = _git(host, ["fetch", "origin", "main"])
+    if fetch.returncode != 0:
+        print("fetch failed")
+        return 0
+    target = _rev_parse_or_none(host, "origin/main")
+    if target is None:
+        print("origin/main could not be resolved after fetch")
+        return 0
+    head = _rev_parse(host, "HEAD")
+    paths = _changed_paths(host, state, target, head)
     services = services_for(paths)
     print(f"services: {sorted(services)}")
     print("paths:")
-    for path in paths:
+    for path in sorted(paths):
         print(f"  {path}")
     return 0
 

@@ -361,6 +361,24 @@ def test_core_down_for_whole_wait_still_deploys(tmp_path):
     assert state.deploy_pending() is False
 
 
+def test_core_down_with_short_wait_still_counts_as_busy(tmp_path):
+    """The hourly watch calls `deploy` with `--wait-idle-s 0`. A single failed probe there must not be read as
+    "core is down for good" and recreate `agent` blindly -- only a sustained (>= 300s) all-raises wait does."""
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    fake.core_unreachable = True  # the one probe this makes raises, but the wait is instant
+    host = Host(run=fake, live=live)
+    state = State(tmp_path / "state")
+
+    result = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
+
+    assert result == 3
+    assert not any(c[0] == "docker" and c[1] == "compose" for c in fake.calls)
+    assert state.deploy_pending() is True
+
+
 def test_a_probe_that_only_sometimes_raises_still_counts_as_busy(tmp_path):
     """Unlike the whole-wait-unreachable case, a mix of a real (non-zero) reading and a raise must not short
     circuit into "proceed" -- only every single poll raising does."""
@@ -387,6 +405,79 @@ def test_a_probe_that_only_sometimes_raises_still_counts_as_busy(tmp_path):
 
     assert result == 3  # busy (claimed=1) the whole time -- the one raise doesn't make this "idle enough"
     assert state.deploy_pending() is True
+
+
+# -- deploy: the second idle wait, after the build and before the recreate --
+
+
+def _claim_during_build(fake: FakeDocker):
+    """Flips `fake.claimed` to 1 the moment a `compose build` call happens -- simulating a turn getting
+    claimed while the (multi-minute, in reality) image build is running. Returns the original `_compose`, so
+    a test can restore it once the build-time claim has served its purpose."""
+    original_compose = fake._compose
+
+    def hook(rest):
+        result = original_compose(rest)
+        if rest[0] == "build":
+            fake.claimed = 1
+        return result
+
+    fake._compose = hook
+    return original_compose
+
+
+def test_turn_claimed_during_build_returns_pending_before_up(tmp_path):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    fake.claimed = 0  # idle before the merge, so the first wait passes right away
+    _claim_during_build(fake)
+    host = Host(run=fake, live=live)
+    state = State(tmp_path / "state")
+
+    result = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
+
+    assert result == 3
+    assert not any(c[:3] == ["docker", "compose", "up"] for c in fake.calls)
+    assert state.deploy_pending() is True
+    records = _deploys(tmp_path)
+    assert records[-1]["result"] == "pending"
+
+
+def test_post_build_pending_without_ok_anchor_recreates_agent_on_retry(tmp_path):
+    """The exact Important repro: no `"ok"` record exists yet (a fresh install's empty state folder) when the
+    second, post-build idle wait times out. `HEAD` is already fast-forwarded onto the new commit by then; the
+    retry must still recreate `agent` rather than see an empty `HEAD`-vs-`target` diff (`HEAD` already equals
+    `target`) and silently clear pending with nothing rebuilt -- the first attempt's own pending record (its
+    `from` sha, the pre-merge commit) has to anchor the diff instead."""
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    fake.claimed = 0
+    original_compose = _claim_during_build(fake)
+    host = Host(run=fake, live=live)
+    state = State(tmp_path / "state")
+
+    first = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
+
+    assert first == 3
+    assert state.deploy_pending() is True
+    assert not any(c[:3] == ["docker", "compose", "up"] for c in fake.calls)
+    assert _deploys(tmp_path)[-1]["result"] == "pending"
+    assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()  # already ff'd
+
+    # The runner goes idle; no new commits land on origin in the meantime.
+    fake.claimed = 0
+    fake._compose = original_compose
+    fake.calls.clear()
+    retried = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
+
+    assert retried == 0
+    assert ["docker", "compose", "up", "-d", "--no-build", "agent"] in fake.calls
+    assert state.deploy_pending() is False
+    assert _deploys(tmp_path)[-1]["result"] == "ok"
 
 
 # -- deploy: a successful rebuild, and the two-step build/up split --
@@ -468,6 +559,44 @@ def test_a_failed_build_is_retried_from_the_last_ok_sha_not_head(tmp_path):
     assert retried == 0
     assert ["docker", "compose", "build", "core"] in fake.calls
     assert _deploys(tmp_path)[2]["result"] == "ok"
+
+
+def test_revert_after_check_failed_redeploys_and_logs(tmp_path):
+    """The exact Critical repro: an `ok` deploy, then a core change whose build and recreate both succeed but
+    whose *check* fails, then a revert back to the working content. With the base pinned to only the last-ok
+    sha, `diff(last_ok, revert)` is empty -- the revert's tree matches the last-ok tree exactly -- so the broken
+    container would stay up forever. The union must also diff from `HEAD` (the broken commit) to catch it."""
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/core/app.py": "good\n"}, "core change 1")
+
+    fake = FakeDocker()
+    host = Host(run=fake, live=live)
+    state = State(tmp_path / "state")
+
+    baseline = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
+    assert baseline == 0
+    assert _deploys(tmp_path)[0]["result"] == "ok"
+
+    _commit(origin, {"src/agent/core/app.py": "bad\n"}, "core change 2 (breaks smoke)")
+    fake.smoke_ok = False
+    broken = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
+    assert broken == 1
+    assert _deploys(tmp_path)[1]["result"].startswith("check_failed")
+    assert ["docker", "compose", "up", "-d", "--no-build", "core"] in fake.calls  # it did recreate, just failed
+
+    # Revert: a new commit whose tree matches "core change 1" exactly.
+    _commit(origin, {"src/agent/core/app.py": "good\n"}, "revert to core change 1")
+    fake.smoke_ok = True
+    fake.calls.clear()
+    reverted = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
+
+    assert reverted == 0
+    assert ["docker", "compose", "build", "core"] in fake.calls
+    assert ["docker", "compose", "up", "-d", "--no-build", "core"] in fake.calls
+    assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()
+    records = _deploys(tmp_path)
+    assert len(records) == 3
+    assert records[2]["result"] == "ok"
 
 
 # -- deploy: a failed compose step or check --

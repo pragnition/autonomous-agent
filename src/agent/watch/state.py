@@ -2,12 +2,14 @@
 
 Everything the hourly watch remembers between runs lives under one root directory (`State.default()` is
 `~/.local/state/improve-jensen`, overridden by env `IMPROVE_JENSEN_STATE`), as a handful of small files:
-`state.json` (the window boundary, known clones and the deploy-pending flag), `metrics.jsonl` (one line per turn,
-midturn or PR, read back by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's not-yet-final
-measurement, written by `stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line per
-`log_deploy`), `plan.json` (written by Claude, read and validated by `plan`), and `digest-<end>.md` files. Every
-whole-file write replaces the previous value atomically (`*.tmp` then `os.replace`), so a process killed mid-write
-never leaves a torn file for the next hourly run to trip over.
+`state.json` (the window boundary and known clones), `metrics.jsonl` (one line per turn, midturn or PR, read back
+by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's not-yet-final measurement, written by
+`stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line per `log_deploy`), `deploy-pending`
+(present means a deploy is pending -- its own file, not a `state.json` key, since `deploy.py` runs as a separate
+process from the hourly watch and a shared read-modify-write could race against this watch's own `commit()`),
+`plan.json` (written by Claude, read and validated by `plan`), and `digest-<end>.md` files. Every whole-file write
+replaces the previous value atomically (`*.tmp` then `os.replace`), so a process killed mid-write never leaves a
+torn file for the next hourly run to trip over.
 
 Measuring a window and committing it are two separate steps, because the digest a measurement produces is meant
 to be acted on (by Claude, against that digest) before the window is final -- and that action can fail. `stage`
@@ -36,6 +38,7 @@ _PENDING_METRICS_FILE = "pending-metrics.jsonl"
 _PENDING_CLONES_FILE = "pending-clones.json"
 _EVIDENCE_FILE = "evidence.jsonl"
 _DEPLOYS_FILE = "deploys.jsonl"
+_DEPLOY_PENDING_FILE = "deploy-pending"
 _PLAN_FILE = "plan.json"
 _DIGEST_PREFIX = "digest-"
 _DIGEST_SUFFIX = ".md"
@@ -351,12 +354,19 @@ class State:
     # -- deploy --
 
     def set_deploy_pending(self, flag: bool) -> None:
-        data = self._read_state()
-        data["deploy_pending"] = bool(flag)
-        self._write_state(data)
+        """The pending flag lives in its own file (`deploy-pending`, present means pending), not a key in
+        `state.json` -- `deploy.py` runs as a separate process from the hourly watch, and `commit()` rewrites
+        `state.json` from that other process; two read-modify-writes to the same file from different processes
+        could otherwise race and drop one or the other's change. A bare file's existence has no such race: the
+        write here is a single filesystem call (`touch`/`unlink`), never a read-modify-write of shared content."""
+        path = self.root / _DEPLOY_PENDING_FILE
+        if flag:
+            path.touch()
+        else:
+            path.unlink(missing_ok=True)
 
     def deploy_pending(self) -> bool:
-        return bool(self._read_state().get("deploy_pending", False))
+        return (self.root / _DEPLOY_PENDING_FILE).exists()
 
     def log_deploy(self, record: dict) -> None:
         _append_jsonl(self.root / _DEPLOYS_FILE, record)

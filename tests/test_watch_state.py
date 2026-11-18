@@ -226,11 +226,10 @@ def test_plan_validation(tmp_path):
     assert state.plan() == {"reviews": [], "fix": None}
 
 
-def test_known_clones_and_deploy_pending_round_trip(tmp_path):
+def test_known_clones_round_trip(tmp_path):
     state = State(tmp_path)
 
     assert state.known_clones() == set()
-    assert state.deploy_pending() is False
 
     state.add_clones(["org/repo1", "org/repo2"])
     assert state.known_clones() == {"org/repo1", "org/repo2"}
@@ -238,11 +237,31 @@ def test_known_clones_and_deploy_pending_round_trip(tmp_path):
     state.add_clones(["org/repo2", "org/repo3"])
     assert state.known_clones() == {"org/repo1", "org/repo2", "org/repo3"}
 
+
+def test_deploy_pending_round_trip(tmp_path):
+    state = State(tmp_path)
+
+    assert state.deploy_pending() is False
+
     state.set_deploy_pending(True)
     assert state.deploy_pending() is True
+    assert (tmp_path / "deploy-pending").exists()  # its own file, not a state.json key
 
     state.set_deploy_pending(False)
     assert state.deploy_pending() is False
+    assert not (tmp_path / "deploy-pending").exists()
+
+
+def test_deploy_pending_survives_a_concurrent_commit(tmp_path):
+    """The pending flag lives in its own file precisely so the hourly watch's own `commit()` -- a read-modify-
+    write of `state.json` from what may be a separate process -- can never race with it and drop the flag."""
+    state = State(tmp_path)
+    state.set_deploy_pending(True)
+
+    state.window(_dt(2026, 11, 19, 10, 0, 0))
+    state.commit()
+
+    assert state.deploy_pending() is True
 
 
 def test_write_digest_filename(tmp_path):
