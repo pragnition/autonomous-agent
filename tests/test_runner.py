@@ -7,9 +7,11 @@ import httpx
 import pytest
 
 from agent.runner.base import RunResult
+from agent.runner.claude import ClaudeRunner
 from agent.runner.link import CoreLink, SessionRevoked
 from agent.runner.tools import remote_sdk_tools
 from agent.runner.worker import FRESH_NOTE, MIDTURN_NOTE, RESTARTED_NOTE, Runner, memory_block
+from test_claude_runner import HANG, FakeClient, FakeProxy, echo_prompt, result, sids
 
 
 async def wait_until(cond):
@@ -106,6 +108,9 @@ class FakeClaude:
     async def interrupt(self, run_id):
         self.interrupted.append(run_id)
         self._stop.set()
+
+    def release(self, run_id):
+        pass
 
 
 def item(conversation_id="V-1", **payload_over):
@@ -228,6 +233,9 @@ async def test_runner_runs_ten_conversations_at_once(tmp_path):
         async def interrupt(self, run_id):
             release.set()
 
+        def release(self, run_id):
+            pass
+
     runner = make_runner(tmp_path, FakeLink(), BlockingClaude())
     items = [item(conversation_id=f"V-{i}") for i in range(n)]
     handles = asyncio.gather(*(runner.handle(it, f"tok-{i}", []) for i, it in enumerate(items)))
@@ -247,6 +255,25 @@ async def test_revoked_token_interrupts(tmp_path):
     claude = FakeClaude(hang=True)
     await make_runner(tmp_path, FakeLink(revoked=True), claude).handle(item(), "tok", [])
     assert claude.interrupted == ["W-V-1"]
+
+
+async def test_a_turn_stopped_once_runs_when_this_runner_claims_it_again(tmp_path):
+    """A stop belongs to the claim it came with. When a turn's lease runs out and core hands it to the same runner
+    again, the new attempt runs instead of returning "interrupted" before it starts."""
+    clients, scripts = [], [[HANG], [echo_prompt, result()]]
+
+    def factory(options):
+        clients.append(FakeClient(options, scripts[len(clients)]))
+        return clients[-1]
+
+    claude = ClaudeRunner(FakeProxy(), "http://172.30.0.1:28091", tmp_path, client_factory=factory,
+                          uuid_factory=sids().__next__)
+    link = FakeLink(cancel=True)
+    runner = make_runner(tmp_path, link, claude)
+    await runner.handle(item(), "tok-1", [])
+    link.cancel = False
+    await runner.handle(item(), "tok-2", [])
+    assert [r["outcome"] for r in link.results] == ["interrupted", "done"]
 
 
 async def test_heartbeat_reports_the_live_session_and_what_was_read(tmp_path):

@@ -232,6 +232,7 @@ class Runner:
             beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await beat
+            self.claude.release(item_id)  # a stop belongs to this claim; a later claim of the item runs afresh
         out = {"outcome": result.outcome, "text": result.summary, "session_id": result.session_id,
                "turns": result.turns, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
                "cache_read_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens,
