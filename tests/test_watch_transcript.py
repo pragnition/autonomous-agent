@@ -63,6 +63,14 @@ def test_inline_code_chars_counts_write_and_heredocs():
     assert facts.inline_code_chars == 100 + len(heredoc_command) + 0
 
 
+def test_heredoc_marker_inside_body_is_not_a_redirect():
+    # The ">" only shows up inside the heredoc's body text, after the marker, so this isn't a file write.
+    command = "cat <<'EOF'\nfoo > bar\nEOF"
+    lines = [_assistant([_tool_use("t1", "Bash", {"command": command})])]
+    facts = turn_facts(lines)
+    assert facts.inline_code_chars == 0
+
+
 def test_tool_errors_normalised_and_missing_tools():
     lines = [
         _assistant([_tool_use("t1", "Read", {"file_path": "/var/agent/x/1.txt"})]),
@@ -145,6 +153,8 @@ def test_normalise_error_strips_paths_hex_and_digits():
     a = normalise_error("/var/agent/x/1.txt: No such file")
     b = normalise_error("/tmp/y/2.txt: No such file")
     assert a == b == "<path> no such file"
+    assert normalise_error("object deadbeef12 not found") == "object <id> not found"
+    assert normalise_error("retry after 12345678 ms") == "retry after <n> ms"
 
 
 def test_turn_facts_returns_dataclass_with_defaults_on_empty_input():

@@ -24,7 +24,7 @@ _LOST_SESSION_PHRASE = "didn't finish before the previous session ended"
 
 _PATH_RE = re.compile(r"/\S+")
 _UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
-_HEX_RUN_RE = re.compile(r"\b[0-9a-f]{8,}\b")
+_HEX_RUN_RE = re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b")
 _DIGIT_RUN_RE = re.compile(r"\d+")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -95,9 +95,11 @@ def _input_text(name: str, tool_input: Any) -> str:
 
 
 def _is_heredoc_write(command: str) -> bool:
-    if not _HEREDOC_RE.search(command):
+    match = _HEREDOC_RE.search(command)
+    if not match:
         return False
-    return ">" in command or "tee" in command
+    before = command[:match.start()]
+    return ">" in before or "tee" in before
 
 
 def _repo_from_clone_url(arg: str) -> str:
