@@ -229,6 +229,20 @@ CREATE TABLE IF NOT EXISTS limit_waits (
     resumed_at TEXT,
     resumed_as TEXT                -- the work item that carried it on
 );
+-- A conversation the agent parked until a time (core/parking.py): at until_at core carries it on in a new turn; a
+-- person's reply in its thread ends it earlier
+CREATE TABLE IF NOT EXISTS parks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,    -- the turn that parked it
+    until_at TEXT NOT NULL,        -- UTC, as db.utcnow() writes it
+    note TEXT,                     -- the agent's own note for the turn that carries on
+    created_at TEXT NOT NULL,
+    ended_at TEXT,
+    ended_how TEXT,                -- resumed | replied | replaced
+    resumed_as TEXT                -- the work item that carried it on
+);
+CREATE INDEX IF NOT EXISTS parks_open ON parks(ended_at, until_at);
 """
 
 

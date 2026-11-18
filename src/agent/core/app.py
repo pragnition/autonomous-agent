@@ -35,6 +35,7 @@ from agent.core import llm_meter
 from agent.core.llm_meter import make_meter_app
 from agent.core.public_api import make_public_app
 from agent.core.notifier import SlackNotifier
+from agent.core.parking import Parking, register_parking_tools
 from agent.core.payloads import Payloads
 from agent.core.pr_stats import PrStatsPoller
 from agent.core.projects import register_project_tools
@@ -168,6 +169,10 @@ class CoreApp:
         # The account pool's state each minute: holds scheduled runs when it runs low, carries on limit-cut turns
         self.usage_watch = UsageWatch(self.conn, proxy, alert=self.dm_admins,
                                       resume=self.conversations.resume_after_limit, timezone=self.config.timezone)
+        # Conversations the agent parked (to wait out a soft cap, or until a time someone named) carry themselves on
+        self.parking = Parking(self.conn, proxy, resume=self.conversations.resume_parked,
+                               timezone=self.config.timezone)
+        register_parking_tools(self.router, self.parking)
         self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
                                       on_change=self.notifier.task_changed) if github_reader else None
         self.agent_app = make_agent_app(
@@ -456,6 +461,7 @@ class CoreApp:
             await web.TCPSite(meter, "0.0.0.0", self.config.llm_meter.port).start()
         loops = [self._every(60, self.conversations.intake_linear), self._every(60, self.scheduler.tick),
                  self._every(60, self.usage_watch.tick),
+                 self._every(60, self.parking.tick),
                  self._every(3600, self.maintenance),
                  self._every(300, self.post_digest), self._every(600, self.refresh_linear_token),
                  self._every(300, self.labeler.sweep)]

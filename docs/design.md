@@ -274,6 +274,18 @@ it to the account it last ran on. Usually it doesn't, since the limit was hit on
 fresh session with the digest handoff note instead (never `/resume` on another account). That happens once: a resumed turn that is cut off again fails like any other. A long project's build keeps its own
 retries (below) instead, and the gate holds them until there is capacity.
 
+A session can also park itself (`core/parking.py`) instead of keeping its turn alive to wait. The agent's `park`
+tool takes an optional `until` (HH:MM in the team's timezone, or an ISO date-time) and a `note`. Without `until`,
+the park lasts until the soft cap on the conversation's account lifts, or until the account's reset when it has no
+capacity. Core records the park in `parks` (event `parked`) and posts "Parked until 14:30 +08; reply here to resume
+earlier." in the thread. The agent then ends its turn. Every minute core carries on each park that is due, as a new
+turn in the same conversation with the agent's note (event `park_resumed`). That turn goes through the same-account
+check as any next turn, and it neither reacts to the parking turn's message nor counts as a continuation. A
+person's message in the thread ends the park at once (`ended_how = replied`, event `park_ended`) and is the next turn
+itself. Background agents and shells still end with the parking turn. The `status` tool shows the conversation's
+account: how much of its 5-hour window is used, its effective cap, when the window resets and when the cap lifts,
+and how many accounts are under their cap.
+
 A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
 whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or
 losing an item revokes its session token, and the runner interrupts the session at its next heartbeat; a later
