@@ -64,6 +64,18 @@ def test_collect_window_statuses_and_smoke_excluded(conn):
     assert result["claimed"] == 1
 
 
+def test_collect_lists_the_turns_still_running(conn):
+    # Whatever their updated_at: a running turn may already have opened a PR the window's search finds.
+    since, until = _iso(T0), _iso(T0 + timedelta(hours=1))
+    running = _insert_item(conn, conversation_id="V-a", status="claimed", updated_at=_iso(T0 - timedelta(hours=2)))
+    _insert_item(conn, conversation_id="V-b", status="queued", updated_at=_iso(T0 + timedelta(minutes=5)))
+    _insert_item(conn, conversation_id="V-c", status="done", updated_at=_iso(T0 + timedelta(minutes=5)))
+
+    result = core_collect.collect(conn, since, until)
+
+    assert result["running"] == [{"id": running, "conversation_id": "V-a"}]
+
+
 def test_collect_reduces_payload_and_reads_pool(conn):
     db.set_setting(conn, "usage_watch", json.dumps({"pool": "hold_scheduled"}))
     since, until = _iso(T0), _iso(T0 + timedelta(hours=1))

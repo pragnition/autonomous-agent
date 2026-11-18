@@ -32,7 +32,9 @@ def _reduced(raw: str | None, keep: tuple[str, ...]) -> dict:
 
 def collect(conn: sqlite3.Connection, since: str, until: str) -> dict:
     """Finished work items with `updated_at` in `(since, until]`, their conversations and the long projects being
-    built, the usage watch's current pool, and the queue's depth (`claimed`, not limited to the window).
+    built, the usage watch's current pool, and the queue's depth (`claimed`, not limited to the window) with the
+    turns behind it (`running`: each claimed item's `id` and `conversation_id`, whatever its `updated_at` -- a turn
+    still running may already have opened a PR the window's own PR search finds).
 
     A `V-smoke-*` conversation (the end-to-end smoke test) never counts as real work and is left out of `items`.
     """
@@ -73,8 +75,11 @@ def collect(conn: sqlite3.Connection, since: str, until: str) -> dict:
     pool = (json.loads(setting).get("pool") if setting else None) or "normal"
 
     claimed = conn.execute("SELECT COUNT(*) FROM work_items WHERE status = 'claimed'").fetchone()[0]
+    running = [{"id": r["id"], "conversation_id": r["conversation_id"]} for r in conn.execute(
+        "SELECT id, conversation_id FROM work_items WHERE status = 'claimed' ORDER BY created_at, rowid")]
 
-    return {"items": items, "conversations": conversations, "projects": projects, "pool": pool, "claimed": claimed}
+    return {"items": items, "conversations": conversations, "projects": projects, "pool": pool, "claimed": claimed,
+            "running": running}
 
 
 def main(argv: list[str]) -> int:

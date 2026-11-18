@@ -32,7 +32,8 @@ SIGNAL_KEYS = ("context_first", "context_peak", "big_start_small_ask", "no_deleg
 @dataclass
 class ConvoView:
     """One conversation's turns, as the digest shows them. Each turn is a plain dict with `id`, `source`,
-    `status`, `outcome`, `minutes`, `asked`, `replied`, `facts` (a `TurnFacts`) and `signals` (a dict)."""
+    `status`, `outcome`, `minutes`, `asked`, `replied`, `facts` (a `TurnFacts`) and `signals` (a dict), and
+    optionally `own` (true for improve-jensen's own traffic, which the totals leave out)."""
 
     id: str
     project: str | None
@@ -62,9 +63,10 @@ def _signal_text(signals: dict) -> str:
 
 
 def _render_turn(turn: dict, cap: int | None) -> list[str]:
+    own = " (improve-jensen's own: not in the totals)" if turn.get("own") else ""
     lines = [
         f"- turn {turn.get('id')} [{turn.get('source')}] status={turn.get('status')} "
-        f"outcome={turn.get('outcome')} minutes={turn.get('minutes')}",
+        f"outcome={turn.get('outcome')} minutes={turn.get('minutes')}{own}",
         f"  asked: {turn.get('asked', '')}",
         f"  replied: {turn.get('replied', '')}",
         f"  signals: {_signal_text(turn.get('signals') or {})}",
@@ -78,9 +80,14 @@ def _render_turn(turn: dict, cap: int | None) -> list[str]:
 
 
 def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
-               deployed: list[dict], cap: int | None) -> str:
+               deployed: list[dict], cap: int | None, alerts: list[str]) -> str:
     start, end = window
-    out = ["# Jensen hourly digest", "", f"Window: {_iso(start)} to {_iso(end)}", "", "## Totals"]
+    out = ["# Jensen hourly digest", "", f"Window: {_iso(start)} to {_iso(end)}", "", "## Needs attention"]
+    if alerts:
+        out.extend(f"- {alert}" for alert in alerts)
+    else:
+        out.append("- none")
+    out += ["", "## Totals"]
     if totals:
         out.extend(f"- {value}" for value in totals.values())
     else:
@@ -118,13 +125,14 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
 
 
 def render(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
-           deployed: list[dict], budget: int = 400_000) -> str:
-    """The digest's markdown text. Tries the tool-line cap at each step in `_CAPS`, returning the first rendering
-    that fits `budget`; if none fit (the people's own messages alone are already over budget), returns the last
-    (narrowest) one anyway, since `asked`/`replied` are never cut."""
+           deployed: list[dict], budget: int = 400_000, *, alerts: list[str] | None = None) -> str:
+    """The digest's markdown text. `alerts` (core unreachable, a failed deploy) go first, under "Needs attention".
+    Tries the tool-line cap at each step in `_CAPS`, returning the first rendering that fits `budget`; if none fit
+    (the people's own messages alone are already over budget), returns the last (narrowest) one anyway, since
+    `asked`/`replied` are never cut."""
     text = ""
     for cap in _CAPS:
-        text = _render_at(window, convos, totals, prs, deployed, cap)
+        text = _render_at(window, convos, totals, prs, deployed, cap, list(alerts or []))
         if len(text) <= budget:
             return text
     return text

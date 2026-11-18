@@ -4,12 +4,16 @@ Pulls the window's finished work items out of core (`core_collect.py`, run insid
 `Host.core_python`), fetches each undelivered turn's own runner transcript to size it up with
 `agent.watch.transcript.turn_facts`, finds Jensen's PRs for the window with `gh search prs` and nails down each
 one's size, CI result and co-author trail with `gh pr view`/`gh pr checks` (or, when the token can't read checks,
-the Actions runs on the PR's head commit), then stages what `agent.watch.state.State` keeps (`State.stage`) and
-writes a digest file for improve-jensen to read next. Every piece of free text that lands in the digest -- a
-person's ask, Jensen's reply, a tool or error line, a deployed issue's title -- is scrubbed of secrets first, since
-it might end up quoted back out in a public issue; so is every raw transcript line *before* `turn_facts` ever
-truncates it, since a secret that straddles that cut would otherwise leak a prefix no exact-value or pattern match
-could catch after the fact.
+the Actions runs on the PR's head commit, then its commit statuses), then stages what `agent.watch.state.State`
+keeps (`State.stage`) and writes a digest file for improve-jensen to read next. Every piece of free text that lands
+in the digest -- a person's ask, Jensen's reply, a tool or error line, a deployed issue's title -- is scrubbed of
+secrets first, since it might end up quoted back out in a public issue; so is every raw transcript line *before*
+`turn_facts` ever truncates it, since a secret that straddles that cut would otherwise leak a prefix no exact-value
+or pattern match could catch after the fact.
+
+Every record is stamped with when its event happened, not when it was measured: a turn or midturn with its
+`updated_at`, a PR with its `mergedAt`, else its `createdAt`. So `count --since <deploy time>` reads only what
+happened after a deploy, even from a window that straddled it.
 
 Measuring is staged, not committed: the digest this produces is meant to be acted on before the window is
 final, and that action can fail. `State.stage` records this window's metrics and newly-seen clones without
@@ -18,16 +22,23 @@ succeeds, folds them in. So a window re-measured after a failed action (the same
 its own prior staging rather than duplicating metrics, and a turn's own clone is never mistaken for a reclone of
 itself just because an earlier, abandoned attempt at the same window already staged it as "seen."
 
-Two things can go wrong here without the rest of the hour's measurement being worth losing: `gh` (missing
-token, a single PR's own `gh pr view`/`gh pr checks` failing, or any other failure) and the runner's transcripts
-(the container unreachable). Both are caught around just the work that depends on them; everything else in the
-window still gets measured and written, and neither failure's own message carries a host path.
+Nothing that goes wrong here may stop the hour from reaching Claude, because the hour that most needs Claude is
+the one after a deploy broke Jensen -- and only Claude reverts it. So:
+- core unreachable (or answering garbage) still gives `has_work`, with a digest that says so, and the window is
+  held open (`State.hold_window`) so the turns core couldn't hand over are read once it answers again;
+- a newest `deploys.jsonl` record of `check_failed` or `not_deployable` gives `has_work` on an otherwise quiet hour,
+  with the record named in the digest;
+- `gh` failing outright, one PR's own calls failing in any way, the runner's transcripts being unavailable, or
+  one malformed turn are each caught around just the work that depends on them; the rest of the window is still
+  measured and written. A caught error's message never reaches the digest or the log -- only its type, since a
+  message can carry a host path or worse.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -36,7 +47,7 @@ from pathlib import Path
 from agent.scrub import scrub
 from agent.watch.digest import SIGNAL_KEYS, ConvoView, render
 from agent.watch.host import Host
-from agent.watch.state import FMT, State, summarize
+from agent.watch.state import FMT, State, is_improve_jensens_own, summarize
 from agent.watch.transcript import TurnFacts, turn_facts
 
 # `pool` values that mean improve-jensen should sit this hour out entirely.
@@ -52,8 +63,14 @@ _BIG_START_MAX_CALLS = 5
 _RETENTION_DAYS = 30
 _PR_SEARCH_LIMIT = 200
 
-# A single failing `gh` call for one PR (a network hiccup, a malformed response) must not drop the rest.
-_PR_FAILURE = (RuntimeError, subprocess.CalledProcessError, OSError, ValueError, KeyError)
+# A newest deploy record starting with one of these means Jensen may be broken by the last deploy.
+_DEPLOY_FAILURES = ("check_failed", "not_deployable")
+
+_CORE_DOWN = ("Jensen's core is unreachable: this hour's finished turns could not be read, and the window stays "
+              "open until core answers again.")
+
+# A head commit's combined status (`gh api repos/<repo>/commits/<sha>/status`), read as a CI result.
+_STATUS_CI = {"success": "passed", "pending": "failed", "failure": "failed", "error": "failed"}
 
 # The per-turn/midturn signals the digest's totals section shows, in that order. "pr" is handled separately,
 # since it needs its own fallback text when `gh` is unavailable.
@@ -76,6 +93,23 @@ def _iso(value: datetime) -> str:
 
 def _parse(value: str) -> datetime:
     return datetime.strptime(value, FMT).replace(tzinfo=UTC)
+
+
+def _event_time(*values: object, fallback: datetime) -> str:
+    """The first of `values` that parses as a timestamp, re-formatted; `fallback` when none does."""
+    for value in values:
+        if isinstance(value, str):
+            try:
+                return _iso(_parse(value))
+            except ValueError:
+                continue
+    return _iso(fallback)
+
+
+def _warn(what: str, exc: BaseException) -> None:
+    """One line on stderr naming what failed and the exception's type -- never its message, which can carry a
+    host path, a token's error text or a piece of a transcript into the public workflow log."""
+    print(f"warning: {what} failed ({type(exc).__name__})", file=sys.stderr)
 
 
 def _person_started(payload: dict) -> bool:
@@ -117,12 +151,30 @@ def _ci_state(checks: subprocess.CompletedProcess) -> str:
 _RUN_OK = {"success", "skipped", "neutral"}
 
 
+def _ci_from_statuses(host: Host, repo: str, head_sha: str) -> str:
+    """CI from the head commit's combined status, for a repo whose CI reports through commit statuses (an outside
+    CI service, an app) rather than Actions: `success` gives `passed`, `pending`, `failure` or `error` gives
+    `failed`, no statuses at all gives `none`. A refused or failed call, or output that doesn't parse, gives
+    `unknown`."""
+    result = host.jensen_gh(["api", f"repos/{repo}/commits/{head_sha}/status"], check=False)
+    if result.returncode != 0:
+        return "unknown"
+    try:
+        data = json.loads(result.stdout or "{}")
+        if not data.get("statuses"):
+            return "none"
+        return _STATUS_CI.get(data.get("state"), "unknown")
+    except (ValueError, AttributeError, TypeError):
+        return "unknown"
+
+
 def _ci_from_runs(host: Host, repo: str, head_sha: str | None) -> str:
     """CI from the Actions runs on the PR's head commit, for when `gh pr checks` is forbidden: a fine-grained token
-    has no "Checks" permission, but Actions: read still lists the runs. No runs gives `none`; a run not yet
-    completed gives `failed`, the same as `gh pr checks`' pending; all completed with a conclusion in `_RUN_OK`
-    gives `passed`, anything else `failed`. A missing head sha, a refused or failed call, or output that doesn't
-    parse gives `unknown`, never a guess."""
+    has no "Checks" permission, but Actions: read still lists the runs. No runs falls back to the commit's
+    statuses (`_ci_from_statuses`), which give `none` when there are none either; a run not yet completed gives
+    `failed`, the same as `gh pr checks`' pending; all completed with a conclusion in `_RUN_OK` gives `passed`,
+    anything else `failed`. A missing head sha, a refused or failed call, or output that doesn't parse gives
+    `unknown`, never a guess."""
     if not head_sha:
         return "unknown"
     result = host.jensen_gh(["api", f"repos/{repo}/actions/runs?head_sha={head_sha}&per_page=100"], check=False)
@@ -130,13 +182,13 @@ def _ci_from_runs(host: Host, repo: str, head_sha: str | None) -> str:
         return "unknown"
     try:
         runs = json.loads(result.stdout or "{}").get("workflow_runs") or []
-        if not runs:
-            return "none"
-        if any(run.get("status") != "completed" for run in runs):
-            return "failed"
-        return "passed" if all(run.get("conclusion") in _RUN_OK for run in runs) else "failed"
+        if runs:
+            if any(run.get("status") != "completed" for run in runs):
+                return "failed"
+            return "passed" if all(run.get("conclusion") in _RUN_OK for run in runs) else "failed"
     except (ValueError, AttributeError, TypeError):
         return "unknown"
+    return _ci_from_statuses(host, repo, head_sha)
 
 
 def _pr_record(host: Host, found: dict, now: datetime, pr_to_conversation: dict[str, str],
@@ -147,8 +199,8 @@ def _pr_record(host: Host, found: dict, now: datetime, pr_to_conversation: dict[
     view = json.loads(host.jensen_gh(
         ["pr", "view", url, "--json", "additions,deletions,createdAt,mergedAt,commits,headRefOid"]).stdout)
     lines = (view.get("additions") or 0) + (view.get("deletions") or 0)
-    merged_at = view.get("mergedAt")
-    open_to_merge_s = (_parse(merged_at) - _parse(view["createdAt"])).total_seconds() if merged_at else None
+    created_at, merged_at = view.get("createdAt"), view.get("mergedAt")
+    open_to_merge_s = (_parse(merged_at) - _parse(created_at)).total_seconds() if merged_at and created_at else None
 
     ci = _ci_state(host.jensen_gh(["pr", "checks", url], check=False))
     if ci == "unknown":
@@ -167,8 +219,8 @@ def _pr_record(host: Host, found: dict, now: datetime, pr_to_conversation: dict[
                 conversation = project.get("conversation_id")
                 break
 
-    return {"ts": _iso(now), "kind": "pr", "url": url, "repo": repo, "lines": lines,
-            "open_to_merge_s": open_to_merge_s, "ci": ci, "coauthor_trailers": coauthor_trailers,
+    return {"ts": _event_time(merged_at, created_at, fallback=now), "kind": "pr", "url": url, "repo": repo,
+            "lines": lines, "open_to_merge_s": open_to_merge_s, "ci": ci, "coauthor_trailers": coauthor_trailers,
             "conversation": conversation}
 
 
@@ -186,30 +238,121 @@ def _fetch_prs(host: Host, now: datetime, start: datetime, pr_to_conversation: d
         return [], f"gh exited {exc.returncode}"
     except json.JSONDecodeError:
         return [], "gh returned unparseable output"
+    except Exception as exc:
+        _warn("searching Jensen's PRs", exc)
+        return [], f"gh failed ({type(exc).__name__})"
+    if not isinstance(found, list):
+        return [], "gh returned unparseable output"
 
     records = []
     for pr in found:
         try:
             records.append(_pr_record(host, pr, now, pr_to_conversation, projects))
-        except _PR_FAILURE:
-            continue  # one PR's own `gh pr view`/`gh pr checks` failing must not drop the rest
+        except Exception as exc:  # one PR failing in any way (a gh hiccup, a null field) must not drop the rest
+            _warn("one PR's record", exc)
     return records, None
+
+
+def _collect(host: Host, start: datetime, end: datetime) -> dict | None:
+    """core's snapshot of the window (`core_collect.py`), or `None` when core can't be read: the container is
+    down, `docker exec` fails, or what comes back isn't a JSON object."""
+    try:
+        collected = json.loads(host.core_python("core_collect.py", ["--since", _iso(start), "--until", _iso(end)]))
+    except Exception as exc:
+        _warn("reading core's work queue", exc)
+        return None
+    return collected if isinstance(collected, dict) else None
+
+
+def _fetch_transcripts(host: Host, ids: list[str]) -> tuple[dict[str, bytes], str | None]:
+    """Each id's runner transcript as raw bytes, plus a host-path-free reason when none could be read at all."""
+    if not ids:
+        return {}, None
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            fetched = host.transcripts(ids, Path(tmp))
+            return {item_id: path.read_bytes() for item_id, path in fetched.items()}, None
+        except Exception as exc:
+            _warn("reading the runner's transcripts", exc)
+            return {}, "Jensen's runner transcripts are unavailable"
+
+
+def _facts(raw_bytes: bytes | None, secrets: list[str]) -> TurnFacts:
+    if raw_bytes is None:
+        return TurnFacts()
+    # Scrub each raw line *before* turn_facts builds (and truncates to 300/300/500) its tool/error lines from
+    # it: a secret that straddles that cut would otherwise leak a prefix too short for any exact-value or
+    # pattern match to catch once it's already been cut.
+    return turn_facts([scrub(line, secrets) for line in raw_bytes.decode(errors="replace").splitlines()])
+
+
+def _deploy_alert(state: State) -> str | None:
+    """A "Needs attention" line when the newest `deploys.jsonl` record is a failed or impossible deploy."""
+    last = state.last_deploy()
+    result = last.get("result") if last else None
+    if not isinstance(result, str) or not result.startswith(_DEPLOY_FAILURES):
+        return None
+    return (f"The newest deploy record is `{result}` (from {last.get('from')} to {last.get('to')}, at "
+            f"{last.get('ts')}): Jensen may be broken. The record is the last line of deploys.jsonl in the state "
+            f"folder.")
+
+
+def _midturn_record(item: dict) -> dict:
+    created, updated = _parse(item["created_at"]), _parse(item["updated_at"])
+    return {"ts": _iso(updated), "kind": "midturn", "id": item["id"], "conversation": item.get("conversation_id"),
+            "source": (item.get("payload") or {}).get("source"),
+            "midturn_wait_s": (updated - created).total_seconds()}
+
+
+def _turn_record_and_view(item: dict, facts: TurnFacts, known_clones: set[str],
+                          secrets: list[str]) -> tuple[dict, dict]:
+    created, updated = _parse(item["created_at"]), _parse(item["updated_at"])
+    payload = item.get("payload") or {}
+    result = item.get("result") or {}
+    source = payload.get("source")
+    record = {
+        "ts": _iso(updated), "kind": "turn", "id": item["id"], "conversation": item.get("conversation_id"),
+        "source": source, "context_first": facts.context_first, "context_peak": facts.context_peak,
+        "big_start_small_ask": _big_start_small_ask(facts), "no_delegation": _no_delegation(facts),
+        "inline_code_chars": facts.inline_code_chars, "lost_background": facts.lost_background,
+        "still_running": facts.still_running, "turn_failed": _turn_failed(_person_started(payload), item, result),
+        "reclone": sum(1 for repo in facts.clones if repo in known_clones), "tool_errors": facts.tool_errors,
+        "missing_tools": facts.missing_tools,
+    }
+    # Belt and suspenders: the lines fed into turn_facts were already scrubbed, but scrub again here in case a line
+    # was skipped (bad JSON) and its text still ended up somewhere -- scrubbing already-safe text is a no-op.
+    scrubbed_facts = replace(facts, tool_lines=[scrub(line, secrets) for line in facts.tool_lines],
+                              error_lines=[scrub(line, secrets) for line in facts.error_lines])
+    view = {
+        "id": item["id"], "source": source, "status": item.get("status"), "outcome": result.get("outcome"),
+        "minutes": round((updated - created).total_seconds() / 60, 1),
+        "asked": scrub(payload.get("text") or "", secrets), "replied": scrub(result.get("text") or "", secrets),
+        "facts": scrubbed_facts, "signals": {key: record[key] for key in SIGNAL_KEYS},
+        "own": is_improve_jensens_own(record),
+    }
+    return record, view
 
 
 def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) -> MeasureResult:
     start, end = state.window(now)
     window = (start, end)
 
-    collected = json.loads(host.core_python("core_collect.py", ["--since", _iso(start), "--until", _iso(end)]))
-    if collected.get("pool", "normal") in _POOL_HOLD:
+    collected = _collect(host, start, end)
+    core_down = collected is None
+    if core_down:
+        collected = {}
+        state.hold_window()
+    elif collected.get("pool", "normal") in _POOL_HOLD:
         return MeasureResult(has_work=False, skip_reason="pool_hold", digest=None, window=window)
 
     secrets = host.secret_values()
     # Created-at order, not whatever order core returned them in: a repo cloned by two turns in the same window
     # must count as a reclone for the second one, which only holds if "second" is well defined.
-    items = sorted(collected.get("items", []), key=lambda item: item.get("created_at") or "")
-    conversations = collected.get("conversations", {})
-    projects = collected.get("projects", [])
+    items = sorted((item for item in collected.get("items") or [] if isinstance(item, dict)),
+                   key=lambda item: str(item.get("created_at") or ""))
+    conversations = collected.get("conversations") or {}
+    projects = collected.get("projects") or []
+    running = [turn for turn in collected.get("running") or [] if isinstance(turn, dict) and turn.get("id")]
 
     turn_records: list[dict] = []
     midturn_records: list[dict] = []
@@ -217,82 +360,50 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     pr_to_conversation: dict[str, str] = {}
     known_clones = set(state.known_clones())
     new_clones: set[str] = set()
+    skipped = 0
 
-    wanted_ids = [item["id"] for item in items
-                  if item.get("kind") == "turn" and item.get("delivered_into") is None]
-    transcripts: dict[str, bytes] = {}
-    transcripts_error: str | None = None
-    if wanted_ids:
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                fetched = host.transcripts(wanted_ids, Path(tmp))
-                transcripts = {item_id: path.read_bytes() for item_id, path in fetched.items()}
-            except RuntimeError:
-                transcripts_error = "Jensen's runner transcripts are unavailable"
+    finished_ids = [item.get("id") for item in items
+                    if item.get("kind") == "turn" and item.get("delivered_into") is None]
+    wanted_ids = list(dict.fromkeys(i for i in finished_ids + [turn["id"] for turn in running] if i))
+    transcripts, transcripts_error = _fetch_transcripts(host, wanted_ids)
+
+    # A turn still running at the window's end may already have opened a PR this window's search finds; read its
+    # transcript so far (a half-written last line is skipped), so that PR names the conversation that made it now,
+    # rather than none -- by the time the turn finishes, the PR has already been planned for review.
+    for turn in running:
+        for url in _facts(transcripts.get(turn["id"]), secrets).prs_created:
+            pr_to_conversation[url] = turn.get("conversation_id")
 
     for item in items:
         if item.get("kind") != "turn":
             continue
-        created = _parse(item["created_at"])
-        updated = _parse(item["updated_at"])
-        conversation_id = item.get("conversation_id")
-
-        if item.get("delivered_into") is not None:
-            midturn_records.append({"ts": _iso(now), "kind": "midturn", "id": item["id"],
-                                    "midturn_wait_s": (updated - created).total_seconds()})
+        try:
+            if item.get("delivered_into") is not None:
+                midturn_records.append(_midturn_record(item))
+                continue
+            facts = _facts(transcripts.get(item["id"]), secrets)
+            record, view = _turn_record_and_view(item, facts, known_clones, secrets)
+        except Exception as exc:  # one malformed item must not cost the rest of the hour
+            _warn("measuring one turn", exc)
+            skipped += 1
             continue
 
-        payload = item.get("payload") or {}
-        result = item.get("result") or {}
-        source = payload.get("source")
-        person_started = _person_started(payload)
-
-        raw_bytes = transcripts.get(item["id"])
-        if raw_bytes is not None:
-            # Scrub each raw line *before* turn_facts builds (and truncates to 300/300/500) its tool/error
-            # lines from it: a secret that straddles that cut would otherwise leak a prefix too short for any
-            # exact-value or pattern match to catch once it's already been cut.
-            scrubbed_lines = [scrub(line, secrets) for line in raw_bytes.decode(errors="replace").splitlines()]
-            facts = turn_facts(scrubbed_lines)
-        else:
-            facts = TurnFacts()
-
+        conversation_id = item.get("conversation_id")
         for url in facts.prs_created:
             pr_to_conversation[url] = conversation_id
-
-        reclone = sum(1 for repo in facts.clones if repo in known_clones)
         known_clones.update(facts.clones)
         new_clones.update(facts.clones)
-
-        record = {
-            "ts": _iso(now), "kind": "turn", "id": item["id"], "conversation": conversation_id, "source": source,
-            "context_first": facts.context_first, "context_peak": facts.context_peak,
-            "big_start_small_ask": _big_start_small_ask(facts), "no_delegation": _no_delegation(facts),
-            "inline_code_chars": facts.inline_code_chars, "lost_background": facts.lost_background,
-            "still_running": facts.still_running, "turn_failed": _turn_failed(person_started, item, result),
-            "reclone": reclone, "tool_errors": facts.tool_errors, "missing_tools": facts.missing_tools,
-        }
         turn_records.append(record)
-
-        # Belt and suspenders: the lines fed into turn_facts were already scrubbed above, but scrub again here
-        # in case a line was skipped (bad JSON) and its text still ended up somewhere -- scrubbing already-safe
-        # text is a no-op.
-        scrubbed_facts = replace(facts, tool_lines=[scrub(line, secrets) for line in facts.tool_lines],
-                                  error_lines=[scrub(line, secrets) for line in facts.error_lines])
-        turn_view = {
-            "id": item["id"], "source": source, "status": item.get("status"), "outcome": result.get("outcome"),
-            "minutes": round((updated - created).total_seconds() / 60, 1),
-            "asked": scrub(payload.get("text") or "", secrets), "replied": scrub(result.get("text") or "", secrets),
-            "facts": scrubbed_facts, "signals": {key: record[key] for key in SIGNAL_KEYS},
-        }
         convo = convo_views.setdefault(
             conversation_id,
-            ConvoView(id=conversation_id, project=conversations.get(conversation_id, {}).get("project"), turns=[]))
-        convo.turns.append(turn_view)
+            ConvoView(id=conversation_id, project=(conversations.get(conversation_id) or {}).get("project"),
+                      turns=[]))
+        convo.turns.append(view)
 
     pr_records, prs_error = _fetch_prs(host, now, start, pr_to_conversation, projects)
+    deploy_alert = _deploy_alert(state)
 
-    if not items and not pr_records and not open_deployed:
+    if not items and not pr_records and not open_deployed and not deploy_alert and not core_down:
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
     produced = turn_records + midturn_records + pr_records
@@ -301,18 +412,21 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     # window before that overwrites this same staging rather than piling another copy on top.
     state.stage(produced, new_clones)
 
-    # Totals summarize exactly what this run produced, never a disk read "since start": every record's `ts` is
-    # this run's own clock, so a read-since-start would also pick up an earlier run's records stamped right at
-    # that same boundary, double-counting a re-measured window.
+    # Totals summarize exactly what this run produced, never a disk read "since start": a PR committed by an earlier
+    # window keeps the ts of its own creation or merge, which can fall inside this window too, and this window's
+    # own PRs would then be counted next to their earlier records.
     totals = {signal: summarize(produced, signal, _iso(start)) for signal in _SIGNALS}
     totals["pr"] = f"PRs: unavailable ({prs_error})" if prs_error else summarize(produced, "pr", _iso(start))
     if transcripts_error:
         totals["transcripts"] = transcripts_error
+    if skipped:
+        totals["skipped"] = f"turns that could not be measured: {skipped}"
 
+    alerts = ([_CORE_DOWN] if core_down else []) + ([deploy_alert] if deploy_alert else [])
     deployed = [{"number": issue.get("number"), "title": scrub(issue.get("title") or "", secrets)}
                 for issue in open_deployed]
 
-    digest_text = render(window, list(convo_views.values()), totals, pr_records, deployed)
+    digest_text = render(window, list(convo_views.values()), totals, pr_records, deployed, alerts=alerts)
     digest_text = scrub(digest_text, secrets)
     digest_path = state.write_digest(end, digest_text)
     state.prune(now, days=_RETENTION_DAYS)

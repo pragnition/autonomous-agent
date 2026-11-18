@@ -2,11 +2,12 @@
 
 Everything the hourly watch remembers between runs lives under one root directory (`State.default()` is
 `~/.local/state/improve-jensen`, overridden by env `IMPROVE_JENSEN_STATE`), as a handful of small files:
-`state.json` (the window boundary and known clones), `metrics.jsonl` (one line per turn, midturn or PR, read back
-by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's not-yet-final measurement, written by
-`stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line per `log_deploy`), `deploy-pending`
-(present means a deploy is pending -- its own file, not a `state.json` key, since `deploy.py` runs as a separate
-process from the hourly watch and a shared read-modify-write could race against this watch's own `commit()`),
+`state.json` (the window boundary and known clones), `metrics.jsonl` (one line per turn, midturn or PR, stamped
+with when it happened and read back by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's
+not-yet-final measurement, written by `stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line
+per `log_deploy`), `deploy-pending` (present means a deploy is pending -- its own file, not a `state.json` key,
+since `deploy.py` runs as a separate process from the hourly watch and a shared read-modify-write could race
+against this watch's own `commit()`),
 `plan.json` (written by Claude, read and validated by `plan`), and `digest-<end>.md` files. Every whole-file write
 replaces the previous value atomically (`*.tmp` then `os.replace`), so a process killed mid-write never leaves a
 torn file for the next hourly run to trip over.
@@ -56,6 +57,12 @@ _COUNTED = _LIST_VALUED | {
 }
 
 _MAX_PLAN_REVIEWS = 10
+
+# improve-jensen's own traffic: the turns it queues into Jensen (`core_ask.py` marks them with this source) and
+# anything in the fresh `V-review-*` conversations it opens. Kept in the metrics and shown in the digest, but never
+# counted as evidence about Jensen -- improve-jensen must not grade its own reviews and live checks as Jensen's work.
+IMPROVE_JENSEN_SOURCE = "improve-jensen"
+_REVIEW_CONVERSATION_PREFIX = "V-review-"
 
 
 def _iso(value: datetime) -> str:
@@ -128,16 +135,36 @@ def _count_counted(signal: str, records: list[dict], label: str) -> str:
     return f"{signal} since {label}: total={total} turns={turns}"
 
 
+def is_improve_jensens_own(record: dict) -> bool:
+    """Whether a turn or midturn record is improve-jensen's own traffic (see `IMPROVE_JENSEN_SOURCE`). A PR record
+    never is: a PR Jensen opens while working on a review's findings is still Jensen's shipped work."""
+    if record.get("kind") not in ("turn", "midturn"):
+        return False
+    return (record.get("source") == IMPROVE_JENSEN_SOURCE
+            or str(record.get("conversation") or "").startswith(_REVIEW_CONVERSATION_PREFIX))
+
+
+def _latest_per_pr(records: list[dict]) -> list[dict]:
+    """One record per PR URL: the last one in `records` order (committed metrics, then staged), which is the most
+    recent measurement of it. A PR gets a record in every window it's updated in."""
+    latest: dict[object, dict] = {}
+    for record in records:
+        if record.get("kind") == "pr":
+            latest.pop(record.get("url"), None)
+            latest[record.get("url")] = record
+    return list(latest.values())
+
+
 def _count_pr(records: list[dict], label: str) -> str:
-    prs = [r for r in records if r.get("kind") == "pr"]
-    merged_without_passing_ci = sum(1 for r in prs
-                                    if r.get("open_to_merge_s") is not None and r.get("ci") != "passed")
+    prs = _latest_per_pr(records)
+    merged = [r for r in prs if r.get("open_to_merge_s") is not None]
+    merged_without_passing_ci = sum(1 for r in merged if r.get("ci") not in ("passed", "unknown"))
+    ci_unknown = sum(1 for r in prs if r.get("ci") == "unknown")
     _, median_lines, _, _ = _stat([r["lines"] for r in prs if r.get("lines") is not None])
-    _, median_open_to_merge_s, _, _ = _stat([r["open_to_merge_s"] for r in prs
-                                             if r.get("open_to_merge_s") is not None])
+    _, median_open_to_merge_s, _, _ = _stat([r["open_to_merge_s"] for r in merged])
     coauthor_trailers = sum(r.get("coauthor_trailers") or 0 for r in prs)
     return (f"pr since {label}: prs={len(prs)} merged_without_passing_ci={merged_without_passing_ci} "
-            f"median_lines={median_lines} median_open_to_merge_s={median_open_to_merge_s} "
+            f"ci_unknown={ci_unknown} median_lines={median_lines} median_open_to_merge_s={median_open_to_merge_s} "
             f"coauthor_trailers={coauthor_trailers}")
 
 
@@ -145,20 +172,23 @@ def summarize(records: list[dict], signal: str, label: str) -> str:
     """The human-readable evidence line for `signal` over an already-chosen list of `records`, labelled `label`
     (normally an ISO timestamp). `State.count` builds that list itself (committed plus staged metrics since a
     `since` boundary); a digest's own totals section instead summarizes exactly the records one `measure` run
-    just produced, never a disk read over a time range -- the same window measured twice would otherwise double
-    up on what a read-since-`start` picks up, since every record's `ts` is the measurement's own clock, not the
-    event's.
+    just produced, never a disk read over a time range -- a window measured again before it was committed would
+    otherwise pick up its own earlier, abandoned staging as well.
+
+    improve-jensen's own turns and midturns (`is_improve_jensens_own`) are left out of every signal.
 
     Numeric signals (`context_first`, `context_peak`, `inline_code_chars` from `kind == "turn"` records;
     `midturn_wait_s` from `kind == "midturn"` records) print `n`, `median`, `p90` and `max` (see `_stat`).
     Counted signals (`lost_background`, `still_running`, `turn_failed`, `no_delegation`, `big_start_small_ask`,
     `reclone`, `tool_errors`, `missing_tools`, all from `kind == "turn"` records) print `total` (the sum -- for
     `tool_errors`/`missing_tools`, the sum of each record's list length) and `turns` (records greater than zero,
-    or with a non-empty list). `pr` (from `kind == "pr"` records) prints `prs`, `merged_without_passing_ci`
-    (`open_to_merge_s` is not null and `ci != "passed"`), `median_lines`, `median_open_to_merge_s` and
-    `coauthor_trailers` (the sum of each record's `coauthor_trailers`, a record missing it counted as 0).
-    An unknown signal raises `ValueError`.
+    or with a non-empty list). `pr` (from `kind == "pr"` records, only the newest record of each PR URL) prints
+    `prs`, `merged_without_passing_ci` (`open_to_merge_s` is not null and `ci` is neither `passed` nor
+    `unknown`), `ci_unknown` (PRs whose CI couldn't be read -- never counted as a failure), `median_lines`,
+    `median_open_to_merge_s` and `coauthor_trailers` (the sum of each PR's `coauthor_trailers`, a record missing
+    it counted as 0). An unknown signal raises `ValueError`.
     """
+    records = [r for r in records if not is_improve_jensens_own(r)]
     if signal == "pr":
         return _count_pr(records, label)
     if signal in _TURN_NUMERIC:
@@ -212,6 +242,14 @@ class State:
         data["pending_end"] = _iso(now)
         self._write_state(data)
         return start, now
+
+    def hold_window(self) -> None:
+        """Keep the window being measured open: the next `commit()` leaves `committed_end` where it is, so the
+        next window starts from the same place. For an hour whose finished turns couldn't be read at all (core
+        unreachable) -- committing it would skip them for good."""
+        data = self._read_state()
+        data["pending_end"] = data.get("committed_end")
+        self._write_state(data)
 
     def commit(self) -> None:
         """Make the last window's end the new starting point (`committed_end = pending_end`), and fold whatever
@@ -278,10 +316,12 @@ class State:
         return summarize(self.read_metrics(since), signal, _iso(since))
 
     def note(self, issue: int, ref: str, line: str, now: datetime) -> int:
-        """Append one evidence line for `issue` and return that issue's running total, this note included."""
+        """Append one evidence line for `issue` and return that issue's running total, this note included. The
+        total counts distinct refs: the same turn or PR noted twice (a re-measured window, or a review and the watch
+        both seeing it) is still one occurrence."""
         path = self.root / _EVIDENCE_FILE
         _append_jsonl(path, {"ts": _iso(now), "issue": issue, "ref": ref, "line": line})
-        return sum(1 for r in _read_jsonl(path) if r.get("issue") == issue)
+        return len({r.get("ref") for r in _read_jsonl(path) if r.get("issue") == issue})
 
     # -- digests --
 
@@ -415,3 +455,8 @@ class State:
 
     def log_deploy(self, record: dict) -> None:
         _append_jsonl(self.root / _DEPLOYS_FILE, record)
+
+    def last_deploy(self) -> dict | None:
+        """The newest `deploys.jsonl` record, or `None` with none yet."""
+        records = _read_jsonl(self.root / _DEPLOYS_FILE)
+        return records[-1] if records else None

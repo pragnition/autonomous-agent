@@ -52,9 +52,11 @@ class FakeHost:
     `gh` dispatch table, recording every call for tests to inspect."""
 
     def __init__(self, *, collect, transcripts=None, login=None, search=None, views=None, checks=None,
-                 runs=None, secrets=None, gh_error=None, transcripts_error=None):
+                 runs=None, statuses=None, secrets=None, gh_error=None, transcripts_error=None, core_error=None):
         self.collect = collect
         self._runs = runs or {}
+        self._statuses = statuses or {}
+        self._core_error = core_error
         self._transcripts = transcripts or {}
         self._login = login
         self._search = search
@@ -69,6 +71,8 @@ class FakeHost:
 
     def core_python(self, module_file, args):
         self.core_python_calls.append((module_file, tuple(args)))
+        if self._core_error:
+            raise self._core_error
         return json.dumps(self.collect)
 
     def transcripts(self, ids, dest):
@@ -94,11 +98,16 @@ class FakeHost:
         if args[:2] == ["search", "prs"]:
             return self._search
         if args[:2] == ["pr", "view"]:
-            return self._views[args[2]]
+            view = self._views[args[2]]
+            if isinstance(view, BaseException):
+                raise view
+            return view
         if args[:2] == ["pr", "checks"]:
             return self._checks[args[2]]
         if args[0] == "api" and "/actions/runs?" in args[1]:
             return self._runs[args[1]]
+        if args[0] == "api" and "/commits/" in args[1] and args[1].endswith("/status"):
+            return self._statuses[args[1]]
         raise AssertionError(f"unexpected gh call: {args}")
 
     def secret_values(self):
@@ -106,6 +115,17 @@ class FakeHost:
 
 
 _NO_PRS = {"login": _cp(stdout="jensen-bot\n"), "search": _cp(stdout="[]")}
+_EMPTY = {"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0, "running": []}
+
+
+def _pr_view(created_at="2026-11-19T09:00:00Z", merged_at="2026-11-19T09:10:00Z", **extra):
+    return _cp(stdout=json.dumps({"additions": 1, "deletions": 1, "createdAt": created_at, "mergedAt": merged_at,
+                                  "commits": [], **extra}))
+
+
+def _search(*urls):
+    return _cp(stdout=json.dumps([{"url": url, "repository": {"nameWithOwner": "/".join(url.split("/")[3:5])},
+                                   "number": int(url.rsplit("/", 1)[1])} for url in urls]))
 
 
 def _since(dt: datetime) -> datetime:
@@ -362,10 +382,13 @@ def test_ci_falls_back_to_the_actions_runs_of_the_head_commit_when_checks_are_fo
             runs[f"repos/org/{repo}/actions/runs?head_sha={sha}&per_page=100"] = response
         views[url] = _cp(stdout=json.dumps(view))
         checks[url] = forbidden
+    # repo2's head commit has no Actions runs and no commit statuses either: `none`.
+    statuses = {"repos/org/repo2/commits/sha2/status": _cp(stdout=json.dumps(
+        {"state": "pending", "total_count": 0, "statuses": []}))}
 
     host = FakeHost(collect={"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     login=_cp(stdout="jensen-bot\n"), search=_cp(stdout=json.dumps(search_results)),
-                    views=views, checks=checks, runs=runs)
+                    views=views, checks=checks, runs=runs, statuses=statuses)
 
     measure(state, host, T0, open_deployed=[])
 
@@ -652,3 +675,205 @@ def test_digest_shrinks_tool_lines_not_messages():
     # narrowest tier) is that the tool/error line markers are gone entirely.
     assert "tool:" not in text
     assert "error:" not in text
+
+
+# -- a failed deploy or a down core never wedges the watch (C1) --
+
+
+def test_core_unreachable_still_reports_work_and_keeps_the_window_open(tmp_path):
+    state = State(tmp_path)
+    state.window(T0 - timedelta(hours=1))
+    state.commit()  # an earlier, committed hour
+    host = FakeHost(collect=None, core_error=RuntimeError("docker exec returned 1: Error: No such container: x"),
+                    **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    text = result.digest.read_text()
+    assert "Jensen's core is unreachable" in text
+    assert "No such container" not in text  # the raw error never reaches the digest
+    # Committing this hour must not skip the turns core couldn't hand over: the next window starts where this one did.
+    state.commit()
+    start, _ = state.window(T0 + timedelta(hours=1))
+    assert start == T0 - timedelta(hours=1)
+
+
+def test_core_answering_garbage_counts_as_unreachable(tmp_path):
+    state = State(tmp_path)
+    host = FakeHost(collect=None, **_NO_PRS)
+    host.core_python = lambda module_file, args: "Traceback (most recent call last): not json"
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    assert "Jensen's core is unreachable" in result.digest.read_text()
+
+
+def _deploys(state, *results):
+    for n, result in enumerate(results):
+        state.log_deploy({"ts": f"2026-11-19T0{n + 7}:00:00Z", "from": f"{n}" * 40, "to": f"{n + 1}" * 40,
+                          "services": ["agent"], "result": result})
+
+
+def test_newest_failed_deploy_record_forces_work_on_a_quiet_hour(tmp_path):
+    for n, failure in enumerate(("check_failed: /health/runner did not return 200",
+                                 "not_deployable: the checkout has uncommitted changes")):
+        state = State(tmp_path / str(n))
+        _deploys(state, "ok", failure)
+
+        result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+
+        assert result.has_work is True, failure
+        text = result.digest.read_text()
+        assert failure in text
+        assert "2" * 40 in text  # the failed record's `to`
+
+
+def test_an_ok_deploy_after_a_failed_one_leaves_a_quiet_hour_quiet(tmp_path):
+    state = State(tmp_path)
+    _deploys(state, "check_failed: smoke test did not print smoke ok", "ok")
+
+    result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+
+    assert result.has_work is False
+    assert result.skip_reason == "quiet"
+
+
+def test_a_pr_with_no_created_at_still_gets_a_record(tmp_path):
+    state = State(tmp_path)
+    url = "https://github.com/org/repo1/pull/1"
+    host = FakeHost(collect=_EMPTY, login=_cp(stdout="jensen-bot\n"), search=_search(url),
+                    views={url: _pr_view(created_at=None)}, checks={url: _cp(returncode=0)})
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    [record] = [r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"]
+    assert record["url"] == url
+    assert record["open_to_merge_s"] is None
+
+
+def test_an_unexpected_error_on_one_pr_names_only_its_type(tmp_path, capsys):
+    state = State(tmp_path)
+    bad, good = "https://github.com/org/repo1/pull/1", "https://github.com/org/repo2/pull/2"
+    host = FakeHost(collect=_EMPTY, login=_cp(stdout="jensen-bot\n"), search=_search(bad, good),
+                    views={bad: TypeError("a detail naming /srv/private/path"), good: _pr_view()},
+                    checks={good: _cp(returncode=0)})
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    assert {r["url"] for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"} == {good}
+    err = capsys.readouterr().err
+    assert "TypeError" in err
+    assert "/srv/private/path" not in err
+
+
+# -- event time (I2) --
+
+
+def test_records_are_stamped_with_the_event_time_not_the_measurement_time(tmp_path):
+    state = State(tmp_path)
+    turn = _item("W-t", conversation_id="C-1", created_at="2026-11-19T09:00:00Z", updated_at="2026-11-19T09:20:00Z")
+    mid = _item("W-m", conversation_id="C-1", created_at="2026-11-19T09:30:00Z", updated_at="2026-11-19T09:31:00Z",
+                delivered_into="W-t")
+    merged, still_open = "https://github.com/org/repo1/pull/1", "https://github.com/org/repo2/pull/2"
+    host = FakeHost(collect={**_EMPTY, "items": [turn, mid]}, login=_cp(stdout="jensen-bot\n"),
+                    search=_search(merged, still_open),
+                    views={merged: _pr_view(created_at="2026-11-19T09:00:00Z", merged_at="2026-11-19T09:40:00Z"),
+                           still_open: _pr_view(created_at="2026-11-19T09:45:00Z", merged_at=None)},
+                    checks={merged: _cp(returncode=0), still_open: _cp(returncode=0)})
+
+    measure(state, host, T0, open_deployed=[])
+
+    stamps = {r.get("id") or r.get("url"): r["ts"] for r in state.read_metrics(_since(T0))}
+    assert stamps == {"W-t": "2026-11-19T09:20:00Z", "W-m": "2026-11-19T09:31:00Z",
+                      merged: "2026-11-19T09:40:00Z", still_open: "2026-11-19T09:45:00Z"}
+
+
+# -- a PR made by a turn still running (I7) --
+
+
+def test_a_pr_opened_by_a_turn_still_running_maps_to_that_turns_conversation(tmp_path):
+    state = State(tmp_path)
+    url = "https://github.com/org/repo1/pull/1"
+    still_writing = [
+        _line(type="SystemMessage", subtype="code_change_published", data={"url": url, "action": "created"}),
+        '{"type": "AssistantMessage", "parent_tool_use_id": nu',  # the runner is still writing this line
+    ]
+    host = FakeHost(collect={**_EMPTY, "running": [{"id": "W-run", "conversation_id": "C-run"}]},
+                    transcripts={"W-run": still_writing}, login=_cp(stdout="jensen-bot\n"), search=_search(url),
+                    views={url: _pr_view(merged_at=None)}, checks={url: _cp(returncode=0)})
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    records = state.read_metrics(_since(T0))
+    assert [r["conversation"] for r in records if r["kind"] == "pr"] == ["C-run"]
+    assert not [r for r in records if r["kind"] == "turn"]  # not finished: no turn record yet
+    assert f"{url} (org/repo1): 2 lines, ci=passed, open_to_merge_s=None, conversation=C-run" in \
+        result.digest.read_text()
+
+
+# -- improve-jensen's own traffic (m1) --
+
+
+def test_improve_jensens_own_turns_show_in_the_digest_but_not_in_the_totals(tmp_path):
+    state = State(tmp_path)
+    person = _item("W-p", conversation_id="C-p", payload={"source": "slack"})
+    review = _item("W-r", conversation_id="C-p", payload={"source": "improve-jensen"})
+    check = _item("W-v", conversation_id="V-review-0a1b2c3d", payload={"continuation": 1})
+    person_mid = _item("W-pm", conversation_id="C-p", created_at="2026-11-19T09:00:00Z",
+                       updated_at="2026-11-19T09:00:50Z", delivered_into="W-p", payload={"source": "slack"})
+    review_mid = _item("W-rm", conversation_id="C-p", created_at="2026-11-19T09:00:00Z",
+                       updated_at="2026-11-19T09:10:00Z", delivered_into="W-p", payload={"source": "improve-jensen"})
+    host = FakeHost(collect={**_EMPTY, "items": [person, review, check, person_mid, review_mid]},
+                    transcripts={"W-p": _bash_calls(45), "W-r": _bash_calls(45), "W-v": _bash_calls(45)}, **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    records = {r["id"]: r for r in state.read_metrics(_since(T0))}
+    assert records["W-r"]["source"] == "improve-jensen"
+    assert records["W-rm"]["source"] == "improve-jensen" and records["W-rm"]["conversation"] == "C-p"
+    since = _since(T0)
+    assert state.count("no_delegation", since).endswith("total=1 turns=1")
+    assert state.count("midturn_wait_s", since).endswith("n=1 median=50.0 p90=50.0 max=50.0")
+    text = result.digest.read_text()
+    assert "no_delegation since 2026-11-19T09:00:00Z: total=1 turns=1" in text
+    for item_id in ("W-r", "W-v"):
+        [line] = [line for line in text.splitlines() if line.startswith(f"- turn {item_id} ")]
+        assert "not in the totals" in line
+    [person_line] = [line for line in text.splitlines() if line.startswith("- turn W-p ")]
+    assert "not in the totals" not in person_line
+
+
+# -- commit statuses when a head commit has no Actions runs (m6) --
+
+
+def test_ci_reads_commit_statuses_when_the_head_commit_has_no_actions_runs(tmp_path):
+    state = State(tmp_path)
+    forbidden = _cp(returncode=1, stderr="HTTP 403: Resource not accessible by personal access token")
+    no_runs = _cp(stdout=json.dumps({"total_count": 0, "workflow_runs": []}))
+
+    def _status(state_value, n=1):
+        return _cp(stdout=json.dumps({"state": state_value, "total_count": n,
+                                      "statuses": [{"state": state_value, "context": "ci"}] * n}))
+
+    cases = {"repo1": (_status("success"), "passed"), "repo2": (_status("pending"), "failed"),
+             "repo3": (_status("failure"), "failed"), "repo4": (_status("error"), "failed"),
+             "repo5": (_status("pending", n=0), "none"), "repo6": (forbidden, "unknown")}
+    urls, views, checks, runs, statuses = [], {}, {}, {}, {}
+    for n, (repo, (response, _)) in enumerate(cases.items(), start=1):
+        url = f"https://github.com/org/{repo}/pull/{n}"
+        urls.append(url)
+        views[url] = _pr_view(headRefOid=f"sha{n}")
+        checks[url] = forbidden
+        runs[f"repos/org/{repo}/actions/runs?head_sha=sha{n}&per_page=100"] = no_runs
+        statuses[f"repos/org/{repo}/commits/sha{n}/status"] = response
+    host = FakeHost(collect=_EMPTY, login=_cp(stdout="jensen-bot\n"), search=_search(*urls), views=views,
+                    checks=checks, runs=runs, statuses=statuses)
+
+    measure(state, host, T0, open_deployed=[])
+
+    prs = {r["repo"]: r["ci"] for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"}
+    assert prs == {f"org/{repo}": want for repo, (_, want) in cases.items()}

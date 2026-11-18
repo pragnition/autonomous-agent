@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.watch.state import State
+from agent.watch.state import State, summarize
 
 
 def _dt(*args) -> datetime:
@@ -134,7 +134,7 @@ def test_count_numeric_and_counted_and_pr(tmp_path):
         "missing_tools since 2026-11-19T00:00:00Z: total=1 turns=1"
 
     assert state.count("pr", since) == \
-        ("pr since 2026-11-19T00:00:00Z: prs=2 merged_without_passing_ci=1 "
+        ("pr since 2026-11-19T00:00:00Z: prs=2 merged_without_passing_ci=1 ci_unknown=0 "
          "median_lines=40 median_open_to_merge_s=300 coauthor_trailers=1")
 
 
@@ -152,6 +152,41 @@ def test_count_pr_sums_coauthor_trailers_and_defaults_missing_to_zero(tmp_path):
     assert state.count("pr", since).endswith("coauthor_trailers=2")
 
 
+def test_count_pr_counts_each_pr_once_and_never_reads_unknown_ci_as_a_failure(tmp_path):
+    # One PR is recorded in every window it's updated in; `count pr` must read only its newest record.
+    state = State(tmp_path)
+    since = _dt(2026, 11, 19, 0, 0, 0)
+    pr1 = {"kind": "pr", "url": "https://github.com/x/y/pull/1", "repo": "x/y", "coauthor_trailers": 3,
+           "conversation": None}
+    state.append_metrics([
+        {**pr1, "ts": "2026-11-19T00:05:00Z", "lines": 10, "open_to_merge_s": None, "ci": "failed"},
+        {**pr1, "ts": "2026-11-19T00:05:00Z", "lines": 30, "open_to_merge_s": None, "ci": "failed"},
+    ])
+    state.stage([
+        {**pr1, "ts": "2026-11-19T02:00:00Z", "lines": 30, "open_to_merge_s": 600, "ci": "passed"},
+        # Merged, but its CI couldn't be read: not a failure, and reported on its own.
+        {"ts": "2026-11-19T02:10:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/2", "repo": "x/y",
+         "lines": 50, "open_to_merge_s": 60, "ci": "unknown", "coauthor_trailers": 0, "conversation": None},
+    ], [])
+
+    assert state.count("pr", since) == \
+        ("pr since 2026-11-19T00:00:00Z: prs=2 merged_without_passing_ci=0 ci_unknown=1 "
+         "median_lines=30 median_open_to_merge_s=60 coauthor_trailers=3")
+
+
+def test_summarize_leaves_out_improve_jensens_own_traffic():
+    records = [
+        {"kind": "turn", "id": "t1", "source": "slack", "conversation": "C-1", "no_delegation": 1},
+        {"kind": "turn", "id": "t2", "source": "improve-jensen", "conversation": "C-1", "no_delegation": 1},
+        {"kind": "turn", "id": "t3", "source": None, "conversation": "V-review-0a1b2c3d", "no_delegation": 1},
+        {"kind": "midturn", "id": "m1", "source": "slack", "conversation": "C-1", "midturn_wait_s": 50},
+        {"kind": "midturn", "id": "m2", "source": "improve-jensen", "conversation": "C-1", "midturn_wait_s": 900},
+    ]
+
+    assert summarize(records, "no_delegation", "x") == "no_delegation since x: total=1 turns=1"
+    assert summarize(records, "midturn_wait_s", "x") == "midturn_wait_s since x: n=1 median=50 p90=50 max=50"
+
+
 def test_count_unknown_signal_raises(tmp_path):
     state = State(tmp_path)
     with pytest.raises(ValueError):
@@ -166,6 +201,17 @@ def test_note_returns_running_total_per_issue(tmp_path):
     assert state.note(7, "digest-20261119T0100Z", "lost background 1x", now) == 2
     assert state.note(7, "digest-20261119T0200Z", "lost background 2x", now) == 3
     assert state.note(8, "digest-20261119T0200Z", "no delegation", now) == 1
+
+
+def test_note_total_counts_each_ref_once(tmp_path):
+    # A re-measured window, or a review and the watch both noting the same turn, is still one occurrence.
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+
+    assert state.note(7, "W-a", "lost background", now) == 1
+    assert state.note(7, "W-a", "lost background, noted again", now) == 1
+    assert state.note(7, "https://github.com/x/y/pull/1", "merged over failing CI", now) == 2
+    assert state.note(8, "W-a", "another issue, same turn", now) == 1
 
 
 def test_prune_drops_old_digests_and_metrics(tmp_path):
