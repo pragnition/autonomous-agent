@@ -62,9 +62,22 @@ def test_system_prompt_lists_the_projects(conn, tmp_path):
 
 def test_use_fable_model(payloads, conn):
     cid = add_conversation(conn)
-    conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9' WHERE id = ?", (cid,))
+    conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9', "
+                 "session_account = 'maple' WHERE id = ?", (cid,))
     p = payloads.turn(row(conn, cid), "x", "bob")
     assert p["model"] == "claude-fable-5-1" and p["resume_session_id"] == "sess-9"
+    assert p["resume_account"] == "maple"  # the runner resumes it only if it stays on this account
+
+
+def test_a_turn_carried_on_after_a_usage_limit_gets_the_same_account_check(payloads, conn):
+    # resume_after_limit queues an ordinary turn: when a runner claims it, it gets the cut-off session and the
+    # account that session ran on, so the runner resumes it only if the proxy keeps it there
+    cid = add_conversation(conn)
+    queued = {**payloads.turn(row(conn, cid), "(A usage limit cut your last turn off: x.)", "bob"), "limit_resume": 1}
+    conn.execute("UPDATE conversations SET session_id = 's-1', session_account = 'badger' WHERE id = ?", (cid,))
+    started = payloads.refresh_turn(row(conn, cid), queued)
+    assert (started["resume_session_id"], started["resume_account"], started["limit_resume"]) == \
+        ("s-1", "badger", 1)
 
 
 def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):

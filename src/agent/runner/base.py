@@ -25,7 +25,10 @@ class RunSpec:
     sdk_tools: list[Any] = field(default_factory=list)
     settings: dict[str, Any] = field(default_factory=dict)  # Claude Code settings for this session only
     resume_session_id: str | None = None
+    resume_account: str | None = None  # the account resume_session_id last ran on, None when not known
     on_message: Callable[[dict], Awaitable[None]] | None = None
+    # (earlier session id, runner transcript or None) -> the prompt for a fresh session that picks up from it
+    handoff: Callable[[str, Path | None], str] | None = None
 
 
 @dataclass
@@ -41,6 +44,6 @@ class RunResult:
     cache_write_tokens: int = 0
     cost_usd_est: float = 0.0
     account_code: str | None = None
-    forks: int = 0
+    forks: int = 0  # times the run moved to a fresh session on another account (the column keeps its old name)
     error: str | None = None
     read: list[str] = field(default_factory=list)  # ids of the messages the session read mid-turn, in order

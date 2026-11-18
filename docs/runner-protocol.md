@@ -10,7 +10,7 @@ Two kinds. The **runner token** is long-lived and pulls work and fetches bundles
 A **session token** is minted per work item when it's claimed and does everything else for that item
 (`/agent/heartbeat`, `/agent/events`, `/agent/tool`, `/agent/files`, `/agent/slack_file`, `/agent/result`). Finishing, cancelling or
 losing an item revokes its session token; a 401 means the item is gone. Each heartbeat of a live item renews its
-token, so it lasts as long as the turn does, however many times the turn forks to another account.
+token, so it lasts as long as the turn does, however many times the turn moves to a fresh session on another account.
 
 ## `POST /agent/pull`
 
@@ -31,6 +31,7 @@ Long-polls for up to 25 s; replies `204` when there's nothing claimable. Otherwi
       "timeout_s": 5400,
       "mcp": {},
       "resume_session_id": null,
+      "resume_account": null,
       "project": "sample",
       "test_secrets": {}
     },
@@ -43,7 +44,9 @@ Long-polls for up to 25 s; replies `204` when there's nothing claimable. Otherwi
 
 The runner reads these payload fields: `text` and `origin` (the prompt: the origin line, if any, then any note,
 then the text), `model`, `system_prompt`, `max_turns`, `timeout_s`, `mcp` (server definitions, `${VAR}` filled in
-from the runner's own env), `resume_session_id` and `test_secrets`. `attempts` is read from the work item itself,
+from the runner's own env), `resume_session_id`, `resume_account` (the account that session last ran on; the
+runner resumes it only if the proxy still has it pinned there, and otherwise starts a fresh session with a handoff
+note) and `test_secrets`. `attempts` is read from the work item itself,
 not the payload, to decide whether a restart note is needed (see Leases). Every other field (`project`,
 `conversation_id` inside the payload, `kind`, `actor`, ...) is the control plane's own bookkeeping.
 
@@ -69,13 +72,14 @@ plus any new messages for it:
 
 ```json
 // request
-{"session_id": "s1", "read": ["W-9"], "accepts_messages": true}
+{"session_id": "s1", "account": "acct-3", "read": ["W-9"], "accepts_messages": true}
 // reply
 {"cancel": false, "messages": [{"id": "W-2", "payload": {"text": "hi"}}]}
 ```
 
-`session_id` is the live session's id (`None` before the SDK has assigned or resumed one). `read` lists every
-message id this run has read so far, across forks, so the control plane can mark them done even if the item
+`session_id` is the live session's id (`None` before the SDK has assigned or resumed one), and `account` the
+account the proxy pinned it to (`None` until the proxy has said); the control plane saves both, so a restarted turn
+resumes the session only on that account. `read` lists every message id this run has read so far, across sessions, so the control plane can mark them done even if the item
 later ends without a result. `accepts_messages` is true only while an attempt is still reading — not finished,
 not told to stop; the control plane also overrides it to `false` once the item's own claim has already been
 lost (its lease reaped as dead), so a message is never delivered into a turn that won't make it back around to

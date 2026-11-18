@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     project TEXT,
     task_id TEXT,
     session_id TEXT,
+    session_account TEXT,  -- the account session_id last ran on (from the proxy); NULL when not known
     is_primary INTEGER NOT NULL DEFAULT 1,
     waiting INTEGER NOT NULL DEFAULT 0,
     model TEXT,
@@ -247,7 +248,12 @@ def connect(path: Path | str) -> sqlite3.Connection:
 # Columns added to tables a live install already has; CREATE TABLE IF NOT EXISTS leaves those tables as they were
 ADDED_COLUMNS = [("request_labels", "project", "TEXT"), ("request_labels", "version", "INTEGER NOT NULL DEFAULT 1"),
                  ("task_records", "project", "TEXT"), ("llm_usage", "cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"),
-                 ("work_items", "delivered_into", "TEXT")]
+                 ("work_items", "delivered_into", "TEXT"), ("conversations", "session_account", "TEXT")]
+# Filled in once, when the column is added: a conversation's session ran on the account its last run recorded
+BACKFILLS = {("conversations", "session_account"):
+             "UPDATE conversations SET session_account = (SELECT r.account_code FROM runs r "
+             "WHERE r.session_id = conversations.session_id ORDER BY r.ended_at DESC, r.rowid DESC LIMIT 1) "
+             "WHERE session_id IS NOT NULL"}
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
@@ -257,6 +263,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
     for table, column, kind in ADDED_COLUMNS:
         if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+            if (table, column) in BACKFILLS:
+                conn.execute(BACKFILLS[(table, column)])
 
 
 def get_setting(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:

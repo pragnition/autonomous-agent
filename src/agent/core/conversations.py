@@ -367,8 +367,9 @@ class Conversations:
         and hand it whatever else arrived in its conversation meanwhile."""
         convo = self._row(item.conversation_id) if item.conversation_id else None
         if beat.get("session_id") and convo is not None:
-            self.conn.execute("UPDATE conversations SET session_id = ? WHERE id = ?",
-                              (beat["session_id"], convo["id"]))
+            # the account goes with the session: NULL until the proxy has said, so it's never resumed elsewhere
+            self.conn.execute("UPDATE conversations SET session_id = ?, session_account = ? WHERE id = ?",
+                              (beat["session_id"], beat.get("account"), convo["id"]))
         for read_item in self.queue.mark_read(beat.get("read") or [], item.id):
             ts = read_item.payload.get("message_ts")
             if ts and convo is not None and convo["channel"]:
@@ -423,12 +424,16 @@ class Conversations:
         text = scrub(text, self.secret_values)
         # Saved before anything is awaited: the next turn can be claimed as soon as this one completed, and it
         # resumes whatever session the conversation has at that moment
+        # A turn a usage limit cut off keeps its session and account: resume_after_limit carries it on from there
         if outcome == "error" and not waiting:  # a broken or missing session must not be resumed; the next starts fresh
-            self.conn.execute("UPDATE conversations SET session_id = NULL, last_active_at = ? WHERE id = ?",
-                              (db.utcnow(), convo["id"]))
+            self.conn.execute("UPDATE conversations SET session_id = NULL, session_account = NULL, last_active_at = ? "
+                              "WHERE id = ?", (db.utcnow(), convo["id"]))
+        elif result.get("session_id"):  # the session and the account it ran on, which the next turn checks
+            self.conn.execute("UPDATE conversations SET session_id = ?, session_account = ?, last_active_at = ? "
+                              "WHERE id = ?", (result["session_id"], result.get("account_code"), db.utcnow(),
+                                               convo["id"]))
         else:
-            self.conn.execute("UPDATE conversations SET session_id = COALESCE(?, session_id), last_active_at = ? "
-                              "WHERE id = ?", (result.get("session_id"), db.utcnow(), convo["id"]))
+            self.conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (db.utcnow(), convo["id"]))
         if continuing:  # resumes the session this turn ended with (a fresh one after an error), like any next turn
             p = item.payload
             if retrying:
@@ -463,7 +468,9 @@ class Conversations:
                                                               data={"outcome": outcome}))
 
     def resume_after_limit(self, work_item_id: str) -> str | None:
-        """Carry on a turn a usage limit cut off, once: a new turn in its conversation that resumes its session.
+        """Carry on a turn a usage limit cut off, once: a new turn in its conversation. Like any next turn, the
+        runner resumes its session only if the proxy keeps it on the account it last ran on; otherwise (the usual
+        case, since the limit was hit on that account) a fresh session starts with a digest of the earlier one.
         Returns the new item's id, or None when there is nothing to carry on (the conversation is gone)."""
         wait = self.conn.execute("SELECT * FROM limit_waits WHERE work_item_id = ? AND resumed_at IS NULL",
                                  (work_item_id,)).fetchone()

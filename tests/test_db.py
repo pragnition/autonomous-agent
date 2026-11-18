@@ -21,9 +21,32 @@ def test_fresh_database_has_every_table_and_column(tmp_path):
                                            "attempts", "result", "created_at", "updated_at", "delivered_into"}
     assert columns(conn, "tokens") == {"hash", "kind", "work_item_id", "expires_at", "revoked"}
     assert columns(conn, "conversations") == {"id", "channel", "thread_ts", "project", "task_id", "session_id",
-                                              "is_primary", "waiting", "model", "created_at", "last_active_at"}
+                                              "session_account", "is_primary", "waiting", "model", "created_at",
+                                              "last_active_at"}
     assert columns(conn, "slack_messages") == {"channel", "ts", "conversation_id"}
     assert conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0
+
+
+def test_conversations_gain_the_account_their_session_last_ran_on(tmp_path):
+    """A live install's conversations predate session_account: it's filled from the session's latest run, so the
+    next turn can still resume a session it can place, and stays NULL (start fresh) for one it can't."""
+    conn = db.connect(tmp_path / "agent.db")
+    conn.execute("CREATE TABLE conversations (id TEXT PRIMARY KEY, channel TEXT, thread_ts TEXT, project TEXT, "
+                 "task_id TEXT, session_id TEXT, is_primary INTEGER NOT NULL DEFAULT 1, waiting INTEGER NOT NULL "
+                 "DEFAULT 0, model TEXT, created_at TEXT NOT NULL, last_active_at TEXT NOT NULL)")
+    db.create_schema(conn)  # creates runs; the column is already added here, so drop it to replay the upgrade
+    conn.execute("ALTER TABLE conversations DROP COLUMN session_account")
+    for run_id, sid, account, ended in [("R1", "s1", "maple", "2026-11-01T00:00:00Z"),
+                                        ("R2", "s1", "cedar", "2026-11-02T00:00:00Z"),
+                                        ("R3", "s2", None, "2026-11-02T00:00:00Z")]:
+        conn.execute("INSERT INTO runs(id, kind, session_id, account_code, started_at, ended_at) "
+                     "VALUES (?, 'turn', ?, ?, ?, ?)", (run_id, sid, account, ended, ended))
+    for cid, sid in [("V-1", "s1"), ("V-2", "s2"), ("V-3", "s-unrecorded"), ("V-4", None)]:
+        conn.execute("INSERT INTO conversations(id, session_id, created_at, last_active_at) VALUES (?, ?, 'x', 'x')",
+                     (cid, sid))
+    db.create_schema(conn)
+    got = dict(conn.execute("SELECT id, session_account FROM conversations").fetchall())
+    assert got == {"V-1": "cedar", "V-2": None, "V-3": None, "V-4": None}
 
 
 def test_work_items_gain_delivered_into(tmp_path):

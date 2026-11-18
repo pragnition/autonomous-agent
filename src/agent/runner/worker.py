@@ -15,6 +15,7 @@ import tarfile
 from pathlib import Path
 
 from agent.runner.base import RunResult, RunSpec
+from agent.runner.handoff import handoff_note
 from agent.runner.link import SessionRevoked
 from agent.runner.tools import remote_sdk_tools
 
@@ -166,8 +167,8 @@ class Runner:
         while True:
             await asyncio.sleep(self.heartbeat_s)
             try:
-                beat = {"session_id": self.claude.session_of(item_id), "read": self.claude.read_of(item_id),
-                        "accepts_messages": self.claude.accepting(item_id)}
+                beat = {"session_id": self.claude.session_of(item_id), "account": self.claude.account_of(item_id),
+                        "read": self.claude.read_of(item_id), "accepts_messages": self.claude.accepting(item_id)}
                 reply = await self.link.heartbeat(tok, beat)
             except SessionRevoked:
                 reply = {"cancel": True}
@@ -201,7 +202,20 @@ class Runner:
             log.exception("session %s failed", spec.run_id)
             return RunResult(spec.run_id, None, "error", error=f"{type(e).__name__}: {e}")
 
+    def _handoff_prompt(self, prompt: str, origin: str, earlier: str, transcript: Path | None = None) -> str:
+        """The prompt for a fresh session that picks up from the earlier one: the origin line stays first, the
+        handoff note after it. A restart note is dropped: the fresh session doesn't pick up where it stopped."""
+        text = prompt.removeprefix(origin).removeprefix(RESTARTED_NOTE)
+        return origin + handoff_note(earlier, self.claude_home, transcript) + text
+
     async def _run_or_start_fresh(self, spec: RunSpec, origin: str) -> RunResult:
+        earlier = spec.resume_session_id
+        if earlier and not await self._can_resume(earlier, spec.resume_account):
+            # Resuming would put the session on another account (or on one we can't confirm): never do that. A fresh
+            # session starts with a short digest of the earlier one instead, never its full history.
+            log.info("not resuming %s: it last ran on %s and the proxy won't keep it there; starting a fresh session",
+                     earlier, spec.resume_account or "an unknown account")
+            spec = dataclasses.replace(spec, resume_session_id=None, prompt=spec.handoff(earlier, None))
         result = await self._run(spec)
         if result.outcome == "error" and spec.resume_session_id and not result.turns:
             # The saved session is gone (the agent container was rebuilt, or its files were lost); the thread has
@@ -213,6 +227,13 @@ class Runner:
             prompt = origin + FRESH_NOTE + text
             result = await self._run(dataclasses.replace(spec, resume_session_id=None, prompt=prompt))
         return result
+
+    async def _can_resume(self, session_id: str, account: str | None) -> bool:
+        try:
+            return await self.claude.can_resume(session_id, account)
+        except Exception:
+            log.exception("couldn't check where %s would resume", session_id)
+            return False
 
     async def handle(self, item: dict, tok: str, manifest: list[dict]) -> None:
         item_id = item["id"]
@@ -259,7 +280,8 @@ class Runner:
         # a turn the machine restarted mid-way through), then the message
         note = RESTARTED_NOTE if item.get("attempts") and payload.get("resume_session_id") else ""
         attached = await save_slack_files(self.link, tok, session, payload.get("files") or [])
-        spec = RunSpec(run_id=item_id, prompt=origin_of(payload) + note + payload["text"] + attached, cwd=session,
+        origin, prompt = origin_of(payload), origin_of(payload) + note + payload["text"] + attached
+        spec = RunSpec(run_id=item_id, prompt=prompt, cwd=session,
                        model=payload["model"], system_prompt=system_prompt, max_turns=payload["max_turns"],
                        timeout_s=payload["timeout_s"],
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,
@@ -269,7 +291,9 @@ class Runner:
                             "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, settings=settings,
-                       resume_session_id=payload.get("resume_session_id"), on_message=self._forwarder(tok))
+                       resume_session_id=payload.get("resume_session_id"),
+                       resume_account=payload.get("resume_account"), on_message=self._forwarder(tok),
+                       handoff=lambda earlier, transcript: self._handoff_prompt(prompt, origin, earlier, transcript))
         return spec
 
     async def run_forever(self) -> None:

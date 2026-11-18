@@ -106,10 +106,25 @@ would otherwise inherit), plus a git identity (`AGENT_NAME`, `AGENT_GIT_EMAIL`),
 `data/runner/linear.env`, the project's test keys, `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`
 (the effortless plugin, which picks each prompt's reasoning effort, needs it). The last two cannot be overridden.
 
-If a turn can't resume its saved session and fails before its first model turn, the runner starts a fresh session
-with a note to call `read_thread` first, placed after the prompt's who, where and link line. When the proxy reports
-the session's account as rejected or disabled, the runner forks the session (same history, new session id, which
-the proxy pins to another account), up to twice.
+A Claude session is never resumed (`--resume`, with or without `--fork-session`) on a different account from the
+one it ran on. Core keeps the account each conversation's session last ran on (`conversations.session_account`, from
+the runner's heartbeat and result) and hands it to the next turn as `resume_account`. Before resuming, the runner
+asks the proxy's `/proxy/whoami` which account the session is pinned to. It resumes only when that is
+`resume_account` and the account isn't rejected or disabled. Otherwise (another account, an expired pin, an unknown
+last account or an unreachable proxy) it starts a fresh session (new id, empty history) with a handoff note
+placed after the prompt's who, where and link line. The earlier session's full history is never loaded into the
+fresh one, by `/resume` or any other route. The runner reads the earlier record itself and the note carries only a
+short digest of it (`agent/runner/handoff.py`): the earlier session id, the text of its last 3 assistant messages
+(4,000 characters in all at most) and the files it edited or wrote (its Edit/Write calls). The note gives the
+record's path (the Claude Code log `CLAUDE_CONFIG_DIR/projects/…/<session id>.jsonl`) for looking up one specific
+detail with grep or tail, and says not to read or load it whole and not to use `/resume` or `--resume`. The session
+catches up with `read_thread` and from the conversation folder's own state (git status, its notes), then carries on.
+When the proxy reports the account of a running session as rejected or disabled (the watchdog, a 403/503, or a 429
+while the account is rejected), the runner does the same within the turn: a fresh session, which the proxy pins
+to another account, with the handoff note. Its digest comes from the runner's transcript `transcripts/<run id>.jsonl`
+(the earlier session's own messages), whose path the note also gives.
+It does this up to twice per turn (the run's `forks` count). If a turn can't resume its saved session and fails
+before its first model turn, the runner starts a fresh session with a note to call `read_thread` first.
 
 ### docker (dind)
 
@@ -153,7 +168,8 @@ accounts and reports their usage: it holds the accounts, pins each session to on
 placeholder token that sessions send. Each origin has its own port; `deploy/proxy-origins.example.toml` lists the
 two this stack uses. core (origin `agent-core`) reads `/proxy/usage` for the queue's gate and `/proxy/usage`,
 `/proxy/perf` and `/proxy/whoami` for the dashboard. The runner (origin `agent-sandbox`) reads `/proxy/usage` and
-`/proxy/whoami` to decide when to fork a session.
+`/proxy/whoami` to decide when a session must move to a fresh one on another account, and whether a saved session
+would resume on the account it last ran on.
 
 ### The dashboard
 
@@ -235,10 +251,12 @@ the watch doesn't steer sessions itself. An account whose `verified` goes false,
 `settings`, so a restart neither repeats an alert nor misses one.
 
 A turn cut off by a usage limit (a 429, or the runner giving up on an account the proxy reports rejected or
-disabled) doesn't fail. The thread is told it was cut off, the message keeps its ⏳, the session is kept and the
-turn goes into `limit_waits` (event `usage_limit_cut`). Once an account is `ok`, the watch re-queues it as a new
-turn that resumes the session with a "you were cut off by a usage limit" note (event `usage_limit_resumed`). That
-happens once: a resumed turn that is cut off again fails like any other. A long project's build keeps its own
+disabled) doesn't fail. The thread is told it was cut off, the message keeps its ⏳, the session and the account it
+ran on are kept and the turn goes into `limit_waits` (event `usage_limit_cut`). Once an account is `ok`, the watch
+re-queues it as a new turn with a "you were cut off by a usage limit" note (event `usage_limit_resumed`). That turn
+goes through the same-account check as any next turn: the runner resumes the session only if the proxy still pins
+it to the account it last ran on. Usually it doesn't, since the limit was hit on that account, so the turn starts a
+fresh session with the digest handoff note instead (never `/resume` on another account). That happens once: a resumed turn that is cut off again fails like any other. A long project's build keeps its own
 retries (below) instead, and the gate holds them until there is capacity.
 
 A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
