@@ -45,10 +45,11 @@ def test_schedules_folder_is_shared(compose):
 
 
 def test_services_and_core_published_on_loopback_only(compose):
-    assert set(compose["services"]) == {"core", "supervisor", "relay", "agent", "docker"}
+    assert set(compose["services"]) == {"core", "supervisor", "supervisor-standby", "relay", "agent", "docker"}
     assert "ports" not in compose["services"]["agent"] and "ports" not in compose["services"]["docker"]
     assert compose["services"]["core"]["ports"] == ["127.0.0.1:18085:8085", "127.0.0.1:18086:8086"]
     assert "ports" not in compose["services"]["supervisor"]
+    assert "ports" not in compose["services"]["supervisor-standby"]
 
 
 def test_no_env_file_and_no_secrets_in_environment(compose):
@@ -61,10 +62,21 @@ def test_no_env_file_and_no_secrets_in_environment(compose):
         assert not any(re.search(r"TOKEN|SECRET|KEY|PASSWORD", k) for k in env), name
 
 
-def test_only_supervisor_mounts_docker_socket(compose):
+def test_only_supervisors_mount_docker_socket(compose):
     for name in compose["services"]:
         mounted = any("docker.sock" in v for v in volumes(compose, name))
-        assert mounted == (name == "supervisor"), name
+        assert mounted == name.startswith("supervisor"), name
+
+
+def test_supervisors_watch_each_other(compose):
+    primary, standby = compose["services"]["supervisor"], compose["services"]["supervisor-standby"]
+    assert primary["environment"]["SUPERVISOR_ROLE"] == "primary"
+    assert standby["environment"]["SUPERVISOR_ROLE"] == "standby"
+    for me, peer, peer_name in ((primary, standby, "supervisor-standby"), (standby, primary, "supervisor")):
+        assert me["environment"]["PEER_CONTAINER"] == peer["container_name"]
+        assert me["environment"]["PEER_HEALTH"] == f"http://{peer_name}:8090/health"
+        assert me["environment"]["CORE_CONTAINER"] == compose["services"]["core"]["container_name"]
+        assert "${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro" in [str(v) for v in me["volumes"]]
 
 
 def test_restart_policies(compose):
