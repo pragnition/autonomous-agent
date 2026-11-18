@@ -40,8 +40,9 @@ def make_pack(name: str = "sample", **over) -> Pack:
                   linear_team="SAM", linear_status={"working": "In Progress", "ready_for_review": "In Review",
                                                     "merged": "Done", "failed": "Todo"},
                   secrets_worker=["SAMPLE_TEST_USER"])
+    pack_fields = {k: over.pop(k) for k in ("notes", "plugin_scope", "dir_name") if k in over}
     fields.update(over)
-    return Pack(ProjectConfig(**fields))
+    return Pack(ProjectConfig(**fields), **pack_fields)
 
 
 class FakeSlack:

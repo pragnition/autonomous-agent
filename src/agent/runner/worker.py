@@ -196,8 +196,9 @@ class Runner:
 
     async def _prepare(self, item: dict, tok: str, manifest: list[dict], convo: str) -> RunSpec:
         payload, item_id = item["payload"], item["id"]
-        plugins = await self._bundle()
-        session = self.scratch_root / convo  # the conversation's own folder, the same every turn; its clones live here
+        skip = set(payload.get("skip_pack_plugins") or ())  # packs scoped to a project this session isn't on
+        plugins = [p for p in await self._bundle() if not (p.parent.name == "packs" and p.name in skip)]
+        session =self.scratch_root / convo  # the conversation's own folder, the same every turn; its clones live here
         session.mkdir(parents=True, exist_ok=True)
         self.claude_home.mkdir(parents=True, exist_ok=True)
         tools = remote_sdk_tools(manifest, self.link, tok, session_dir=session)

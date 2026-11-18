@@ -142,6 +142,14 @@ async def test_mention_outside_a_project_channel_queues_a_turn(convos, queue):
     assert queue.claim() is not None
 
 
+async def test_a_packs_extra_channel_binds_its_project(conn, queue, slack, tmp_path, fake_linear):
+    convos = Conversations(conn, config=make_config(tmp_path), queue=queue, slack=slack,
+                           packs={"sample": make_pack(slack_channels=["C-FEEDBACK"])}, payloads=FakePayloads(),
+                           notifier=FakeNotifier(), bot_user_id="UBOT", linear_poller=fake_linear)
+    await convos.handle_slack(mention("t1", "the dev site is down", channel="C-FEEDBACK"))
+    assert conn.execute("SELECT project FROM conversations").fetchone()["project"] == "sample"
+
+
 async def test_only_a_project_channel_binds_a_project(convos, conn, queue):
     """A DM, a mention in a channel with no project pack and a mention in a project's channel each queue a turn;
     only the project channel's conversation carries a project."""

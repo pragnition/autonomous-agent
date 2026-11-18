@@ -164,7 +164,7 @@ Routing picks the message's conversation (one row in `conversations`, one Claude
   hangs off. Every message core receives or posts is recorded in `slack_messages`, so a thread under any of them
   finds its way back. The reply goes to the thread the message came from.
 - **New**: a mention outside any known thread starts a conversation for that thread. In a channel that is a pack's
-  `slack_channel`, the conversation is bound to that project from the start.
+  `slack_channel` or one of its `slack_channels`, the conversation is bound to that project from the start.
 
 A message containing "use fable" switches its conversation to `[claude.models] hard` for the rest of the
 conversation; otherwise sessions use `default`.
@@ -280,13 +280,23 @@ status reaction on the thread's first message. `[limits] max_tasks_per_day` (def
 A project is a pack in `data/config/packs/<project>/`:
 
 - `project.toml`: `[project]` `name`, `repo` (owner/name on GitHub), `default_branch`, `owner` (a person key: PRs
-  from unmapped requesters are assigned to them), `slack_channel`, `linear_team`; `[linear.status]` (task status
-  to Linear state name for `working`, `ready_for_review`, `merged`, `failed`); `[build]` `setup` and `checks`;
+  from unmapped requesters are assigned to them), `slack_channel`, `slack_channels` (optional: more channels on
+  the project, such as a feedback channel), `linear_team`; `[linear.status]` (task status to Linear state name for
+  `working`, `ready_for_review`, `merged`, `failed`); `[plugin]` `scope`; `[build]` `setup` and `checks`;
   `[secrets]` `worker`.
-- `plugin/`: a Claude Code plugin (`.claude-plugin/plugin.json` and skills). Every session gets every pack's plugin.
+- `notes.md` (optional): what a session on the project should know (access, schedules, gotchas).
+- `plugin/`: a Claude Code plugin (`.claude-plugin/plugin.json` and skills). With `[plugin] scope = "all"` (the
+  default) every session gets it; with `"project"` only sessions on the project do.
+
+A session is on a project when its conversation is bound to it (one of the pack's channels, a labelled Linear issue,
+a schedule in its channel, `start_task`). A conversation with no project (a DM, any other channel) is on the
+projects named, by pack name or repo name, in any of its messages so far, so the project stays for its later turns.
+The system prompt carries the `notes.md` of each project the session is on, after the rest of the prompt and before
+the persona; other projects' notes are left out.
 
 `examples/config/packs/sample/` is a minimal pack; `examples/pack-templates/chilliclaw/` is a full example with
-setup that writes the app's `.env`, local-run skills and a meter overlay.
+setup that writes the app's `.env`, local-run skills and a meter overlay; `examples/pack-templates/rosterrolo/`
+has notes and a project-scoped plugin.
 
 ### work_on and checkouts
 

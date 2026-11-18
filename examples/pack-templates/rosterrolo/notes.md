@@ -1,0 +1,2 @@
+- Code: https://github.com/pragnition/RosterRolo, default branch main.
+- The team's app secrets for running it locally are at /run/agent/projects/rosterrolo.env.

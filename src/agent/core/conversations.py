@@ -134,10 +134,9 @@ class Conversations:
 
     async def _project_for_channel(self, channel: str) -> str | None:
         for name, pack in self.packs.items():
-            if pack.project.slack_channel == channel:
+            if channel in pack.project.channels:
                 return name
-        named = {p.project.slack_channel.lstrip("#"): n for n, p in self.packs.items()
-                 if p.project.slack_channel.startswith("#")}
+        named = {c.lstrip("#"): n for n, p in self.packs.items() for c in p.project.channels if c.startswith("#")}
         if not named:
             return None
         return named.get(await self._channel_name(channel))

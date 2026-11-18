@@ -154,11 +154,23 @@ class ProjectConfig:
     linear_team: str
     linear_status: dict[str, str]
     secrets_worker: list[str]
+    slack_channels: list[str] = field(default_factory=list)  # more channels that map to the project (feedback, …)
+
+    @property
+    def channels(self) -> list[str]:
+        """Every Slack channel that maps to the project: its slack_channel first, then slack_channels."""
+        return [c for c in (self.slack_channel, *self.slack_channels) if c]
+
+
+PLUGIN_SCOPES = ("all", "project")
 
 
 @dataclass
 class Pack:
     project: ProjectConfig
+    notes: str = ""            # notes.md: what a session on this project should know (access, schedules, gotchas)
+    plugin_scope: str = "all"  # "project": its plugin loads only in sessions on this project
+    dir_name: str = ""         # the pack's folder, which names its plugin in the bundle
 
 
 def _read_toml(path: Path, problems: list[str]) -> dict:
@@ -376,6 +388,7 @@ def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
         linear_team=_str(proj, "linear_team", pw, problems),
         linear_status={k: v for k, v in ((data.get("linear") or {}).get("status") or {}).items()},
         secrets_worker=_str_list(secrets, "worker", f"{where} [secrets]", problems),
+        slack_channels=_str_list(proj, "slack_channels", pw, problems),
     )
     reserved = RESERVED_SECRETS & set(project.secrets_worker)
     for name in sorted(reserved):
@@ -386,10 +399,16 @@ def load_pack(pack_dir: Path, agent: AgentConfig) -> Pack:
     plugin_dir = pack_dir / "plugin"
     if not (plugin_dir / ".claude-plugin" / "plugin.json").is_file():
         problems.append(f"{plugin_dir}: missing .claude-plugin/plugin.json")
+    scope = (data.get("plugin") or {}).get("scope", "all")
+    if scope not in PLUGIN_SCOPES:
+        problems.append(f"{where} [plugin]: 'scope' must be one of {', '.join(PLUGIN_SCOPES)}")
+
+    notes_file = pack_dir / "notes.md"
+    notes = notes_file.read_text().strip() if notes_file.is_file() else ""
 
     if problems:
         raise ConfigError(problems)
-    return Pack(project)
+    return Pack(project, notes=notes, plugin_scope=scope, dir_name=pack_dir.name)
 
 
 def load_packs(config_dir: Path, agent: AgentConfig) -> dict[str, Pack]:

@@ -196,6 +196,12 @@ async def test_prompt_starts_with_the_messages_origin(tmp_path):
     assert claude.specs[1].prompt == "fix the export"
 
 
+async def test_runner_leaves_out_the_pack_plugins_core_skips(tmp_path):
+    link, claude = FakeLink(), FakeClaude()
+    await make_runner(tmp_path, link, claude).handle(item(skip_pack_plugins=["a", "core"]), "tok", [])
+    assert [p.name for p in claude.specs[0].plugins] == ["core", "effortless", "b"]  # only packs can be skipped
+
+
 async def test_runner_loads_core_effortless_and_all_pack_plugins(tmp_path):
     runner = make_runner(tmp_path, FakeLink(), FakeClaude())
     plugins = await runner._bundle()

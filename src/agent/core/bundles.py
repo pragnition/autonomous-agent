@@ -1,5 +1,6 @@
 """Config bundles for the runner: the core plugin's skills, the effortless plugin (picks each prompt's reasoning
-effort) and every pack's plugin — every session gets every pack's skills. Deterministic, so the version (a hash of
+effort) and every pack's plugin. A session gets every pack's skills except those of packs scoped to a project it isn't
+on (core lists them in the turn's skip_pack_plugins and the runner leaves them out). Deterministic, so the version (a hash of
 the contents) changes only when they do."""
 
 from __future__ import annotations

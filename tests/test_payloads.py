@@ -60,6 +60,49 @@ def test_system_prompt_lists_the_projects(conn, tmp_path):
     assert "{projects}" not in two and "- none configured" in prompt({})
 
 
+def _notes_payloads(conn, tmp_path):
+    packs = {"chilliclaw": make_pack("chilliclaw", repo="pragnition/chilliclaw", notes="CC-NOTES: staging only"),
+             "rosterrolo": make_pack("rosterrolo", repo="pragnition/RosterRolo", notes="RR-NOTES: dev site login",
+                                     plugin_scope="project", dir_name="rosterrolo"),
+             "bare": make_pack("bare", repo="o/bare")}
+    return Payloads(conn, config=make_config(tmp_path), packs=packs, persona_text=PERSONA,
+                    config_dir=tmp_path / "config", secrets={})
+
+
+def test_a_project_conversation_gets_only_its_packs_notes(conn, tmp_path):
+    payloads = _notes_payloads(conn, tmp_path)
+    convo = row(conn, add_conversation(conn, project="chilliclaw"))
+    prompt = payloads.turn(convo, "the dev site 500s; rosterrolo too?", "ann")["system_prompt"]
+    assert "Notes for chilliclaw (from its pack; they apply to this conversation):\nCC-NOTES: staging only" in prompt
+    assert "RR-NOTES" not in prompt                   # a bound conversation is on its own project only
+    assert prompt.index("CC-NOTES") < prompt.index(PERSONA)
+
+
+def test_an_unmapped_conversation_gets_the_notes_of_projects_it_names(conn, tmp_path):
+    from agent.core.sessions import WorkQueue
+    payloads = _notes_payloads(conn, tmp_path)
+    cid = add_conversation(conn, project=None, channel="D-ann")
+    plain = payloads.turn(row(conn, cid), "whats up?", "ann")
+    assert "Notes for" not in plain["system_prompt"] and plain["skip_pack_plugins"] == ["rosterrolo"]
+    named = payloads.turn(row(conn, cid), "can you log in to the RosterRolo dev site?", "ann")
+    assert "RR-NOTES" in named["system_prompt"] and "CC-NOTES" not in named["system_prompt"]
+    assert named["skip_pack_plugins"] == []
+    WorkQueue(conn).enqueue(conversation_id=cid, kind="turn", payload=named)
+    later = payloads.turn(row(conn, cid), "and now fix it", "ann")      # the project stays once it's been named
+    assert "RR-NOTES" in later["system_prompt"] and later["skip_pack_plugins"] == []
+    # a name inside another word doesn't count; the repo's name does
+    other = row(conn, add_conversation(conn, project=None, channel="D-bob"))
+    assert "CC-NOTES" not in payloads.turn(other, "rosterrolo-ish chilliclawed", "bob")["system_prompt"]
+    assert "CC-NOTES" in payloads.turn(other, "see pragnition/chilliclaw#12", "bob")["system_prompt"]
+
+
+def test_a_project_scoped_plugin_loads_only_on_its_project(conn, tmp_path):
+    payloads = _notes_payloads(conn, tmp_path)
+    on_cc = payloads.turn(row(conn, add_conversation(conn, project="chilliclaw")), "x", "ann")
+    on_rr = payloads.turn(row(conn, add_conversation(conn, project="rosterrolo")), "x", "ann")
+    assert on_cc["skip_pack_plugins"] == ["rosterrolo"] and on_rr["skip_pack_plugins"] == []
+
+
 def test_use_fable_model(payloads, conn):
     cid = add_conversation(conn)
     conn.execute("UPDATE conversations SET model = 'claude-fable-5-1', session_id = 'sess-9' WHERE id = ?", (cid,))

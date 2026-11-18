@@ -1,0 +1,23 @@
+# The RosterRolo pack. Copy it to /data/config/packs/rosterrolo/ (the data directory's config/packs/rosterrolo), put
+# the team's RosterRolo .env at data/secrets/projects/rosterrolo.env (sessions read it as
+# /run/agent/projects/rosterrolo.env) and restart core. Fill in the SET-ME values first: `just doctor` flags them.
+[project]
+name = "rosterrolo"
+repo = "pragnition/RosterRolo"
+default_branch = "main"
+owner = "sam"                        # owns PRs from unmapped requesters: set to RosterRolo's owner
+slack_channel = "#SET-ME"            # RosterRolo's channel, where task threads for work that starts outside Slack go
+slack_channels = []                  # other channels on RosterRolo (feedback, alerts): sessions there get its notes
+linear_team = "SET-ME"               # RosterRolo's Linear team key; must not be a team another pack already polls
+
+[linear.status]                      # the team's workflow states: check them against the team
+working = "In Progress"
+ready_for_review = "In Review"
+merged = "Done"
+failed = "Todo"
+
+[plugin]
+scope = "project"                    # its skills load only in sessions on RosterRolo (its channels, issues or named)
+
+[secrets]
+worker = []                          # names of test-only keys in core.env, given to every session; none needed

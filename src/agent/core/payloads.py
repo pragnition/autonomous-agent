@@ -1,11 +1,12 @@
 """What a session starts with: the work item payload a runner turns into a Claude Code session.
 
-A short system prompt from config (or the shipped default) with the projects listed, the persona, the model and
-budgets. Every session also gets the packs' test-only secrets; nothing else secret ever goes into a payload.
+A short system prompt from config (or the shipped default) with the projects listed, the notes of the packs the
+conversation is on (see session_projects), the persona, the model and budgets. Every session also gets the packs' test-only secrets; nothing else secret ever goes into a payload.
 """
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -47,8 +48,31 @@ class Payloads:
         names = [k for pack in self.packs.values() for k in pack.project.secrets_worker]
         return {k: self.secrets[k] for k in names if k in self.secrets}
 
-    def _full_prompt(self) -> str:
-        return "\n\n".join(p for p in (self.system_prompt(), self.persona_text) if p)
+    def session_projects(self, convo, text: str = "") -> list[str]:
+        """The packs this conversation is on: its own project when it has one (a pack's channel, a labelled Linear
+        issue, a schedule in a pack's channel), otherwise the packs named (by name or repo) in any of its messages so
+        far, so a DM that mentions a project keeps that project's notes on every later turn. None for the rest."""
+        if convo["project"] in self.packs:
+            return [convo["project"]]
+        rows = self.conn.execute("SELECT json_extract(payload, '$.text') FROM work_items WHERE conversation_id = ?",
+                                 (convo["id"],)).fetchall()
+        said = "\n".join([text, *(r[0] or "" for r in rows)])
+        return [name for name, pack in sorted(self.packs.items())
+                if any(re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", said, re.IGNORECASE)
+                       for word in {name, pack.project.repo.rsplit("/", 1)[-1]} if word)]
+
+    def project_notes(self, names: list[str]) -> str:
+        """The notes of the packs this session is on, for the system prompt."""
+        return "\n\n".join(f"Notes for {n} (from its pack; they apply to this conversation):\n{self.packs[n].notes}"
+                           for n in names if self.packs[n].notes)
+
+    def skipped_plugins(self, names: list[str]) -> list[str]:
+        """The plugins of packs scoped to their own project that this session isn't on: the runner leaves them out,
+        so a session carries only the skills of the projects it touches."""
+        return sorted(p.dir_name or n for n, p in self.packs.items() if p.plugin_scope == "project" and n not in names)
+
+    def _full_prompt(self, names: list[str]) -> str:
+        return "\n\n".join(p for p in (self.system_prompt(), self.project_notes(names), self.persona_text) if p)
 
     def turn(self, convo, text: str, actor: str | None, *, unattended: bool = False) -> dict:
         payload = {"text": text, "actor": actor, "unattended": unattended,
@@ -66,5 +90,7 @@ class Payloads:
         the turn, because a turn queued while the one before it ran must resume the session that turn ended with,
         and must see the projects as they are when it actually starts, not when it was queued. The text stays as
         it was when the turn was queued."""
+        names = self.session_projects(convo, payload.get("text") or "")
         return {**payload, "resume_session_id": convo["session_id"], "project": convo["project"],
-                "test_secrets": self.test_secrets(), "system_prompt": self._full_prompt()}
+                "test_secrets": self.test_secrets(), "system_prompt": self._full_prompt(names),
+                "skip_pack_plugins": self.skipped_plugins(names)}

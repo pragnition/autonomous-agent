@@ -5,7 +5,9 @@ import shutil
 import tomllib
 from pathlib import Path
 
-from agent.config import load_agent_config, load_pack, load_packs
+import pytest
+
+from agent.config import ConfigError, load_agent_config, load_pack, load_packs
 from agent.tasks import Status
 
 ROOT = Path(__file__).parent.parent
@@ -18,6 +20,25 @@ def test_all_example_packs_load():
     assert "sample" in load_packs(EXAMPLES, config)
     assert load_pack(TEMPLATES / "chilliclaw", config).project.name == "chilliclaw"
     assert (EXAMPLES / "persona.toml").read_text() == (ROOT / "src/agent/defaults/persona.toml").read_text()
+
+
+def test_rosterrolo_pack_carries_notes_and_scopes_its_plugin():
+    pack = load_pack(TEMPLATES / "rosterrolo", load_agent_config(EXAMPLES / "agent.toml"))
+    assert pack.project.repo == "pragnition/RosterRolo" and pack.project.default_branch == "main"
+    assert pack.plugin_scope == "project" and pack.dir_name == "rosterrolo"
+    assert "/run/agent/projects/rosterrolo.env" in pack.notes
+    assert set(pack.project.linear_status) <= {s.value for s in Status}
+    # the chilliclaw pack keeps today's behaviour: its skills in every session, no notes until they're moved in
+    chilliclaw = load_pack(TEMPLATES / "chilliclaw", load_agent_config(EXAMPLES / "agent.toml"))
+    assert chilliclaw.plugin_scope == "all" and chilliclaw.project.channels == ["#chilliclaw-dev"]
+
+
+def test_a_pack_with_an_unknown_plugin_scope_fails(tmp_path):
+    shutil.copytree(TEMPLATES / "rosterrolo", tmp_path / "rr")
+    toml = tmp_path / "rr" / "project.toml"
+    toml.write_text(toml.read_text().replace('scope = "project"', 'scope = "mine"'))
+    with pytest.raises(ConfigError, match="'scope' must be one of all, project"):
+        load_pack(tmp_path / "rr", load_agent_config(EXAMPLES / "agent.toml"))
 
 
 def test_chilliclaw_pack_status_keys_valid():
