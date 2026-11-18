@@ -25,14 +25,15 @@ plans the reviews and the one fix that run after you. You don't change code, rev
 - Note a problem at most once per conversation or PR.
 
 ## The record
-- Match each problem to an open `jensen-watch` issue and note it. Then set the description's count line, its last
-  line, to `Seen: <total> times since <first date>, last <today>` (a seeded issue keeps `since seeding`):
-  `gh issue view N --json body --jq .body > body.md`, edit that line, `gh issue edit N --body-file body.md`. Editing
-  a description notifies no one.
+- An issue's description carries two marker lines, each on a line of its own and edited in place:
+  - `Seen: <total> times since <first date>, last <date>` (a seeded issue keeps `since seeding`), always present;
+  - `Qualifies: <reason>`, added once the issue qualifies for a fix (see the plan).
+- Match each problem to an open `jensen-watch` issue and note it. Then set its `Seen:` line to the total `note`
+  printed: `gh issue view N --json body --jq .body > body.md`, edit the line, `gh issue edit N --body-file body.md`.
+  Editing a description notifies no one.
 - No issue fits: open one with `gh issue create --label jensen-watch --label <area>`, a plain title and a description
   in the seeded issues' shape: what goes wrong, why it matters, the evidence (its signal and `count` line, and the
-  value that would mean it's fixed), where the fix probably belongs, and the count line. Never open one from noise.
-- When an issue qualifies for a fix (see the plan), add `Qualifies: <reason>` under its count line.
+  value that would mean it's fixed), where the fix probably belongs, and the `Seen:` line. Never open one from noise.
 - Comment only when an issue's state changes: picked, deployed, failed, fixed, stuck. Never to say it was seen again.
 
 ## Deployed improvements
@@ -49,18 +50,23 @@ For each open `fix-deployed` issue:
 - A person's comment after `stuck` was added lifts it: remove `stuck`. Failed attempts count again from that comment.
 
 ## Housekeeping
-- An issue seen only once (a total of 1 on its count line) and not again within 7 days: close it with a short
+- An issue seen only once (a total of 1 on its `Seen:` line) and not again within 7 days: close it with a short
   comment.
+- A `fix` or `respond` job is running when `gh run list --workflow improve-jensen.yml --status in_progress --json
+  databaseId` lists a run other than `$GITHUB_RUN_ID` whose `gh run view <id> --json jobs` shows that job not
+  `completed`.
 - A stale `fixing` label: an issue that has had `fixing` for more than 3 hours while no fix job is running (its
-  runner died). Remove the label and comment once.
-  - When it was added: `gh api --paginate repos/$GITHUB_REPOSITORY/issues/<N>/events --jq '.[] | select(.event ==
-    "labeled" and .label.name == "fixing") | .created_at' | tail -1`.
-  - A fix job is running when `gh run list --workflow improve-jensen.yml --status in_progress --json databaseId`
-    lists a run other than `$GITHUB_RUN_ID` whose `gh run view <id> --json jobs` shows a `fix` job not `completed`.
-- A failed deploy: if the newest record in `deploys.jsonl` is `check_failed` and no fix job is running, Jensen may be
-  broken. Find the newest PR merged in that record's `from..to` (`git log --merges --oneline <from>..<to>`) and the
-  issue it refs. Unless that issue has `needs-person` or already has a `Deploy check failed at <to>` comment, comment
-  `Deploy check failed at <to>: picked to revert.` on it and make it the plan's `fix`, whatever the rules below say.
+  runner died). Remove the label and comment once. When it was added:
+  `gh api --paginate repos/$GITHUB_REPOSITORY/issues/<N>/events --jq '.[] | select(.event == "labeled" and
+  .label.name == "fixing") | .created_at' | tail -1`.
+- A failed deploy: the newest record in `deploys.jsonl` is `check_failed` and no fix or respond job is running (both
+  deploy). Jensen may be broken. Find the newest PR merged in that record's `from..to`
+  (`git log --merges --oneline <from>..<to>`) and the issue it refs, and skip the rest if that issue has
+  `needs-person` or already has a `Deploy check failed at <to>` comment.
+  - The PR was itself a revert (its branch is `improve-jensen/revert-...`): never revert the revert. Add
+    `needs-person`, @-mention the admins, and send them the Slack DM that `.github/improve-jensen.md` describes.
+  - Otherwise comment `Deploy check failed at <to>: picked to revert.` on the issue and make it the plan's `fix`,
+    whatever the rules below say. Don't add a `Picked for a fix:` comment to it.
 
 ## The plan
 Write `plan.json` in the state folder on every run, even when it's empty:
@@ -80,7 +86,7 @@ Write `plan.json` in the state folder on every run, even when it's empty:
 - Never pick an issue labelled `project`, `stuck`, `needs-person` or `fix-deployed`.
 - Priority: shipped harm and lost work first, then how Jensen works (`works`, `long-runs`), then `people`. Within a
   tier, the most occurrences.
-- On the issue you pick, comment `Picked for a fix: <why it qualifies>`.
+- On the issue you pick by these rules, comment `Picked for a fix: <why it qualifies>`.
 
 ## Rules
 - **This repo is public.** improve-jensen's issues, PRs, commits and workflow logs never hold:
@@ -91,4 +97,4 @@ Write `plan.json` in the state folder on every run, even when it's empty:
 
   The evidence stays on the host.
 - Your final message is in the workflow log: keep it to counts and issue numbers.
-- Post nothing in Slack.
+- Post nothing in Slack, except the DM above for a revert whose deploy check failed.

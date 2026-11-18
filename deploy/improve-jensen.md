@@ -25,10 +25,13 @@ To show its usage separately on the dashboard, leave it out of `[dashboard] agen
 ## 2. Jensen's GitHub token
 
 improve-jensen reads Jensen's PRs with Jensen's own token (`GH_TOKEN` in `data/secrets/agent.env`), which today gets
-a 403 on CI checks. Whoever holds Jensen's GitHub account widens it: on github.com, Settings → Developer settings →
-Fine-grained tokens → the token → Edit, then give Actions, Checks and Commit statuses read access on every repo
+a 403 on CI checks. Fine-grained tokens have no Checks permission, so `gh pr checks` may keep failing; the watch and
+the reviews then read the Actions runs on the PR's head commit instead.
+
+Whoever holds Jensen's GitHub account widens the token: on github.com, Settings → Developer settings → Fine-grained
+tokens → the token → Edit, then give Actions, Commit statuses, Pull requests and Contents read access on every repo
 Jensen works in. The token's value doesn't change, so `agent.env` stays as it is. This fixes the same gap for Jensen.
-Until it's done, CI shows as `unknown` and no finding rests on it.
+Step 8 checks it. Until it works, CI shows as `unknown` and no finding rests on it.
 
 ## 3. gh and the review plugin
 
@@ -42,37 +45,41 @@ claude plugin marketplace add anthropics/claude-plugins-official   # skip if `cl
 claude plugin install pr-review-toolkit@claude-plugins-official
 ```
 
-Without the plugin, reviews fall back to plain subagent reviews and say so.
+Your `gh` login lands in the HOME the runners share, where any `gh` call without `GH_TOKEN` acts as you. The
+workflow stays disabled until step 9, which logs you out. Without the plugin, reviews fall back to plain subagent
+reviews and say so.
 
 ## 4. The runners
 
-Remove the old runner and its user:
+Disable the workflow, so nothing runs on the new runners before step 9, and remove the old runner and its user:
 
 ```sh
+gh workflow disable improve-jensen.yml -R pragnition/autonomous-agent
 sudo bash -c 'cd /home/gha-improve-jensen/actions-runner && ./svc.sh stop && ./svc.sh uninstall'
 gh api repos/pragnition/autonomous-agent/actions/runners --jq '.runners[] | "\(.id) \(.name)"'
 gh api -X DELETE repos/pragnition/autonomous-agent/actions/runners/<id of improve-jensen>
 sudo userdel -r gha-improve-jensen
 ```
 
-On a GitHub Team plan or above (`gh api orgs/pragnition --jq .plan.name`), put the runners in an organization runner
-group that only this repo's `improve-jensen.yml` on `main` can use (see step 5):
+Put the runners in an organization runner group that only this repo's `improve-jensen.yml` on `main` can use (step 5).
+Runner groups and organization registration tokens need the `admin:org` scope on your login:
 
 ```sh
+gh auth refresh -h github.com -s admin:org
 repo_id=$(gh api repos/pragnition/autonomous-agent --jq .id)
-gh api -X POST orgs/pragnition/actions/runner-groups --input - <<EOF
+gh api -X POST orgs/pragnition/actions/runner-groups --input - \
+  --jq '{allows_public_repositories, restricted_to_workflows, selected_workflows}' <<EOF
 {"name": "improve-jensen", "visibility": "selected", "selected_repository_ids": [$repo_id],
- "restricted_to_workflows": true,
+ "allows_public_repositories": true, "restricted_to_workflows": true,
  "selected_workflows": ["pragnition/autonomous-agent/.github/workflows/improve-jensen.yml@refs/heads/main"]}
 EOF
 url=https://github.com/pragnition; tokens=orgs/pragnition; group="--runnergroup improve-jensen"
 ```
 
-On the Free plan, register them on the repo instead:
-
-```sh
-url=https://github.com/pragnition/autonomous-agent; tokens=repos/pragnition/autonomous-agent; group=
-```
+The response must show `allows_public_repositories: true`; without it, this public repo's jobs never get the runners.
+It should also show `restricted_to_workflows: true`. If it comes back `false`, the plan doesn't honour the workflow
+restriction, and fork-run approval (step 5) is the only guard. (On a plan without runner groups, register on the repo
+instead: `url=https://github.com/pragnition/autonomous-agent; tokens=repos/pragnition/autonomous-agent; group=`.)
 
 Then register the three runners, labelled `improve-jensen` plus `watch`, `work` and `work`:
 
@@ -90,7 +97,7 @@ for name in watch work-1 work-2; do
 done
 ```
 
-Check: the repo's (or organization's) Settings → Actions → Runners shows the three runners Idle, and
+Check: the organization's Settings → Actions → Runners shows the three runners Idle in the `improve-jensen` group, and
 `curl -s http://127.0.0.1:18092/proxy/whoami` answers.
 
 ## 5. Fork PRs
@@ -104,19 +111,19 @@ The repo is public and the runners have the host. A fork's PR could change a wor
     -f approval_policy=all_external_contributors
   ```
 
-- The runner group from step 4 runs only `improve-jensen.yml` from `main`, so a workflow from any other file or ref
-  never gets these runners, a fork's included. Without the group, the approval setting is the only guard.
-- With the group, a run started by a PR review or review comment (those run from the PR's merge ref) waits with no
+- An approved fork run executes on these runners, with the whole host, passwordless sudo and the live secrets.
+  Never approve a fork run whose PR touches `.github/workflows/` or any `runs-on` line.
+- With `restricted_to_workflows: true`, the runner group runs only `improve-jensen.yml` from `main`, so a workflow
+  from any other file or ref never gets these runners, a fork's included.
+- That also means a run started by a PR review or review comment (those run from the PR's merge ref) waits with no
   runner. Mention `@improve-jensen` in an ordinary PR comment instead.
 
 ## 6. Merge and protect main
 
-Disable the workflow first, so the hourly watch doesn't start before the switch-on is done. Then merge, and protect
-`main` so that CI's `python` and `dashboard` checks are required:
+Merge the PR that brings the engine to `main`. Then protect `main` so that CI's `python` and `dashboard` checks are
+required:
 
 ```sh
-gh workflow disable improve-jensen.yml -R pragnition/autonomous-agent
-# merge the PR that brings the engine to main
 gh api -X PUT repos/pragnition/autonomous-agent/branches/main/protection --input - <<'EOF'
 {"required_status_checks": {"strict": false, "contexts": ["python", "dashboard"]},
  "enforce_admins": false, "required_pull_request_reviews": null, "restrictions": null}
@@ -128,12 +135,10 @@ improve-jensen opens and merges its own PRs. If opening one fails with a 403, tu
 
 ## 7. The live core-rebuild check
 
-A running turn has to survive a core rebuild, because `just deploy` rebuilds core without waiting for an idle runner.
-The live checkout gets the new scripts only at the first deploy (step 8), so work from a scratch clone of `main`.
-Build core's image first, so that the rebuild during the turn is quick:
+A running turn has to survive a core restart, because `just deploy` rebuilds core without waiting for an idle runner.
+The live checkout gets the new scripts only at the first deploy (step 8), so work from a scratch clone of `main`:
 
 ```sh
-cd ~/autonomous-agent && docker compose build core
 git clone https://github.com/pragnition/autonomous-agent ~/improve-jensen-setup && cd ~/improve-jensen-setup
 cat > long-turn.md <<'EOF'
 This is a live check of the stack, not a request from a person. Run this with Bash in the foreground, with a Bash
@@ -153,18 +158,31 @@ docker exec agent-core python -c "import sqlite3, sys; print(sqlite3.connect('/d
   (sys.argv[1],)).fetchone())" <item id>
 ```
 
-Once it shows `claimed`, rebuild core: `cd ~/autonomous-agent && docker compose up -d --build core`. Within about
-five minutes the item must end `done` with the text `done`. If the turn doesn't survive, stop here: core deploys must
-also wait for an idle runner (`src/agent/watch/deploy.py`) before the engine runs unattended.
+Once it shows `claimed`, note core's start time and restart core. Compose doesn't recreate a container whose image
+hasn't changed, so force it:
 
-## 8. First deploy, labels and issues
+```sh
+docker inspect -f '{{.State.StartedAt}}' agent-core
+cd ~/autonomous-agent && docker compose up -d --force-recreate core
+docker inspect -f '{{.State.StartedAt}}' agent-core   # must be later than the first; else core never restarted
+```
+
+Within about five minutes the item must end `done` with the text `done`. If the turn doesn't survive, stop here: core
+deploys must also wait for an idle runner (`src/agent/watch/deploy.py`) before the engine runs unattended.
+
+## 8. First deploy, labels, issues and the token check
 
 ```sh
 cd ~/improve-jensen-setup
 python3 scripts/deploy.py   # deploys main into ~/autonomous-agent, the same as `just deploy` run there
 python3 scripts/jensen_watch.py seed deploy/improve-jensen-seed.json --repo pragnition/autonomous-agent
+python3 scripts/jensen_watch.py gh api 'repos/<a repo Jensen works in>/actions/runs?per_page=1'
 cd && rm -rf ~/improve-jensen-setup
 ```
+
+The last command must answer with JSON, not a 403. If it still 403s, give Jensen a classic token with the `repo` scope
+as `GH_TOKEN` in `agent.env`; the agent container reads it when recreated
+(`docker compose up -d --force-recreate agent` in `~/autonomous-agent`, while Jensen is idle).
 
 From now on, deploy with `cd ~/autonomous-agent && just deploy`. Its exit codes:
 - 0: deployed and checked, or nothing to deploy;
@@ -181,16 +199,18 @@ From now on, deploy with `cd ~/autonomous-agent && just deploy`. Its exit codes:
 ```sh
 gh workflow enable improve-jensen.yml -R pragnition/autonomous-agent
 gh workflow run improve-jensen.yml -R pragnition/autonomous-agent -f mode=watch
-gh run watch -R pragnition/autonomous-agent
-ls -t ~/.local/state/improve-jensen/digest-*.md | head -1   # the digest it read
+gh auth logout                                               # the runners share this HOME
+ls -t ~/.local/state/improve-jensen/digest-*.md | head -1   # once the run is done: the digest it read
 cat ~/.local/state/improve-jensen/plan.json                 # the reviews and the fix it planned
 ```
 
-The first window is the last hour. An hour with no finished turns, no new PRs and no `fix-deployed` issue starts no
-Claude run, and neither does one while core's usage watch is holding scheduled runs. From here the watch runs every
-hour at :17.
+Follow the run in the repo's Actions tab. The first window is the last hour. An hour with no finished turns, no new
+PRs and no `fix-deployed` issue starts no Claude run, and neither does one while core's usage watch is holding
+scheduled runs. From here the watch runs every hour at :17.
 
 ## Turning it off
+
+Log in to `gh` for this, and log out afterwards:
 
 ```sh
 gh workflow disable improve-jensen.yml -R pragnition/autonomous-agent
@@ -198,5 +218,6 @@ gh workflow disable improve-jensen.yml -R pragnition/autonomous-agent
 
 This stops the hourly watch, manual runs and the issue triggers. A run already going keeps going: list them with
 `gh run list -R pragnition/autonomous-agent --workflow improve-jensen.yml --status in_progress`, and stop one with
-`gh run cancel <id>`. A cancelled fix still clears `fixing`, but a change it merged may not be deployed yet: check
-the end of `deploys.jsonl`. `gh workflow enable` turns it back on, and the next watch catches up on the hours missed.
+`gh run cancel <id> -R pragnition/autonomous-agent`. A cancelled fix still clears `fixing`, but a change it merged may
+not be deployed yet: check the end of `deploys.jsonl`. `gh workflow enable` turns it back on, and the next watch
+catches up on the hours missed.

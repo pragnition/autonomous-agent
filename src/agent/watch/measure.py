@@ -3,12 +3,13 @@
 Pulls the window's finished work items out of core (`core_collect.py`, run inside `agent-core` through
 `Host.core_python`), fetches each undelivered turn's own runner transcript to size it up with
 `agent.watch.transcript.turn_facts`, finds Jensen's PRs for the window with `gh search prs` and nails down each
-one's size, CI result and co-author trail with `gh pr view`/`gh pr checks`, then stages what
-`agent.watch.state.State` keeps (`State.stage`) and writes a digest file for improve-jensen to read next. Every
-piece of free text that lands in the digest -- a person's ask, Jensen's reply, a tool or error line, a deployed
-issue's title -- is scrubbed of secrets first, since it might end up quoted back out in a public issue; so is
-every raw transcript line *before* `turn_facts` ever truncates it, since a secret that straddles that cut would
-otherwise leak a prefix no exact-value or pattern match could catch after the fact.
+one's size, CI result and co-author trail with `gh pr view`/`gh pr checks` (or, when the token can't read checks,
+the Actions runs on the PR's head commit), then stages what `agent.watch.state.State` keeps (`State.stage`) and
+writes a digest file for improve-jensen to read next. Every piece of free text that lands in the digest -- a
+person's ask, Jensen's reply, a tool or error line, a deployed issue's title -- is scrubbed of secrets first, since
+it might end up quoted back out in a public issue; so is every raw transcript line *before* `turn_facts` ever
+truncates it, since a secret that straddles that cut would otherwise leak a prefix no exact-value or pattern match
+could catch after the fact.
 
 Measuring is staged, not committed: the digest this produces is meant to be acted on before the window is
 final, and that action can fail. `State.stage` records this window's metrics and newly-seen clones without
@@ -112,18 +113,46 @@ def _ci_state(checks: subprocess.CompletedProcess) -> str:
     return "failed"
 
 
+# A completed Actions run with one of these conclusions doesn't fail the commit.
+_RUN_OK = {"success", "skipped", "neutral"}
+
+
+def _ci_from_runs(host: Host, repo: str, head_sha: str | None) -> str:
+    """CI from the Actions runs on the PR's head commit, for when `gh pr checks` is forbidden: a fine-grained token
+    has no "Checks" permission, but Actions: read still lists the runs. No runs gives `none`; a run not yet
+    completed gives `failed`, the same as `gh pr checks`' pending; all completed with a conclusion in `_RUN_OK`
+    gives `passed`, anything else `failed`. A missing head sha, a refused or failed call, or output that doesn't
+    parse gives `unknown`, never a guess."""
+    if not head_sha:
+        return "unknown"
+    result = host.jensen_gh(["api", f"repos/{repo}/actions/runs?head_sha={head_sha}&per_page=100"], check=False)
+    if result.returncode != 0:
+        return "unknown"
+    try:
+        runs = json.loads(result.stdout or "{}").get("workflow_runs") or []
+        if not runs:
+            return "none"
+        if any(run.get("status") != "completed" for run in runs):
+            return "failed"
+        return "passed" if all(run.get("conclusion") in _RUN_OK for run in runs) else "failed"
+    except (ValueError, AttributeError, TypeError):
+        return "unknown"
+
+
 def _pr_record(host: Host, found: dict, now: datetime, pr_to_conversation: dict[str, str],
                projects: list[dict]) -> dict:
     url = found.get("url")
     repo = (found.get("repository") or {}).get("nameWithOwner", "")
 
     view = json.loads(host.jensen_gh(
-        ["pr", "view", url, "--json", "additions,deletions,createdAt,mergedAt,commits"]).stdout)
+        ["pr", "view", url, "--json", "additions,deletions,createdAt,mergedAt,commits,headRefOid"]).stdout)
     lines = (view.get("additions") or 0) + (view.get("deletions") or 0)
     merged_at = view.get("mergedAt")
     open_to_merge_s = (_parse(merged_at) - _parse(view["createdAt"])).total_seconds() if merged_at else None
 
     ci = _ci_state(host.jensen_gh(["pr", "checks", url], check=False))
+    if ci == "unknown":
+        ci = _ci_from_runs(host, repo, view.get("headRefOid"))
 
     commits = view.get("commits") or []
     coauthor_trailers = sum(

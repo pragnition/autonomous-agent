@@ -19,10 +19,13 @@ the gap in Jensen's process behind each one goes into this repo's record. You ne
   in that folder, `python "$GITHUB_WORKSPACE/scripts/jensen_watch.py" gh pr checkout <number>`.
 
 ## What to check
-- **CI.** Did the repo's CI run on the PR, and what did it say (`python scripts/jensen_watch.py gh pr checks <url>`;
-  for a merged PR, also the checks on its merge commit)? A repo with no CI, or CI that never runs, is itself a
-  finding. A 403 means Jensen's token can't read checks yet: CI is unknown, and no finding rests on it. Don't run the
-  product's test suites here.
+- **CI.** Did the repo's CI run on the PR, and what did it say? A repo with no CI, or CI that never runs, is itself a
+  finding. Don't run the product's test suites here.
+  - Read `python scripts/jensen_watch.py gh pr checks <url>`; for a merged PR, also the checks on its merge commit.
+  - If that 403s (a fine-grained token has no Checks permission), read the Actions runs on the PR's head commit:
+    `python scripts/jensen_watch.py gh pr view <url> --json headRefOid`, then
+    `python scripts/jensen_watch.py gh api 'repos/<owner/repo>/actions/runs?head_sha=<sha>'`.
+  - If that 403s too, CI is unknown, and no finding rests on it.
 - **Tests that can't fail:** suites that skip or return early (no database, no env), tests with no assertions, and
   tests that only exercise mocks of the code under test.
 - **The diff,** with pr-review-toolkit's agents as subagents (`pr-review-toolkit:code-reviewer`,
@@ -58,7 +61,7 @@ No provable defects: send nothing.
   commit".
 - Find the matching open issue in this repo (`gh issue list --label jensen-watch --state open --limit 200 --json
   number,title,body`). Record the gap once per PR with `python scripts/jensen_watch.py note <issue> <PR URL> "<line>"`
-  (the URL and the line stay on the host), and set the issue's count line to the total it prints, as
+  (the URL and the line stay on the host), and set the issue's `Seen:` line to the total it prints, as
   `.github/improve-jensen-watch.md` describes.
 - No issue fits: open one in the seeded issues' shape, labelled `jensen-watch` and its area.
 

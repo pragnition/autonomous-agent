@@ -52,8 +52,9 @@ class FakeHost:
     `gh` dispatch table, recording every call for tests to inspect."""
 
     def __init__(self, *, collect, transcripts=None, login=None, search=None, views=None, checks=None,
-                 secrets=None, gh_error=None, transcripts_error=None):
+                 runs=None, secrets=None, gh_error=None, transcripts_error=None):
         self.collect = collect
+        self._runs = runs or {}
         self._transcripts = transcripts or {}
         self._login = login
         self._search = search
@@ -96,6 +97,8 @@ class FakeHost:
             return self._views[args[2]]
         if args[:2] == ["pr", "checks"]:
             return self._checks[args[2]]
+        if args[0] == "api" and "/actions/runs?" in args[1]:
+            return self._runs[args[1]]
         raise AssertionError(f"unexpected gh call: {args}")
 
     def secret_values(self):
@@ -325,6 +328,51 @@ def test_pr_records_ci_states(tmp_path):
     assert prs["https://github.com/org/repo5/pull/5"]["open_to_merge_s"] == 1000.0  # 09:00:00 -> 09:16:40
     assert prs["https://github.com/org/repo5/pull/5"]["coauthor_trailers"] == 1  # GitHub's own casing
     assert prs["https://github.com/org/repo1/pull/1"]["coauthor_trailers"] == 0  # no commits at all
+
+
+def test_ci_falls_back_to_the_actions_runs_of_the_head_commit_when_checks_are_forbidden(tmp_path):
+    # A fine-grained token has no "Checks" permission, so `gh pr checks` can 403 while Actions: read still works.
+    state = State(tmp_path)
+    forbidden = _cp(returncode=1, stderr="HTTP 403: Resource not accessible by personal access token")
+
+    def _runs(*runs):
+        return _cp(stdout=json.dumps({"total_count": len(runs), "workflow_runs": list(runs)}))
+
+    cases = {
+        # repo: (headRefOid, runs API response, expected ci)
+        "repo1": ("sha1", _runs({"status": "completed", "conclusion": "success"},
+                                {"status": "completed", "conclusion": "skipped"},
+                                {"status": "completed", "conclusion": "neutral"}), "passed"),
+        "repo2": ("sha2", _runs(), "none"),
+        "repo3": ("sha3", _runs({"status": "completed", "conclusion": "success"},
+                                {"status": "in_progress", "conclusion": None}), "failed"),
+        "repo4": ("sha4", _runs({"status": "completed", "conclusion": "success"},
+                                {"status": "completed", "conclusion": "failure"}), "failed"),
+        "repo5": ("sha5", forbidden, "unknown"),
+        "repo6": (None, None, "unknown"),  # no head commit to look up: no runs call at all
+    }
+    search_results, views, checks, runs = [], {}, {}, {}
+    for n, (repo, (sha, response, _)) in enumerate(cases.items(), start=1):
+        url = f"https://github.com/org/{repo}/pull/{n}"
+        search_results.append({"url": url, "repository": {"nameWithOwner": f"org/{repo}"}, "number": n})
+        view = {"additions": 1, "deletions": 1, "createdAt": "2026-11-19T09:00:00Z",
+                "mergedAt": "2026-11-19T09:05:00Z", "commits": []}
+        if sha:
+            view["headRefOid"] = sha
+            runs[f"repos/org/{repo}/actions/runs?head_sha={sha}&per_page=100"] = response
+        views[url] = _cp(stdout=json.dumps(view))
+        checks[url] = forbidden
+
+    host = FakeHost(collect={"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+                    login=_cp(stdout="jensen-bot\n"), search=_cp(stdout=json.dumps(search_results)),
+                    views=views, checks=checks, runs=runs)
+
+    measure(state, host, T0, open_deployed=[])
+
+    prs = {r["repo"]: r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"}
+    assert {repo: prs[f"org/{repo}"]["ci"] for repo in cases} == {repo: want for repo, (_, _, want) in cases.items()}
+    runs_calls = [c for c in host.gh_calls if c[0] == "api" and "/actions/runs?" in c[1]]
+    assert sorted(c[1] for c in runs_calls) == sorted(runs)
 
 
 def test_pr_fetch_failure_skips_prs_without_crashing(tmp_path):
