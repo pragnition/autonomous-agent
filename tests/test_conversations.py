@@ -5,7 +5,7 @@ import pytest
 
 from agent import db, tasks
 from agent.core import projects
-from agent.core.conversations import NOT_AUTHORISED, Conversations, record_message
+from agent.core.conversations import NOT_AUTHORISED, Conversations, cut_by_limit, record_message
 from agent.core.sessions import WorkQueue
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, make_config, make_pack
@@ -596,6 +596,49 @@ async def test_a_limit_carry_on_resets_the_failures_in_a_row(convos, queue, slac
 async def test_a_failed_turn_outside_a_build_still_stops(convos, queue, slack, conn):
     await failed_turn(convos, queue, "t63", {"outcome": "error", "error": "boom"})
     assert queue.claim() is None
+
+
+def test_what_counts_as_cut_by_a_usage_limit():
+    assert cut_by_limit("error", "429 [{'type': 'rate_limit_error'}]")
+    assert cut_by_limit("error", "account badger is rejected")
+    assert cut_by_limit("error", "account badger is disabled")
+    assert not cut_by_limit("error", "500 API Error: overloaded")
+    assert not cut_by_limit("error", None)
+    assert not cut_by_limit("timeout", "429 later")
+
+
+async def test_a_turn_cut_by_a_limit_waits_and_is_carried_on_once(convos, queue, slack, conn):
+    await convos.handle_slack(mention("t70", "question"))
+    item = queue.claim()
+    reactions = len(slack.reactions)
+    await fail(convos, queue, item, {"outcome": "error", "error": "account badger is rejected", "session_id": "s-1",
+                                     "account_code": "badger"})
+    assert slack.posts[-1]["text"].startswith("A usage limit cut me off (account badger is rejected).")
+    assert len(slack.reactions) == reactions          # the message keeps its ⏳
+    assert queue.claim() is None                      # nothing runs until the usage watch says so
+    # its session and the account it ran on are kept: the carry-on turn resumes it only if it stays on that account
+    assert tuple(conn.execute("SELECT session_id, session_account FROM conversations WHERE id = ?",
+                              (item.conversation_id,)).fetchone()) == ("s-1", "badger")
+    assert conn.execute("SELECT type FROM events WHERE type = 'usage_limit_cut'").fetchone() is not None
+
+    new_id = convos.resume_after_limit(item.id)
+    assert convos.resume_after_limit(item.id) is None  # once
+    nxt = queue.claim()
+    assert nxt.id == new_id and nxt.conversation_id == item.conversation_id and nxt.payload["limit_resume"] == 1
+    assert nxt.payload["text"].startswith("(A usage limit cut your last turn off: account badger is rejected.")
+
+    # cut off again, it fails like any other turn: never a second resume
+    await fail(convos, queue, nxt, {"outcome": "error", "error": "429 rate_limit_error"})
+    assert slack.posts[-1]["text"].startswith("That failed before I could finish it:")
+    assert conn.execute("SELECT COUNT(*) FROM limit_waits").fetchone()[0] == 1
+    assert queue.claim() is None
+
+
+async def test_a_build_turn_cut_by_a_limit_retries_as_before(convos, queue, slack, conn):
+    item = await start_build(convos, queue, conn, "t71")
+    await fail(convos, queue, item, {"outcome": "error", "error": "429 rate_limit_error"})
+    assert queue.claim().payload["failures"] == 1     # the build's own retry, which the Gate holds until capacity
+    assert conn.execute("SELECT COUNT(*) FROM limit_waits").fetchone()[0] == 0
 
 
 async def test_interrupted_turn_says_it_was_stopped(convos, queue, slack):

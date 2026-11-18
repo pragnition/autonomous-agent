@@ -384,6 +384,26 @@ async def test_a_session_that_would_land_on_another_account_hands_off_to_a_fresh
     assert "sess-1" in prompt and str(log) in prompt and "read_thread" in prompt and RESTARTED_NOTE not in prompt
 
 
+async def test_a_turn_carried_on_after_a_usage_limit_hands_off_when_its_account_wont_keep_it(tmp_path):
+    # the usual case: the limit was hit on badger, so the proxy no longer pins the session there
+    note = "(A usage limit cut your last turn off: account badger is rejected. carry on.)"
+    link, claude = FakeLink(), FakeClaude()
+    claude.resumable = False
+    it = item(resume_session_id="s-1", resume_account="badger", limit_resume=1)
+    it["payload"]["text"] = note
+    await make_runner(tmp_path, link, claude).handle(it, "tok", [])
+    assert claude.resume_checks == [("s-1", "badger")]
+    assert len(claude.specs) == 1 and claude.specs[0].resume_session_id is None  # never resumed on another account
+    assert claude.specs[0].prompt == handoff_note("s-1", tmp_path / "claude") + note
+
+
+async def test_a_turn_carried_on_after_a_usage_limit_resumes_when_its_account_keeps_it(tmp_path):
+    link, claude = FakeLink(), FakeClaude()
+    await make_runner(tmp_path, link, claude).handle(
+        item(resume_session_id="s-1", resume_account="badger", limit_resume=1), "tok", [])
+    assert claude.resume_checks == [("s-1", "badger")] and claude.specs[0].resume_session_id == "s-1"
+
+
 async def test_the_handoff_inside_a_run_keeps_the_origin_first(tmp_path):
     origin = "[from bob · DM]"
     link, claude = FakeLink(), FakeClaude()

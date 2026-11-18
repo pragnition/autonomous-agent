@@ -220,6 +220,15 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+-- Turns a usage limit cut off, each re-queued once when an account has capacity again (core/usage_watch.py)
+CREATE TABLE IF NOT EXISTS limit_waits (
+    work_item_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    resumed_at TEXT,
+    resumed_as TEXT                -- the work item that carried it on
+);
 """
 
 

@@ -5,7 +5,7 @@ import pytest
 
 from agent import db
 from agent.config import Limits
-from agent.core.sessions import Gate, WorkQueue, mint_token, resolve_token, revoke_for_work_item
+from agent.core.sessions import HOLD_SCHEDULED, Gate, WorkQueue, mint_token, resolve_token, revoke_for_work_item
 from agent.proxy import ProxyUnavailable
 
 T0 = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
@@ -242,6 +242,17 @@ def test_has_claimable(conn):
     assert q.has_claimable()    # c2's turn is untouched
     q.claim()
     assert not q.has_claimable()
+
+
+def test_scheduled_runs_wait_while_the_usage_watch_holds_them(conn):
+    q = WorkQueue(conn)
+    scheduled = q.enqueue("c1", "turn", {"source": "schedule"})
+    db.set_setting(conn, HOLD_SCHEDULED, "1")
+    assert not q.has_claimable() and q.claim() is None
+    person = q.enqueue("c2", "turn", {"source": "slack"})
+    assert q.has_claimable() and q.claim().id == person    # people's requests still start
+    db.set_setting(conn, HOLD_SCHEDULED, "0")
+    assert q.claim().id == scheduled
 
 
 def test_has_claimable_excludes_a_conversations_second_turn(conn):

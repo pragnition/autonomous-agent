@@ -93,6 +93,12 @@ _CLAIMABLE = ("(w.status = 'queued' OR (w.status = 'claimed' AND w.lease_until <
               "o.conversation_id = w.conversation_id AND o.status = 'claimed' AND o.lease_until >= ?))")
 
 
+# Set by the usage watch (core/usage_watch.py) while the pool is down to its last account with room: scheduled runs
+# wait in the queue and people's requests still start
+HOLD_SCHEDULED = "usage_hold_scheduled"
+_NOT_SCHEDULED = " AND COALESCE(json_extract(w.payload, '$.source'), '') != 'schedule'"
+
+
 class WorkQueue:
     def __init__(self, conn: sqlite3.Connection, lease_s: int = 90, max_attempts: int = 5):
         self.conn, self.lease_s, self.max_attempts = conn, lease_s, max_attempts
@@ -102,6 +108,10 @@ class WorkQueue:
         self.conn.execute("INSERT INTO work_items(id, conversation_id, kind, payload, created_at, updated_at) "
                           "VALUES (?, ?, ?, ?, ?, ?)", (item_id, conversation_id, kind, json.dumps(payload), now, now))
         return item_id
+
+    def _claimable(self) -> str:
+        held = db.get_setting(self.conn, HOLD_SCHEDULED, "0") == "1"
+        return _CLAIMABLE + (_NOT_SCHEDULED if held else "")
 
     def get(self, item_id: str) -> WorkItem | None:
         row = self.conn.execute("SELECT * FROM work_items WHERE id = ?", (item_id,)).fetchone()
@@ -129,7 +139,7 @@ class WorkQueue:
         the Gate only when there is something to start, so an idle queue never has to call it (and, through it,
         the account proxy) on every poll."""
         now_s = _iso(_now(now))
-        return self.conn.execute(f"SELECT 1 FROM work_items w WHERE {_CLAIMABLE} LIMIT 1",
+        return self.conn.execute(f"SELECT 1 FROM work_items w WHERE {self._claimable()} LIMIT 1",
                                  (now_s, now_s)).fetchone() is not None
 
     def claim(self, now: datetime | None = None) -> WorkItem | None:
@@ -139,7 +149,7 @@ class WorkQueue:
         with self.conn:
             self.conn.execute("BEGIN IMMEDIATE")
             self._reap(now)
-            row = self.conn.execute(f"SELECT * FROM work_items w WHERE {_CLAIMABLE} "
+            row = self.conn.execute(f"SELECT * FROM work_items w WHERE {self._claimable()} "
                                     "ORDER BY w.created_at, w.rowid LIMIT 1", (now_s, now_s)).fetchone()
             if row is None:
                 return None

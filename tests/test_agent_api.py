@@ -276,6 +276,23 @@ async def test_health_is_open(api):
     assert (await api.get("/health")).status == 200
 
 
+async def test_runner_health_follows_its_pulls_and_heartbeats(conn, queue, parts):
+    now = [0.0]
+    client = await _client(conn, queue, parts, runner_stale_s=120, clock=lambda: now[0])
+    try:
+        assert (await client.get("/health/runner")).status == 200   # a fresh core gives the runner time to show up
+        now[0] = 121
+        assert (await client.get("/health/runner")).status == 503
+        _, stok = await pull_one(client)                             # a pull counts
+        assert (await client.get("/health/runner")).status == 200
+        now[0] = 300
+        assert (await client.get("/health/runner")).status == 503
+        await client.post("/agent/heartbeat", headers=bearer(stok), json={})  # so does a running item's heartbeat
+        assert (await client.get("/health/runner")).status == 200
+    finally:
+        await client.close()
+
+
 class CountingGate(FakeGate):
     def __init__(self):
         super().__init__()
