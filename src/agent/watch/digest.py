@@ -1,10 +1,13 @@
 """Rendering the hourly digest: turning measured facts into the markdown text improve-jensen reads.
 
 `render` only arranges already-scrubbed strings into markdown — nothing here touches secrets or `Host`; scrubbing
-happens in `measure.py` before a `ConvoView` is built. The one thing `render` shrinks on its own is the tool/error
-lines pulled from each turn's `TurnFacts`: the cap on how many characters of each line to show steps down
-300 -> 120 -> 40 -> 0 until the whole text fits `budget`, while `asked` and `replied` are never touched, since a
-person's message and Jensen's reply are the point of the digest, even on a day with nothing else to show for it.
+happens in `measure.py` before a `ConvoView` is built, and again over the whole rendered text before it's
+written. The one thing `render` shrinks on its own is the tool/error lines pulled from each turn's `TurnFacts`:
+the first attempt leaves them exactly as `turn_facts` built them (up to 300 characters of a tool call's input
+*and* up to 300 of its output, up to 500 for an error); later attempts cut each line down further -- to 120,
+then 40, then 0 (omitted entirely) -- until the whole text fits `budget`. `asked` and `replied` are never
+touched, since a person's message and Jensen's reply are the point of the digest, even on a day with nothing
+else to show for it.
 """
 
 from __future__ import annotations
@@ -12,15 +15,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-# The tool-line cap steps down through these, stopping at the first that fits `budget`; 0 means "omit the
-# transcript-derived lines for this turn entirely."
-_CAPS = (300, 120, 40, 0)
+# The tool-line cap steps down through these, stopping at the first that fits `budget`. `None` means "exactly as
+# `turn_facts` built the line, no further cut" (it must come first: cutting an already-300/300-built tool line
+# down to a flat 300 characters total would lose the output half of a call whose input alone was already near
+# that length); 0 means "omit the transcript-derived lines for this turn entirely."
+_CAPS: tuple[int | None, ...] = (None, 120, 40, 0)
 
 _FMT = "%Y-%m-%dT%H:%M:%SZ"
 
-# `signals` keys, in the order a turn shows them.
-_SIGNAL_ORDER = ("context_first", "context_peak", "big_start_small_ask", "no_delegation", "inline_code_chars",
-                 "lost_background", "still_running", "turn_failed", "reclone", "tool_errors", "missing_tools")
+# `signals` keys, in the order a turn shows them -- also what `measure.py` uses to pull exactly these fields out
+# of a turn's metrics record when building that turn's `signals` dict, so the two don't drift apart.
+SIGNAL_KEYS = ("context_first", "context_peak", "big_start_small_ask", "no_delegation", "inline_code_chars",
+               "lost_background", "still_running", "turn_failed", "reclone", "tool_errors", "missing_tools")
 
 
 @dataclass
@@ -37,7 +43,9 @@ def _iso(value: datetime) -> str:
     return value.strftime(_FMT)
 
 
-def _capped(lines: list[str], cap: int) -> list[str]:
+def _capped(lines: list[str], cap: int | None) -> list[str]:
+    if cap is None:
+        return list(lines)
     if cap <= 0:
         return []
     return [line[:cap] for line in lines]
@@ -45,7 +53,7 @@ def _capped(lines: list[str], cap: int) -> list[str]:
 
 def _signal_text(signals: dict) -> str:
     bits = []
-    for key in _SIGNAL_ORDER:
+    for key in SIGNAL_KEYS:
         if key not in signals:
             continue
         value = signals[key]
@@ -53,7 +61,7 @@ def _signal_text(signals: dict) -> str:
     return ", ".join(bits)
 
 
-def _render_turn(turn: dict, cap: int) -> list[str]:
+def _render_turn(turn: dict, cap: int | None) -> list[str]:
     lines = [
         f"- turn {turn.get('id')} [{turn.get('source')}] status={turn.get('status')} "
         f"outcome={turn.get('outcome')} minutes={turn.get('minutes')}",
@@ -70,7 +78,7 @@ def _render_turn(turn: dict, cap: int) -> list[str]:
 
 
 def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
-               deployed: list[dict], cap: int) -> str:
+               deployed: list[dict], cap: int | None) -> str:
     start, end = window
     out = ["# Jensen hourly digest", "", f"Window: {_iso(start)} to {_iso(end)}", "", "## Totals"]
     if totals:

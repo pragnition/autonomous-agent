@@ -3,10 +3,20 @@
 Everything the hourly watch remembers between runs lives under one root directory (`State.default()` is
 `~/.local/state/improve-jensen`, overridden by env `IMPROVE_JENSEN_STATE`), as a handful of small files:
 `state.json` (the window boundary, known clones and the deploy-pending flag), `metrics.jsonl` (one line per turn,
-midturn or PR, read back by `count`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line per
+midturn or PR, read back by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's not-yet-final
+measurement, written by `stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line per
 `log_deploy`), `plan.json` (written by Claude, read and validated by `plan`), and `digest-<end>.md` files. Every
 whole-file write replaces the previous value atomically (`*.tmp` then `os.replace`), so a process killed mid-write
 never leaves a torn file for the next hourly run to trip over.
+
+Measuring a window and committing it are two separate steps, because the digest a measurement produces is meant
+to be acted on (by Claude, against that digest) before the window is final -- and that action can fail. `stage`
+records this window's metrics and newly-seen clones where `read_metrics`/`count` can already see them (so
+evidence gathered mid-action still reflects this window), but `known_clones()` and the permanent `metrics.jsonl`
+stay untouched until `commit()` folds the staged data in for good. If the action on a digest fails and the same
+window gets measured again before anything is committed, `stage` simply overwrites what an earlier attempt
+staged rather than piling another copy on top, and a turn's own clone can't be mistaken for a reclone of itself
+just because an earlier, abandoned attempt at the same window already "saw" it.
 """
 
 from __future__ import annotations
@@ -22,6 +32,8 @@ FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 _STATE_FILE = "state.json"
 _METRICS_FILE = "metrics.jsonl"
+_PENDING_METRICS_FILE = "pending-metrics.jsonl"
+_PENDING_CLONES_FILE = "pending-clones.json"
 _EVIDENCE_FILE = "evidence.jsonl"
 _DEPLOYS_FILE = "deploys.jsonl"
 _PLAN_FILE = "plan.json"
@@ -94,6 +106,62 @@ def _stat(values: list) -> tuple[int, object, object, object]:
     return n, median, p90, ordered[-1]
 
 
+def _count_numeric(signal: str, records: list[dict], kind: str, label: str) -> str:
+    values = [r[signal] for r in records if r.get("kind") == kind and signal in r]
+    n, median, p90, maximum = _stat(values)
+    return f"{signal} since {label}: n={n} median={median} p90={p90} max={maximum}"
+
+
+def _count_counted(signal: str, records: list[dict], label: str) -> str:
+    turn_records = [r for r in records if r.get("kind") == "turn" and signal in r]
+    if signal in _LIST_VALUED:
+        total = sum(len(r[signal]) for r in turn_records)
+        turns = sum(1 for r in turn_records if len(r[signal]) > 0)
+    else:
+        total = sum(r[signal] for r in turn_records)
+        turns = sum(1 for r in turn_records if r[signal] > 0)
+    return f"{signal} since {label}: total={total} turns={turns}"
+
+
+def _count_pr(records: list[dict], label: str) -> str:
+    prs = [r for r in records if r.get("kind") == "pr"]
+    merged_without_passing_ci = sum(1 for r in prs
+                                    if r.get("open_to_merge_s") is not None and r.get("ci") != "passed")
+    _, median_lines, _, _ = _stat([r["lines"] for r in prs if r.get("lines") is not None])
+    _, median_open_to_merge_s, _, _ = _stat([r["open_to_merge_s"] for r in prs
+                                             if r.get("open_to_merge_s") is not None])
+    return (f"pr since {label}: prs={len(prs)} merged_without_passing_ci={merged_without_passing_ci} "
+            f"median_lines={median_lines} median_open_to_merge_s={median_open_to_merge_s}")
+
+
+def summarize(records: list[dict], signal: str, label: str) -> str:
+    """The human-readable evidence line for `signal` over an already-chosen list of `records`, labelled `label`
+    (normally an ISO timestamp). `State.count` builds that list itself (committed plus staged metrics since a
+    `since` boundary); a digest's own totals section instead summarizes exactly the records one `measure` run
+    just produced, never a disk read over a time range -- the same window measured twice would otherwise double
+    up on what a read-since-`start` picks up, since every record's `ts` is the measurement's own clock, not the
+    event's.
+
+    Numeric signals (`context_first`, `context_peak`, `inline_code_chars` from `kind == "turn"` records;
+    `midturn_wait_s` from `kind == "midturn"` records) print `n`, `median`, `p90` and `max` (see `_stat`).
+    Counted signals (`lost_background`, `still_running`, `turn_failed`, `no_delegation`, `big_start_small_ask`,
+    `reclone`, `tool_errors`, `missing_tools`, all from `kind == "turn"` records) print `total` (the sum -- for
+    `tool_errors`/`missing_tools`, the sum of each record's list length) and `turns` (records greater than zero,
+    or with a non-empty list). `pr` (from `kind == "pr"` records) prints `prs`, `merged_without_passing_ci`
+    (`open_to_merge_s` is not null and `ci != "passed"`), `median_lines` and `median_open_to_merge_s`.
+    An unknown signal raises `ValueError`.
+    """
+    if signal == "pr":
+        return _count_pr(records, label)
+    if signal in _TURN_NUMERIC:
+        return _count_numeric(signal, records, "turn", label)
+    if signal in _MIDTURN_NUMERIC:
+        return _count_numeric(signal, records, "midturn", label)
+    if signal in _COUNTED:
+        return _count_counted(signal, records, label)
+    raise ValueError(f"unknown signal: {signal!r}")
+
+
 class State:
     """improve-jensen's on-host state folder, rooted at `root` (created if missing)."""
 
@@ -138,10 +206,25 @@ class State:
         return start, now
 
     def commit(self) -> None:
-        """Make the last window's end the new starting point: `committed_end = pending_end`."""
+        """Make the last window's end the new starting point (`committed_end = pending_end`), and fold whatever
+        is staged for it into the permanent record: staged metrics are appended to `metrics.jsonl`, staged
+        clones merge into `known_clones`, and both staging files are cleared. A window with nothing staged (no
+        `stage()` call ever happened, or a previous `commit()` already cleared it) only moves the window
+        boundary -- there is nothing to fold in, and that's fine."""
         data = self._read_state()
         data["committed_end"] = data.get("pending_end")
         self._write_state(data)
+
+        staged_metrics = self._read_pending_metrics()
+        if staged_metrics:
+            self.append_metrics(staged_metrics)
+        staged_clones = self._read_pending_clones()
+        if staged_clones:
+            self.add_clones(staged_clones)
+        for name in (_PENDING_METRICS_FILE, _PENDING_CLONES_FILE):
+            path = self.root / name
+            if path.exists():
+                path.unlink()
 
     # -- metrics --
 
@@ -153,62 +236,38 @@ class State:
             for record in records:
                 fh.write(json.dumps(record) + "\n")
 
+    def stage(self, records: list[dict], clones: Iterable[str]) -> None:
+        """Overwrite this window's staged metrics and newly-seen clones (atomic writes), replacing whatever an
+        earlier, not-yet-committed attempt at this same window staged. Staged records are visible to
+        `read_metrics`/`count` right away; staged clones are not visible to `known_clones()` at all until
+        `commit()` merges them in. Call this every time `measure` has work to report, even with an empty
+        `records`/`clones` -- the overwrite is what clears out a stale staging from a previous attempt."""
+        _atomic_write(self.root / _PENDING_METRICS_FILE, "".join(json.dumps(r) + "\n" for r in records))
+        _atomic_write(self.root / _PENDING_CLONES_FILE, json.dumps(sorted(set(clones))))
+
+    def _read_pending_metrics(self) -> list[dict]:
+        return _read_jsonl(self.root / _PENDING_METRICS_FILE)
+
+    def _read_pending_clones(self) -> set[str]:
+        path = self.root / _PENDING_CLONES_FILE
+        if not path.exists():
+            return set()
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return set()
+        return set(data) if isinstance(data, list) else set()
+
     def read_metrics(self, since: datetime) -> list[dict]:
-        return [r for r in _read_jsonl(self.root / _METRICS_FILE) if r.get("ts") and _parse(r["ts"]) >= since]
+        records = _read_jsonl(self.root / _METRICS_FILE) + self._read_pending_metrics()
+        return [r for r in records if r.get("ts") and _parse(r["ts"]) >= since]
 
     # -- evidence --
 
     def count(self, signal: str, since: datetime) -> str:
-        """The human-readable evidence line for `signal` over metrics since `since`.
-
-        Numeric signals (`context_first`, `context_peak`, `inline_code_chars` from `kind == "turn"` records;
-        `midturn_wait_s` from `kind == "midturn"` records) print `n`, `median`, `p90` and `max` (see `_stat`).
-        Counted signals (`lost_background`, `still_running`, `turn_failed`, `no_delegation`, `big_start_small_ask`,
-        `reclone`, `tool_errors`, `missing_tools`, all from `kind == "turn"` records) print `total` (the sum — for
-        `tool_errors`/`missing_tools`, the sum of each record's list length) and `turns` (records greater than zero,
-        or with a non-empty list). `pr` (from `kind == "pr"` records) prints `prs`, `merged_without_passing_ci`
-        (`open_to_merge_s` is not null and `ci != "passed"`), `median_lines` and `median_open_to_merge_s`.
-        An unknown signal raises `ValueError`.
-        """
-        label = _iso(since)
-        records = self.read_metrics(since)
-        if signal == "pr":
-            return self._count_pr(records, label)
-        if signal in _TURN_NUMERIC:
-            return self._count_numeric(signal, records, "turn", label)
-        if signal in _MIDTURN_NUMERIC:
-            return self._count_numeric(signal, records, "midturn", label)
-        if signal in _COUNTED:
-            return self._count_counted(signal, records, label)
-        raise ValueError(f"unknown signal: {signal!r}")
-
-    @staticmethod
-    def _count_numeric(signal: str, records: list[dict], kind: str, label: str) -> str:
-        values = [r[signal] for r in records if r.get("kind") == kind and signal in r]
-        n, median, p90, maximum = _stat(values)
-        return f"{signal} since {label}: n={n} median={median} p90={p90} max={maximum}"
-
-    @staticmethod
-    def _count_counted(signal: str, records: list[dict], label: str) -> str:
-        turn_records = [r for r in records if r.get("kind") == "turn" and signal in r]
-        if signal in _LIST_VALUED:
-            total = sum(len(r[signal]) for r in turn_records)
-            turns = sum(1 for r in turn_records if len(r[signal]) > 0)
-        else:
-            total = sum(r[signal] for r in turn_records)
-            turns = sum(1 for r in turn_records if r[signal] > 0)
-        return f"{signal} since {label}: total={total} turns={turns}"
-
-    @staticmethod
-    def _count_pr(records: list[dict], label: str) -> str:
-        prs = [r for r in records if r.get("kind") == "pr"]
-        merged_without_passing_ci = sum(1 for r in prs
-                                        if r.get("open_to_merge_s") is not None and r.get("ci") != "passed")
-        _, median_lines, _, _ = _stat([r["lines"] for r in prs if r.get("lines") is not None])
-        _, median_open_to_merge_s, _, _ = _stat([r["open_to_merge_s"] for r in prs
-                                                 if r.get("open_to_merge_s") is not None])
-        return (f"pr since {label}: prs={len(prs)} merged_without_passing_ci={merged_without_passing_ci} "
-                f"median_lines={median_lines} median_open_to_merge_s={median_open_to_merge_s}")
+        """The human-readable evidence line for `signal` over committed-plus-staged metrics since `since`. See
+        `summarize` for what each signal prints; an unknown signal raises `ValueError`."""
+        return summarize(self.read_metrics(since), signal, _iso(since))
 
     def note(self, issue: int, ref: str, line: str, now: datetime) -> int:
         """Append one evidence line for `issue` and return that issue's running total, this note included."""

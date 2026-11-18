@@ -3,14 +3,24 @@
 Pulls the window's finished work items out of core (`core_collect.py`, run inside `agent-core` through
 `Host.core_python`), fetches each undelivered turn's own runner transcript to size it up with
 `agent.watch.transcript.turn_facts`, finds Jensen's PRs for the window with `gh search prs` and nails down each
-one's size, CI result and co-author trail with `gh pr view`/`gh pr checks`, then writes what
-`agent.watch.state.State` keeps (`metrics.jsonl`, a digest file) for improve-jensen to read next. Every piece of
-free text that lands in the digest -- a person's ask, Jensen's reply, a tool or error line, a deployed issue's
-title -- is scrubbed of secrets first, since it might end up quoted back out in a public issue.
+one's size, CI result and co-author trail with `gh pr view`/`gh pr checks`, then stages what
+`agent.watch.state.State` keeps (`State.stage`) and writes a digest file for improve-jensen to read next. Every
+piece of free text that lands in the digest -- a person's ask, Jensen's reply, a tool or error line, a deployed
+issue's title -- is scrubbed of secrets first, since it might end up quoted back out in a public issue; so is
+every raw transcript line *before* `turn_facts` ever truncates it, since a secret that straddles that cut would
+otherwise leak a prefix no exact-value or pattern match could catch after the fact.
 
-Two things can go wrong here without the rest of the hour's measurement being worth losing: `gh` (missing token,
-or any other failure) and the runner's transcripts (the container unreachable). Both are caught around just the
-work that depends on them; everything else in the window still gets measured and written.
+Measuring is staged, not committed: the digest this produces is meant to be acted on before the window is
+final, and that action can fail. `State.stage` records this window's metrics and newly-seen clones without
+touching the permanent `metrics.jsonl` or `known_clones()` -- only `State.commit()`, called once that action
+succeeds, folds them in. So a window re-measured after a failed action (the same items, reprocessed) overwrites
+its own prior staging rather than duplicating metrics, and a turn's own clone is never mistaken for a reclone of
+itself just because an earlier, abandoned attempt at the same window already staged it as "seen."
+
+Two things can go wrong here without the rest of the hour's measurement being worth losing: `gh` (missing
+token, a single PR's own `gh pr view`/`gh pr checks` failing, or any other failure) and the runner's transcripts
+(the container unreachable). Both are caught around just the work that depends on them; everything else in the
+window still gets measured and written, and neither failure's own message carries a host path.
 """
 
 from __future__ import annotations
@@ -23,9 +33,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.scrub import scrub
-from agent.watch.digest import ConvoView, render
+from agent.watch.digest import SIGNAL_KEYS, ConvoView, render
 from agent.watch.host import Host
-from agent.watch.state import FMT, State
+from agent.watch.state import FMT, State, summarize
 from agent.watch.transcript import TurnFacts, turn_facts
 
 # `pool` values that mean improve-jensen should sit this hour out entirely.
@@ -39,17 +49,16 @@ _NO_DELEGATION_CALLS = 40
 _BIG_START_TOKENS = 100_000
 _BIG_START_MAX_CALLS = 5
 _RETENTION_DAYS = 30
+_PR_SEARCH_LIMIT = 200
 
-# The per-turn/midturn signals `State.count` knows, in the order the digest's totals section shows them. "pr" is
-# handled separately, since it needs its own fallback text when `gh` is unavailable.
+# A single failing `gh` call for one PR (a network hiccup, a malformed response) must not drop the rest.
+_PR_FAILURE = (RuntimeError, subprocess.CalledProcessError, OSError, ValueError, KeyError)
+
+# The per-turn/midturn signals the digest's totals section shows, in that order. "pr" is handled separately,
+# since it needs its own fallback text when `gh` is unavailable.
 _SIGNALS = ("context_first", "context_peak", "inline_code_chars", "lost_background", "still_running",
             "turn_failed", "no_delegation", "big_start_small_ask", "reclone", "tool_errors", "missing_tools",
             "midturn_wait_s")
-
-# `signals` keys carried on each turn handed to the digest (everything in a metrics turn record except the
-# bookkeeping fields `ts`/`kind`/`id`/`conversation`/`source`, which the turn already carries at its own level).
-_TURN_SIGNAL_KEYS = ("context_first", "context_peak", "big_start_small_ask", "no_delegation", "inline_code_chars",
-                     "lost_background", "still_running", "turn_failed", "reclone", "tool_errors", "missing_tools")
 
 
 @dataclass
@@ -96,7 +105,9 @@ def _ci_state(checks: subprocess.CompletedProcess) -> str:
     output = f"{checks.stdout or ''}{checks.stderr or ''}".lower()
     if "no checks reported" in output:
         return "none"
-    if "403" in output or "resource not accessible" in output:
+    # The literal phrase, not a bare "403": a check URL's own job/run id can contain those digits by chance
+    # (e.g. .../job/33178403211), and that must still read as a real CI failure, not an unreadable token.
+    if "http 403" in output or "resource not accessible" in output:
         return "unknown"
     return "failed"
 
@@ -117,7 +128,8 @@ def _pr_record(host: Host, found: dict, now: datetime, pr_to_conversation: dict[
     commits = view.get("commits") or []
     coauthor_trailers = sum(
         1 for commit in commits
-        if "Co-Authored-By: Claude" in f"{commit.get('messageHeadline', '')}\n{commit.get('messageBody', '')}")
+        if "co-authored-by: claude" in
+        f"{commit.get('messageHeadline', '')}\n{commit.get('messageBody', '')}".lower())
 
     conversation = pr_to_conversation.get(url)
     if conversation is None:
@@ -137,15 +149,22 @@ def _fetch_prs(host: Host, now: datetime, start: datetime, pr_to_conversation: d
         login = host.jensen_gh(["api", "user", "--jq", ".login"]).stdout.strip()
         search_out = host.jensen_gh(
             ["search", "prs", "--author", login, "--updated", f">={_iso(start)}",
-             "--json", "url,repository,number"]).stdout
+             "--json", "url,repository,number", "--limit", str(_PR_SEARCH_LIMIT)]).stdout
         found = json.loads(search_out or "[]")
-        return [_pr_record(host, pr, now, pr_to_conversation, projects) for pr in found], None
-    except RuntimeError as exc:
-        return [], str(exc)
+    except RuntimeError:
+        return [], "Jensen's GitHub token is missing"
     except subprocess.CalledProcessError as exc:
         return [], f"gh exited {exc.returncode}"
     except json.JSONDecodeError:
         return [], "gh returned unparseable output"
+
+    records = []
+    for pr in found:
+        try:
+            records.append(_pr_record(host, pr, now, pr_to_conversation, projects))
+        except _PR_FAILURE:
+            continue  # one PR's own `gh pr view`/`gh pr checks` failing must not drop the rest
+    return records, None
 
 
 def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) -> MeasureResult:
@@ -157,7 +176,9 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
         return MeasureResult(has_work=False, skip_reason="pool_hold", digest=None, window=window)
 
     secrets = host.secret_values()
-    items = collected.get("items", [])
+    # Created-at order, not whatever order core returned them in: a repo cloned by two turns in the same window
+    # must count as a reclone for the second one, which only holds if "second" is well defined.
+    items = sorted(collected.get("items", []), key=lambda item: item.get("created_at") or "")
     conversations = collected.get("conversations", {})
     projects = collected.get("projects", [])
 
@@ -170,15 +191,15 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
 
     wanted_ids = [item["id"] for item in items
                   if item.get("kind") == "turn" and item.get("delivered_into") is None]
-    transcripts: dict[str, Path] = {}
+    transcripts: dict[str, bytes] = {}
     transcripts_error: str | None = None
     if wanted_ids:
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                transcripts = host.transcripts(wanted_ids, Path(tmp))
-                transcripts = {item_id: path.read_bytes() for item_id, path in transcripts.items()}
-            except RuntimeError as exc:
-                transcripts_error = str(exc)
+                fetched = host.transcripts(wanted_ids, Path(tmp))
+                transcripts = {item_id: path.read_bytes() for item_id, path in fetched.items()}
+            except RuntimeError:
+                transcripts_error = "Jensen's runner transcripts are unavailable"
 
     for item in items:
         if item.get("kind") != "turn":
@@ -199,7 +220,11 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
 
         raw_bytes = transcripts.get(item["id"])
         if raw_bytes is not None:
-            facts = turn_facts(raw_bytes.decode(errors="replace").splitlines())
+            # Scrub each raw line *before* turn_facts builds (and truncates to 300/300/500) its tool/error
+            # lines from it: a secret that straddles that cut would otherwise leak a prefix too short for any
+            # exact-value or pattern match to catch once it's already been cut.
+            scrubbed_lines = [scrub(line, secrets) for line in raw_bytes.decode(errors="replace").splitlines()]
+            facts = turn_facts(scrubbed_lines)
         else:
             facts = TurnFacts()
 
@@ -220,38 +245,46 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
         }
         turn_records.append(record)
 
+        # Belt and suspenders: the lines fed into turn_facts were already scrubbed above, but scrub again here
+        # in case a line was skipped (bad JSON) and its text still ended up somewhere -- scrubbing already-safe
+        # text is a no-op.
         scrubbed_facts = replace(facts, tool_lines=[scrub(line, secrets) for line in facts.tool_lines],
                                   error_lines=[scrub(line, secrets) for line in facts.error_lines])
         turn_view = {
             "id": item["id"], "source": source, "status": item.get("status"), "outcome": result.get("outcome"),
             "minutes": round((updated - created).total_seconds() / 60, 1),
             "asked": scrub(payload.get("text") or "", secrets), "replied": scrub(result.get("text") or "", secrets),
-            "facts": scrubbed_facts, "signals": {key: record[key] for key in _TURN_SIGNAL_KEYS},
+            "facts": scrubbed_facts, "signals": {key: record[key] for key in SIGNAL_KEYS},
         }
         convo = convo_views.setdefault(
             conversation_id,
             ConvoView(id=conversation_id, project=conversations.get(conversation_id, {}).get("project"), turns=[]))
         convo.turns.append(turn_view)
 
-    if new_clones:
-        state.add_clones(new_clones)
-
     pr_records, prs_error = _fetch_prs(host, now, start, pr_to_conversation, projects)
 
     if not items and not pr_records and not open_deployed:
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
-    state.append_metrics(turn_records + midturn_records + pr_records)
+    produced = turn_records + midturn_records + pr_records
+    # Staged, not appended: committing this window (merging into metrics.jsonl/known_clones for good) is a
+    # separate step, taken only once Claude's own run against this digest succeeds. A re-measure of the same
+    # window before that overwrites this same staging rather than piling another copy on top.
+    state.stage(produced, new_clones)
 
-    totals = {signal: state.count(signal, start) for signal in _SIGNALS}
-    totals["pr"] = f"PRs: unavailable ({prs_error})" if prs_error else state.count("pr", start)
+    # Totals summarize exactly what this run produced, never a disk read "since start": every record's `ts` is
+    # this run's own clock, so a read-since-start would also pick up an earlier run's records stamped right at
+    # that same boundary, double-counting a re-measured window.
+    totals = {signal: summarize(produced, signal, _iso(start)) for signal in _SIGNALS}
+    totals["pr"] = f"PRs: unavailable ({prs_error})" if prs_error else summarize(produced, "pr", _iso(start))
     if transcripts_error:
-        totals["transcripts"] = f"transcripts: unavailable ({transcripts_error})"
+        totals["transcripts"] = transcripts_error
 
     deployed = [{"number": issue.get("number"), "title": scrub(issue.get("title") or "", secrets)}
                 for issue in open_deployed]
 
     digest_text = render(window, list(convo_views.values()), totals, pr_records, deployed)
+    digest_text = scrub(digest_text, secrets)
     digest_path = state.write_digest(end, digest_text)
     state.prune(now, days=_RETENTION_DAYS)
 

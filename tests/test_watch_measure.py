@@ -3,7 +3,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from agent.watch.digest import ConvoView, render
+from agent.watch.digest import SIGNAL_KEYS, ConvoView, render
 from agent.watch.measure import measure
 from agent.watch.state import State
 from agent.watch.transcript import TurnFacts
@@ -181,6 +181,34 @@ def test_turn_records_and_signals(tmp_path):
     assert records["W-b"]["turn_failed"] == 0
 
 
+def test_turn_failed_isolated_cases(tmp_path):
+    state = State(tmp_path)
+    # status="failed" wins outright, even though the result carries real text.
+    failed_status_with_text = _item("W-1", conversation_id="C-1", status="failed",
+                                    created_at="2026-11-19T09:00:00Z", updated_at="2026-11-19T09:01:00Z",
+                                    result={"text": "some text", "outcome": "done"})
+    # Empty text is still a failure signal even when the outcome itself says "done".
+    empty_text_done_outcome = _item("W-2", conversation_id="C-2", status="done",
+                                    created_at="2026-11-19T09:00:00Z", updated_at="2026-11-19T09:01:00Z",
+                                    result={"text": "", "outcome": "done"})
+    # Not person-started (it's a continuation), so a failing outcome doesn't count against it.
+    continuation_timeout = _item("W-3", conversation_id="C-3", status="done",
+                                 created_at="2026-11-19T09:00:00Z", updated_at="2026-11-19T09:01:00Z",
+                                 payload={"continuation": 1}, result={"text": "", "outcome": "timeout"})
+
+    host = FakeHost(
+        collect={"items": [failed_status_with_text, empty_text_done_outcome, continuation_timeout],
+                 "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+        **_NO_PRS)
+
+    measure(state, host, T0, open_deployed=[])
+
+    records = {r["id"]: r for r in state.read_metrics(_since(T0)) if r["kind"] == "turn"}
+    assert records["W-1"]["turn_failed"] == 1
+    assert records["W-2"]["turn_failed"] == 1
+    assert records["W-3"]["turn_failed"] == 0
+
+
 def test_big_start_small_ask_signal(tmp_path):
     state = State(tmp_path)
     # A single huge first call (over the 100k-token threshold), then a result, with no further tool calls.
@@ -235,19 +263,31 @@ def test_pr_records_ci_states(tmp_path):
         {"url": "https://github.com/org/repo2/pull/2", "repository": {"nameWithOwner": "org/repo2"}, "number": 2},
         {"url": "https://github.com/org/repo3/pull/3", "repository": {"nameWithOwner": "org/repo3"}, "number": 3},
         {"url": "https://github.com/org/repo4/pull/4", "repository": {"nameWithOwner": "org/repo4"}, "number": 4},
+        {"url": "https://github.com/org/repo5/pull/5", "repository": {"nameWithOwner": "org/repo5"}, "number": 5},
     ]
 
-    def _view(url):
+    def _view(url, commits=()):
         return _cp(stdout=json.dumps({"additions": 10, "deletions": 5, "createdAt": "2026-11-19T09:00:00Z",
-                                      "mergedAt": "2026-11-19T09:10:00Z", "commits": []}))
+                                      "mergedAt": "2026-11-19T09:10:00Z", "commits": list(commits)}))
 
     views = {pr["url"]: _view(pr["url"]) for pr in search_results}
+    # repo5's PR carries a co-author trailer, in GitHub's own casing, and specific additions/deletions/dates so
+    # `lines`/`open_to_merge_s`/`coauthor_trailers` can all be checked precisely.
+    views["https://github.com/org/repo5/pull/5"] = _cp(stdout=json.dumps({
+        "additions": 25, "deletions": 15, "createdAt": "2026-11-19T09:00:00Z", "mergedAt": "2026-11-19T09:16:40Z",
+        "commits": [{"messageHeadline": "fix: bug", "messageBody": "Co-authored-by: Claude <noreply@x>"}],
+    }))
     checks = {
         "https://github.com/org/repo1/pull/1": _cp(returncode=0),
         "https://github.com/org/repo2/pull/2": _cp(returncode=8, stdout="no checks reported on the 'main' ref\n"),
         "https://github.com/org/repo3/pull/3": _cp(returncode=1,
                                                     stderr="HTTP 403: Resource not accessible by integration"),
         "https://github.com/org/repo4/pull/4": _cp(returncode=1, stdout="some other check failure"),
+        # A check URL's own job/run id can contain the digits "403" by pure chance; that must not be read as a
+        # "resource not accessible" 403 and downgraded to "unknown" -- it's a real, readable check failure.
+        "https://github.com/org/repo5/pull/5": _cp(
+            returncode=1,
+            stdout="X 1 failing check\nSee https://github.com/org/repo5/actions/runs/33178403211/job/92210403211\n"),
     }
 
     host = FakeHost(
@@ -262,11 +302,16 @@ def test_pr_records_ci_states(tmp_path):
 
     measure(state, host, T0, open_deployed=[])
 
+    # `gh search prs` is capped, per the minor fix.
+    search_call = next(c for c in host.gh_calls if c[:2] == ["search", "prs"])
+    assert "--limit" in search_call and "200" in search_call
+
     prs = {r["url"]: r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"}
     assert prs["https://github.com/org/repo1/pull/1"]["ci"] == "passed"
     assert prs["https://github.com/org/repo2/pull/2"]["ci"] == "none"
     assert prs["https://github.com/org/repo3/pull/3"]["ci"] == "unknown"
     assert prs["https://github.com/org/repo4/pull/4"]["ci"] == "failed"
+    assert prs["https://github.com/org/repo5/pull/5"]["ci"] == "failed"  # not "unknown": 403 here is just an id
 
     # The transcript that created it wins over the project fallback.
     assert prs["https://github.com/org/repo1/pull/1"]["conversation"] == "C-a"
@@ -275,6 +320,11 @@ def test_pr_records_ci_states(tmp_path):
     # Neither a transcript match nor an active project: no conversation.
     assert prs["https://github.com/org/repo3/pull/3"]["conversation"] is None
     assert prs["https://github.com/org/repo4/pull/4"]["conversation"] is None
+
+    assert prs["https://github.com/org/repo5/pull/5"]["lines"] == 40  # 25 additions + 15 deletions
+    assert prs["https://github.com/org/repo5/pull/5"]["open_to_merge_s"] == 1000.0  # 09:00:00 -> 09:16:40
+    assert prs["https://github.com/org/repo5/pull/5"]["coauthor_trailers"] == 1  # GitHub's own casing
+    assert prs["https://github.com/org/repo1/pull/1"]["coauthor_trailers"] == 0  # no commits at all
 
 
 def test_pr_fetch_failure_skips_prs_without_crashing(tmp_path):
@@ -288,7 +338,9 @@ def test_pr_fetch_failure_skips_prs_without_crashing(tmp_path):
     assert result.has_work is True
     assert not [r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"]
     text = result.digest.read_text()
-    assert "PRs: unavailable (GH_TOKEN missing from /live/data/secrets/agent.env)" in text
+    # A generic, host-path-free reason -- never the raw RuntimeError message, which names the agent.env path.
+    assert "PRs: unavailable (Jensen's GitHub token is missing)" in text
+    assert "/live/data/secrets/agent.env" not in text
 
 
 def test_pr_fetch_gh_failure_skips_prs_without_crashing(tmp_path):
@@ -304,6 +356,31 @@ def test_pr_fetch_gh_failure_skips_prs_without_crashing(tmp_path):
     assert "PRs: unavailable (gh exited 2)" in result.digest.read_text()
 
 
+def test_one_failing_pr_view_does_not_drop_other_pr_records(tmp_path):
+    state = State(tmp_path)
+    item = _item("W-a", conversation_id="C-a")
+    search_results = [
+        {"url": "https://github.com/org/repo1/pull/1", "repository": {"nameWithOwner": "org/repo1"}, "number": 1},
+        {"url": "https://github.com/org/repo2/pull/2", "repository": {"nameWithOwner": "org/repo2"}, "number": 2},
+    ]
+    # pull/2 has no entry in `views` at all: FakeHost's dispatch raises KeyError for it, standing in for a real
+    # `gh pr view` hiccup (a network error, a malformed response) on just that one PR.
+    views = {"https://github.com/org/repo1/pull/1": _cp(stdout=json.dumps(
+        {"additions": 1, "deletions": 1, "createdAt": "2026-11-19T09:00:00Z", "mergedAt": "2026-11-19T09:05:00Z",
+         "commits": []}))}
+    checks = {"https://github.com/org/repo1/pull/1": _cp(returncode=0)}
+
+    host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+                    login=_cp(stdout="jensen-bot\n"), search=_cp(stdout=json.dumps(search_results)),
+                    views=views, checks=checks)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    prs = [r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"]
+    assert {r["url"] for r in prs} == {"https://github.com/org/repo1/pull/1"}
+
+
 # -- reclone --
 
 
@@ -316,6 +393,7 @@ def test_reclone_counts_repos_seen_in_earlier_windows(tmp_path):
                               "claimed": 0},
                      transcripts={"W-first": clone_lines}, **_NO_PRS)
     measure(state, host1, T0, open_deployed=[])
+    state.commit()  # the first window's Claude run succeeds: its staged clones become permanently known
 
     first_record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-first")
     assert first_record["reclone"] == 0
@@ -329,6 +407,39 @@ def test_reclone_counts_repos_seen_in_earlier_windows(tmp_path):
 
     second_record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-second")
     assert second_record["reclone"] == 1
+
+
+# -- re-measuring the same window (stage/commit) --
+
+
+def test_remeasure_same_window_has_no_duplicates_or_self_reclone(tmp_path):
+    # The watch only commits a window after Claude's own run against its digest succeeds, so a failed run means
+    # the same window gets measured again. That must not duplicate the turn's metrics line, and must not count
+    # the turn's own clone as a reclone of itself just because the first (abandoned) attempt already staged it.
+    state = State(tmp_path)
+    clone_lines = [_assistant([{"id": "t1", "name": "Bash", "input": {"command": "gh repo clone org/repo"}}])]
+    item = _item("W-a", conversation_id="C-1")
+    host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+                    transcripts={"W-a": clone_lines}, **_NO_PRS)
+
+    first = measure(state, host, T0, open_deployed=[])
+    assert first.has_work is True
+    first_record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-a")
+    assert first_record["reclone"] == 0
+    assert state.known_clones() == set()  # staged, not yet committed
+
+    # Claude's run against the first digest fails; nothing was committed. The same window is measured again.
+    second = measure(state, host, T0, open_deployed=[])
+    assert second.has_work is True
+
+    turn_records = [r for r in state.read_metrics(_since(T0)) if r["kind"] == "turn" and r["id"] == "W-a"]
+    assert len(turn_records) == 1  # overwritten by stage(), not duplicated
+    assert turn_records[0]["reclone"] == 0  # still not its own reclone
+
+    # Now the second attempt succeeds and gets committed: the staged data becomes permanent.
+    state.commit()
+    assert state.known_clones() == {"org/repo"}
+    assert len([r for r in state.read_metrics(_since(T0)) if r["kind"] == "turn" and r["id"] == "W-a"]) == 1
 
 
 # -- transcripts unavailable --
@@ -349,7 +460,9 @@ def test_transcripts_failure_still_writes_turn_record_from_db_data(tmp_path):
     assert record["inline_code_chars"] == 0
     assert record["tool_errors"] == [] and record["missing_tools"] == []
     assert record["turn_failed"] == 0  # status/outcome/text from the DB alone say this turn succeeded
-    assert "transcripts: unavailable" in result.digest.read_text()
+    text = result.digest.read_text()
+    assert "Jensen's runner transcripts are unavailable" in text
+    assert "no such container" not in text  # the raw RuntimeError message never reaches the digest
 
 
 # -- digest redaction (Review Focus 2) --
@@ -359,7 +472,8 @@ def test_digest_redacts_secrets(tmp_path):
     state = State(tmp_path)
     leaking_lines = [
         _assistant([{"id": "t1", "name": "Bash", "input": {"command": "env | grep TOKEN"}}]),
-        _result_line("t1", "SLACK_TOKEN=xoxb-123456789012-abcdefghij", is_error=True),
+        # The exact agent.env value (caught by secret_values()) and a regex-pattern secret, both in tool output.
+        _result_line("t1", "GH_TOKEN=supersecretvalue SLACK_TOKEN=xoxb-123456789012-abcdefghij", is_error=True),
     ]
     item = _item("W-a", conversation_id="C-a", payload={"text": "the value is supersecretvalue, please use it"},
                 result={"text": "ack: supersecretvalue noted"})
@@ -373,6 +487,30 @@ def test_digest_redacts_secrets(tmp_path):
     assert "xoxb-123456789012-abcdefghij" not in text
     assert "supersecretvalue" not in text
     assert "[redacted]" in text
+
+
+def test_digest_never_leaks_a_secret_prefix_across_the_truncation_boundary(tmp_path):
+    # turn_facts truncates a tool call's output to 300 characters when it builds the tool line. A secret that
+    # starts at position 296 of the raw output would, if scrubbing ran only after that cut, show up as just its
+    # first 4 characters -- too short to match the exact value or any pattern. Scrubbing the raw line first
+    # (before turn_facts ever sees it) must mean not even that short a prefix survives.
+    state = State(tmp_path)
+    secret = "supersecretvalue"
+    padded_output = ("y" * 296) + secret + " and more trailing text"
+    leaking_lines = [
+        _assistant([{"id": "t1", "name": "Bash", "input": {"command": "env"}}]),
+        _result_line("t1", padded_output, is_error=True),
+    ]
+    item = _item("W-a", conversation_id="C-a")
+
+    host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+                    transcripts={"W-a": leaking_lines}, secrets=[secret], **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    text = result.digest.read_text()
+    assert secret not in text
+    assert secret[:4] not in text  # not even a short prefix of the secret survives the 300-char cut
 
 
 # -- digest totals and deployed issues --
@@ -399,18 +537,40 @@ def test_digest_lists_deployed_issues_and_totals(tmp_path):
 # -- digest budget shrinking (Review Focus 3) --
 
 
+def test_first_render_attempt_never_recuts_a_turn_facts_line():
+    # A tool call's own ~300-char input, by itself, must not make render()'s *first* attempt re-cut the whole
+    # "name: input -> output" line down to a flat 300 characters -- that would lose the output half entirely.
+    # The first attempt must show the line exactly as turn_facts built it (up to 300 + 300, or 500 for an error).
+    window = (T0, T0 + timedelta(hours=1))
+    marker = "OUTPUT_MARKER_TEXT_THAT_MUST_SURVIVE_IN_FULL"
+    tool_line = f"Bash: {'x' * 280} -> {marker}"
+    error_line = ("e" * 480) + marker
+    facts = TurnFacts(tool_lines=[tool_line], error_lines=[error_line])
+    turn = {"id": "W-a", "source": None, "status": "done", "outcome": "done", "minutes": 1.0, "asked": "",
+            "replied": "", "facts": facts, "signals": {key: 0 for key in SIGNAL_KEYS} | {"tool_errors": [],
+                                                                                          "missing_tools": []}}
+    convos = [ConvoView(id="C-a", project=None, turns=[turn])]
+
+    text = render(window, convos, {}, [], [])
+
+    assert tool_line in text
+    assert error_line in text
+    assert marker in text
+
+
 def test_digest_shrinks_tool_lines_not_messages():
     window = (T0, T0 + timedelta(hours=1))
     big_ask = "a" * 200_000
     convos = []
-    base_signals = {key: 0 for key in ("context_first", "context_peak", "big_start_small_ask", "no_delegation",
-                                       "inline_code_chars", "lost_background", "still_running", "turn_failed",
-                                       "reclone")}
+    base_signals = {key: 0 for key in SIGNAL_KEYS}
     base_signals.update(tool_errors=[], missing_tools=[])
     long_line = "x" * 5000
 
     for i in range(300):
-        facts = TurnFacts(tool_lines=[long_line] * 40, error_lines=["e" * 2000])
+        # Deliberately much larger than a real transcript's own 300/300/500 caps would ever let through, so
+        # that even the widest tool-line cap (120) still can't fit the budget -- only cap=0 (omitted entirely)
+        # does, proving the lines actually got cut rather than this passing by construction either way.
+        facts = TurnFacts(tool_lines=[long_line] * 80, error_lines=["e" * 2000] * 3)
         asked = big_ask if i == 0 else f"ask {i}"
         turn = {"id": f"W-{i}", "source": None, "status": "done", "outcome": "done", "minutes": 1.0,
                 "asked": asked, "replied": f"reply {i}", "facts": facts, "signals": dict(base_signals)}
@@ -423,4 +583,8 @@ def test_digest_shrinks_tool_lines_not_messages():
     assert big_ask in text
     for i in range(1, 300):
         assert f"ask {i}" in text
-    assert long_line not in text  # the tool lines got cut, not the messages
+    # Meaningful, not vacuous: every cap in the sequence is well below len(long_line), so "long_line not in
+    # text" would hold even if nothing shrank at all. What actually proves the lines were cut (down to the
+    # narrowest tier) is that the tool/error line markers are gone entirely.
+    assert "tool:" not in text
+    assert "error:" not in text

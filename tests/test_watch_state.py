@@ -36,6 +36,46 @@ def test_first_window_is_last_hour_then_resumes_from_commit(tmp_path):
     assert end3 == now3
 
 
+def test_stage_is_visible_to_read_metrics_but_not_known_clones_until_commit(tmp_path):
+    state = State(tmp_path)
+    since = _dt(2026, 11, 19, 0, 0, 0)
+
+    state.stage([{"ts": "2026-11-19T00:10:00Z", "kind": "turn", "id": "t1", "reclone": 0}], ["org/repo"])
+
+    # Staged metrics show up right away...
+    assert [r["id"] for r in state.read_metrics(since)] == ["t1"]
+    # ...but staged clones never show up in known_clones() until commit() folds them in.
+    assert state.known_clones() == set()
+
+    # A re-measure of the same window stages again: this overwrites, it never appends a second copy.
+    state.stage([{"ts": "2026-11-19T00:10:00Z", "kind": "turn", "id": "t1", "reclone": 0}], ["org/repo"])
+    assert [r["id"] for r in state.read_metrics(since)] == ["t1"]
+
+    state.commit()
+    # Now permanent: committed, not duplicated, and known_clones() finally sees it.
+    assert [r["id"] for r in state.read_metrics(since)] == ["t1"]
+    assert state.known_clones() == {"org/repo"}
+
+    # commit() cleared the staging files: a later stage()+commit() for a new window doesn't re-merge the old one.
+    state.stage([{"ts": "2026-11-19T01:10:00Z", "kind": "turn", "id": "t2", "reclone": 0}], ["org/repo2"])
+    assert {r["id"] for r in state.read_metrics(since)} == {"t1", "t2"}
+    assert state.known_clones() == {"org/repo"}  # t2's clone isn't merged in yet
+    state.commit()
+    assert state.known_clones() == {"org/repo", "org/repo2"}
+    assert {r["id"] for r in state.read_metrics(since)} == {"t1", "t2"}
+
+
+def test_commit_without_a_prior_stage_only_moves_the_window(tmp_path):
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+    state.window(now)
+
+    state.commit()  # no stage() call ever happened for this window
+
+    assert state.known_clones() == set()
+    assert state.read_metrics(_dt(2000, 1, 1, 0, 0, 0)) == []
+
+
 def test_count_numeric_and_counted_and_pr(tmp_path):
     state = State(tmp_path)
     since = _dt(2026, 11, 19, 0, 0, 0)
