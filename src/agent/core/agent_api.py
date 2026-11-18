@@ -18,7 +18,7 @@ from aiohttp import web
 
 from agent import db
 from agent import events as event_log
-from agent.core.sessions import TokenInfo, WorkItem, WorkQueue, mint_token, resolve_token
+from agent.core.sessions import TokenInfo, WorkItem, WorkQueue, mint_token, renew_token, resolve_token
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +95,8 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
         info = resolved(request, "session")
         body = await request.json()
         alive = queue.heartbeat(info.work_item_id)
+        if alive:  # a turn can outlive the token it was claimed with: an account fork restarts its timer
+            renew_token(conn, _token(request), ttl_s=session_ttl_s)
         messages: list[dict] = []
         if body and on_beat is not None:  # an empty body means no beat: an older runner just checking in
             beat = {**body, "accepts_messages": bool(body.get("accepts_messages")) and alive}

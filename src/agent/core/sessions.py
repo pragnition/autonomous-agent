@@ -58,6 +58,12 @@ def resolve_token(conn: sqlite3.Connection, token: str, now: datetime | None = N
     return TokenInfo(row["kind"], row["work_item_id"])
 
 
+def renew_token(conn: sqlite3.Connection, token: str, *, ttl_s: int) -> None:
+    """Push a live token's expiry out to ttl_s from now; a revoked one stays revoked."""
+    conn.execute("UPDATE tokens SET expires_at = ? WHERE hash = ? AND revoked = 0",
+                 (_iso(datetime.now(UTC) + timedelta(seconds=ttl_s)), _hash(token)))
+
+
 def revoke_for_work_item(conn: sqlite3.Connection, work_item_id: str) -> None:
     conn.execute("UPDATE tokens SET revoked = 1 WHERE work_item_id = ?", (work_item_id,))
 
