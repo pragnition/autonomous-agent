@@ -196,6 +196,41 @@ async def test_a_dm_turn_gets_the_test_keys_and_no_checkout_tools(tmp_path):
         await client.close()
 
 
+def fake_download(monkeypatch, status=200, content_type="image/png", body=b"png-bytes"):
+    """httpx in core answers a Slack download with this; returns the requests it saw."""
+    import httpx
+    seen = []
+    real = httpx.AsyncClient
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(status, headers={"content-type": content_type}, content=body)
+
+    monkeypatch.setattr("agent.core.app.httpx.AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    return seen
+
+
+async def test_slack_file_downloads_with_the_bot_token(app, monkeypatch):
+    async def files_info(file):
+        return {"file": {"id": file, "mimetype": "image/png", "url_private_download": "https://files.slack/F1"}}
+
+    app.slack.files_info, app.slack.token = files_info, "xoxb-bot"
+    seen = fake_download(monkeypatch)
+    assert await app.slack_file("F1") == b"png-bytes"
+    assert str(seen[0].url) == "https://files.slack/F1" and seen[0].headers["Authorization"] == "Bearer xoxb-bot"
+
+
+async def test_slack_file_refused_download_is_an_error(app, monkeypatch):
+    async def files_info(file):
+        return {"file": {"id": file, "mimetype": "image/png", "url_private": "https://files.slack/F1"}}
+
+    app.slack.files_info, app.slack.token = files_info, "xoxb-bot"
+    fake_download(monkeypatch, content_type="text/html; charset=utf-8", body=b"<html>sign in</html>")
+    with pytest.raises(ValueError, match="refused"):
+        await app.slack_file("F1")
+
+
 async def test_on_files_uploads_to_the_conversation(app):
     await app.conversations.handle_slack({"type": "message", "channel_type": "im", "channel": "D1", "user": "U00000001",
                                           "ts": "6.1", "text": "show me"})

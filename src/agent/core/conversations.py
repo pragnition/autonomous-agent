@@ -33,6 +33,19 @@ SEEN, WORKING, DONE, FAILED = "eyes", "hourglass_flowing_sand", "white_check_mar
 _FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
 LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the line goes without it after that
+# A person's message with files attached arrives with this subtype; every other subtype (edits, joins, bot
+# messages, deletions) is not something a person said to the agent
+FILE_SHARE = "file_share"
+
+
+def message_files(event: dict) -> list[dict]:
+    """The files attached to a Slack message, as the turn carries them: the runner fetches each one through core
+    (which holds the bot token) into the session folder. Files Slack won't serve (deleted, past the free plan's
+    limit) are left out."""
+    return [{"id": f["id"], "name": f.get("name") or f["id"], "mimetype": f.get("mimetype") or "",
+             "size": int(f.get("size") or 0)}
+            for f in event.get("files") or []
+            if f.get("id") and f.get("mode") not in ("tombstone", "hidden_by_limit")]
 
 
 def origin_line(where: str, *, who: str | None = None, link: str | None = None) -> str:
@@ -200,8 +213,10 @@ class Conversations:
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, source: str,
                       requester: str | None, follows: str | None = None, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0,
-                      report_to: dict | None = None) -> str:
+                      report_to: dict | None = None, files: list[dict] | None = None) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
+        if files:  # the message's attachments; the runner saves them into the session folder
+            payload["files"] = files
         payload["origin"] = origin  # the runner puts it at the top of the prompt
         # where the turn came from, who asked and which turn it carries on: the task record's labeler reads them
         payload.update(source=source, requester=requester, follows=follows)
@@ -220,7 +235,9 @@ class Conversations:
 
     async def handle_slack(self, event: dict) -> None:
         user, channel = event.get("user"), event.get("channel")
-        if not user or not channel or event.get("bot_id") or event.get("subtype") or user == self.bot_user_id:
+        subtype = event.get("subtype")
+        if not user or not channel or event.get("bot_id") or (subtype and subtype != FILE_SHARE) \
+                or user == self.bot_user_id:
             return
         is_dm = event.get("channel_type") == "im"
         thread_ts = event.get("thread_ts") or event["ts"]  # a top-level message starts its own thread
@@ -243,7 +260,7 @@ class Conversations:
             convo = self._row(convo["id"])
         came_from = event.get("thread_ts")
         self._enqueue_turn(convo, text, person.key, origin=origin, source="slack", requester=person.key,
-                           message_ts=event["ts"],
+                           message_ts=event["ts"], files=message_files(event),
                            reply_thread_ts=came_from if came_from != convo["thread_ts"] else None)
         await self._react(channel, event["ts"], SEEN)  # the person sees it landed long before the session replies
 

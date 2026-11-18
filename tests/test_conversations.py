@@ -206,6 +206,35 @@ async def test_own_and_bot_messages_ignored(convos, queue):
     assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
 
 
+SHOT = {"id": "F1", "name": "shot.png", "mimetype": "image/png", "size": 2048}
+
+
+async def test_untagged_reply_with_a_file_in_a_known_thread_carries_the_file(convos, queue):
+    await convos.handle_slack(mention("t8", "the export is broken"))
+    await convos.handle_slack({**reply("t8", "like this"), "subtype": "file_share",
+                               "files": [SHOT, {"id": "F2", "mode": "tombstone"}]})
+    item = last_item(queue)
+    assert item.payload["text"] == "like this" and item.payload["files"] == [SHOT]
+
+
+async def test_a_file_without_text_still_makes_a_turn(convos, queue):
+    await convos.handle_slack({**dm(""), "subtype": "file_share", "files": [SHOT]})
+    assert last_item(queue).payload["files"] == [SHOT]
+
+
+async def test_a_message_without_files_carries_none(convos, queue):
+    await convos.handle_slack(dm("hi"))
+    assert "files" not in last_item(queue).payload
+
+
+async def test_other_subtypes_still_ignored(convos, queue):
+    await convos.handle_slack(mention("t9", "x"))
+    queue.claim()
+    for subtype in ("message_changed", "channel_join", "bot_message", "message_deleted"):
+        await convos.handle_slack({**reply("t9", "x"), "subtype": subtype})
+    assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 1
+
+
 async def test_use_fable_sticks(convos, conn, queue):
     await convos.handle_slack(mention("t1", "use fable and fix x"))
     assert convo(conn, "t1")["model"] == "claude-fable-5-1"
