@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from pathlib import Path
 
@@ -308,6 +309,13 @@ async def test_messages_forwarded(tmp_path):
 async def test_options_ask_the_cli_to_echo_messages(tmp_path):
     runner, _ = make_runner(tmp_path, [[]])
     assert runner.build_options(spec(tmp_path), session_id="s").extra_args == {"replay-user-messages": None}
+
+
+async def test_options_let_a_large_image_through(tmp_path):
+    # Issue #3: a 1.08 MB PNG from Slack is ~1.44 MB as base64, over the SDK's 1 MiB default, and ended the session
+    runner, _ = make_runner(tmp_path, [[]])
+    image_message = len(json.dumps({"type": "image", "data": base64.b64encode(b"\0" * 1_080_000).decode()}))
+    assert runner.build_options(spec(tmp_path), session_id="s").max_buffer_size > 10 * image_message
 
 
 async def test_a_message_sent_mid_turn_reaches_the_session_and_is_read(tmp_path):

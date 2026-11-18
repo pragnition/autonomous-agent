@@ -33,6 +33,9 @@ from agent.runner.outcome import ACCOUNT_TROUBLE, FORK_STATUSES, map_result, usa
 # The SDK hands the parent's whole environment to the CLI, so anything secret-looking is overridden with "".
 SECRETISH = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_KEY|_KEY)$|^(GH|GITHUB|SLACK|LINEAR|AWS)_", re.I)
 PROXY_VARS = {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
+# The most the SDK reads of one message from the CLI. Its default, 1 MiB, ends the session on an image of ~750 KB
+# (a tool result carries it as base64, a third larger): a Slack screenshot or a full-page Playwright one.
+MAX_BUFFER_SIZE = 20 * 1024 * 1024
 
 
 async def _user_message(message_uuid: str, text: str):
@@ -78,7 +81,7 @@ class ClaudeRunner:
             setting_sources=["user", "project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
             session_id=session_id, resume=resume, fork_session=fork,
-            settings=json.dumps(spec.settings) if spec.settings else None,
+            settings=json.dumps(spec.settings) if spec.settings else None, max_buffer_size=MAX_BUFFER_SIZE,
             # the CLI echoes each user message it reads, with the uuid it was sent with
             extra_args={"replay-user-messages": None})
 
