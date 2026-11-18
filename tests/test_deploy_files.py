@@ -1,5 +1,6 @@
 import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -193,3 +194,22 @@ def test_agent_toolkit_installs_exactly_the_vetted_set():
     # Context7 runs as its local MCP server: the plugin's hosted one needs a login a headless agent can't do
     assert "claude mcp add -s user context7 -- npx -y @upstash/context7-mcp@" in text
     assert os.access(script, os.X_OK)
+
+
+def test_agent_toolkit_runs_every_install_when_piped_into_bash(tmp_path):
+    """It's run as `docker exec -i agent-runner bash < deploy/agent-toolkit.sh`, so bash reads the script from stdin.
+    An installer that reads stdin too must not swallow the lines after it."""
+    bin_dir, log = tmp_path / "bin", tmp_path / "calls.log"
+    bin_dir.mkdir()
+    (tmp_path / "home" / "skills").mkdir(parents=True)
+    stubs = {"npx": f'cat >/dev/null; echo "npx $*" >> {log}',  # reads stdin, like an interactive installer
+             "claude": 'case "$*" in "plugin marketplace list") echo anthropic-plugin-directory;; esac'}
+    for name, body in stubs.items():
+        (bin_dir / name).write_text(f"#!/bin/bash\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CLAUDE_CONFIG_DIR": str(tmp_path / "home")}
+    with (ROOT / "deploy" / "agent-toolkit.sh").open() as script:
+        subprocess.run(["bash"], stdin=script, env=env, check=True, capture_output=True)
+    installed = [line.split("--skill ")[1].split()[0] for line in log.read_text().splitlines() if "skills@" in line]
+    assert installed == ["web-design-guidelines", "vercel-react-best-practices", "vercel-composition-patterns",
+                         "supabase-postgres-best-practices"]

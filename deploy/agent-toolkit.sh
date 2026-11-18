@@ -5,18 +5,20 @@
 # Spec: docs/superpowers/specs/2026-11-17-off-the-shelf-toolkit-design.md
 set -u
 failed=()
+# bash reads this script from stdin, so every installer gets </dev/null: one that read stdin would swallow the rest
 
 plugin() {  # the official marketplace is named anthropic-plugin-directory in the agent's home
-  claude plugin install "$1@anthropic-plugin-directory" || claude plugin install "$1@claude-plugins-official" \
+  claude plugin install "$1@anthropic-plugin-directory" </dev/null \
+    || claude plugin install "$1@claude-plugins-official" </dev/null \
     || failed+=("plugin $1")
 }
 
 skill() {  # <repo> <skill>
-  npx -y skills@1.9.0 add "$1" --skill "$2" -g -a claude-code --copy -y || failed+=("skill $2")
+  npx -y skills@1.9.0 add "$1" --skill "$2" -g -a claude-code --copy -y </dev/null || failed+=("skill $2")
 }
 
 claude plugin marketplace list | grep -q -e anthropic-plugin-directory -e claude-plugins-official \
-  || claude plugin marketplace add anthropics/claude-plugins-official
+  || claude plugin marketplace add anthropics/claude-plugins-official </dev/null
 
 # Left out: security-guidance (its hooks install the Agent SDK at every session start and wake a session after it has
 # ended, which the runner's turn handling doesn't expect), code-review (duplicates pr-review-toolkit) and
@@ -28,7 +30,7 @@ plugin pr-review-toolkit  # specialist reviewer agents
 # Current library docs: Context7's local MCP server, which works without an account. The context7 plugin's hosted
 # server needs an OAuth login, which a headless agent can't do.
 claude mcp get context7 >/dev/null 2>&1 \
-  || claude mcp add -s user context7 -- npx -y @upstash/context7-mcp@4.7.3 || failed+=("mcp context7")
+  || claude mcp add -s user context7 -- npx -y @upstash/context7-mcp@4.7.3 </dev/null || failed+=("mcp context7")
 
 skill vercel-labs/agent-skills web-design-guidelines
 skill vercel-labs/agent-skills vercel-react-best-practices
