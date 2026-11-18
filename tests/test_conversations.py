@@ -5,7 +5,7 @@ import pytest
 
 from agent import db, tasks
 from agent.core import projects
-from agent.core.conversations import NOT_AUTHORISED, Conversations, cut_by_limit, record_message
+from agent.core.conversations import NOT_AUTHORISED, Conversations, cut_by_limit, lost_tasks_note, record_message
 from agent.core.sessions import WorkQueue
 from agent.tasks import Status
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, make_config, make_pack
@@ -1045,3 +1045,62 @@ async def test_a_runner_that_cannot_take_messages_gets_none(convos, queue, slack
     assert (await convos.on_beat(first, {"accepts_messages": False}))["messages"] == []
     assert len(slack.reactions) == reactions
     assert (await convos.on_beat(first, {"accepts_messages": True}))["messages"] != []
+
+
+ENDED = "your turn ended, and a turn's background agents stop when it does"
+LOST = [{"task": "Explore graphify A", "because": ENDED}, {"task": "Explore graphify B", "because": ENDED}]
+
+
+async def test_a_turn_whose_background_agents_were_stopped_wakes_the_session_at_once(convos, queue, slack, conn):
+    await convos.handle_slack(mention("t-lost", "run the A/B"))
+    first = queue.claim()
+    result = {"text": "Launched 8 agents.", "outcome": "done", "session_id": "sess-1", "lost_tasks": LOST}
+    queue.complete(first.id, result)
+    await convos.on_result(queue.get(first.id), result)
+    assert slack.posts[-1]["text"] == "Launched 8 agents."  # the turn's own reply still posts
+    nxt = queue.claim()  # and the session is woken right away, not at the next message
+    assert nxt.conversation_id == first.conversation_id and nxt.payload["recovers"] == 1
+    assert nxt.payload["origin"] == first.payload["origin"] and nxt.payload["follows"] == first.id
+    assert "message_ts" not in nxt.payload  # it answers no message: no reactions
+    text = nxt.payload["text"]
+    assert ENDED in text and "- Explore graphify A\n- Explore graphify B\n" in text
+    assert "Tell the thread now" in text
+    assert conn.execute("SELECT session_id FROM conversations WHERE id = ?",
+                        (first.conversation_id,)).fetchone()[0] == "sess-1"  # resumed: the CLI's notes arrive too
+    assert conn.execute("SELECT COUNT(*) FROM events WHERE type = 'background_tasks_lost'").fetchone()[0] == 1
+
+
+async def test_a_wake_turn_that_loses_agents_again_does_not_wake_another(convos, queue):
+    await convos.handle_slack(mention("t-lost2", "run the A/B"))
+    first = queue.claim()
+    result = {"text": "ok", "outcome": "done", "lost_tasks": LOST}
+    queue.complete(first.id, result)
+    await convos.on_result(queue.get(first.id), result)
+    wake = queue.claim()
+    queue.complete(wake.id, result)
+    await convos.on_result(queue.get(wake.id), result)
+    assert queue.claim() is None
+
+
+async def test_a_stopped_turn_or_one_carrying_on_is_not_woken_for_its_agents(convos, queue):
+    await convos.handle_slack(mention("t-lost3", "run it"))
+    first = queue.claim()
+    result = {"outcome": "interrupted", "lost_tasks": LOST}
+    queue.complete(first.id, result)
+    await convos.on_result(queue.get(first.id), result)
+    assert queue.claim() is None
+    await convos.handle_slack(mention("t-lost4", "build it"))
+    item = queue.claim()
+    result = {"outcome": "max_turns", "lost_tasks": LOST}  # carries on anyway, resuming the session
+    queue.complete(item.id, result)
+    await convos.on_result(queue.get(item.id), result)
+    nxt = queue.claim()
+    assert nxt.payload["continuation"] == 1 and "recovers" not in nxt.payload
+    assert queue.claim() is None
+
+
+def test_the_wake_note_names_each_cause_when_they_differ():
+    note = lost_tasks_note([{"task": "A", "because": "your turn ran out of time and was stopped"},
+                            {"task": "B", "because": "your session moved to another account because x"}])
+    assert "- A (your turn ran out of time and was stopped)\n" in note
+    assert "- B (your session moved to another account because x)\n" in note

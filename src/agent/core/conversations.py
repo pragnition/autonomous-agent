@@ -85,6 +85,22 @@ def failure_reply(outcome: str, error: str | None) -> str:
     return f"That failed before I could finish it:\n```\n{error.strip()}\n```"
 
 
+def lost_tasks_note(lost: list[dict]) -> str:
+    """The prompt of the turn that wakes a session whose background agents were stopped when its session closed:
+    what was stopped, why, and what to do about it."""
+    causes = list(dict.fromkeys(t.get("because") or "its session closed" for t in lost))
+    if len(causes) == 1:
+        head = f"Background work you started was stopped before it finished: {causes[0]}."
+        lines = [f"- {t.get('task')}" for t in lost]
+    else:
+        head = "Background work you started was stopped before it finished."
+        lines = [f"- {t.get('task')} ({t.get('because') or 'its session closed'})" for t in lost]
+    return (f"({head}\n" + "\n".join(lines) + "\n"
+            "Tell the thread now what was stopped and why. Then relaunch what you still need and wait for it in this "
+            "turn: background agents stop when the turn that started them ends, so don't end the turn while they run. "
+            "If you don't remember the work, read the thread (read_thread) first.)")
+
+
 async def _nothing(*args) -> None:
     return None
 
@@ -234,7 +250,7 @@ class Conversations:
                       requester: str | None, follows: str | None = None, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0,
                       report_to: dict | None = None, files: list[dict] | None = None, failures: int = 0,
-                      limit_resume: bool = False) -> str:
+                      limit_resume: bool = False, recovers: bool = False) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
         if files:  # the message's attachments; the runner saves them into the session folder
             payload["files"] = files
@@ -247,6 +263,8 @@ class Conversations:
             payload["failures"] = failures
         if limit_resume:  # carries on a turn a usage limit cut off; cut off again, it fails like any other turn
             payload["limit_resume"] = 1
+        if recovers:  # picks up background agents the last turn's session closed on; never wakes another
+            payload["recovers"] = 1
         if message_ts:
             payload["message_ts"] = message_ts
         if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
@@ -448,6 +466,18 @@ class Conversations:
                                unattended=bool(p.get("unattended")), message_ts=p.get("message_ts"),
                                reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1,
                                report_to=p.get("report_to"), failures=failures + 1 if retrying else 0)
+        # Background agents its session closed on: wake the session now rather than at the next message, once. A
+        # turn that carries on anyway (continuing, waiting) resumes the session and sees them then; a stopped one
+        # was meant to stop.
+        lost = result.get("lost_tasks") or []
+        if lost and not continuing and not waiting and outcome != "interrupted" and not item.payload.get("recovers"):
+            p = item.payload
+            self._enqueue_turn(self._row(convo["id"]), lost_tasks_note(lost), p.get("actor"),
+                               origin=p.get("origin") or "", source=p.get("source") or "slack",
+                               requester=p.get("requester"), follows=item.id, unattended=bool(p.get("unattended")),
+                               reply_thread_ts=p.get("reply_thread_ts"), report_to=p.get("report_to"), recovers=True)
+            events.append(self.conn, "background_tasks_lost", task_id=convo["task_id"], actor=None,
+                          data={"work_item": item.id, "conversation_id": convo["id"], "lost": lost})
         if waiting:
             self.conn.execute("INSERT OR IGNORE INTO limit_waits(work_item_id, conversation_id, error, created_at) "
                               "VALUES (?, ?, ?, ?)", (item.id, convo["id"], result.get("error"), db.utcnow()))

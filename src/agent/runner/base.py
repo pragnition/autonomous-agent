@@ -47,3 +47,5 @@ class RunResult:
     forks: int = 0  # times the run moved to a fresh session on another account (the column keeps its old name)
     error: str | None = None
     read: list[str] = field(default_factory=list)  # ids of the messages the session read mid-turn, in order
+    # background agents still running when their session closed, each {"task": description, "because": why}
+    lost_tasks: list[dict] = field(default_factory=list)

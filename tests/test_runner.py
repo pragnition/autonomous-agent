@@ -349,6 +349,18 @@ async def test_result_reports_every_message_the_session_read(tmp_path):
     assert link.results[-1]["read"] == ["W-2", "W-3"]
 
 
+async def test_result_reports_the_background_agents_its_session_closed_on(tmp_path):
+    lost = [{"task": "Explore graphify A", "because": "your turn ended"}]
+
+    class Losing(FakeClaude):
+        async def run(self, spec):
+            return RunResult(spec.run_id, "sess-1", "done", summary="launched", lost_tasks=lost)
+
+    link = FakeLink()
+    await make_runner(tmp_path, link, Losing()).handle(item(), "tok", [])
+    assert link.results[-1]["lost_tasks"] == lost
+
+
 async def test_a_restarted_turn_is_told_and_resumes(tmp_path):
     link, claude = FakeLink(), FakeClaude()
     it = item(resume_session_id="live-1", origin="[from bob · DM]")

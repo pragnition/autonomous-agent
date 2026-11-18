@@ -3,7 +3,8 @@ import base64
 import json
 from pathlib import Path
 
-from claude_agent_sdk import AssistantMessage, CLIConnectionError, ResultMessage, TextBlock, UserMessage, tool
+from claude_agent_sdk import (AssistantMessage, CLIConnectionError, ResultMessage, SystemMessage, TextBlock,
+                              UserMessage, tool)
 
 from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, ProxyUnavailable, SoftCap, Usage
 from agent.runner.base import RunSpec
@@ -203,6 +204,51 @@ async def test_account_code_from_whoami(tmp_path):
     runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, assistant, result()]], proxy=proxy)
     r = await runner.run(spec(tmp_path))
     assert r.account_code == "cedar" and len(proxy.whoami_calls) == 1
+
+
+def task_frame(subtype, task_id, **data):
+    return SystemMessage(subtype=subtype, data={"type": "system", "subtype": subtype, "task_id": task_id, **data})
+
+
+def started(task_id, description, task_type="local_agent"):
+    return task_frame("task_started", task_id, description=description, task_type=task_type)
+
+
+async def test_background_agents_still_running_when_the_turn_ends_are_reported_lost(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, started("t1", "Explore graphify A"),
+                                        started("t2", "Explore graphify B"), started("t3", "Explore graphify C"),
+                                        started("sh", "npm run dev", task_type="local_bash"),
+                                        task_frame("task_notification", "t2", status="completed"),
+                                        task_frame("task_updated", "t3", patch={"status": "killed"}),
+                                        result(text="Launched them.")]])
+    r = await runner.run(spec(tmp_path))
+    assert r.outcome == "done" and r.summary == "Launched them."
+    # a finished agent isn't lost, and a background shell is never tracked (it may never finish)
+    assert r.lost_tasks == [{"task": "Explore graphify A",
+                             "because": "your turn ended, and a turn's background agents stop when it does"}]
+
+
+async def test_a_turn_with_no_background_agents_left_reports_none_lost(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, started("t1", "Explore"),
+                                        task_frame("task_notification", "t1", status="completed"), result()]])
+    assert (await runner.run(spec(tmp_path))).lost_tasks == []
+
+
+async def test_agents_lost_in_an_account_handoff_say_so_and_carry_to_the_runs_result(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, started("t1", "Explore graphify A"),
+                                        result("error_during_execution", api_error_status=403)],
+                                       [echo_prompt, result()]])
+    r = await runner.run(spec(tmp_path))
+    assert (r.outcome, r.forks) == ("done", 1)
+    assert [t["task"] for t in r.lost_tasks] == ["Explore graphify A"]
+    assert r.lost_tasks[0]["because"].startswith("your session moved to another account because")
+
+
+async def test_agents_lost_to_a_timeout_say_the_turn_ran_out_of_time(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, started("t1", "Explore"), HANG]])
+    r = await runner.run(spec(tmp_path, timeout_s=0.2))
+    assert r.outcome == "timeout"
+    assert r.lost_tasks == [{"task": "Explore", "because": "your turn ran out of time and was stopped"}]
 
 
 async def test_resume_keeps_the_session_id(tmp_path):

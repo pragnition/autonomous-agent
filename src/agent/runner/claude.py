@@ -12,6 +12,9 @@ Each attempt's prompt, and every message that arrives while the run is going, is
 own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
 until each one has been: a result from before the prompt was read (a background task from an earlier turn finishing)
 doesn't answer this turn.
+
+A session's background agents live in its CLI process, which closes when the attempt ends. Any still running then
+are stopped, so the result names each one and why its session closed (lost_tasks); core starts a turn for them.
 """
 
 from __future__ import annotations
@@ -27,8 +30,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, UserMessage,
-                              create_sdk_mcp_server)
+from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, SystemMessage,
+                              UserMessage, create_sdk_mcp_server)
 
 from agent.proxy import PLACEHOLDER_TOKEN, ProxyClient, ProxyUnavailable
 from agent.runner.base import RunResult, RunSpec
@@ -41,6 +44,26 @@ PROXY_VARS = {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
 # The most the SDK reads of one message from the CLI. Its default, 1 MiB, ends the session on an image of ~750 KB
 # (a tool result carries it as base64, a third larger): a Slack screenshot or a full-page Playwright one.
 MAX_BUFFER_SIZE = 20 * 1024 * 1024
+# The task types that are delegated agent work (a background shell or monitor is left out: it may never finish)
+AGENT_TASK_TYPES = frozenset({"local_agent", "local_workflow"})
+TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "stopped", "killed"})
+
+
+def track_task(tasks: dict[str, str], msg: SystemMessage) -> None:
+    """Keep tasks (task id -> description) to the agent tasks still running, from the CLI's task frames."""
+    data = msg.data if isinstance(msg.data, dict) else {}
+    task_id = data.get("task_id")
+    if not task_id:
+        return
+    if msg.subtype == "task_started":
+        if data.get("task_type") in AGENT_TASK_TYPES:
+            tasks[task_id] = data.get("description") or task_id
+    elif msg.subtype == "task_notification":
+        tasks.pop(task_id, None)
+    elif msg.subtype == "task_updated":
+        patch = data.get("patch")
+        if isinstance(patch, dict) and patch.get("status") in TERMINAL_TASK_STATUSES:
+            tasks.pop(task_id, None)
 
 
 async def _user_message(message_uuid: str, text: str):
@@ -158,9 +181,11 @@ class ClaudeRunner:
         if spec.run_id in self._stopped:  # cancelled before (or between) its sessions: don't start another
             return RunResult(run_id=spec.run_id, session_id=resume, outcome="interrupted", error="interrupted")
         self._read[spec.run_id] = []
+        lost: list[dict] = []  # every attempt's background agents that its session closed on
         try:
             while True:
                 attempt = await self._attempt(spec, resume=resume, prompt=prompt, can_fork=forks < self.max_forks)
+                lost += attempt.result.lost_tasks
                 if attempt.switch_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
                     # Never resume (or fork) the session onto another account: start a fresh one, which the proxy
                     # pins to a working account, and tell it which session to pick up from
@@ -170,6 +195,7 @@ class ClaudeRunner:
                         prompt = self._handoff(spec, earlier, self.transcripts_dir / f"{spec.run_id}.jsonl")
                     continue
                 attempt.result.forks, attempt.result.read = forks, self._read[spec.run_id]
+                attempt.result.lost_tasks = lost
                 return attempt.result
         finally:
             self._read.pop(spec.run_id, None)
@@ -217,7 +243,7 @@ class ClaudeRunner:
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False, "can_fork": can_fork,
-                 "accepting": False, "pending": {prompt_uuid: None}}
+                 "accepting": False, "pending": {prompt_uuid: None}, "tasks": {}}
         self._active[spec.run_id] = (client, state)
         read = self._read.setdefault(spec.run_id, [])
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -242,6 +268,8 @@ class ClaudeRunner:
                         state["asked"] = True
                         with contextlib.suppress(ProxyUnavailable):
                             state["account"] = await self.proxy.whoami(state["sid"])
+                    if isinstance(msg, SystemMessage):
+                        track_task(state["tasks"], msg)
                     if isinstance(msg, UserMessage) and msg.uuid in state["pending"]:
                         if (item_id := state["pending"].pop(msg.uuid)) is not None:
                             read.append(item_id)
@@ -297,4 +325,20 @@ class ClaudeRunner:
                     switch_wanted = True
                 elif final.api_error_status == 429:
                     switch_wanted = await self._account_status(state) in ACCOUNT_TROUBLE
+        if state["tasks"]:  # the session's process closes with the attempt, and its background agents with it
+            because = _closed_because(state, result, switch_wanted)
+            result.lost_tasks = [{"task": task, "because": because} for task in state["tasks"].values()]
         return _Attempt(result, switch_wanted)
+
+
+def _closed_because(state: dict, result: RunResult, switch_wanted: bool) -> str:
+    """Why an attempt's session closed, in words the session can pass on to the person."""
+    if state["reason"] == "timeout":
+        return "your turn ran out of time and was stopped"
+    if state["reason"] == "external":
+        return "your turn was stopped"
+    if switch_wanted:
+        return f"your session moved to another account because {result.error or 'its account was in trouble'}"
+    if result.outcome == "error":
+        return f"your turn ended with an error: {result.error}"
+    return "your turn ended, and a turn's background agents stop when it does"

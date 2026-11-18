@@ -26,7 +26,9 @@ MIDTURN_NOTE = ("(A new message arrived while you're working. Answer it now with
                 "Linear session, because your final reply only posts when this whole turn ends. Then carry on, and "
                 "change course if it asks you to.)\n\n")
 RESTARTED_NOTE = ("(Your machine restarted partway through this turn. Your session picks up where it stopped: check "
-                  "what you had already done, then carry on. The message you were working on:)\n\n")
+                  "what you had already done, then carry on. Background agents or tasks you had running were stopped "
+                  "by the restart: relaunch the ones you still need and tell the thread they were restarted. The "
+                  "message you were working on:)\n\n")
 MEMORY_RULES = """# Memory
 
 Your memory is the folder {dir}, shared by all your sessions. Its index, MEMORY.md, is below; read a fact's file when its line matters to what you're doing.
@@ -258,7 +260,7 @@ class Runner:
                "turns": result.turns, "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
                "cache_read_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens,
                "cost_usd_est": result.cost_usd_est, "account_code": result.account_code, "forks": result.forks,
-               "error": result.error, "read": result.read}
+               "error": result.error, "read": result.read, "lost_tasks": result.lost_tasks}
         with contextlib.suppress(SessionRevoked):
             await self.link.result(tok, out)
 
