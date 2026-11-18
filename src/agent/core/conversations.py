@@ -28,6 +28,9 @@ log = logging.getLogger(__name__)
 NOT_AUTHORISED = "Sorry, I only work with people on this team's list."
 FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 LIMIT_OUTCOMES = {"timeout", "max_turns"}  # a turn that ran out of time or steps carries on in a new one
+# A long project's build also carries on after a turn that failed (an API error, a lost session), so one bad turn
+# doesn't end days of work; after this many failures in a row it stops like any other turn
+RETRY_OUTCOMES, BUILD_RETRIES = {"error", "interrupted"}, 3
 # A message's progress: seen -> working -> done or failed
 SEEN, WORKING, DONE, FAILED = "eyes", "hourglass_flowing_sand", "white_check_mark", "warning"
 _FABLE = re.compile(r"\buse fable\b", re.I)
@@ -127,6 +130,11 @@ class Conversations:
     def _row(self, convo_id: str) -> sqlite3.Row | None:
         return self.conn.execute("SELECT * FROM conversations WHERE id = ?", (convo_id,)).fetchone()
 
+    def _builds(self, convo_id: str) -> bool:
+        """Whether the conversation is an active long project's build."""
+        return self.conn.execute("SELECT 1 FROM projects WHERE conversation_id = ? AND status = 'active'",
+                                 (convo_id,)).fetchone() is not None
+
     def _known_thread(self, channel: str, thread_ts: str) -> bool:
         return self.conn.execute("SELECT 1 FROM conversations WHERE channel = ? AND thread_ts IS ? UNION ALL "
                                  "SELECT 1 FROM slack_messages WHERE channel = ? AND ts = ? LIMIT 1",
@@ -213,7 +221,7 @@ class Conversations:
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, source: str,
                       requester: str | None, follows: str | None = None, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0,
-                      report_to: dict | None = None, files: list[dict] | None = None) -> str:
+                      report_to: dict | None = None, files: list[dict] | None = None, failures: int = 0) -> str:
         payload = self.payloads.turn(convo, text, actor, unattended=unattended)
         if files:  # the message's attachments; the runner saves them into the session folder
             payload["files"] = files
@@ -222,6 +230,8 @@ class Conversations:
         payload.update(source=source, requester=requester, follows=follows)
         if continuation:
             payload["continuation"] = continuation
+        if failures:  # the failed turns in a row this one carries on from
+            payload["failures"] = failures
         if message_ts:
             payload["message_ts"] = message_ts
         if reply_thread_ts:  # the thread the message came from, when it isn't the conversation's own
@@ -378,9 +388,13 @@ class Conversations:
         outcome, step = result.get("outcome", "done"), int(item.payload.get("continuation") or 0)
         cap = self.config.limits.schedule_continuations if item.payload.get("source") == "schedule" \
             else self.config.limits.continuations
-        continuing = outcome in LIMIT_OUTCOMES and step < cap
+        failures = int(item.payload.get("failures") or 0)
+        retrying = outcome in RETRY_OUTCOMES and step < cap and failures < BUILD_RETRIES and self._builds(convo["id"])
+        continuing = (outcome in LIMIT_OUTCOMES and step < cap) or retrying
         failed = outcome in FAILED_OUTCOMES and not continuing
-        if continuing:
+        if retrying:
+            text = failure_reply(outcome, result.get("error"))  # the thread sees the real error; the ⏳ stays
+        elif continuing:
             text = ""  # nothing to post: the thread's ⏳ stays, and the next turn carries on silently
         elif failed:
             text = failure_reply(outcome, result.get("error"))
@@ -395,14 +409,20 @@ class Conversations:
         else:
             self.conn.execute("UPDATE conversations SET session_id = COALESCE(?, session_id), last_active_at = ? "
                               "WHERE id = ?", (result.get("session_id"), db.utcnow(), convo["id"]))
-        if continuing:  # resumes the session this turn ended with, like any next turn
-            p, limit = item.payload, limit_name(outcome, self.config.limits)
-            self._enqueue_turn(self._row(convo["id"]), f"(Your last turn hit its {limit} before you finished. Carry "
-                               "on from where you stopped.)", p.get("actor"), origin=p.get("origin") or "",
+        if continuing:  # resumes the session this turn ended with (a fresh one after an error), like any next turn
+            p = item.payload
+            if retrying:
+                note = (f"(Your last turn ended with an error: {result.get('error') or outcome}. Carry on from where "
+                        "you stopped. If you don't remember the work, read your project's memory note and the thread "
+                        "(read_thread) first.)")
+            else:
+                note = (f"(Your last turn hit its {limit_name(outcome, self.config.limits)} before you finished. "
+                        "Carry on from where you stopped.)")
+            self._enqueue_turn(self._row(convo["id"]), note, p.get("actor"), origin=p.get("origin") or "",
                                source=p.get("source") or "slack", requester=p.get("requester"), follows=item.id,
                                unattended=bool(p.get("unattended")), message_ts=p.get("message_ts"),
                                reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1,
-                               report_to=p.get("report_to"))
+                               report_to=p.get("report_to"), failures=failures + 1 if retrying else 0)
         if failed and not convo["channel"] and item.payload.get("report_to"):
             await self._report_scheduled_failure(convo, item.payload["report_to"], text)
         elif text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own

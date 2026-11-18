@@ -4,6 +4,7 @@ import itertools
 import pytest
 
 from agent import db, tasks
+from agent.core import projects
 from agent.core.conversations import NOT_AUTHORISED, Conversations, record_message
 from agent.core.sessions import WorkQueue
 from agent.tasks import Status
@@ -519,6 +520,54 @@ async def test_carrying_on_stops_after_the_configured_number_of_times(convos, fa
     assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
     assert queue.claim() is None
     assert tasks.get_task(conn, task_id).status == Status.failed
+
+
+async def start_build(convos, queue, conn, thread):
+    """A conversation that is a long project's build, with its first turn claimed."""
+    await convos.handle_slack(mention(thread, "build the spec"))
+    item = queue.claim()
+    projects.start(conn, name="exams", repo="org/exams", conversation_id=item.conversation_id, started_by="ann",
+                   thread_link=None)
+    return item
+
+
+async def fail(convos, queue, item, result):
+    queue.complete(item.id, result)
+    await convos.on_result(queue.get(item.id), result)
+
+
+async def test_a_build_turn_that_fails_says_so_and_carries_on(convos, queue, slack, conn):
+    first = await start_build(convos, queue, conn, "t60")
+    reactions = len(slack.reactions)
+    await fail(convos, queue, first, {"outcome": "error", "error": "500 API Error: overloaded"})
+    assert "500 API Error: overloaded" in slack.posts[-1]["text"]  # the real error still reaches the thread
+    assert len(slack.reactions) == reactions                        # the message keeps its ⏳
+    nxt = queue.claim()
+    assert nxt.conversation_id == first.conversation_id and nxt.payload["continuation"] == 1
+    assert "500 API Error: overloaded" in nxt.payload["text"] and "memory note" in nxt.payload["text"]
+
+
+async def test_a_build_stops_after_three_failed_turns_in_a_row(convos, queue, slack, conn):
+    item = await start_build(convos, queue, conn, "t61")
+    for _ in range(3):
+        await fail(convos, queue, item, {"outcome": "interrupted", "error": "interrupted"})
+        item = queue.claim()
+    await fail(convos, queue, item, {"outcome": "interrupted", "error": "interrupted"})
+    assert queue.claim() is None
+    assert slack.posts[-1]["text"] == "That was stopped before I finished it."
+
+
+async def test_a_limit_carry_on_resets_the_failures_in_a_row(convos, queue, slack, conn):
+    item = await start_build(convos, queue, conn, "t62")
+    for outcome in ("error", "error", "timeout", "error", "error"):
+        await fail(convos, queue, item, {"outcome": outcome, "error": "x"})
+        item = queue.claim()
+    assert item is not None and item.payload["continuation"] == 5
+
+
+async def test_a_failed_turn_outside_a_build_still_stops(convos, queue, slack, conn):
+    await failed_turn(convos, queue, "t63", {"outcome": "error", "error": "boom"})
+    assert queue.claim() is None
 
 
 async def test_interrupted_turn_says_it_was_stopped(convos, queue, slack):
