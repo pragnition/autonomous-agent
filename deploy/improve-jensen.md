@@ -30,5 +30,9 @@ reaches Claude through the account proxy, so its usage is balanced across the te
    sudo ./svc.sh install gha-improve-jensen && sudo ./svc.sh start
    ```
 
-4. **Check.** `curl -s http://127.0.0.1:18092/proxy/whoami` as the runner user answers, and the runner shows
+4. **Opening PRs.** improve-jensen opens its own PRs with `gh pr create`, or `scripts/open_pr.py` when `gh` isn't
+   installed for the runner user. If it reports a 403 creating the PR, turn on the repo's Settings → Actions → General
+   → "Allow GitHub Actions to create and approve pull requests".
+
+5. **Check.** `curl -s http://127.0.0.1:18092/proxy/whoami` as the runner user answers, and the runner shows
    Idle under the repo's Settings → Actions → Runners.
