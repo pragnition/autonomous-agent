@@ -34,7 +34,7 @@ refusal.
          | Claude API, placeholder token
          v
  relay (host network, 172.30.0.1:28090/28091) --> account proxy (host, 127.0.0.1:18090/18091) --> Claude
- supervisor + supervisor-standby: poll core's /health and each other's every minute; restart and alert in Slack
+ supervisor + supervisor-standby: poll core, the runner's heartbeat and each other every minute; restart and alert
 ```
 
 The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.1. core has the fixed address
@@ -42,7 +42,7 @@ The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.
 
 | Listener | Where | Reached by |
 |---|---|---|
-| core :8080 | stack network only | the runner (`http://core:8080`): agent API, git endpoint; the supervisors: `/health` |
+| core :8080 | stack network only | the runner (`http://core:8080`): agent API, git endpoint; the supervisors: `/health`, `/health/runner` |
 | supervisor :8090 | stack network only | the other supervisor: `/health` |
 | core :8085 | host 127.0.0.1:18085 | Linear, through Tailscale Funnel: `/linear/webhook`, `/linear/oauth/callback` |
 | core :8086 | host 127.0.0.1:18086 | people on the tailnet, through `tailscale serve` on :9443 |
@@ -122,11 +122,16 @@ Images and volumes live in the `agentdocker` volume.
 ### supervisor and supervisor-standby
 
 `python -m agent supervisor`, run twice: containers `agent-supervisor` (`SUPERVISOR_ROLE=primary`) and
-`agent-supervisor-standby` (`standby`). They watch core and each other. Every 60 s each checks core's `/health`
-and its peer's `/health` (`:8090`, stack network only). After three failures in a row, it alerts and restarts the
-target once through the Docker socket, and alerts again when the target is back. Each restarts its peer. Only the
-primary acts on core; the standby leaves core alone while the primary is up and takes core over once the primary is
-down, so core is never restarted twice and the same alert is never sent twice.
+`agent-supervisor-standby` (`standby`). They watch core, the runner and each other. Every 60 s each checks core's
+`/health`, the runner's heartbeat as core sees it (`core:8080/health/runner`, 503 once the runner hasn't pulled or
+heartbeated for 2 minutes) and its peer's `/health` (`:8090`, stack network only). The runner isn't checked while
+core is failing, since its heartbeat is read from core. After three failures in a row, a supervisor alerts and
+restarts the target through the Docker socket (`agent-core`, `agent-runner`, or the peer's container), and alerts
+again when the target is back. A target that is down again within 30 minutes of that restart gets an alert and no
+restart, so nothing is restarted in a loop. Each restarts its peer. Only the primary acts on core and the runner;
+the standby leaves them alone while the primary is up and takes them over once the primary is down, so nothing is
+restarted twice and the same alert is never sent twice. If both supervisors die together, compose's
+`restart: unless-stopped` brings them back.
 
 A supervisor's own `/health` answers 503 once its watch loop hasn't finished a tick for three minutes, so a
 supervisor whose loop has hung counts as down, not just one whose process is gone. A tick that raises ends the
@@ -207,6 +212,34 @@ Before claiming, core's gate checks three things:
 - the agent isn't paused (stop);
 - the account proxy reports capacity on at least one account;
 - fewer than `[limits] max_concurrent_sessions` items are running (default 10).
+
+While the usage watch holds scheduled runs (below), the pull skips turns whose `source` is `schedule`; people's
+requests still start.
+
+### Usage watch
+
+Every 60 s core reads `/proxy/usage` (`core/usage_watch.py`) and gives each account a state:
+
+- `out`: the proxy gives it no rank (no capacity);
+- `hot`: its 5-hour window is at least 85% used, or its `pace_delta` is above 0.05 (ahead of its 7-day pace, so
+  it will run out before the window resets). It is `ok` again only once it is below 75% and back on pace, so it
+  doesn't flap;
+- `ok`: otherwise.
+
+The pool, counted in `ok` accounts: with two or more (or all the verified accounts, in a smaller pool) nothing
+changes. With fewer, scheduled runs (and their carry-ons) wait in the queue. With none, the admins get one DM
+with the earliest reset, and another when capacity is back. The proxy already ranks accounts for new sessions, so
+the watch doesn't steer sessions itself. An account whose `verified` goes false, or that has been `out` for over
+5 hours, is reported to the admins once. Every change of state is an event (`usage_account`, `usage_pool`,
+`usage_unverified`, `usage_out_too_long`), shown on the dashboard's Events page. The last state is kept in
+`settings`, so a restart neither repeats an alert nor misses one.
+
+A turn cut off by a usage limit (a 429, or the runner giving up on an account the proxy reports rejected or
+disabled) doesn't fail. The thread is told it was cut off, the message keeps its ⏳, the session is kept and the
+turn goes into `limit_waits` (event `usage_limit_cut`). Once an account is `ok`, the watch re-queues it as a new
+turn that resumes the session with a "you were cut off by a usage limit" note (event `usage_limit_resumed`). That
+happens once: a resumed turn that is cut off again fails like any other. A long project's build keeps its own
+retries (below) instead, and the gate holds them until there is capacity.
 
 A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
 whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or

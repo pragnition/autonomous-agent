@@ -77,6 +77,8 @@ def test_supervisors_watch_each_other(compose):
         assert me["environment"]["PEER_CONTAINER"] == peer["container_name"]
         assert me["environment"]["PEER_HEALTH"] == f"http://{peer_name}:8090/health"
         assert me["environment"]["CORE_CONTAINER"] == compose["services"]["core"]["container_name"]
+        assert me["environment"]["RUNNER_CONTAINER"] == compose["services"]["agent"]["container_name"]
+        assert me["environment"]["RUNNER_HEALTH"] == "http://core:8080/health/runner"
         assert "${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro" in [str(v) for v in me["volumes"]]
 
 

@@ -2,7 +2,8 @@ import pytest
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from agent.supervisor import Heartbeat, Watchdog, deferrals, health_app, health_targets, restartable
+from agent.supervisor import (DEPENDS_ON, Heartbeat, Watchdog, deferrals, health_app, health_targets,
+                              restartable)
 
 
 @pytest.fixture
@@ -76,8 +77,12 @@ STANDBY_ENV = {"SUPERVISOR_ROLE": "standby", "PEER_HEALTH": "http://supervisor:8
                "PEER_CONTAINER": "agent-supervisor"}
 
 
-def pair(environ):
-    alerts, restarts, health = [], [], {"core": True, "peer": True}
+def target_of(url):
+    return "runner" if url.endswith("/health/runner") else "peer" if "supervisor" in url else "core"
+
+
+def pair(environ, clock=None):
+    alerts, restarts, health = [], [], {"core": True, "peer": True, "runner": True}
 
     async def alert(text):
         alerts.append(text)
@@ -86,20 +91,22 @@ def pair(environ):
         restarts.append(name)
 
     async def check(url):
-        return health["peer" if "supervisor" in url else "core"]
+        return health[target_of(url)]
 
     targets = health_targets(environ)
-    return Watchdog(targets, alert=alert, restart=restart, check=check,
-                    defer_to=deferrals(environ, targets)), alerts, restarts, health
+    return Watchdog(targets, alert=alert, restart=restart, check=check, defer_to=deferrals(environ, targets),
+                    depends_on=DEPENDS_ON, **({"clock": clock} if clock else {})), alerts, restarts, health
 
 
 def test_targets_and_containers():
-    assert health_targets({}) == {"core": "http://core:8080/health"}  # one supervisor alone still works
-    assert restartable({}) == {"core": "agent-core"} and deferrals({}, health_targets({})) == {}
+    # one supervisor alone still works
+    assert health_targets({}) == {"core": "http://core:8080/health", "runner": "http://core:8080/health/runner"}
+    assert restartable({}) == {"core": "agent-core", "runner": "agent-runner"}
+    assert deferrals({}, health_targets({})) == {}
     assert health_targets(STANDBY_ENV)["peer"] == "http://supervisor:8090/health"
-    assert restartable(STANDBY_ENV) == {"core": "agent-core", "peer": "agent-supervisor"}
+    assert restartable(STANDBY_ENV) == {"core": "agent-core", "runner": "agent-runner", "peer": "agent-supervisor"}
     assert deferrals(PRIMARY_ENV, health_targets(PRIMARY_ENV)) == {}
-    assert deferrals(STANDBY_ENV, health_targets(STANDBY_ENV)) == {"core": "peer"}
+    assert deferrals(STANDBY_ENV, health_targets(STANDBY_ENV)) == {"core": "peer", "runner": "peer"}
 
 
 async def test_each_restarts_its_peer():
@@ -135,6 +142,57 @@ async def test_standby_takes_core_over_when_primary_dies_later():
     health["peer"] = False
     await tick(w, 3)
     assert restarts == ["peer", "core"]
+
+
+async def test_a_down_core_says_nothing_about_the_runner():
+    # the runner's heartbeat is read from core: while core fails, the runner isn't checked or restarted
+    w, alerts, restarts, health = pair(PRIMARY_ENV)
+    health["core"] = health["runner"] = False
+    await tick(w, 5)
+    assert restarts == ["core"] and w.failures["runner"] == 0
+
+
+async def test_runner_restarted_when_its_heartbeat_stops():
+    for env in (PRIMARY_ENV, STANDBY_ENV):
+        w, alerts, restarts, health = pair(env)
+        health["runner"] = False
+        await tick(w, 3)
+        assert restarts == (["runner"] if env is PRIMARY_ENV else [])  # the standby leaves it to the primary
+
+
+async def test_standby_takes_the_runner_over_when_primary_is_down():
+    w, alerts, restarts, health = pair(STANDBY_ENV)
+    health["runner"] = health["peer"] = False
+    await tick(w, 3)
+    assert restarts == ["peer", "runner"]
+
+
+async def test_second_outage_within_30_minutes_alerts_without_restarting():
+    now = [0.0]
+    w, alerts, restarts, health = pair(PRIMARY_ENV, clock=lambda: now[0])
+    health["core"] = False
+    await tick(w, 3)
+    health["core"] = True
+    await tick(w, 1)
+    now[0] = 20 * 60
+    health["core"] = False
+    await tick(w, 5)
+    assert restarts == ["core"]
+    assert alerts[-1].startswith("core is down again (3 failed health checks), less than 30 minutes after")
+    assert sum("down" in a for a in alerts) == 2  # one alert per outage, not one per tick
+
+
+async def test_outage_after_30_minutes_gets_another_restart():
+    now = [0.0]
+    w, alerts, restarts, health = pair(PRIMARY_ENV, clock=lambda: now[0])
+    health["core"] = False
+    await tick(w, 3)
+    health["core"] = True
+    await tick(w, 1)
+    now[0] = 31 * 60
+    health["core"] = False
+    await tick(w, 3)
+    assert restarts == ["core", "core"]
 
 
 def test_heartbeat_goes_stale():

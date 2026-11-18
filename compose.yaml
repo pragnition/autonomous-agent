@@ -81,8 +81,9 @@ services:
       - ${AGENT_DATA:-./data}/tasks:/data/tasks:ro          # the task record core keeps; the agent only reads it
       - agentwork:/var/agent
 
-  # Two supervisors that watch core and each other. Each restarts the other when it is down or its loop has
-  # stalled; only the primary acts on core, and the standby takes core over only while the primary is down.
+  # Two supervisors that watch core, the runner's heartbeat (read from core) and each other. Each restarts the other
+  # when it is down or its loop has stalled; only the primary acts on core and the runner, and the standby takes
+  # them over only while the primary is down. Down again within 30 minutes of a restart: an alert, no restart.
   supervisor:
     build: {context: ., target: supervisor}
     container_name: agent-supervisor
@@ -92,6 +93,8 @@ services:
       SUPERVISOR_ROLE: primary
       CORE_HEALTH: http://core:8080/health
       CORE_CONTAINER: agent-core
+      RUNNER_HEALTH: http://core:8080/health/runner
+      RUNNER_CONTAINER: agent-runner
       PEER_HEALTH: http://supervisor-standby:8090/health
       PEER_CONTAINER: agent-supervisor-standby
     volumes:
@@ -107,6 +110,8 @@ services:
       SUPERVISOR_ROLE: standby
       CORE_HEALTH: http://core:8080/health
       CORE_CONTAINER: agent-core
+      RUNNER_HEALTH: http://core:8080/health/runner
+      RUNNER_CONTAINER: agent-runner
       PEER_HEALTH: http://supervisor:8090/health
       PEER_CONTAINER: agent-supervisor
     volumes:
