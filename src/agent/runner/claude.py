@@ -121,6 +121,10 @@ class ClaudeRunner:
             state["reason"] = state["reason"] or "external"
             await client.interrupt()
 
+    def release(self, run_id: str) -> None:
+        """Forget a stop once the claim it came with is over: core may hand the same item to this runner again."""
+        self._stopped.discard(run_id)
+
     async def run(self, spec: RunSpec) -> RunResult:
         forks, resume, fork = 0, spec.resume_session_id, False
         if spec.run_id in self._stopped:  # cancelled before (or between) its sessions: don't start another
