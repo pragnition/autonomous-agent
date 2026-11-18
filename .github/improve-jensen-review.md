@@ -25,7 +25,10 @@ the gap in Jensen's process behind each one goes into this repo's record. You ne
   - If that 403s (a fine-grained token has no Checks permission), read the Actions runs on the PR's head commit:
     `python scripts/jensen_watch.py gh pr view <url> --json headRefOid`, then
     `python scripts/jensen_watch.py gh api 'repos/<owner/repo>/actions/runs?head_sha=<sha>'`.
-  - If that 403s too, CI is unknown, and no finding rests on it.
+  - No runs there: the repo's CI may report through commit statuses instead. Read
+    `python scripts/jensen_watch.py gh api repos/<owner/repo>/commits/<sha>/status`: its `state` is the result, and
+    an empty `statuses` list means no CI reported on that commit.
+  - If those 403 too, CI is unknown, and no finding rests on it.
 - **Tests that can't fail:** suites that skip or return early (no database, no env), tests with no assertions, and
   tests that only exercise mocks of the code under test.
 - **The diff,** with pr-review-toolkit's agents as subagents (`pr-review-toolkit:code-reviewer`,

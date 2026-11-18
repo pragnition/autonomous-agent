@@ -355,14 +355,29 @@ def test_fix_claude_step_leaves_room_for_the_always_cleanup(improve_jensen):
     assert claude_step.get("timeout-minutes", 0) < improve_jensen["jobs"]["fix"]["timeout-minutes"]
 
 
+def test_fix_and_respond_push_with_the_claude_app_not_the_job_token(improve_jensen):
+    # A push made with the job's GITHUB_TOKEN never triggers `ci`, so `gh pr checks --watch` would wait forever:
+    # the checkout must not leave that token in the git config for the Claude step's pushes to pick up.
+    for name in ("fix", "respond"):
+        checkout = next(s for s in improve_jensen["jobs"][name]["steps"]
+                        if str(s.get("uses", "")).startswith("actions/checkout@"))
+        assert checkout["with"]["persist-credentials"] is False, name
+
+
 # -- improve-jensen's instructions --
 
 
 def test_instructions_carry_the_key_rules():
     anchors = {
-        ".github/improve-jensen-watch.md": ("jensen_watch.py note", "jensen_watch.py count", "plan.json", "fixing"),
-        ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit"),
-        ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #"),
+        ".github/improve-jensen-watch.md": (
+            "jensen_watch.py note", "jensen_watch.py count", "plan.json", "fixing",
+            "core is unreachable", "not_deployable", "two such comments", "ci_unknown"),
+        ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit", "/status"),
+        ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #",
+                                      ".github/workflows/", ".github/improve-jensen*.md",
+                                      "deploy/improve-jensen-seed.json"),
+        "deploy/improve-jensen.md": ("Never approve a fork run on this repo", "debug logging",
+                                     "persist-credentials: false", "claude[bot]", "gh run list"),
     }
     for path, wanted in anchors.items():
         text = (ROOT / path).read_text()

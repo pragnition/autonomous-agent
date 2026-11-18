@@ -403,3 +403,21 @@ def test_seed_file_is_general():
             assert term not in haystack, f"{entry['title']!r} leaks {term!r}"
 
     assert project_count == 2, "exactly the two runner rewrites carry `project`"
+
+
+_VAGUE = ("stays low", "well under", "near zero", "leaves room", "close to zero", "stays at zero")
+# The fields `count` prints (see `agent.watch.state.summarize`).
+_COUNT_FIELD = re.compile(r"`(?:total|turns|n|median|p90|max|prs|merged_without_passing_ci|ci_unknown|median_lines|"
+                          r"median_open_to_merge_s|coauthor_trailers)(?:=\d+)?`")
+
+
+def test_seed_measured_issues_are_fixed_at_a_number_count_prints():
+    # A `jensen-watch` issue with a signal is judged by `count`'s own output, so its "Fixed when" names a field of
+    # that output and the number it has to reach -- never a word like "low" that each watch would read its own way.
+    for entry in json.loads(SEED_PATH.read_text()):
+        evidence = entry["body"].split("## Evidence", 1)[1].split("## Where the fix belongs", 1)[0]
+        fixed_when = evidence.split("Fixed when", 1)[1]
+        for phrase in _VAGUE:
+            assert phrase not in fixed_when, (entry["title"], phrase)
+        if evidence.lstrip().startswith("Signal:"):
+            assert _COUNT_FIELD.search(fixed_when) and re.search(r"\d", fixed_when), entry["title"]

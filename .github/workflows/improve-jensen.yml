@@ -146,9 +146,12 @@ jobs:
       # dispatch user's raw input straight to the shell.
       TARGET: ${{ inputs.mode == 'fix' && inputs.target || needs.watch.outputs.fix }}
     steps:
+      # No job token left in the git config: Claude's pushes must go out as the Claude app, since a push made with
+      # this job's GITHUB_TOKEN never triggers `ci` and `gh pr checks --watch` would wait for checks that never come.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -189,9 +192,10 @@ jobs:
       group: improve-jensen-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4   # persist-credentials: false for the same reason as in `fix`
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
