@@ -289,8 +289,11 @@ def test_improve_jensen_triggers_and_jobs(improve_jensen):
     assert dispatch_inputs["mode"]["default"] == "watch"
     assert set(dispatch_inputs["mode"]["options"]) == {"watch", "review", "fix", "assess", "project", "approvals"}
     assert dispatch_inputs["target"]["type"] == "string"
-    for trigger in ("issues", "issue_comment", "pull_request_review_comment", "pull_request_review"):
+    for trigger in ("issues", "issue_comment"):
         assert trigger in on
+    # A PR review runs the workflow from the PR's own merge ref, which for a fork is the fork's code on these runners:
+    # every trigger left runs main's workflow.
+    assert not {"pull_request", "pull_request_target", "pull_request_review", "pull_request_review_comment"} & set(on)
     assert set(improve_jensen["jobs"]) == {"watch", "review", "fix", "respond", "assess", "project", "approvals"}
 
 

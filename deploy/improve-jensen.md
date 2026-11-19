@@ -116,14 +116,14 @@ The repo is public and the runners have the host. A fork's PR could change a wor
     -f approval_policy=all_external_contributors
   ```
 
-- Never approve a fork run on this repo. An approved run executes the fork's own code on these runners: a run
-  started by a review on its PR checks out the PR's merge ref, installs it with `pip install -e` and follows its
-  instruction files, all as `pragnition`, with passwordless sudo and the live secrets. Read a fork's PR as a diff;
-  if it's wanted, someone with write access brings it over on a branch of their own.
-- With `restricted_to_workflows: true`, the runner group runs only `improve-jensen.yml` from `main`, so a workflow
-  from any other file or ref never gets these runners, a fork's included.
-- That also means a run started by a PR review or review comment (those run from the PR's merge ref) waits with no
-  runner. Mention `@improve-jensen` in an ordinary PR comment instead.
+- Never approve a fork run on this repo. An approved run executes the fork's own code on these runners, as
+  `pragnition`, with passwordless sudo and the live secrets. Read a fork's PR as a diff; if it's wanted, someone with
+  write access brings it over on a branch of their own.
+- `improve-jensen.yml` has no PR or PR-review triggers (a PR review runs the workflow from the PR's own merge ref), so
+  every run it starts uses `main`'s workflow. Mention `@improve-jensen` in an ordinary PR comment.
+- With `restricted_to_workflows: true` on the runner group, a workflow from any other file or ref never gets these
+  runners either. Without an organization runner group (repo runners, below), fork-run approval is the guard for a
+  fork's own workflow file.
 
 ## 6. Merge and protect main
 
