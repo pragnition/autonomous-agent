@@ -93,6 +93,8 @@ Everything lives under `/var/agent`, the `agentwork` volume, which survives rebu
 | `memory/` | Claude Code's auto memory, shared by every session |
 | `transcripts/<work item>.jsonl` | the runner's own transcript of each turn |
 | `bundles/<version>/` | the core plugin, the effortless plugin and every pack's plugin |
+| `services.toml` | the agent's long-running services, which the runner keeps going (below) |
+| `run/<name>.{lock,pid,out}` | each service's lock, pid and output (`.out.1` is the rotated one) |
 
 The schedules file is outside the volume, at `/data/schedules/schedules.toml` (the host's `data/schedules/`), the
 same path as in core.
@@ -130,6 +132,32 @@ session keeps running where it is rather than ending the turn, and it doesn't ha
 account and hand off again.
 It does this up to twice per turn (the run's `forks` count). If a turn can't resume its saved session and fails
 before its first model turn, the runner starts a fresh session with a note to call `read_thread` first.
+
+#### The agent's services
+
+The agent's long-running helpers (a bridge, a poller, a watcher) run under the runner, not with `nohup`, so they
+survive restarts and redeploys. The agent lists them in `/var/agent/services.toml`:
+
+```toml
+[[services]]
+name = "outlook-bridge"                     # [A-Za-z0-9._-]+
+cmd = ["python3", "-I", "bridge.py"]         # the argv; no shell
+cwd = "/var/agent/bridges/outlook-bridge"    # an existing absolute directory
+```
+
+A task in the runner process (`agent/runner/services.py`), started whether or not there is a runner token yet,
+reads the file every 30 s and reconciles: it starts new services, stops removed ones (SIGTERM to the service's
+process group, SIGKILL after 10 s) and restarts one whose `cmd` or `cwd` changed. A service that exits is started
+again after 5 s, doubling up to 5 minutes, and back to 5 s once a run has lasted 10 minutes. A missing or invalid
+file means no services and an invalid entry is left out, each logged once; nothing in the supervisor can stop the
+runner. A service gets the runner's environment (so the `agent.env` keys) and its own process group. While the
+runner runs a service it holds an exclusive `flock` on `run/<name>.lock`, so a second runner can't start another
+copy, and keeps its pid in `run/<name>.pid`. Before a service's first start in a runner's life, any process with
+exactly the same argv and working directory (from `/proc`) is stopped, which takes over a copy the agent started by
+hand. A service's stdout and stderr go to `run/<name>.out` with the runner's own start, exit and stop lines,
+rotated to `.out.1` at 5 MB; the runner's log has each start, exit code and restart, never the arguments or
+environment. On SIGTERM the runner stops every service before it exits. The container runs with `init: true`, so an
+init process is PID 1 and reaps the orphans sessions leave behind.
 
 ### docker (dind)
 
