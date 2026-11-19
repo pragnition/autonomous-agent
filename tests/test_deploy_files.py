@@ -214,6 +214,18 @@ def test_agent_image_can_run_and_drive_apps():
         assert needle in target, needle
 
 
+def test_the_agents_home_and_browsers_live_on_the_volume():
+    """A rebuilt container starts from the image, so anything the agent installs outside the volume is lost: its home
+    folder (pip --user, uv tools, npm -g, bun, dotfiles) and the Playwright browsers are links into /var/agent, and
+    the runner seeds them there (agent.runner.home)."""
+    target = agent_target()
+    for needle in ("rm -rf /home/agent && ln -s /var/agent/home /home/agent",
+                   "mv /opt/ms-playwright /opt/ms-playwright-image && ln -s /var/agent/ms-playwright /opt/ms-playwright",
+                   "NPM_CONFIG_PREFIX=/home/agent/.local", 'PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"'):
+        assert needle in target, needle
+    assert "ln -s /var/agent/claude /home/agent/.claude" not in target  # the runner makes that link, in the volume
+
+
 def test_core_publishes_public_port(compose):
     # only the Linear webhook/OAuth listener goes through Tailscale Funnel; both stay on loopback
     assert "127.0.0.1:18085:8085" in compose["services"]["core"]["ports"]

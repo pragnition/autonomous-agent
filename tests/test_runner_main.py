@@ -79,3 +79,16 @@ def test_agent_environment():
     assert env["GH_TOKEN"] == "ghp_abc" and env["OPENAI_API_KEY"] == "k" and "PATH" not in env
     assert env["GIT_AUTHOR_NAME"] == env["GIT_COMMITTER_NAME"] == "jensen"
     assert env["GIT_AUTHOR_EMAIL"] == "jensen@users.noreply.github.com"
+
+
+def test_main_prepares_the_home_folder_before_anything_runs(tmp_path, monkeypatch):
+    from agent.runner import main as runner_main
+
+    calls = []
+    monkeypatch.setattr(runner_main, "prepare_home", lambda root: calls.append(("prepare", root)))
+    monkeypatch.setattr(runner_main.asyncio, "run", lambda coro: (calls.append(("run",)), coro.close()))
+    monkeypatch.setattr(runner_main.os, "environ", {})
+
+    runner_main.main(["--root", str(tmp_path), "--token-file", str(tmp_path / "token")])
+
+    assert calls == [("prepare", tmp_path), ("run",)]

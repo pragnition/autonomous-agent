@@ -6,7 +6,8 @@ one), and stops it when the file is empty or gone. A runner that exits on its ow
 stays down until core writes a new token, so nobody has to touch the laptop.
 
 Alongside it, from the moment the process starts and whether or not there is a token yet, the process keeps the
-agent's own services running (services.py). On SIGTERM it stops those services cleanly before it exits.
+agent's own services running (services.py). On SIGTERM it stops those services cleanly before it exits. Before
+any of that, it makes sure the agent's home folder and browsers are in place on the volume (home.py).
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ import signal
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
+
+from agent.runner.home import prepare as prepare_home
 
 log = logging.getLogger(__name__)
 
@@ -105,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     root = Path(args.root)
+    prepare_home(root)  # the home folder and browsers on the volume, before anything runs in them
     env = agent_environment(os.environ, args.agent_name, args.git_email)
     os.environ.update(env)  # the git identity, for every commit the agent makes
     claude = ClaudeRunner(ProxyClient(args.proxy), args.proxy, root / "transcripts")

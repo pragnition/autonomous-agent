@@ -93,8 +93,13 @@ Everything lives under `/var/agent`, the `agentwork` volume, which survives rebu
 | `memory/` | Claude Code's auto memory, shared by every session |
 | `transcripts/<work item>.jsonl` | the runner's own transcript of each turn |
 | `bundles/<version>/` | the core plugin, the effortless plugin and every pack's plugin |
+| `home/` | the agent's home folder (`/home/agent` links here): what it installs with `pip --user`, `uv tool`, `npm -g` or `bun add -g`, and its dotfiles; a fresh volume gets one from `/etc/skel` with the `.claude` link |
+| `ms-playwright/` | the Playwright browsers (`/opt/ms-playwright` links here): the image's, copied in when missing, and any the agent installs |
 | `services.toml` | the agent's long-running services, which the runner keeps going (below) |
 | `run/<name>.{lock,pid,out}` | each service's lock, pid and output (`.out.1` is the rotated one) |
+
+A rebuilt container starts from the image, so what the agent puts outside the volume (a `sudo apt` install, `/tmp`)
+is gone after a redeploy. The runner prepares `home/` and `ms-playwright/` as it starts (`agent.runner.home`).
 
 The schedules file is outside the volume, at `/data/schedules/schedules.toml` (the host's `data/schedules/`), the
 same path as in core.

@@ -67,6 +67,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && npm install -g @playwright/cli@0.1.24 \
  && playwright-cli install-browser chromium --with-deps \
  && chmod -R a+rwX /opt/ms-playwright \
+ && mv /opt/ms-playwright /opt/ms-playwright-image && ln -s /var/agent/ms-playwright /opt/ms-playwright \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --uid 1001 --shell /bin/bash agent \
  && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent && chmod 0440 /etc/sudoers.d/agent \
@@ -78,10 +79,13 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && mkdir -p /var/agent && chown agent /var/agent \
  && ln -s "$(python -c 'import claude_agent_sdk, os; print(os.path.dirname(claude_agent_sdk.__file__))')/_bundled/claude" \
       /usr/local/bin/claude \
- && ln -s /var/agent/claude /home/agent/.claude \
+ && rm -rf /home/agent && ln -s /var/agent/home /home/agent \
  && chmod -R a+rX /app   # COPY keeps the host's file modes; the agent user must read the code
 # The agent's own Claude home, on the work volume: the skills, plugins and MCP servers it installs stay
 ENV SHELL=/bin/bash AZURE_CONFIG_DIR=/data/cli/azure DOCKER_HOST=tcp://127.0.0.1:2375 CLAUDE_CONFIG_DIR=/var/agent/claude
+# Its home folder and the browsers are links into the volume too (agent.runner.home seeds them), so what it installs
+# there survives a rebuild; `npm -g` goes to ~/.local.
+ENV NPM_CONFIG_PREFIX=/home/agent/.local PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"
 USER agent
 CMD ["python", "-m", "agent", "runner"]
 
