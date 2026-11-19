@@ -1,0 +1,5 @@
+prompt = """
+Run ./slow_build.sh in this repo. It takes about 3 minutes and writes out/checksum.txt. Once it \
+finishes, put the checksum it wrote into a file named result.md.
+"""
+time_limit_min = 10

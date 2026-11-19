@@ -1,0 +1,716 @@
+"""The yardstick: a set of real tasks improve-jensen runs Jensen through, to tell whether Jensen as a whole got better
+or worse after a change.
+
+A task is a folder `<id>/` under `$STATE/yardstick/tasks/` (a person retires one by moving it to
+`$STATE/yardstick/retired/`):
+- `task.toml`: `prompt`, `time_limit_min` (default 30) and an optional `rubric`;
+- `fixture/`: what Jensen works on, copied into its own folder in `agent-runner`. A `build.sh` there is run in that
+  folder before the turn is queued; it makes the git repo and its first commit, then deletes itself;
+- `check`: run in that folder after the turn ends; exit 0 is a pass;
+- `hidden/`: optional; copied in, with `check`, only once the turn has ended, and both removed again right after
+  the check, so Jensen never sees either -- not even from a later turn, or from the retry next door.
+
+An id may hold only plain characters, and never ends in `-r`: that's the name of a retry's folder.
+
+A task is mechanical when it has a `check` and no rubric. Only mechanical tasks count toward the score or the gate,
+so improve-jensen is never the judge of its own change; the others are recorded as `judged`. A gate run's results
+carry the gate's `started` (`gate`), and its verdict is recorded in `$STATE/yardstick/gate-runs.jsonl`
+(`record_gate_run`): a run whose gate failed is never compared against again.
+
+`run` first removes run folders under `/var/agent/yardstick/` older than 7 days, then copies each task into
+`/var/agent/yardstick/<run>/<id>/` (made with a plain `mkdir` in the same command as the copy, so a folder that is
+already there is refused, never reused), queues its prompt as a turn in a fresh `V-yardstick-<run>-` conversation
+(`core_ask.py`), keeps at most `concurrency` of those turns in flight, polls them (`core_items.py`) every
+`POLL_SECONDS` until each finishes or runs out its time limit, then runs its check. The time limit starts when the
+turn first leaves `queued` (a turn waiting behind people's work isn't slow), with an overall cap of three times the
+limit from when it was queued (a turn that never starts can't hold the run); time the turn spends `waiting` for an
+account with capacity (a usage limit) counts toward neither. A failure of a mechanical task is tried once more in a
+fresh folder, `<id>-r`. A turn that started but never finishes is recorded as a timeout and left running, never
+cancelled; one that never left the queue is cancelled (`core_items.py --cancel`), or it would still start long
+after the run gave up on it. The run moves on regardless, so a hung Jensen or a runner that is down can't hang the
+job: every `docker exec` here has a timeout, and `build.sh` and `check` also run under `timeout` inside the runner.
+A failure that says nothing about Jensen -- the copy, build, queueing or check's own `docker exec` failed, the
+folder was already there, the turn never left the queue -- is recorded with `infra: true` (`INFRA_REASONS`), and
+no score or comparison counts it. Each task's result is appended to `$STATE/yardstick/results.jsonl` as soon as it
+is final, its `ts` in `state.FMT`. A run has a time budget (`DEFAULT_BUDGET_MIN`): once it is spent, every task
+still in flight or to run is recorded as `skipped: time budget` (an infrastructure failure too) and the run
+returns. When the run ends, the memory notes it left behind are removed (`runner_memory.py`).
+
+Nothing here prints a task id, a note's name, a host path or anything a container wrote to stderr: task ids written
+by the assessment come from real products, and this output ends up in a public workflow log.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+import posixpath
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import tomllib
+import uuid
+from collections import deque
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from agent.watch.state import FMT, State
+
+RUNNER_BASE = "/var/agent/yardstick"
+MEMORY_ROOT = "/var/agent/memory"
+MARKER = "/var/agent/yardstick/"
+CONVERSATION_PREFIX = "V-yardstick-"
+RUNNER = "agent-runner"
+
+POLL_SECONDS = 30
+DEFAULT_TIME_LIMIT_MIN = 30
+# A turn that never leaves `queued` times out at this many times its own limit, counted from when it was queued.
+QUEUED_CAP_FACTOR = 3
+# `check` and `build.sh` run under `timeout -k 10 <limit>` inside the runner; the host's own wait on that
+# `docker exec` is a backstop a minute past it, for a runner that stops answering altogether.
+CHECK_TIMEOUT_S = 600
+BUILD_TIMEOUT_S = 300
+_BACKSTOP_S = 60
+_COPY_TIMEOUT_S = 120
+_EXEC_TIMEOUT_S = 120  # each `core_python`/`runner_python` call: queue, poll, memory
+PRUNE_DAYS = 7
+# A run stops after this many minutes, well inside its job's own timeout, so the run's results and its memory
+# cleanup always happen.
+DEFAULT_BUDGET_MIN = 200
+_OUT_OF_TIME = "skipped: time budget"
+# A run is compared with an earlier one only when they share at least this many mechanical tasks.
+MIN_SHARED = 2
+# A run id starts with when the run started, in this format.
+_RUN_ID_FMT = "%Y%m%dT%H%M%SZ"
+_FINISHED = ("done", "failed", "cancelled")
+_QUEUED = "queued"
+# A turn a usage limit cut off, waiting for an account with capacity (`core_items.py`): its wait counts toward no
+# time limit -- that's capacity, not Jensen.
+_WAITING = "waiting"
+# Results that say nothing about Jensen: the task couldn't be set up, handed over, checked or got no turn at all.
+# They're recorded with `infra: true`, and the score, `compare` and its regressions leave them out.
+INFRA_REASONS = ("queue failed", "queue error", "copy failed", "build failed", "check error", "folder exists",
+                 "never left the queue", _OUT_OF_TIME)
+# Failures that are never retried: the folder is someone else's, or the run is out of time.
+_NO_RETRY = ("folder exists", _OUT_OF_TIME)
+# Exit codes of `timeout` when it stopped the command: 124 after SIGTERM, 137 when it had to SIGKILL it too.
+_TIMED_OUT = (124, 137)
+# The exit code the copy uses when the task's folder is already there (its plain `mkdir` failed).
+_FOLDER_EXISTS = 17
+
+HEADER = ("This is a yardstick task in `{dir}`. Work only in that folder. It has no remote: don't push, don't open "
+          "PRs, don't message anyone, and don't save memory notes or skills about it. Reply 'done' when finished.")
+
+# A task id becomes a folder name inside agent-runner and part of a shell command: plain characters only.
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_RETRY_SUFFIX = "-r"
+
+
+@dataclass(frozen=True)
+class Task:
+    id: str
+    prompt: str
+    time_limit_min: int
+    rubric: str
+    path: Path
+    mechanical: bool
+
+
+def tasks_root(state: State) -> Path:
+    return state.root / "yardstick" / "tasks"
+
+
+def results_path(state: State) -> Path:
+    return state.yardstick_results_path()
+
+
+def gate_runs_path(state: State) -> Path:
+    """One JSON line per gate run: `{run, gate, result, ts}` (`record_gate_run`)."""
+    return state.root / "yardstick" / "gate-runs.jsonl"
+
+
+def _retired_root(root: Path) -> Path:
+    return Path(root).parent / "retired"
+
+
+def _warn(text: str) -> None:
+    print(f"warning: {text}", file=sys.stderr)
+
+
+# -- tasks --
+
+
+def _read_task(folder: Path) -> Task:
+    """The task in `folder`; raises `ValueError` (with a message naming no path) when it isn't a valid one."""
+    if not _ID.fullmatch(folder.name):
+        raise ValueError("a task id may hold only letters, digits, '.', '_' and '-'")
+    if folder.name.endswith(_RETRY_SUFFIX):
+        raise ValueError(f"a task id may not end in '{_RETRY_SUFFIX}': that's the name of a retry's folder")
+    try:
+        data = tomllib.loads((folder / "task.toml").read_text())
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"task.toml can't be read ({type(exc).__name__})") from None
+    prompt = data.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("task.toml needs a non-empty prompt")
+    limit = data.get("time_limit_min", DEFAULT_TIME_LIMIT_MIN)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("time_limit_min must be a whole number of minutes, 1 or more")
+    rubric = data.get("rubric", "")
+    if not isinstance(rubric, str):
+        raise ValueError("rubric must be text")
+    check = (folder / "check").is_file()
+    return Task(id=folder.name, prompt=prompt, time_limit_min=limit, rubric=rubric, path=folder,
+                mechanical=check and not rubric.strip())
+
+
+def _task_folders(root: Path) -> list[Path]:
+    """Folders under `root` holding a `task.toml`, in id order. A dot folder is an install still in progress."""
+    if not root.is_dir():
+        return []
+    return [p for p in sorted(root.iterdir())
+            if p.is_dir() and not p.name.startswith(".") and (p / "task.toml").is_file()]
+
+
+def load_tasks(root: Path) -> list[Task]:
+    """Every task under `root`, in id order. One that can't be read is skipped with a warning that counts them but
+    never names them."""
+    tasks, skipped = [], 0
+    for folder in _task_folders(Path(root)):
+        try:
+            tasks.append(_read_task(folder))
+        except ValueError:
+            skipped += 1
+    if skipped:
+        _warn(f"skipped {skipped} yardstick task(s) that could not be read")
+    return tasks
+
+
+def _taken(task_id: str, root: Path) -> bool:
+    return (root / task_id).exists() or (_retired_root(root) / task_id).exists()
+
+
+def _copy_in(src: Path, root: Path) -> None:
+    """Copy the task folder `src` to `root/<id>` through a dot folder renamed into place, so `load_tasks` never sees
+    half a task."""
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = root / f".{src.name}.{uuid.uuid4().hex[:8]}"
+    try:
+        shutil.copytree(src, tmp, symlinks=True)
+        tmp.rename(root / src.name)
+    finally:
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def install(src: Path, root: Path) -> list[str]:
+    """Copy each task folder in `src` that `root` doesn't have yet (a retired id counts as had), never touching one
+    that's there. Returns the ids it added. A folder in `src` that isn't a valid task is skipped."""
+    added, skipped = [], 0
+    for folder in _task_folders(Path(src)):
+        if _taken(folder.name, Path(root)):
+            continue
+        try:
+            _read_task(folder)
+        except ValueError:
+            skipped += 1
+            continue
+        _copy_in(folder, Path(root))
+        added.append(folder.name)
+    if skipped:
+        _warn(f"skipped {skipped} yardstick task(s) that could not be read")
+    return added
+
+
+def add(src_task: Path, root: Path) -> str:
+    """Add the one task folder `src_task`. Raises `ValueError` when it isn't a valid task and `FileExistsError` when
+    its id is already taken, by a task or a retired one: a task is never overwritten."""
+    src_task, root = Path(src_task), Path(root)
+    if not (src_task / "task.toml").is_file():
+        raise ValueError("not a yardstick task: there is no task.toml")
+    _read_task(src_task)
+    if _taken(src_task.name, root):
+        raise FileExistsError("a yardstick task with that id already exists")
+    _copy_in(src_task, root)
+    return src_task.name
+
+
+# -- results --
+
+
+def read_results(state: State) -> list[dict]:
+    path = results_path(state)
+    if not path.is_file():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("run") and record.get("task"):
+            out.append(record)
+    return out
+
+
+def _append_jsonl(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
+def _append_result(state: State, record: dict) -> None:
+    _append_jsonl(results_path(state), record)
+
+
+def record_gate_run(state: State, run_id: str, gate_started: str, result: str) -> None:
+    """Record what the gate run `run_id` found about the gate started at `gate_started`. A run whose verdict was
+    `failed` measured a change that is then reverted: it is never a baseline, nor part of a task's streak."""
+    _append_jsonl(gate_runs_path(state), {"run": run_id, "gate": gate_started, "result": result,
+                                          "ts": datetime.now(UTC).strftime(FMT)})
+
+
+def _failed_gate_runs(state: State) -> set[str]:
+    """The runs whose latest recorded gate verdict is `failed`."""
+    path = gate_runs_path(state)
+    if not path.is_file():
+        return set()
+    verdicts: dict[str, object] = {}
+    for line in path.read_text().splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("run"):
+            verdicts[str(record["run"])] = record.get("result")
+    return {run_id for run_id, result in verdicts.items() if result == "failed"}
+
+
+def score(results: list[dict]) -> tuple[int, int]:
+    """`(passed, counted)` over the mechanical tasks only; judged ones and infrastructure failures never count."""
+    counted = [r for r in results if not r.get("judged") and not r.get("infra")]
+    return sum(1 for r in counted if r.get("passed") is True), len(counted)
+
+
+def _parse_ts(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, FMT).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _run_started(run_id: str, first_ts: datetime | None) -> datetime | None:
+    """When a run started: the time in its id (`new_run_id`), else its earliest result's `ts` -- which is no
+    earlier than its start, so a run judged to have started before a time really did."""
+    match = re.match(r"(\d{8}T\d{6}Z)-", run_id)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), _RUN_ID_FMT).replace(tzinfo=UTC)
+        except ValueError:
+            pass
+    return first_ts
+
+
+@dataclass
+class _Runs:
+    order: list[str]  # run ids in the order they first appear in the results file
+    by_run: dict[str, dict[str, bool]]  # each run's mechanical results by task, infrastructure failures left out
+    mechanical: dict[str, set[str]]  # each run's mechanical tasks, infrastructure failures included
+    started: dict[str, datetime | None]  # each run's start (`_run_started`)
+    failed_gates: set[str]  # runs whose gate verdict was `failed` (`record_gate_run`)
+
+    def earlier(self, run_id: str, before: datetime | None) -> list[str]:
+        """The runs before `run_id` in the file, leaving out every failed gate run; with `before`, only those that
+        started before that time."""
+        runs = [r for r in self.order[:self.order.index(run_id)] if r not in self.failed_gates]
+        if before is None:
+            return runs
+        return [r for r in runs if self.started[r] is not None and self.started[r] < before]
+
+
+def _runs(state: State) -> _Runs:
+    order: list[str] = []
+    by_run: dict[str, dict[str, bool]] = {}
+    mechanical: dict[str, set[str]] = {}
+    first_ts: dict[str, datetime] = {}
+    for record in read_results(state):
+        run_id = str(record["run"])
+        if run_id not in by_run:
+            order.append(run_id)
+            by_run[run_id], mechanical[run_id] = {}, set()
+        if not record.get("judged"):
+            mechanical[run_id].add(str(record["task"]))
+            if not record.get("infra"):
+                by_run[run_id][str(record["task"])] = record.get("passed") is True
+        ts = _parse_ts(record.get("ts"))
+        if ts is not None and (run_id not in first_ts or ts < first_ts[run_id]):
+            first_ts[run_id] = ts
+    return _Runs(order, by_run, mechanical,
+                 {run_id: _run_started(run_id, first_ts.get(run_id)) for run_id in order}, _failed_gate_runs(state))
+
+
+def compare(state: State, current_run_id: str, before: datetime | None = None) -> dict:
+    """The current run against the most recent earlier run that shares at least `MIN_SHARED` mechanical tasks with
+    it (`previous`, `None` when no earlier run does; `shared`, how many). `drop` is how many fewer of those shared
+    tasks passed now; a task added since can't move it. A regression is a mechanical task that passed each of its
+    last 3 earlier runs and fails now (after its retry). The gate fails on a drop of 2 or more, or on any
+    regression. An infrastructure failure (`INFRA_REASONS`) is no result at all, in this run or an earlier one.
+
+    A gate run whose verdict was `failed` is never an earlier run: the change it measured was reverted. With
+    `before` (a gate's `started`), only runs that started before it count as earlier: a nightly run that landed
+    between the change's deploy and the gate run already includes the change, so it can be neither the baseline
+    nor part of a task's streak."""
+    runs = _runs(state)
+    by_run = runs.by_run
+    out = {"previous": None, "shared": 0, "drop": 0, "regressions": [], "gate_failed": False}
+    current = by_run.get(current_run_id)
+    if not current:
+        return out
+    earlier = runs.earlier(current_run_id, before)
+    previous = next((run_id for run_id in reversed(earlier)
+                     if len(set(by_run[run_id]) & set(current)) >= MIN_SHARED), None)
+    if previous is not None:
+        shared = set(by_run[previous]) & set(current)
+        out["previous"] = previous
+        out["shared"] = len(shared)
+        out["drop"] = sum(by_run[previous][t] for t in shared) - sum(current[t] for t in shared)
+    for task_id in sorted(current):
+        if current[task_id]:
+            continue
+        history = [by_run[run_id][task_id] for run_id in earlier if task_id in by_run[run_id]]
+        if len(history) >= 3 and all(history[-3:]):
+            out["regressions"].append(task_id)
+    out["gate_failed"] = out["drop"] >= 2 or bool(out["regressions"])
+    return out
+
+
+def gate_verdict(state: State, run_id: str, gate_started: datetime | None = None) -> str:
+    """What the run `run_id` says about the change a gate (started at `gate_started`) is measuring: `failed` or
+    `passed` from `compare`, against runs that started before the gate only. With no earlier run it can be
+    compared with (none shares `MIN_SHARED` mechanical tasks with it) it is `passed`, and this run becomes the
+    baseline: waiting wouldn't change that. `retry` when the run recorded no results at all, or when an earlier run
+    would have been comparable but for this run's infrastructure failures: the next gate run may get through."""
+    runs = _runs(state)
+    if run_id not in runs.order:
+        return "retry"
+    comparison = compare(state, run_id, before=gate_started)
+    if comparison["gate_failed"]:
+        return "failed"
+    if comparison["previous"] is None and any(len(set(runs.by_run[r]) & runs.mechanical[run_id]) >= MIN_SHARED
+                                              for r in runs.earlier(run_id, gate_started)):
+        return "retry"
+    return "passed"
+
+
+# -- run --
+
+
+@dataclass
+class _Attempt:
+    task: Task
+    tries: int
+    folder: str
+    item: str = ""
+    started: float = 0.0  # when the turn was queued
+    running: float | None = None  # when a poll first saw it out of `queued`
+    last_status: str | None = None  # what the last poll that knew of it said
+    waited: float = 0.0  # time spent `waiting` on a usage limit, up to `waiting_since`
+    waiting_since: float | None = None  # when a poll first saw the current wait
+
+    def saw(self, status: str | None, now: float) -> None:
+        """Note what a poll at `now` said (`None`: no news)."""
+        if status is None:
+            return
+        self.last_status = status
+        if status != _QUEUED and self.running is None:
+            self.running = now
+        if status == _WAITING:
+            if self.waiting_since is None:
+                self.waiting_since = now
+        elif self.waiting_since is not None:
+            self.waited += now - self.waiting_since
+            self.waiting_since = None
+
+    def never_left_the_queue(self) -> bool:
+        return self.running is None and self.last_status == _QUEUED
+
+    def timed_out(self, now: float) -> bool:
+        """Past its time limit, from when it left the queue, or past the overall cap, from when it was queued.
+        Time spent `waiting` counts toward neither."""
+        limit = self.task.time_limit_min * 60
+        waited = self.waited + (now - self.waiting_since if self.waiting_since is not None else 0.0)
+        if self.running is not None and now - self.running - waited >= limit:
+            return True
+        return now - self.started - waited >= QUEUED_CAP_FACTOR * limit
+
+
+def _normalized(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    """No host user or group names travel into the runner (they can be a person's name)."""
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
+
+
+def _tar(entries: list[tuple[Path, str]], executable: tuple[str, ...] = ()) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for path, arcname in entries:
+            if arcname in executable:
+                info = _normalized(tar.gettarinfo(str(path), arcname))
+                info.mode = 0o755
+                with path.open("rb") as fh:
+                    tar.addfile(info, fh)
+            else:
+                tar.add(str(path), arcname=arcname, filter=_normalized)
+    return buf.getvalue()
+
+
+def _docker_sh(host, script: str, *, timeout: int, data: bytes | None = None) -> int:
+    """`sh -c script` inside agent-runner (with `data` on stdin when given); the exit code, or -1 when docker
+    itself can't be run or the command outlives `timeout`. Its output is never read or printed."""
+    args = ["docker", "exec", "-i", RUNNER, "sh", "-c", script] if data is not None \
+        else ["docker", "exec", RUNNER, "sh", "-c", script]
+    kwargs: dict = {"capture_output": True, "timeout": timeout}
+    if data is not None:
+        kwargs["input"] = data
+    try:
+        return host.run(args, **kwargs).returncode
+    except Exception:
+        return -1
+
+
+def _prune(host) -> None:
+    """Remove run folders under `RUNNER_BASE` older than `PRUNE_DAYS`, in one `find`. A failure only warns: an old
+    folder left behind is no reason to skip a run."""
+    try:
+        host.run(["docker", "exec", RUNNER, "find", RUNNER_BASE, "-mindepth", "1", "-maxdepth", "1",
+                  "-mtime", f"+{PRUNE_DAYS}", "-exec", "rm", "-rf", "{}", "+"],
+                 capture_output=True, timeout=_COPY_TIMEOUT_S)
+    except Exception as exc:
+        _warn(f"pruning old yardstick folders failed ({type(exc).__name__})")
+
+
+def _prepare(host, task: Task, folder: str) -> str:
+    """Copy the fixture into `folder` and build it; `""` when done, else the reason it failed. The folder is made
+    with a plain `mkdir` in the same command as the copy: one that is already there fails it ("folder exists"),
+    with no gap between a check and the copy for another run to slip into."""
+    fixture, q = task.path / "fixture", shlex.quote(folder)
+    base = shlex.quote(posixpath.dirname(folder))
+    try:
+        data = _tar([(child, child.name) for child in sorted(fixture.iterdir())] if fixture.is_dir() else [])
+    except OSError:
+        return "copy failed"
+    script = f"mkdir -p {base} && {{ mkdir {q} || exit {_FOLDER_EXISTS}; }} && tar -x -C {q}"
+    rc = _docker_sh(host, script, timeout=_COPY_TIMEOUT_S, data=data)
+    if rc == _FOLDER_EXISTS:
+        return "folder exists"
+    if rc != 0:
+        return "copy failed"
+    if (fixture / "build.sh").is_file() and _docker_sh(
+            host, f"cd {q} && timeout -k 10 {BUILD_TIMEOUT_S} sh build.sh", timeout=BUILD_TIMEOUT_S + _BACKSTOP_S):
+        return "build failed"
+    return ""
+
+
+def _queue(host, run_id: str, task: Task, folder: str) -> tuple[str, str]:
+    """Queue the task's turn: `(work item id, "")`, or `("", reason)` when it couldn't be queued -- "queue error"
+    when the exec timed out (the turn may or may not be in core), "queue failed" when it failed outright."""
+    text = HEADER.format(dir=folder) + "\n\n" + task.prompt
+    args = ["--new", "--new-prefix", f"{CONVERSATION_PREFIX}{run_id}-",
+            "--text-b64", base64.b64encode(text.encode()).decode()]
+    try:
+        item = host.core_python("core_ask.py", args, timeout=_EXEC_TIMEOUT_S).strip()
+    except subprocess.TimeoutExpired:
+        return "", "queue error"
+    except Exception:
+        return "", "queue failed"
+    return (item, "") if item else ("", "queue failed")
+
+
+def _poll(host, ids: list[str]) -> dict | None:
+    """Each id's status from core, or `None` when it couldn't be read (a timed-out exec included): no news, and
+    each turn's own time limit still runs."""
+    try:
+        statuses = json.loads(host.core_python("core_items.py", ["--ids", ",".join(ids)], timeout=_EXEC_TIMEOUT_S))
+    except Exception:
+        return None
+    return statuses if isinstance(statuses, dict) else None
+
+
+def _cancel(host, item: str) -> bool:
+    """Cancel a turn still queued (`core_items.py --cancel`); whether it was. Any failure is just `False`."""
+    try:
+        reply = json.loads(host.core_python("core_items.py", ["--cancel", item], timeout=_EXEC_TIMEOUT_S))
+    except Exception:
+        return False
+    return isinstance(reply, dict) and reply.get("cancelled") is True
+
+
+def _check(host, attempt: _Attempt, status: str) -> tuple[bool, str]:
+    """Copy `hidden/` and `check` in (replacing anything by those names the turn left there), run the check, then
+    remove both again, whatever the check's outcome."""
+    task, q = attempt.task, shlex.quote(attempt.folder)
+    turn_failed = f"turn {status}" if status != "done" else ""
+    if not (task.path / "check").is_file():  # a judged task with nothing to run: it passes when the turn finished
+        return not turn_failed, turn_failed
+    entries = [(task.path / "hidden", "hidden")] if (task.path / "hidden").is_dir() else []
+    entries.append((task.path / "check", "check"))
+    try:
+        data = _tar(entries, executable=("check",))
+    except OSError:
+        return False, "copy failed"
+    try:
+        script = f"rm -rf {q}/hidden {q}/check && mkdir -p {q} && tar -x -C {q}"
+        if _docker_sh(host, script, timeout=_COPY_TIMEOUT_S, data=data) != 0:
+            return False, "copy failed"
+        return _run_check(host, q, turn_failed)
+    finally:
+        _docker_sh(host, f"rm -rf {q}/hidden {q}/check", timeout=_COPY_TIMEOUT_S)
+
+
+def _run_check(host, q: str, turn_failed: str) -> tuple[bool, str]:
+    try:
+        result = host.run(["docker", "exec", RUNNER, "sh", "-c", f"cd {q} && timeout -k 10 {CHECK_TIMEOUT_S} ./check"],
+                          capture_output=True, timeout=CHECK_TIMEOUT_S + _BACKSTOP_S)
+    except subprocess.TimeoutExpired:
+        return False, "check timeout"
+    except Exception:
+        return False, "check error"
+    if result.returncode == 0:
+        return True, ""
+    if result.returncode in _TIMED_OUT:
+        return False, "check timeout"
+    return False, turn_failed or "check failed"
+
+
+def _sha(host) -> str:
+    try:
+        result = host.run(["git", "-C", str(host.live), "rev-parse", "HEAD"], capture_output=True, text=True)
+    except Exception:
+        return ""
+    return (result.stdout or "").strip() if result.returncode == 0 else ""
+
+
+def _memory(host, args: list[str]) -> dict | None:
+    try:
+        report = json.loads(host.runner_python("runner_memory.py", args, timeout=_EXEC_TIMEOUT_S))
+    except Exception:
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None = None, concurrency: int = 4,
+        budget_min: int = DEFAULT_BUDGET_MIN, sleep=time.sleep, clock=time.monotonic) -> list[dict]:
+    """Run `tasks` (see the module docstring); one result per task, in `tasks`' order. A gate run passes the
+    gate's `started` as `gate`, and each of its results carries it. Once `budget_min` minutes are spent, every task
+    still to run or in flight is recorded as `skipped: time budget` and the run returns."""
+    if not tasks:
+        return []
+    deadline = clock() + budget_min * 60
+    sha = _sha(host)
+    since = int(time.time())
+    base = f"{RUNNER_BASE}/{run_id}"
+    _prune(host)
+    before = f"{base}/.memory-before.json"
+    if _memory(host, ["--root", MEMORY_ROOT, "--snapshot", before]) is None:
+        _warn("could not list Jensen's memory notes before the run; no note will be removed after it")
+
+    final: dict[str, dict] = {}
+    pending: deque[tuple[Task, int]] = deque((task, 1) for task in tasks)
+    in_flight: list[_Attempt] = []
+    failed_polls = failed_cancels = 0
+
+    def give_up(attempt: _Attempt) -> None:
+        """A turn still queued would start long after the run gave up on it: cancel it."""
+        nonlocal failed_cancels
+        if not _cancel(host, attempt.item):
+            failed_cancels += 1
+
+    def finish(attempt: _Attempt, passed: bool, reason: str) -> None:
+        task = attempt.task
+        if not passed and task.mechanical and attempt.tries == 1 and reason not in _NO_RETRY:
+            pending.append((task, 2))
+            return
+        minutes = round((clock() - attempt.started) / 60, 1) if attempt.item else 0.0
+        record = {"run": run_id, "ts": datetime.now(UTC).strftime(FMT), "sha": sha, "task": task.id,
+                  "passed": passed, "minutes": minutes, "judged": not task.mechanical, "reason": reason,
+                  "infra": reason in INFRA_REASONS, "tries": attempt.tries}
+        if gate is not None:
+            record["gate"] = gate
+        final[task.id] = record
+        _append_result(state, record)
+
+    def out_of_time() -> None:
+        """Record everything still in flight or to run as skipped (cancelling a turn still queued)."""
+        for attempt in in_flight:
+            if attempt.never_left_the_queue():
+                give_up(attempt)
+            finish(attempt, False, _OUT_OF_TIME)
+        for task, tries in pending:
+            finish(_Attempt(task, tries, ""), False, _OUT_OF_TIME)
+        in_flight.clear()
+        pending.clear()
+
+    try:
+        while pending or in_flight:
+            if clock() >= deadline:
+                out_of_time()
+                break
+            while pending and len(in_flight) < concurrency and clock() < deadline:
+                task, tries = pending.popleft()
+                attempt = _Attempt(task, tries, f"{base}/{task.id}" + (_RETRY_SUFFIX if tries > 1 else ""))
+                reason = _prepare(host, task, attempt.folder)
+                if not reason:
+                    attempt.item, reason = _queue(host, run_id, task, attempt.folder)
+                if reason:
+                    finish(attempt, False, reason)
+                    continue
+                attempt.started = clock()
+                in_flight.append(attempt)
+            if not in_flight:
+                continue
+            sleep(POLL_SECONDS)
+            statuses = _poll(host, [attempt.item for attempt in in_flight])
+            if statuses is None:
+                failed_polls += 1
+                statuses = {}
+            for attempt in list(in_flight):
+                entry = statuses.get(attempt.item)
+                status = entry.get("status") if isinstance(entry, dict) else None
+                attempt.saw(status, clock())
+                if status in _FINISHED:
+                    in_flight.remove(attempt)
+                    finish(attempt, *_check(host, attempt, status))
+                elif attempt.timed_out(clock()):
+                    in_flight.remove(attempt)
+                    if attempt.never_left_the_queue():
+                        give_up(attempt)
+                        finish(attempt, False, "never left the queue")
+                    else:  # left running in Jensen: never cancelled
+                        finish(attempt, False, "timeout")
+    finally:
+        report = _memory(host, ["--root", MEMORY_ROOT, "--since", str(since), "--marker", MARKER,
+                                "--existing-file", before])
+        if report is None:
+            _warn("the memory cleanup after the yardstick run failed")
+        else:
+            removed, kept = len(report.get("removed") or []), len(report.get("kept") or [])
+            print(f"memory cleanup: removed {removed} note(s), kept {kept} that existed before the run",
+                  file=sys.stderr)
+        if failed_polls:
+            _warn(f"{failed_polls} status read(s) of the yardstick turns failed")
+        if failed_cancels:
+            _warn(f"{failed_cancels} yardstick turn(s) still queued could not be cancelled")
+    return [final[task.id] for task in tasks if task.id in final]
+
+
+def new_run_id(now: datetime) -> str:
+    return f"{now.astimezone(UTC).strftime(_RUN_ID_FMT)}-{uuid.uuid4().hex[:4]}"

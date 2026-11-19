@@ -45,6 +45,10 @@ schedules:
 smoke:
     docker compose exec core python /app/scripts/smoke.py
 
+# Fetch main, rebuild whatever changed, wait for an idle runner first, then check the stack live (see deploy.py)
+deploy *args:
+    PYTHONPATH=src python3 scripts/deploy.py {{args}}
+
 # Give the dashboard the Claude account holders' names (from the account proxy's config; run on the laptop)
 account-names:
     python3 -c "import sys; sys.path.insert(0, 'src'); from agent.dashboard.names import main; main()" data/config/account-names.toml

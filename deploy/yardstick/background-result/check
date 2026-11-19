@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Pass when result.md holds the exact checksum slow_build.sh would have written, recomputed
+directly from the input data rather than by running the slow part again."""
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def main() -> int:
+    data_file = ROOT / "data" / "input.txt"
+    if not data_file.exists():
+        print("check error: missing data/input.txt")
+        return 1
+    expected = hashlib.sha256(data_file.read_bytes()).hexdigest()
+
+    result = ROOT / "result.md"
+    if not result.exists():
+        print("result.md is missing")
+        return 1
+
+    if expected not in result.read_text():
+        print(f"result.md does not contain the checksum {expected}")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

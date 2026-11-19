@@ -567,6 +567,53 @@ Compose also reads `AGENT_NAME` and `AGENT_GIT_EMAIL` from the environment (or a
 `compose.yaml`, kept out of git) for the git identity of the agent's commits. Use the agent's name and its GitHub
 account's noreply address.
 
+## improve-jensen
+
+improve-jensen is the agent that owns this repository and keeps making the agent (Jensen, in this team's install) a
+better engineer. It runs outside the stack, as a Claude Code GitHub Action (`.github/workflows/improve-jensen.yml`)
+on five self-hosted runners on the host (one for the hourly watch, four for everything else), and reaches Claude
+through the proxy's `improve-jensen` origin. A bad deploy can break the agent, but not the agent that has to undo it.
+Nobody tells it what to improve: it works that out from the evidence. The workflow has eight jobs:
+
+- `watch`, hourly: `scripts/jensen_watch.py measure` turns the hour's turns, transcripts and the agent's PRs into
+  signals and a digest. Claude records each problem in a `jensen-watch` issue, follows the deployed improvements and
+  plans the reviews and at most one fix (`.github/improve-jensen-watch.md`).
+- `review`, one per new PR of the agent's, in any repo: reads its CI, reviews the diff for defects it can prove,
+  hands them to the agent in the conversation that made the PR (`scripts/ask_jensen.py`) and records the gap in the
+  agent's process (`.github/improve-jensen-review.md`).
+- `fix`, one at a time: ships one improvement for an issue that qualifies, through a PR, CI, a fresh review, the
+  merge, `just deploy`, the live check and a revert if the check fails (`.github/improve-jensen.md`).
+- `respond`: answers `improve-jensen` issues and `@improve-jensen` mentions under the same rules.
+- `assess`, four times a day: ranks at most ten things that hold the agent back, against the goal (enterprise-grade
+  products, little human help, long runs) and only on evidence from the agent's own work. It writes `assessment.md`
+  on the host and the pinned `jensen-assessment` issue in general terms, files issues, marks up to three `priority`
+  (the watch fixes those first), adds yardstick tasks and starts at most one project
+  (`.github/improve-jensen-assess.md`).
+- `yardstick`, nightly and after each change that alters how the agent behaves: runs the agent through a small set of
+  real tasks in throwaway folders inside `agent-runner` (`V-yardstick-` conversations, at most four at once) and
+  scores only the tasks with a mechanical check. Five synthetic seeds ship in `deploy/yardstick/`; tasks drawn from
+  real failures stay on the host. As a gate it measures one change at a time: the job that ships a change starts its
+  gate as soon as `just deploy` returns 0, each job that can ship one reports as it ends whether a gate is active, and
+  the yardstick job then runs the gate. Other behaviour changes wait, and a gate it couldn't measure yet is retried
+  after the next job. On a drop of two or more or a regression, the yardstick job comments `Yardstick gate failed
+  ...: picked to revert.` on the change's issue and `gate-revert` reverts the change; if that job dies first, the
+  watch picks the issue again. A change to the yardstick or the gate itself is merged by a person, never by
+  improve-jensen.
+- `project`, one at a time: builds a project-scale improvement over runs of up to six hours, with a design note on its
+  issue, a progress file on its `improve-jensen/project-<n>` branch and the same bar as a fix, gate included
+  (`.github/improve-jensen-project.md`).
+
+The agent and improve-jensen talk through `/var/agent/feedback/` in `agent-runner`. The agent writes a short note
+there when something in its setup gets in its way. The watch reads new notes as evidence, records them on issues in
+general terms and answers in the note with a `Status:` line. After each deploy that changes how the agent behaves,
+improve-jensen adds a plain-words line to `CHANGES.md` there, which the agent reads when its setup seems different.
+
+An improvement counts only when its evidence goes away: the issue keeps `fix-deployed` until `jensen_watch.py count`
+shows the signal fixed for three days. improve-jensen's state stays on the host, in `~/.local/state/improve-jensen/`
+(windows, metrics, evidence, deploys, the plan, the digests, the assessments, the yardstick's tasks and results,
+and the gate record; metrics and digests are kept 30 days). Conversations, people and products never go into this
+public repo. Host setup and switch-on: `deploy/improve-jensen.md`.
+
 ## Operations
 
 | Command | What it does |
@@ -575,6 +622,7 @@ account's noreply address.
 | `just down` | stops and removes the stack; data stays under `data/` |
 | `just doctor` | in core: config, packs, each required secret, the proxy (verified accounts, capacity), each pack's checks, GitHub read access per repo, Linear states per pack, the runner token. In the agent container: `gh auth status` and `az account show` |
 | `just smoke` | queues one turn ("reply with pong") with no Slack thread and waits up to 5 minutes for the answer: core, runner, proxy and Claude end to end |
+| `just deploy` | in the live checkout: fetches `main`, rebuilds only the services the change touches (waiting for an idle runner before `agent`), then checks the stack live. Exit 0 deployed, 1 check failed, 2 checkout not deployable, 3 pending |
 | `just dashboard-serve` | `tailscale serve --bg --https=9443 http://127.0.0.1:18086`: the dashboard at `https://<node>.<tailnet>.ts.net:9443`, tailnet only |
 | `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `supervisor-standby`, `relay`) |
 | `just kpis [--days N] [--project P]` | prints the KPIs |

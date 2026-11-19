@@ -1,0 +1,107 @@
+[
+  {
+    "title": "Work ships before CI has run",
+    "labels": ["jensen-watch", "ships"],
+    "body": "## What goes wrong\nWork merges into the main branch without continuous integration ever running on it, and that goes unnoticed at merge time.\n\n## Why it matters\nOnce CI silently stops gating merges, failing tests and type errors pile up on the main branch. New failures get waved off by eye as \"flakes\" instead of being run and checked, so real regressions blend in with noise.\n\n## Evidence\nSignal: `pr` (the share of merged changes where CI did not pass, via `count`).\nAt seeding: the one build this came from carried main-branch test and type failures that were never run to a clean result, with new failures compared by hand instead of re-run. Fixed when `count pr` prints `merged_without_passing_ci=0` and `ci_unknown=0` (every PR's CI was read) over a span with at least one merged PR.\n\n## Where the fix belongs\nIn the step that decides a change is ready to merge, and in how CI's own result gets read back before that decision.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Security issues ship without being caught",
+    "labels": ["jensen-watch", "ships"],
+    "body": "## What goes wrong\nIssues with real security impact -- too much access granted, or data exposed to users who shouldn't see it -- reach production without a review stopping them.\n\n## Why it matters\nA security gap that ships is a security gap a user can hit; knowing about it after the fact is not a mitigation.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: at least one such issue was already known, written up as a note, and merged anyway rather than fixed first. Fixed when a security pass runs before merge and nothing with this shape reaches the main branch again.\n\n## Where the fix belongs\nIn the review step that runs before a change merges, and in what counts as \"resolved\" for a known risk.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Parallel work lands without being reconciled",
+    "labels": ["jensen-watch", "ships"],
+    "body": "## What goes wrong\nWhen more than one lane of work touches the same area at once, nothing checks that the pieces agree with each other before they all land.\n\n## Why it matters\nLanes that disagree on the same rules leave behind contradictions, duplicated logic and leftover scaffolding nobody owns, which costs more to untangle later than it would have cost to reconcile up front.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: parallel lanes left duplicated helper logic, unused scaffolding and clashing change ordering behind. Fixed when an integration pass runs before parallel lanes merge, and this kind of contradiction stops showing up in review.\n\n## Where the fix belongs\nIn how parallel lanes get merged together, with an integration step between \"each lane is done\" and \"the whole thing is done.\"\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Tests pass without being able to fail",
+    "labels": ["jensen-watch", "ships"],
+    "body": "## What goes wrong\nSome tests are built so they can't catch a real regression: they skip when a dependency isn't present and still report success, they're written by whoever wrote the code they check, or they only exercise a stand-in instead of the real thing.\n\n## Why it matters\nA green suite that can't go red isn't evidence of anything. It gives false confidence at exactly the moment a real check was needed.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: suites that short-circuit to a pass with no backing service present, tests written in the same change as the code they check, and one large suite built entirely against a stand-in instead of the real dependency. Fixed when a review step can show a given test actually fails on a broken version of the code it covers.\n\n## Where the fix belongs\nIn what a review checks about a test's own ability to fail, before the test is trusted.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Large changes merge within minutes of opening",
+    "labels": ["jensen-watch", "ships"],
+    "body": "## What goes wrong\nSizeable changes open and merge almost immediately, reviewed only by other instances of the same model in the same sitting.\n\n## Why it matters\nA change nobody independent looked at, merged before anyone could, is not reviewed -- it just has a review-shaped step attached to it.\n\n## Evidence\nSignal: `pr` (`median_lines`, `median_open_to_merge_s`, via `count`). At seeding: changes of one to six thousand lines were merging within about a minute of opening. Fixed when `count pr` prints a `median_open_to_merge_s` of 600 or more (ten minutes, room for an independent pass) over a span with at least one merged PR.\n\n## Where the fix belongs\nIn the step between opening a change and merging it -- what has to happen in between, and who has to do it.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Commit messages claim fixes that aren't in the code",
+    "labels": ["jensen-watch", "ships"],
+    "body": "## What goes wrong\nA commit message says something was fixed or verified when the code in that commit doesn't actually do it. Departures from the agreed design get written up as \"assumptions\" rather than flagged for a decision.\n\n## Why it matters\nA message that overstates what a change does is worse than no message: it tells the next reader to stop looking right where they should look closer.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: commit messages asserting fixes or verification not borne out by the diff, and spec departures logged as assumptions instead of raised. Fixed when a review step stops finding a claim in a commit message that the diff doesn't back up.\n\n## Where the fix belongs\nIn what a commit message is allowed to claim, and in a review step that checks the message against the diff.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Nearly every commit carries the same authorship trailer",
+    "labels": ["jensen-watch", "ships"],
+    "body": "## What goes wrong\nCommits are stamped with an attribution trailer naming the tool that wrote them, on almost every commit, regardless of what's wanted for that repository.\n\n## Why it matters\nAn attribution line that's always there isn't a meaningful signal, and it's not something every repository wants in its history.\n\n## Evidence\nSignal: `coauthor_trailers` (the `pr` line's own count, via `count pr`). At seeding: the trailer appeared on about 99 out of every 100 commits. Fixed when `count pr` prints `coauthor_trailers=0` over a span with at least one PR, the trailer then following each repository's own setting instead of always being added.\n\n## Where the fix belongs\nIn the setting that controls whether this trailer gets added, made to follow what each repository actually wants.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "A long conversation's context never gets reset",
+    "labels": ["jensen-watch", "works", "project"],
+    "body": "## What goes wrong\nContext inside one long-running conversation keeps growing and is never reset, even once a piece of work inside it is done and its detail is no longer needed.\n\n## Why it matters\nEvery turn after that pays, in time and cost, for carrying the entire history forward -- including turns that only needed to answer a small question.\n\n## Evidence\nSignal: `context_first`, `context_peak` (via `count`). At seeding: one session grew from about 24 thousand tokens to nearly 800 thousand over its life, and a sizeable share of turns started already above 100 thousand tokens for small asks. Fixed when `count context_first` prints a `p90` under 100000 (that starting-size threshold) and `count big_start_small_ask` prints `total=0`.\n\n## Where the fix belongs\nIn how a long-running conversation is built as its own project, with a deliberate point where old detail gets dropped rather than carried forever.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Background work dies the moment its turn ends",
+    "labels": ["jensen-watch", "works", "project"],
+    "body": "## What goes wrong\nWork started in the background -- a subagent, a shell command left running -- lives only as long as the turn that started it. When the turn ends, that work is gone, whether or not it finished.\n\n## Why it matters\nParallel work that can vanish mid-flight either has to be babysat by keeping the turn open, or it silently disappears and has to be redone.\n\n## Evidence\nSignal: `lost_background` (via `count`). At seeding: parallel work was lost this way more than once in a single day. Fixed when `count lost_background` prints `total=0`.\n\n## Where the fix belongs\nIn how background work is run as its own project, so it outlives the turn that started it instead of depending on it staying open.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Work rarely gets delegated",
+    "labels": ["jensen-watch", "works"],
+    "body": "## What goes wrong\nMost turns do their own work directly in the main thread rather than handing pieces of it to a subagent, even on turns heavy enough with tool calls that delegating would help.\n\n## Why it matters\nWorking everything in one thread means one context carries everything at once, and nothing runs in parallel or gets a fresh, focused context of its own.\n\n## Evidence\nSignal: `no_delegation` (via `count`). At seeding: only a small single-digit percentage of turns used any subagent at all, and well under half of the heaviest-tool-call turns used one. Fixed when `count no_delegation` prints `turns=1` or fewer.\n\n## Where the fix belongs\nIn what prompts a turn to delegate, and in making a maintained delegation workflow the default rather than something that has to be reached for.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Code gets written through shell here-documents",
+    "labels": ["jensen-watch", "works"],
+    "body": "## What goes wrong\nInstead of using a dedicated file-editing tool, code gets written by piping whole files through shell commands, with full file contents passed through the main context either way.\n\n## Why it matters\nShell here-documents are a clumsy way to write code: they're easy to get wrong on quoting and escaping, and they put the entire file's text in context rather than just the lines that changed.\n\n## Evidence\nSignal: `inline_code_chars` (via `count`). At seeding: the large majority of main-thread tool calls were shell commands, and a dedicated edit tool was used only a couple of times across hundreds of turns. Fixed when `count inline_code_chars` prints a `p90` under 5000 (characters of code written inline per turn), shell-based file writes no longer being the default way code gets changed.\n\n## Where the fix belongs\nIn which tool gets reached for by default when writing or changing a file.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Project setup gets rediscovered every conversation",
+    "labels": ["jensen-watch", "works"],
+    "body": "## What goes wrong\nEach new conversation on a project re-clones it and re-learns its setup from scratch, instead of picking up what an earlier conversation already worked out.\n\n## Why it matters\nRe-learning the same setup over and over burns time and disk space, and setup knowledge ends up scattered across several places instead of living in one.\n\n## Evidence\nSignal: `reclone` (via `count`). At seeding: a single project was cloned dozens of times over a few days, and the scratch space used ran into the tens of gigabytes. Fixed when `count reclone` prints `turns=2` or fewer.\n\n## Where the fix belongs\nIn how a project's own setup and facts are found and reused across conversations, instead of being split across several sources and rebuilt each time.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "The fixed cost of starting a session keeps climbing",
+    "labels": ["jensen-watch", "works"],
+    "body": "## What goes wrong\nEvery fresh session pays a fixed token cost before any real work happens, and that baseline cost has been rising over time rather than staying flat.\n\n## Why it matters\nA rising fixed cost makes every single turn more expensive, even ones that do nothing unusual -- it's a tax that grows quietly in the background.\n\n## Evidence\nNo signal in the current measurement set tracks this directly; it would show up as a slow upward drift in `context_first` across ordinary turns over days, not within one turn. At seeding: a fresh session's starting overhead rose by several thousand tokens over the course of a few days. Fixed when `count context_first`'s `median` over a week is no more than 2000 tokens above its `median` over the week before.\n\n## Where the fix belongs\nIn what gets loaded into every fresh session by default, and in keeping that content deliberately small.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Background lanes aren't logged in, and new projects get turned away",
+    "labels": ["jensen-watch", "long-runs"],
+    "body": "## What goes wrong\nLanes started in the background can fail all at once because the account running them isn't signed in, and a project the system hasn't already registered gets refused outright instead of being picked up.\n\n## Why it matters\nEither failure mode cuts a long run short for a reason that has nothing to do with the work itself, and both are avoidable setup problems rather than real obstacles.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: several background lanes failed at once for not being signed in, and unregistered projects were refused rather than picked up automatically. Fixed when background lanes stay signed in on their own, and a new project doesn't need to be registered by hand before it's picked up.\n\n## Where the fix belongs\nIn how a background lane's own login is kept current, and in how a new project gets registered.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Long runs spend their own time budget waiting in place",
+    "labels": ["jensen-watch", "long-runs"],
+    "body": "## What goes wrong\nTo keep a turn alive while something else finishes, the main thread sits in a loop that just waits, burning its own time budget on nothing.\n\n## Why it matters\nTime spent waiting in the foreground is time that isn't available for the turn's real budget, and it's a workaround for a gap rather than a way of actually tracking background work.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: dozens of these waiting loops together ate several hours of the available turn budget in a few days of work. Fixed when a turn can wait on background work finishing without needing to sit in a loop to do it.\n\n## Where the fix belongs\nIn how a turn is notified that background work finished, instead of polling for it by waiting in place.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "It goes quiet after promising a report",
+    "labels": ["jensen-watch", "people"],
+    "body": "## What goes wrong\nA turn says it will report back once something finishes, and then the turn simply ends without ever following up. Messages sent in while a turn is already running can also go unanswered.\n\n## Why it matters\nA promise to report back that never gets kept trains people to stop trusting the promise, and to go check manually instead.\n\n## Evidence\nSignal: `still_running` (background work still running when the turn's own result came back -- the \"promised to report, then ended\" case) and `lost_background` (that background work stopped or failed outright instead), via `count`. At seeding: a meaningful share of messages sent into an already-running turn also got no direct reply at all. Fixed when `count still_running` and `count lost_background` both print `turns=1` or fewer.\n\n## Where the fix belongs\nIn what happens at the end of a turn that promised a follow-up, and in how a message sent mid-turn gets answered.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "It states guesses as settled fact",
+    "labels": ["jensen-watch", "people"],
+    "body": "## What goes wrong\nAn answer gets stated with full confidence when it was actually a guess, and the correction comes later, if at all.\n\n## Why it matters\nA confident wrong answer costs more to recover from than \"I'm not sure\" would have, because the listener has already acted on it.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: around ten such guesses were later walked back once the real answer turned out to be different. Fixed when a week passes with no retracted claim noted on this issue (its `Seen:` total stops rising).\n\n## Where the fix belongs\nIn how confidence gets represented when an answer hasn't actually been checked.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "It doesn't know its own setup",
+    "labels": ["jensen-watch", "people"],
+    "body": "## What goes wrong\nAsked a basic question about how it's configured -- what it can reach, what's running where -- it gets the answer wrong.\n\n## Why it matters\nNot knowing your own setup leads to wrong assumptions downstream, and it's a question people have to ask more than once to get a trustworthy answer to.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: this happened on the order of several times across a few hundred messages from people. Fixed when questions about its own setup are reliably answered without needing a correction.\n\n## Where the fix belongs\nIn how its own configuration is surfaced to it, so it can check rather than guess.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Standing instructions don't carry across threads",
+    "labels": ["jensen-watch", "people"],
+    "body": "## What goes wrong\nAn instruction meant to stand going forward only sticks in the thread it was given in; a new thread has no memory of it and the same instruction has to be repeated.\n\n## Why it matters\nRepeating the same standing instruction over and over is a sign that it isn't actually standing -- it's being re-taught each time, which wastes a person's attention on something they already said once.\n\n## Evidence\nNo signal in the current measurement set tracks this directly. At seeding: one instruction had to be repeated across roughly half a dozen separate threads. Fixed when a standing instruction given once keeps applying across later threads without being repeated.\n\n## Where the fix belongs\nIn how a standing instruction is saved so it's available outside the thread it was given in.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Tools it needs aren't in its own runner image",
+    "labels": ["jensen-watch", "people"],
+    "body": "## What goes wrong\nPartway through a turn, it reaches for a tool that turns out not to be installed in the environment it's running in.\n\n## Why it matters\nA missing tool discovered mid-turn stalls the work and forces a workaround, when the gap could have been caught and closed ahead of time.\n\n## Evidence\nSignal: `missing_tools` (via `count`). At seeding: this showed up repeatedly across transcripts as a tool simply not being found. Fixed when `count missing_tools` prints `total=0`.\n\n## Where the fix belongs\nIn what the runner image ships with by default, checked against what actually gets reached for.\n\nSeen: 0 times since seeding"
+  },
+  {
+    "title": "Its token can't read CI check results",
+    "labels": ["jensen-watch", "people", "needs-person"],
+    "body": "## What goes wrong\nThe access it has to read from its code host doesn't include permission to see continuous-integration check results, so it gets an access error instead of a real pass or fail answer.\n\n## Why it matters\nWithout being able to see the real check result, it has approved a change over continuous integration that was, in truth, failing -- which defeats the point of having continuous integration gate merges at all.\n\n## Evidence\nSignal: `pr` (`ci_unknown`, via `count`: the watch reads CI with the same token) and `tool_errors` (via `count`), for the access error on checks. At seeding: this access error showed up repeatedly across transcripts over the same few days. Fixed when `count pr` prints `ci_unknown=0` over a span with at least one PR, a real check result read instead.\n\n## Where the fix belongs\nOnly a person can widen this access; it isn't something that can be changed from inside a turn.\n\nSeen: 0 times since seeding"
+  }
+]
