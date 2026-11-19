@@ -335,6 +335,25 @@ def test_kpi_view_daily_by_source_and_task_list(conn, queue):
     assert k["by_source"] == {"slack": 1, "linear": 1, "schedule": 0} and k["time"]["n"] == 2
     assert k["by_project"] == {"sample": 1, "general": 1}
     assert not {"cost_usd", "cost_per_task", "merge_rate", "pickup"} & set(k)
+    assert set(view["usage"]) == {"today", "7d", "month"} and k["tokens_by_project"] == {}
+
+
+def test_kpi_view_serves_tokens_by_project_without_claude_cost(conn, queue):
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
+    general, project = add_conversation(conn, project=None), add_conversation(conn, project="sample")
+    for cid in (general, project, project):
+        add_run(conn, add_item(queue, cid), ended="2026-11-13T10:00:00Z")
+    conn.execute("UPDATE runs SET project = 'sample' WHERE id IN (SELECT w.id FROM work_items w "
+                 "WHERE w.conversation_id = ?)", (project,))
+    view = kpi_view(conn, 7, now, "Asia/Singapore")
+    today = view["usage"]["today"]
+    assert today["by_project"] == {
+        "sample": {"runs": 2, "input_tokens": 20, "output_tokens": 40, "cache_read_tokens": 60,
+                   "cache_write_tokens": 80},
+        "general": {"runs": 1, "input_tokens": 10, "output_tokens": 20, "cache_read_tokens": 30,
+                    "cache_write_tokens": 40}}
+    assert today["total"]["input_tokens"] == 30 and view["kpis"]["tokens_by_project"] == today["by_project"]
+    assert "cost" not in json.dumps(view["usage"]["today"]["by_project"]) + json.dumps(view["kpis"])
 
 
 def test_overview_counts_local_day(conn, queue):

@@ -14,7 +14,7 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from agent import db
-from agent.core.kpis import FMT, SOURCES, compute_kpis
+from agent.core.kpis import FMT, SOURCES, compute_kpis, usage_windows
 
 STATES = {"queued": ("queued",), "running": ("claimed", "delivered"), "done": ("done",), "failed": ("failed",),
          "cancelled": ("cancelled",)}
@@ -328,15 +328,22 @@ def _json(text: str | None):
         return text
 
 
+def _plain(value):
+    """A value as JSON can carry it: datetimes as UTC timestamps, dataclasses (also inside dicts) as dicts."""
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).strftime(FMT)
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    return value
+
+
 def _kpis_dict(k) -> dict:
     out = {}
     for f in dataclasses.fields(k):
         value = getattr(k, f.name)
-        if isinstance(value, datetime):
-            value = value.astimezone(UTC).strftime(FMT)
-        elif dataclasses.is_dataclass(value):
-            value = dataclasses.asdict(value)
-        out[f.name] = value
+        out[f.name] = _plain(value)
     out["finished_rate"] = k.finished_rate
     return out
 
@@ -345,7 +352,8 @@ TASK_LIST = 200  # the KPI page lists at most this many of the window's tasks
 
 
 def kpi_view(conn: sqlite3.Connection, days: int, now: datetime, tz: str) -> dict:
-    """The four KPIs, tasks per local day by source, and the window's tasks, newest first."""
+    """The four KPIs, tasks per local day by source, the window's tasks, newest first, and token use by project
+    for today, 7 days and this month."""
     zone = ZoneInfo(tz)
     today = now.astimezone(zone).date()
     dates = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
@@ -362,4 +370,5 @@ def kpi_view(conn: sqlite3.Connection, days: int, now: datetime, tz: str) -> dic
         "SELECT record FROM task_records WHERE started_at >= ? AND started_at < ? ORDER BY started_at DESC, id DESC "
         "LIMIT ?", (since.astimezone(UTC).strftime(FMT), hi, TASK_LIST))]
     kpis = compute_kpis(conn, since=since, until=now)
-    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values()), "tasks": tasks}
+    return {"kpis": _kpis_dict(kpis), "daily": list(daily.values()), "tasks": tasks,
+            "usage": _plain(usage_windows(conn, now, tz))}
