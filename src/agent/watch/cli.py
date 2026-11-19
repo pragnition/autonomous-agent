@@ -24,10 +24,11 @@ from the outside, not acting as Jensen.
 time). `gate status` prints the active gate, or with `--last` the one that ended last (with its `result`), or
 `none`; with `--github-output` it only writes `active=true|false` there, so a workflow log never shows a gate's
 handle. `gate end --result passed|failed` archives the gate with its result. `yardstick run --gate` measures the
-active gate's change and says what it found in `gate_result`: `none` (no active gate: nothing measured), `retry`
-(it couldn't be measured this time -- the pool held, no tasks, an error, or too few tasks in common with an earlier
-run -- and the gate stays active for the next gate run), or `passed`/`failed`, compared only with runs that started
-before the gate did; it never ends the gate itself.
+active gate's change and says what it found in `gate_result`: `none` (no active gate, or no tasks installed:
+nothing to measure), `retry` (it couldn't be measured this time -- the pool held or an error -- and the gate stays
+active for the next gate run), or `passed`/`failed`, compared only with runs that started before the gate did and
+never with a gate run that failed; with no such run to compare with, it passes and becomes the baseline. It
+records its verdict, and never ends the gate itself.
 
 `assess-check`/`assess-plan`/`assess-commit` drive the assess job the same way `measure`/`plan`/`commit` drive the
 watch; `project-mark` is the deterministic record of which `project` issue, if any, is currently being worked
@@ -162,8 +163,8 @@ def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | Non
             return 2
         tasks = [task for task in tasks if task.id in wanted]
 
-    if not tasks:
-        emit(0, 0, "no_tasks", "", cannot_measure)
+    if not tasks:  # nothing to measure, and a retry wouldn't change that
+        emit(0, 0, "no_tasks", "", "none")
         return 0
     if _pool_holding(host, now):
         emit(0, 0, "pool_hold", "", cannot_measure)
@@ -171,10 +172,14 @@ def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | Non
 
     run_id = yardstick.new_run_id(now)
     try:
-        results = yardstick.run(host, state, tasks, run_id=run_id)
-        # Only runs that started before the gate can be its baseline (`state.gate` has already parsed `started`).
-        gate_result = (yardstick.gate_verdict(state, run_id, datetime.strptime(active["started"], FMT)
-                                              .replace(tzinfo=UTC)) if active else "none")
+        results = yardstick.run(host, state, tasks, run_id=run_id, gate=active["started"] if active else None)
+        gate_result = "none"
+        if active:
+            # Only runs that started before the gate can be its baseline (`state.gate` has already parsed
+            # `started`), and the verdict is recorded: a failed gate run is never anyone's baseline.
+            gate_result = yardstick.gate_verdict(state, run_id,
+                                                 datetime.strptime(active["started"], FMT).replace(tzinfo=UTC))
+            yardstick.record_gate_run(state, run_id, active["started"], gate_result)
     except Exception as exc:
         print(f"yardstick run failed ({type(exc).__name__})", file=sys.stderr)
         emit(0, 0, "error", run_id, cannot_measure)

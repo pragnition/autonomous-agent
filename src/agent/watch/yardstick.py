@@ -109,6 +109,11 @@ def results_path(state: State) -> Path:
     return state.yardstick_results_path()
 
 
+def gate_runs_path(state: State) -> Path:
+    """One JSON line per gate run: `{run, gate, result, ts}` (`record_gate_run`)."""
+    return state.root / "yardstick" / "gate-runs.jsonl"
+
+
 def _retired_root(root: Path) -> Path:
     return Path(root).parent / "retired"
 
@@ -233,11 +238,37 @@ def read_results(state: State) -> list[dict]:
     return out
 
 
-def _append_result(state: State, record: dict) -> None:
-    path = results_path(state)
+def _append_jsonl(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as fh:
         fh.write(json.dumps(record) + "\n")
+
+
+def _append_result(state: State, record: dict) -> None:
+    _append_jsonl(results_path(state), record)
+
+
+def record_gate_run(state: State, run_id: str, gate_started: str, result: str) -> None:
+    """Record what the gate run `run_id` found about the gate started at `gate_started`. A run whose verdict was
+    `failed` measured a change that is then reverted: it is never a baseline, nor part of a task's streak."""
+    _append_jsonl(gate_runs_path(state), {"run": run_id, "gate": gate_started, "result": result,
+                                          "ts": datetime.now(UTC).strftime(FMT)})
+
+
+def _failed_gate_runs(state: State) -> set[str]:
+    """The runs whose latest recorded gate verdict is `failed`."""
+    path = gate_runs_path(state)
+    if not path.is_file():
+        return set()
+    verdicts: dict[str, object] = {}
+    for line in path.read_text().splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("run"):
+            verdicts[str(record["run"])] = record.get("result")
+    return {run_id for run_id, result in verdicts.items() if result == "failed"}
 
 
 def score(results: list[dict]) -> tuple[int, int]:
@@ -272,10 +303,12 @@ class _Runs:
     order: list[str]  # run ids in the order they first appear in the results file
     by_run: dict[str, dict[str, bool]]  # each run's mechanical results by task
     started: dict[str, datetime | None]  # each run's start (`_run_started`)
+    failed_gates: set[str]  # runs whose gate verdict was `failed` (`record_gate_run`)
 
     def earlier(self, run_id: str, before: datetime | None) -> list[str]:
-        """The runs before `run_id` in the file; with `before`, only those that started before that time."""
-        runs = self.order[:self.order.index(run_id)]
+        """The runs before `run_id` in the file, leaving out every failed gate run; with `before`, only those that
+        started before that time."""
+        runs = [r for r in self.order[:self.order.index(run_id)] if r not in self.failed_gates]
         if before is None:
             return runs
         return [r for r in runs if self.started[r] is not None and self.started[r] < before]
@@ -295,7 +328,8 @@ def _runs(state: State) -> _Runs:
         ts = _parse_ts(record.get("ts"))
         if ts is not None and (run_id not in first_ts or ts < first_ts[run_id]):
             first_ts[run_id] = ts
-    return _Runs(order, by_run, {run_id: _run_started(run_id, first_ts.get(run_id)) for run_id in order})
+    return _Runs(order, by_run, {run_id: _run_started(run_id, first_ts.get(run_id)) for run_id in order},
+                 _failed_gate_runs(state))
 
 
 def compare(state: State, current_run_id: str, before: datetime | None = None) -> dict:
@@ -305,9 +339,10 @@ def compare(state: State, current_run_id: str, before: datetime | None = None) -
     last 3 earlier runs and fails now (after its retry). The gate fails on a drop of 2 or more, or on any
     regression.
 
-    With `before` (a gate's `started`), only runs that started before it count as earlier: a nightly run that
-    landed between the change's deploy and the gate run already includes the change, so it can be neither the
-    baseline nor part of a task's streak."""
+    A gate run whose verdict was `failed` is never an earlier run: the change it measured was reverted. With
+    `before` (a gate's `started`), only runs that started before it count as earlier: a nightly run that landed
+    between the change's deploy and the gate run already includes the change, so it can be neither the baseline
+    nor part of a task's streak."""
     runs = _runs(state)
     by_run = runs.by_run
     out = {"previous": None, "shared": 0, "drop": 0, "regressions": [], "gate_failed": False}
@@ -333,19 +368,13 @@ def compare(state: State, current_run_id: str, before: datetime | None = None) -
 
 
 def gate_verdict(state: State, run_id: str, gate_started: datetime | None = None) -> str:
-    """What the run `run_id` says about the change a gate (started at `gate_started`) is measuring: `passed` or
-    `failed` from `compare`, against runs that started before the gate only; `passed` too when no run started
-    before it, so this one becomes the baseline; `retry` when it can't say -- the run recorded no results, or it
-    shares fewer than `MIN_SHARED` mechanical tasks with every earlier run."""
-    runs = _runs(state)
-    if run_id not in runs.order:
+    """What the run `run_id` says about the change a gate (started at `gate_started`) is measuring: `failed` or
+    `passed` from `compare`, against runs that started before the gate only. With no earlier run it can be
+    compared with (none shares `MIN_SHARED` mechanical tasks with it) it is `passed`, and this run becomes the
+    baseline: waiting wouldn't change that. `retry` when the run recorded no results at all."""
+    if run_id not in _runs(state).order:
         return "retry"
-    if not runs.earlier(run_id, gate_started):
-        return "passed"
-    comparison = compare(state, run_id, before=gate_started)
-    if comparison["previous"] is None:
-        return "retry"
-    return "failed" if comparison["gate_failed"] else "passed"
+    return "failed" if compare(state, run_id, before=gate_started)["gate_failed"] else "passed"
 
 
 # -- run --
@@ -513,9 +542,10 @@ def _memory(host, args: list[str]) -> dict | None:
     return report if isinstance(report, dict) else None
 
 
-def run(host, state: State, tasks: list[Task], *, run_id: str, concurrency: int = 4, sleep=time.sleep,
-        clock=time.monotonic) -> list[dict]:
-    """Run `tasks` (see the module docstring); one result per task, in `tasks`' order."""
+def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None = None, concurrency: int = 4,
+        sleep=time.sleep, clock=time.monotonic) -> list[dict]:
+    """Run `tasks` (see the module docstring); one result per task, in `tasks`' order. A gate run passes the
+    gate's `started` as `gate`, and each of its results carries it."""
     if not tasks:
         return []
     sha = _sha(host)
@@ -540,6 +570,8 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, concurrency: int 
         record = {"run": run_id, "ts": datetime.now(UTC).strftime(FMT), "sha": sha, "task": task.id,
                   "passed": passed, "minutes": minutes, "judged": not task.mechanical, "reason": reason,
                   "tries": attempt.tries}
+        if gate is not None:
+            record["gate"] = gate
         final[task.id] = record
         _append_result(state, record)
 

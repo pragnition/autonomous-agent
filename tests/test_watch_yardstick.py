@@ -809,10 +809,11 @@ def test_gate_verdict(tmp_path):
     assert yardstick.gate_verdict(state, "r2") == "passed"  # a drop of 1
     _record(state, "r3", {"a": False, "b": False, "c": False})
     assert yardstick.gate_verdict(state, "r3") == "failed"
+    # No earlier run it can be compared with: it passes and becomes the baseline.
     _record(state, "r4", {"a": True, "new": True})  # one task in common with every earlier run
-    assert yardstick.gate_verdict(state, "r4") == "retry"
+    assert yardstick.gate_verdict(state, "r4") == "passed"
     _record(state, "r5", {}, judged={"j": True})  # no mechanical task at all
-    assert yardstick.gate_verdict(state, "r5") == "retry"
+    assert yardstick.gate_verdict(state, "r5") == "passed"
     assert yardstick.gate_verdict(state, "never-ran") == "retry"
 
 
@@ -857,6 +858,69 @@ def test_a_gate_compares_against_the_last_run_started_before_the_gate(tmp_path):
     path.write_text("".join(json.dumps({"run": run, "ts": ts, "task": task, "passed": passed, "judged": False})
                             + "\n" for run, ts, passed in rows for task in ("a", "b")))
     assert yardstick.compare(loose, gate_run, before=gate_started)["previous"] == "early"
+
+
+def test_a_failed_gate_run_is_never_a_baseline(tmp_path):
+    # The change a failed gate measured was reverted: its run says nothing about Jensen as it is now. Compared with
+    # it, the next change scoring just as badly would pass.
+    state = State(tmp_path / "state")
+    nightlies = [f"2026111{n}T190700Z-000{n}" for n in range(3)]
+    for run in nightlies:
+        _record(state, run, {task: True for task in "abcde"})
+    three_of_five = {"a": True, "b": True, "c": True, "d": False, "e": False}
+    gate_a, gate_a_started = "20261119T090000Z-aaaa", datetime(2026, 11, 19, 8, 0, 0, tzinfo=UTC)
+    _record(state, gate_a, three_of_five)
+    assert yardstick.gate_verdict(state, gate_a, gate_a_started) == "failed"
+    yardstick.record_gate_run(state, gate_a, "2026-11-19T08:00:00Z", "failed")
+
+    gate_b, gate_b_started = "20261119T110000Z-bbbb", datetime(2026, 11, 19, 10, 0, 0, tzinfo=UTC)
+    _record(state, gate_b, three_of_five)
+    comparison = yardstick.compare(state, gate_b, before=gate_b_started)
+    assert comparison["previous"] == nightlies[-1] and comparison["drop"] == 2
+    assert comparison["regressions"] == ["d", "e"]  # the failed run doesn't break their streak either
+    assert yardstick.gate_verdict(state, gate_b, gate_b_started) == "failed"
+
+    # A nightly run skips it too.
+    yardstick.record_gate_run(state, gate_b, "2026-11-19T10:00:00Z", "failed")
+    _record(state, "20261119T190700Z-cccc", {task: True for task in "abcde"})
+    assert yardstick.compare(state, "20261119T190700Z-cccc")["previous"] == nightlies[-1]
+
+    # A gate whose only earlier run is a failed gate run has nothing to compare with: it is the baseline.
+    lone = State(tmp_path / "lone")
+    _record(lone, gate_a, three_of_five)
+    yardstick.record_gate_run(lone, gate_a, "2026-11-19T08:00:00Z", "failed")
+    _record(lone, gate_b, {"a": False, "b": False, "c": False, "d": False, "e": False})
+    assert yardstick.gate_verdict(lone, gate_b, gate_b_started) == "passed"
+
+
+def test_cli_gate_run_records_its_verdict_so_a_failed_one_is_never_a_baseline(tmp_path, monkeypatch):
+    state = State(tmp_path / "state")
+    for task_id in "abcde":
+        _write_task(state.root / "yardstick" / "tasks", task_id)
+    for n in range(3):
+        _record(state, f"2026111{n}T190700Z-000{n}", {task: True for task in "abcde"})
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+    fails_d_and_e = lambda folder: 1 if folder.rsplit("/", 1)[1][0] in "de" else 0  # noqa: E731
+
+    state.gate_start(12, "repo", "abc123", T0 - timedelta(hours=2))
+    rc, kv = _gate_run(state, FakeHost(tmp_path, check_rc=fails_d_and_e), tmp_path / "out.txt",
+                       now=T0 - timedelta(hours=1))
+    assert rc == 0 and kv["gate_result"] == "failed"
+    gate_a_lines = [r for r in _read_results(state) if r["run"] == kv["run_id"]]
+    assert {r["gate"] for r in gate_a_lines} == {"2026-11-19T17:07:00Z"}
+    state.gate_end("failed", T0 - timedelta(minutes=50))
+
+    state.gate_start(13, "repo", "def456", T0 - timedelta(minutes=30))
+    rc, kv = _gate_run(state, FakeHost(tmp_path, check_rc=fails_d_and_e), tmp_path / "out.txt")
+    assert rc == 0 and kv["gate_result"] == "failed"  # against the nightly 5/5, not gate A's 3/5
+
+    runs = [json.loads(line) for line in yardstick.gate_runs_path(state).read_text().splitlines()]
+    assert [(r["gate"], r["result"]) for r in runs] == [("2026-11-19T17:07:00Z", "failed"),
+                                                       ("2026-11-19T18:37:00Z", "failed")]
+    # A nightly run's lines carry no gate.
+    main(["yardstick", "run", "--github-output", str(tmp_path / "out.txt")], host=FakeHost(tmp_path), state=state,
+         now=T0 + timedelta(hours=1))
+    assert all("gate" not in r for r in _read_results(state) if r["run"].startswith("20261119T200700Z"))
 
 
 def test_cli_gate_run_ignores_a_nightly_run_after_the_gate_started(tmp_path, monkeypatch):
@@ -1112,9 +1176,9 @@ def test_cli_gate_run_retries_when_it_cannot_measure(tmp_path, monkeypatch, caps
     out = tmp_path / "out.txt"
     monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
 
-    # No tasks installed.
+    # No tasks installed: nothing to measure, now or on a retry.
     rc, kv = _gate_run(state, FakeHost(tmp_path), out)
-    assert rc == 0 and kv["gate_result"] == "retry" and kv["skip_reason"] == "no_tasks"
+    assert rc == 0 and kv["gate_result"] == "none" and kv["skip_reason"] == "no_tasks"
 
     # The pool holds.
     _write_task(state.root / "yardstick" / "tasks", "t1")
@@ -1140,19 +1204,24 @@ def test_cli_gate_run_retries_when_it_cannot_measure(tmp_path, monkeypatch, caps
         rc, kv = _gate_run(state, FakeHost(tmp_path), out)
     assert rc == 1 and kv["gate_result"] == "retry"
 
-    # Fewer than 2 mechanical tasks in common with any earlier run.
-    state2 = State(tmp_path / "state2")
-    state2.gate_start(12, "repo", "abc123", T0)
-    _write_task(state2.root / "yardstick" / "tasks", "t1")
-    _write_task(state2.root / "yardstick" / "tasks", "t2")
-    _record(state2, "20261118T190700Z-0000", {"t1": True, "old": True})
-    rc, kv = _gate_run(state2, FakeHost(tmp_path), out)
-    assert rc == 0 and kv["gate_result"] == "retry" and kv["skip_reason"] == ""
-
     # Every retry leaves the gate active, for the next gate run.
-    assert state.gate(T0) is not None and state2.gate(T0) is not None
+    assert state.gate(T0) is not None
     printed = capsys.readouterr()
     assert "boom" not in printed.out + printed.err and "/home" not in printed.out + printed.err
+
+
+def test_cli_gate_run_with_no_comparable_earlier_run_passes_as_the_baseline(tmp_path, monkeypatch):
+    # Fewer than 2 mechanical tasks in common with any earlier run: waiting would never change that.
+    state = State(tmp_path / "state")
+    state.gate_start(12, "repo", "abc123", T0)
+    _write_task(state.root / "yardstick" / "tasks", "t1")
+    _write_task(state.root / "yardstick" / "tasks", "t2")
+    _record(state, "20261118T190700Z-0000", {"t1": True, "old": True})
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+
+    rc, kv = _gate_run(state, FakeHost(tmp_path, check_rc=lambda folder: 1), tmp_path / "out.txt")
+
+    assert rc == 0 and kv["gate_result"] == "passed" and kv["skip_reason"] == "" and kv["score"] == "0"
 
 
 def test_cli_gate_run_passes_without_a_drop(tmp_path, monkeypatch):
