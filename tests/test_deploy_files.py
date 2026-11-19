@@ -375,12 +375,15 @@ def test_instructions_carry_the_key_rules():
     anchors = {
         ".github/improve-jensen-watch.md": (
             "jensen_watch.py note", "jensen_watch.py count", "plan.json", "fixing",
-            "core is unreachable", "not_deployable", "two such comments", "ci_unknown"),
+            "core is unreachable", "not_deployable", "two such comments", "ci_unknown",
+            "Start the gate first", "A behaviour-changing deploy landed"),
         ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit", "/status"),
         ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #",
                                       ".github/workflows/", ".github/improve-jensen*.md",
                                       "deploy/improve-jensen-seed.json",
-                                      "improve-jensen never merges a change to its own yardstick or gate"),
+                                      "improve-jensen never merges a change to its own yardstick or gate",
+                                      "starts its gate as soon as `just deploy` returns 0",
+                                      "Gate waiting: a deploy is pending"),
         "deploy/improve-jensen.md": ("Never approve a fork run on this repo", "debug logging",
                                      "persist-credentials: false", "claude[bot]", "gh run list"),
     }
