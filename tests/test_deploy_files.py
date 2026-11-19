@@ -178,6 +178,7 @@ def test_agent_image():
 def test_agent_service(compose):
     agent = compose["services"]["agent"]
     assert agent["build"]["target"] == "agent" and agent["restart"] == "unless-stopped"
+    assert agent["init"] is True  # PID 1 is an init that reaps orphaned processes, not the runner
     assert agent["network_mode"] == "service:docker" and "networks" not in agent and not agent.get("privileged")
     vols = volumes(compose, "agent")
     assert "${AGENT_DATA:-./data}/runner:/run/agent:ro" in vols
