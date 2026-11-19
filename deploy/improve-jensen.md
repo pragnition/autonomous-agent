@@ -216,12 +216,18 @@ aren't open already. An install switched on before the assessment existed runs t
 
 ## 9. First watch and the token check
 
-Turn the workflow on and log out straight away, so that no job can borrow your login (the checks below rely on it):
+Turn the workflow on, switch the engine on, and log out straight away, so that no job can borrow your login (the
+checks below rely on it):
 
 ```sh
 gh workflow enable improve-jensen.yml -R pragnition/autonomous-agent
+gh variable set IMPROVE_JENSEN_ENGINE --body on -R pragnition/autonomous-agent
 gh auth logout                                               # the runners share this HOME
 ```
+
+Until this line, `IMPROVE_JENSEN_ENGINE` is unset (anything but `on` means off): `respond` keeps matching today's one
+runner and answering issues and `@improve-jensen` comments with a PR, the old way, and `watch`, `assess` and the
+nightly `yardstick` never fire on their cron. Nothing about the issue flow changes before it.
 
 Start the first watch from the repo's Actions tab (improve-jensen → Run workflow, mode `watch`) and follow it there.
 Once it's done:
@@ -316,13 +322,22 @@ tasks that aren't there yet.
 
 ## Turning it off
 
-Log in to `gh` for this, and log out afterwards:
+```sh
+gh variable set IMPROVE_JENSEN_ENGINE --body off -R pragnition/autonomous-agent
+```
+
+This takes `respond` back to today's one runner and stops `watch`, `assess` and the nightly `yardstick` firing on
+their cron; a manual `workflow_dispatch` run still works regardless. Issues and `@improve-jensen` comments still get
+answered with a PR, the old way, for a person to merge — nothing about the issue flow changes either side of the
+switch.
+
+For a full stop — nothing runs at all, not even `respond` — log in to `gh`, and log out afterwards:
 
 ```sh
 gh workflow disable improve-jensen.yml -R pragnition/autonomous-agent
 ```
 
-This stops the hourly watch, manual runs and the issue triggers. A run already going keeps going: list them with
+A run already going keeps going: list them with
 `gh run list -R pragnition/autonomous-agent --workflow improve-jensen.yml --status in_progress`, and stop one with
 `gh run cancel <id> -R pragnition/autonomous-agent`. A cancelled fix still clears `fixing`, but a change it merged may
 not be deployed yet: check the end of `deploys.jsonl`. `gh workflow enable` turns it back on, and the next watch

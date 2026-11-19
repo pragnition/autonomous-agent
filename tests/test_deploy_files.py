@@ -285,10 +285,31 @@ def test_improve_jensen_triggers_and_jobs(improve_jensen):
 
 def test_jobs_run_on_the_right_runners(improve_jensen):
     jobs = improve_jensen["jobs"]
-    for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"), ("respond", "work"),
+    for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"),
                              ("assess", "work"), ("project", "work"), ("yardstick", "work"), ("gate-revert", "work")):
         labels = _runs_on_labels(jobs[name])
         assert labels == {"self-hosted", "improve-jensen", want_label}, name
+
+
+def test_respond_runs_on_the_old_runner_until_the_engine_switch_is_on(improve_jensen):
+    """Today's one live runner has no `work` label. Until a person sets `vars.IMPROVE_JENSEN_ENGINE` to `on` (after
+    deploy/improve-jensen.md's new runners exist), `respond` must keep matching just `[self-hosted,
+    improve-jensen]`, or merging this workflow would stop it answering issues at all."""
+    runs_on = improve_jensen["jobs"]["respond"]["runs-on"]
+    assert runs_on == (
+        "${{ fromJSON(vars.IMPROVE_JENSEN_ENGINE == 'on' && '[\"self-hosted\", \"improve-jensen\", \"work\"]' || "
+        "'[\"self-hosted\", \"improve-jensen\"]') }}")
+
+
+def test_respond_tells_claude_to_stop_at_the_pr_when_the_engine_is_off(improve_jensen):
+    """claude-code-action appends a non-empty `prompt` to tag mode's auto-generated one as `<custom_instructions>`;
+    while the engine is off, respond must tell Claude to open the PR and leave the merge and deploy to a person."""
+    respond_claude = next(s for job_name, s in _claude_steps(improve_jensen) if job_name == "respond")
+    prompt = respond_claude["with"]["prompt"]
+    assert "vars.IMPROVE_JENSEN_ENGINE != 'on'" in prompt
+    assert "The engine is not switched on: open the PR and stop there." in prompt
+    assert "merge, deploy or start a gate" in prompt
+    assert "a person merges" in prompt
 
 
 def test_fix_is_serialised(improve_jensen):
@@ -413,6 +434,19 @@ def test_each_schedule_runs_only_its_job(improve_jensen):
         for other_name, other_cron in _SCHEDULE_CRONS.items():
             if other_name != name:
                 assert other_cron not in job_if, (name, other_name, job_if)
+
+
+def test_scheduled_jobs_wait_for_the_engine_switch(improve_jensen):
+    """Merging this workflow must not change today's behaviour: `watch`, `assess` and the nightly `yardstick` may
+    only fire on their own cron once a person sets the repo variable `IMPROVE_JENSEN_ENGINE` to `on` (deploy/
+    improve-jensen.md). A manual `workflow_dispatch` is a person's explicit choice and keeps working regardless."""
+    jobs = improve_jensen["jobs"]
+    for name, cron in _SCHEDULE_CRONS.items():
+        job_if = " ".join(str(jobs[name]["if"]).split())
+        assert f"github.event.schedule == '{cron}' && vars.IMPROVE_JENSEN_ENGINE == 'on'" in job_if, name
+    for name, mode in (("watch", "watch"), ("assess", "assess"), ("yardstick", "yardstick")):
+        job_if = " ".join(str(jobs[name]["if"]).split())
+        assert f"(github.event_name == 'workflow_dispatch' && inputs.mode == '{mode}')" in job_if, name
 
 
 def test_new_jobs_runners_timeouts_and_files(improve_jensen):
