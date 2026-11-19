@@ -228,7 +228,8 @@ cat ~/.local/state/improve-jensen/plan.json                 # the reviews and th
 The first window is the last hour. An hour with no finished turns, no new PRs, no `fix-deployed` issue and nothing
 that needs attention (core unreachable, a failed deploy) starts no Claude run and writes no plan, and neither does
 one while core's usage watch is holding scheduled runs. From here the watch runs every hour at :17, the assessment
-every 6 hours at :13, and the yardstick nightly at 19:07 UTC (03:07 Singapore time).
+every 6 hours at :13, and the yardstick nightly at 19:07 UTC (03:07 Singapore time) and as a gate after any job that
+starts one.
 
 Then check, once, that the jobs work on their own tokens. The `fix` and `respond` jobs check out with
 `persist-credentials: false`, so Claude pushes and opens PRs as the Claude app: a push made with a job's own
@@ -262,7 +263,7 @@ cd ~/autonomous-agent
 python3 scripts/jensen_watch.py yardstick install deploy/yardstick
 ```
 
-Start the run from the Actions tab (improve-jensen → Run workflow, mode `yardstick`, `target` empty), or with
+Start the run from the Actions tab (improve-jensen → Run workflow, mode `yardstick`), or with
 `gh workflow run improve-jensen.yml -R pragnition/autonomous-agent -f mode=yardstick` from a machine logged in to
 `gh`. Start it at a quiet hour: it runs Jensen through each task in a silent `V-yardstick-` conversation, at most four
 at once, and can take a few hours. When it's done:
@@ -280,7 +281,8 @@ cat ~/.local/state/improve-jensen/assessment.md
 ```
 
 The pinned `jensen-assessment` issue shows the same list in general terms, and the same run's `project` job shows
-whether it started an improvement project. An assessment with nothing new since the last one starts no Claude run.
+whether it started an improvement project. An assessment with nothing new since the last one, and no project
+waiting, starts no Claude run.
 
 ## The yardstick tasks
 
@@ -298,10 +300,13 @@ tasks that aren't there yet.
 
 ## Manual runs
 
-- A `watch` run, a `fix` run for one of this repo's issues, an `assess` run, and a `yardstick` run with an empty
-  `target` are safe to start by hand. A `project` run takes a `project` issue's number as its `target`.
-- A `yardstick` run with `target` `gate` is improve-jensen's own: a fix or project run starts it after a change, and
-  it measures the change in the gate record. A failed gate reverts that change.
+- A `watch` run, a `fix` run for one of this repo's issues, an `assess` run, and a `yardstick` run are safe to start
+  by hand. A `project` run takes a `project` issue's number as its `target`.
+- A gate run is improve-jensen's own. When a watch, fix, project or respond job ends with a gate active (it ran
+  `gate start` after a change), the same run's `yardstick` job measures that change, and a failed gate reverts it.
+  A manual `yardstick` run never gates or reverts anything: start one only while
+  `python3 scripts/jensen_watch.py gate status` (in `~/autonomous-agent`) shows none, so it isn't compared with the
+  change being measured.
 - A `review` run takes a product PR's URL as its `target`, and that URL then shows in this public repo's run: in its
   inputs and in the Claude step's prompt. Leave reviews to the hourly watch, which names a PR only by an index into
   the state folder; start one by hand only for a PR whose URL may be public.
@@ -322,6 +327,8 @@ This stops the hourly watch, manual runs and the issue triggers. A run already g
 not be deployed yet: check the end of `deploys.jsonl`. `gh workflow enable` turns it back on, and the next watch
 catches up on the hours missed.
 
-A yardstick gate run that died (its runner stopped, or the host suspended) leaves its gate record behind, and
-deploys that change how Jensen behaves wait until it expires after 12 hours. To end it sooner, run
-`cd ~/autonomous-agent && python3 scripts/jensen_watch.py gate end`; the next watch removes `gating` from its issue.
+A gate the yardstick couldn't measure (its run died, the host suspended, or core's usage watch held it) stays
+active, and the next job to end with it active, the hourly watch at the latest, starts its gate run again. Deploys
+that change how Jensen behaves wait meanwhile, and the gate expires after 12 hours. To give up on it sooner and keep
+the change, run `cd ~/autonomous-agent && python3 scripts/jensen_watch.py gate end --result passed`; the next watch
+removes `gating` from its issue.
