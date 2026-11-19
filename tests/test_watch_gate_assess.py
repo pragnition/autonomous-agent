@@ -18,202 +18,6 @@ def _kv(text: str) -> dict:
     return dict(line.split("=", 1) for line in text.splitlines() if line)
 
 
-# -- gate: State --
-
-
-def test_gate_start_twice_raises(tmp_path):
-    state = State(tmp_path)
-    now = _dt(2026, 11, 19, 10, 0, 0)
-
-    state.gate_start(7, "repo", "abc123", now)
-    assert state.gate(now) == {"issue": 7, "kind": "repo", "handle": "abc123", "started": "2026-11-19T10:00:00Z"}
-
-    with pytest.raises(RuntimeError):
-        state.gate_start(8, "host", "backup/path", now)
-    # The first gate is still the one on record -- the failed second call changed nothing.
-    assert state.gate(now)["issue"] == 7
-
-
-def test_gate_expires_after_12_hours(tmp_path):
-    state = State(tmp_path)
-    start = _dt(2026, 11, 19, 0, 0, 0)
-    state.gate_start(1, "repo", "sha1", start)
-
-    almost = start + timedelta(hours=11, minutes=59)
-    assert state.gate(almost) is not None
-
-    expired = start + timedelta(hours=12, minutes=1)
-    assert state.gate(expired) is None
-
-    # An expired gate never blocks a fresh gate_start -- it's as if there were no gate at all.
-    state.gate_start(2, "host", "backup", expired)
-    assert state.gate(expired)["issue"] == 2
-
-
-def test_gate_end_removes_it(tmp_path):
-    state = State(tmp_path)
-    now = _dt(2026, 11, 19, 0, 0, 0)
-    state.gate_start(1, "repo", "sha1", now)
-    assert state.gate(now) is not None
-
-    state.gate_end()
-
-    assert state.gate(now) is None
-    # Ending an already-absent gate is not an error.
-    state.gate_end()
-
-
-# -- gate: CLI --
-
-
-def test_gate_cli_start_status_end(tmp_path, capsys):
-    state = State(tmp_path / "state")
-
-    rc = main(["gate", "start", "--issue", "5", "--kind", "repo", "--handle", "abc123"],
-              host=object(), state=state, now=T0)
-    assert rc == 0
-    capsys.readouterr()
-
-    rc_status = main(["gate", "status"], host=object(), state=state, now=T0)
-    assert rc_status == 0
-    out = capsys.readouterr().out.strip()
-    assert json.loads(out) == {"issue": 5, "kind": "repo", "handle": "abc123", "started": "2026-11-19T10:00:00Z"}
-
-    rc_dup = main(["gate", "start", "--issue", "6", "--kind", "host", "--handle", "xyz"],
-                  host=object(), state=state, now=T0)
-    assert rc_dup == 1
-    assert "already active" in capsys.readouterr().err.lower()
-
-    rc_end = main(["gate", "end"], host=object(), state=state, now=T0)
-    assert rc_end == 0
-    main(["gate", "status"], host=object(), state=state, now=T0)
-    assert capsys.readouterr().out.strip() == "none"
-
-    # Now that the gate is gone, starting a new one works.
-    rc_fresh = main(["gate", "start", "--issue", "6", "--kind", "host", "--handle", "xyz"],
-                    host=object(), state=state, now=T0)
-    assert rc_fresh == 0
-
-
-def test_gate_end_archives_the_gate_with_its_result(tmp_path):
-    state = State(tmp_path)
-    assert state.last_gate() is None
-
-    state.gate_start(7, "repo", "abc123", T0)
-    state.gate_end("failed", T0 + timedelta(hours=2), started="2026-11-19T10:00:00Z", drop=2, regressions=1)
-
-    assert state.gate(T0) is None and not (tmp_path / "gate.json").exists()
-    assert state.last_gate() == {"issue": 7, "kind": "repo", "handle": "abc123", "started": "2026-11-19T10:00:00Z",
-                                 "result": "failed", "ended": "2026-11-19T12:00:00Z", "drop": 2, "regressions": 1}
-    assert json.loads((tmp_path / "gate-last.json").read_text())["result"] == "failed"
-
-    # Ending with no gate active changes nothing: the last ended gate stays on record.
-    state.gate_end("passed", T0 + timedelta(hours=3))
-    assert state.last_gate()["result"] == "failed"
-
-    # An expired gate is still archived (it's the record of the change it was measuring), and a new one replaces
-    # the last record.
-    state.gate_start(8, "host", "backup-1", T0)
-    state.gate_end("passed", T0 + timedelta(hours=13))
-    assert state.last_gate()["issue"] == 8 and state.last_gate()["result"] == "passed"
-
-    with pytest.raises(ValueError):
-        state.gate_end("maybe", T0)
-
-
-def test_gate_cli_status_last_github_output_and_end_result(tmp_path, capsys):
-    state = State(tmp_path / "state")
-    out = tmp_path / "out.txt"
-
-    # No gate: active=false, and nothing on stdout -- a workflow log never shows a gate's handle.
-    assert main(["gate", "status", "--github-output", str(out)], host=object(), state=state, now=T0) == 0
-    assert _kv(out.read_text()) == {"active": "false"}
-    assert capsys.readouterr().out == ""
-    assert main(["gate", "status", "--last"], host=object(), state=state, now=T0) == 0
-    assert capsys.readouterr().out.strip() == "none"
-
-    main(["gate", "start", "--issue", "5", "--kind", "host", "--handle", "backup-7"], host=object(), state=state,
-         now=T0)
-    out.unlink()
-    assert main(["gate", "status", "--github-output", str(out)], host=object(), state=state, now=T0) == 0
-    assert _kv(out.read_text()) == {"active": "true"}
-    assert capsys.readouterr().out == ""
-
-    assert main(["gate", "end", "--result", "passed"], host=object(), state=state,
-                now=T0 + timedelta(hours=1)) == 0
-    main(["gate", "status"], host=object(), state=state, now=T0 + timedelta(hours=1))
-    assert capsys.readouterr().out.strip() == "none"
-    main(["gate", "status", "--last"], host=object(), state=state, now=T0 + timedelta(hours=1))
-    assert json.loads(capsys.readouterr().out) == {"issue": 5, "kind": "host", "handle": "backup-7",
-                                                   "started": "2026-11-19T10:00:00Z", "result": "passed",
-                                                   "ended": "2026-11-19T11:00:00Z", "drop": None,
-                                                   "regressions": None}
-
-    with pytest.raises(SystemExit):
-        main(["gate", "end", "--result", "maybe"], host=object(), state=state, now=T0)
-
-
-def test_gate_end_with_started_ends_only_the_gate_it_measured(tmp_path, capsys):
-    state = State(tmp_path / "state")
-    state.gate_start(5, "repo", "abc123", T0)
-    later = T0 + timedelta(hours=1)
-
-    # A gate started at another time is a different gate (the measured one ended, and a new one began since).
-    assert main(["gate", "end", "--result", "failed", "--started", "2026-11-19T09:00:00Z", "--drop", "2",
-                 "--regressions", "0"], host=object(), state=state, now=later) == 1
-    assert "2026-11-19T10:00:00Z" in capsys.readouterr().err
-    assert state.gate(later) is not None and state.last_gate() is None
-
-    assert main(["gate", "end", "--result", "failed", "--started", "2026-11-19T10:00:00Z", "--drop", "2",
-                 "--regressions", "1"], host=object(), state=state, now=later) == 0
-    assert state.gate(later) is None
-    last = state.last_gate()
-    assert (last["issue"], last["result"], last["drop"], last["regressions"]) == (5, "failed", 2, 1)
-
-    # With nothing active, there is no gate that started then.
-    assert main(["gate", "end", "--result", "passed", "--started", "2026-11-19T10:00:00Z"], host=object(),
-                state=state, now=later) == 1
-    assert "no active gate" in capsys.readouterr().err
-    assert state.last_gate()["result"] == "failed"
-
-    with pytest.raises(SystemExit):
-        main(["gate", "end", "--result", "passed", "--drop", "two"], host=object(), state=state, now=later)
-
-
-def test_gate_end_with_started_still_ends_an_expired_gate(tmp_path):
-    # The gate run can finish after the 12 hours are up: it still records what it measured.
-    state = State(tmp_path / "state")
-    state.gate_start(5, "repo", "abc123", T0)
-    late = T0 + timedelta(hours=13)
-    assert main(["gate", "end", "--result", "passed", "--started", "2026-11-19T10:00:00Z"], host=object(),
-                state=state, now=late) == 0
-    assert state.last_gate()["result"] == "passed"
-
-
-def test_gate_start_refuses_while_a_deploy_is_pending(tmp_path, capsys):
-    # The pending change would land mid-gate, unmeasured, the moment the gate ends.
-    state = State(tmp_path / "state")
-    state.set_deploy_pending(True)
-
-    assert main(["gate", "start", "--issue", "5", "--kind", "repo", "--handle", "abc123"], host=object(),
-                state=state, now=T0) == 1
-    assert "a deploy is pending" in capsys.readouterr().err
-    assert state.gate(T0) is None
-    with pytest.raises(RuntimeError, match="a deploy is pending"):
-        state.gate_start(5, "repo", "abc123", T0)
-
-    state.set_deploy_pending(False)
-    assert main(["gate", "start", "--issue", "5", "--kind", "repo", "--handle", "abc123"], host=object(),
-                state=state, now=T0) == 0
-
-
-def test_gate_start_rejects_bad_kind(tmp_path):
-    state = State(tmp_path / "state")
-    with pytest.raises(SystemExit):
-        main(["gate", "start", "--issue", "1", "--kind", "bogus", "--handle", "x"],
-             host=object(), state=state, now=T0)
-
-
 # -- assess-check --
 
 
@@ -261,7 +65,7 @@ def test_assess_check_first_time_and_nothing_new(tmp_path, capsys):
     assert kv2["started"] == "2026-11-19T11:00:00Z"
 
 
-def test_assess_check_new_feedback_or_yardstick_result(tmp_path, capsys):
+def test_assess_check_new_feedback_counts_as_work(tmp_path, capsys):
     # A new note from Jensen counts as new work.
     state_dir = tmp_path / "notes-state"
     state = State(state_dir)
@@ -273,36 +77,6 @@ def test_assess_check_new_feedback_or_yardstick_result(tmp_path, capsys):
     kv = _kv(capsys.readouterr().out)
     assert kv["has_work"] == "true"
     assert kv["skip_reason"] == ""
-
-    # A new yardstick result counts too, even with no notes and an otherwise quiet hour.
-    state2_dir = tmp_path / "yardstick-state"
-    state2 = State(state2_dir)
-    state2.set_last_assess(T0)
-    yardstick_dir = state2_dir / "yardstick"
-    yardstick_dir.mkdir()
-    result_line = json.dumps({"run": "1", "ts": "2026-11-19T10:30:00Z", "sha": "abc", "task": "t1",
-                              "passed": True, "minutes": 2.0, "judged": False})
-    (yardstick_dir / "results.jsonl").write_text(result_line + "\n")
-    host2 = _AssessHost()
-
-    rc2 = main(["assess-check"], host=host2, state=state2, now=T0 + timedelta(hours=1))
-    assert rc2 == 0
-    kv2 = _kv(capsys.readouterr().out)
-    assert kv2["has_work"] == "true"
-
-    # An old yardstick result (before last_assess) is not new.
-    state3_dir = tmp_path / "old-yardstick-state"
-    state3 = State(state3_dir)
-    state3.set_last_assess(T0 + timedelta(hours=2))
-    (state3_dir / "yardstick").mkdir()
-    (state3_dir / "yardstick" / "results.jsonl").write_text(result_line + "\n")
-    host3 = _AssessHost()
-
-    rc3 = main(["assess-check"], host=host3, state=state3, now=T0 + timedelta(hours=3))
-    assert rc3 == 0
-    kv3 = _kv(capsys.readouterr().out)
-    assert kv3["has_work"] == "false"
-    assert kv3["skip_reason"] == "quiet"
 
 
 def test_assess_check_new_digest_counts_as_work(tmp_path, capsys):
@@ -432,71 +206,6 @@ def test_state_digest_newer_than(tmp_path):
     assert state.digest_newer_than(written) is False
 
 
-def test_state_yardstick_result_newer_than(tmp_path):
-    state = State(tmp_path)
-    assert state.yardstick_result_newer_than(T0) is False  # no results file
-
-    path = tmp_path / "yardstick" / "results.jsonl"
-    path.parent.mkdir()
-    path.write_text("\n".join([
-        json.dumps({"run": "r1", "ts": "2026-11-19T09:00:00Z", "task": "a"}),
-        "not json",
-        json.dumps({"run": "r1", "ts": "yesterday", "task": "b"}),
-        json.dumps(["a", "list"]),
-        json.dumps({"run": "r2", "ts": "2026-11-19T10:30:00Z", "task": "a"}),
-    ]) + "\n")
-
-    assert state.yardstick_result_newer_than(T0) is True  # one bad line never hides the lines after it
-    assert state.yardstick_result_newer_than(_dt(2026, 11, 19, 10, 30, 0)) is False
-    assert state.yardstick_result_newer_than(_dt(2026, 11, 19, 8, 0, 0)) is True
-
-
-# -- assess-plan --
-
-
-def test_assess_plan_outputs_and_clears(tmp_path, capsys):
-    state_dir = tmp_path / "state"
-    state = State(state_dir)
-    plan_path = state_dir / "assess-plan.json"
-    plan_path.write_text(json.dumps({"project": 123}))
-
-    rc = main(["assess-plan"], host=object(), state=state, now=T0)
-
-    assert rc == 0
-    kv = _kv(capsys.readouterr().out)
-    assert kv["project"] == "123"
-    assert kv["has_project"] == "true"
-    assert not plan_path.exists()
-
-    # A missing or invalid project falls back cleanly, and the file is still removed once read.
-    plan_path.write_text(json.dumps({"project": True}))  # a bool doesn't count as a positive int
-    rc2 = main(["assess-plan"], host=object(), state=state, now=T0)
-    assert rc2 == 0
-    kv2 = _kv(capsys.readouterr().out)
-    assert kv2["project"] == ""
-    assert kv2["has_project"] == "false"
-    assert not plan_path.exists()
-
-    # No file at all: same clean fallback, no crash.
-    rc3 = main(["assess-plan"], host=object(), state=state, now=T0)
-    assert rc3 == 0
-    assert _kv(capsys.readouterr().out)["has_project"] == "false"
-
-
-def test_assess_plan_writes_to_github_output(tmp_path):
-    state_dir = tmp_path / "state"
-    state = State(state_dir)
-    (state_dir / "assess-plan.json").write_text(json.dumps({"project": 7}))
-    output_file = tmp_path / "out.txt"
-
-    rc = main(["assess-plan", "--github-output", str(output_file)], host=object(), state=state, now=T0)
-
-    assert rc == 0
-    kv = _kv(output_file.read_text())
-    assert kv["project"] == "7"
-    assert kv["has_project"] == "true"
-
-
 # -- assess-commit --
 
 
@@ -594,4 +303,4 @@ def test_seed_creates_the_new_state_labels(tmp_path):
 
     assert rc == 0
     created = {c[3] for c in host.calls if c[1:3] == ["label", "create"]}
-    assert {"gating", "priority", "jensen-assessment"} <= created
+    assert {"proposed", "approved", "rejected", "jensen-assessment"} <= created

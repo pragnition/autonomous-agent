@@ -155,7 +155,7 @@ def test_quiet_hour_writes_nothing(tmp_path):
     host = FakeHost(collect={"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is False
     assert result.skip_reason == "quiet"
@@ -172,7 +172,7 @@ def test_quiet_hour_with_a_successful_empty_notes_read_still_stages_the_notes_cu
     host = FakeHost(collect={"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is False  # genuinely quiet: no items, no notes, no error
     raw = json.loads((tmp_path / "state.json").read_text())
@@ -192,7 +192,7 @@ def test_pool_hold_skips_without_consuming_window(tmp_path):
     host = FakeHost(collect={"items": [], "conversations": {}, "projects": [], "pool": "hold_scheduled",
                              "claimed": 0})
 
-    result = measure(state, host, hold_now, open_deployed=[])
+    result = measure(state, host, hold_now)
 
     assert result.has_work is False
     assert result.skip_reason == "pool_hold"
@@ -206,7 +206,7 @@ def test_pool_hold_skips_without_consuming_window(tmp_path):
 
 
 def test_pool_hold_comes_from_the_shared_pool_helper(tmp_path, monkeypatch):
-    # measure, `yardstick run` and `assess-check` share one reading of core's pool (`host.pool_is_holding`).
+    # measure and `assess-check` share one reading of core's pool (`host.pool_is_holding`).
     from agent.watch import measure as measure_module
 
     seen = []
@@ -218,14 +218,13 @@ def test_pool_hold_comes_from_the_shared_pool_helper(tmp_path, monkeypatch):
     monkeypatch.setattr(measure_module, "pool_is_holding", holding)
     host = FakeHost(collect=_EMPTY, **_NO_PRS)  # core itself says "normal": only the helper says hold
 
-    result = measure(State(tmp_path), host, T0, open_deployed=[])
+    result = measure(State(tmp_path), host, T0)
 
     assert result.skip_reason == "pool_hold" and seen == [T0]
 
     # Unreadable (None) is not a hold: the hour goes on, and core's own reply decides the rest.
     monkeypatch.setattr(measure_module, "pool_is_holding", lambda host, now=None: None)
-    assert measure(State(tmp_path / "unread"), FakeHost(collect=_EMPTY, **_NO_PRS), T0,
-                   open_deployed=[]).skip_reason == "quiet"
+    assert measure(State(tmp_path / "unread"), FakeHost(collect=_EMPTY, **_NO_PRS), T0).skip_reason == "quiet"
 
 
 # -- turn records and signals --
@@ -248,7 +247,7 @@ def test_turn_records_and_signals(tmp_path):
         transcripts={"W-a": _bash_calls(45), "W-b": []},
         **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     records = {r["id"]: r for r in state.read_metrics(_since(T0)) if r["kind"] == "turn"}
@@ -280,7 +279,7 @@ def test_turn_failed_isolated_cases(tmp_path):
                  "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
         **_NO_PRS)
 
-    measure(state, host, T0, open_deployed=[])
+    measure(state, host, T0)
 
     records = {r["id"]: r for r in state.read_metrics(_since(T0)) if r["kind"] == "turn"}
     assert records["W-1"]["turn_failed"] == 1
@@ -301,7 +300,7 @@ def test_big_start_small_ask_signal(tmp_path):
         transcripts={"W-big": [big_call, _result_line("t1", "contents")]},
         **_NO_PRS)
 
-    measure(state, host, T0, open_deployed=[])
+    measure(state, host, T0)
 
     record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-big")
     assert record["big_start_small_ask"] == 1
@@ -316,7 +315,7 @@ def test_midturn_wait_seconds(tmp_path):
     host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     midturn = next(r for r in state.read_metrics(_since(T0)) if r["kind"] == "midturn")
@@ -379,7 +378,7 @@ def test_pr_records_ci_states(tmp_path):
         login=_cp(stdout="jensen-bot\n"), search=_cp(stdout=json.dumps(search_results)),
         views=views, checks=checks)
 
-    measure(state, host, T0, open_deployed=[])
+    measure(state, host, T0)
 
     # `gh search prs` is capped, per the minor fix.
     search_call = next(c for c in host.gh_calls if c[:2] == ["search", "prs"])
@@ -446,7 +445,7 @@ def test_ci_falls_back_to_the_actions_runs_of_the_head_commit_when_checks_are_fo
                     login=_cp(stdout="jensen-bot\n"), search=_cp(stdout=json.dumps(search_results)),
                     views=views, checks=checks, runs=runs, statuses=statuses)
 
-    measure(state, host, T0, open_deployed=[])
+    measure(state, host, T0)
 
     prs = {r["repo"]: r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"}
     assert {repo: prs[f"org/{repo}"]["ci"] for repo in cases} == {repo: want for repo, (_, _, want) in cases.items()}
@@ -460,7 +459,7 @@ def test_pr_fetch_failure_skips_prs_without_crashing(tmp_path):
     host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     gh_error=RuntimeError("GH_TOKEN missing from /live/data/secrets/agent.env"))
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     assert not [r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"]
@@ -476,7 +475,7 @@ def test_pr_fetch_gh_failure_skips_prs_without_crashing(tmp_path):
     host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     gh_error=subprocess.CalledProcessError(2, ["gh", "api", "user"]))
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     assert not [r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"]
@@ -501,7 +500,7 @@ def test_one_failing_pr_view_does_not_drop_other_pr_records(tmp_path):
                     login=_cp(stdout="jensen-bot\n"), search=_cp(stdout=json.dumps(search_results)),
                     views=views, checks=checks)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     prs = [r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"]
@@ -519,7 +518,7 @@ def test_reclone_counts_repos_seen_in_earlier_windows(tmp_path):
     host1 = FakeHost(collect={"items": [item1], "conversations": {}, "projects": [], "pool": "normal",
                               "claimed": 0},
                      transcripts={"W-first": clone_lines}, **_NO_PRS)
-    measure(state, host1, T0, open_deployed=[])
+    measure(state, host1, T0)
     state.commit()  # the first window's Claude run succeeds: its staged clones become permanently known
 
     first_record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-first")
@@ -530,7 +529,7 @@ def test_reclone_counts_repos_seen_in_earlier_windows(tmp_path):
     host2 = FakeHost(collect={"items": [item2], "conversations": {}, "projects": [], "pool": "normal",
                               "claimed": 0},
                      transcripts={"W-second": clone_lines}, **_NO_PRS)
-    measure(state, host2, T0 + timedelta(hours=1), open_deployed=[])
+    measure(state, host2, T0 + timedelta(hours=1))
 
     second_record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-second")
     assert second_record["reclone"] == 1
@@ -549,14 +548,14 @@ def test_remeasure_same_window_has_no_duplicates_or_self_reclone(tmp_path):
     host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     transcripts={"W-a": clone_lines}, **_NO_PRS)
 
-    first = measure(state, host, T0, open_deployed=[])
+    first = measure(state, host, T0)
     assert first.has_work is True
     first_record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-a")
     assert first_record["reclone"] == 0
     assert state.known_clones() == set()  # staged, not yet committed
 
     # Claude's run against the first digest fails; nothing was committed. The same window is measured again.
-    second = measure(state, host, T0, open_deployed=[])
+    second = measure(state, host, T0)
     assert second.has_work is True
 
     turn_records = [r for r in state.read_metrics(_since(T0)) if r["kind"] == "turn" and r["id"] == "W-a"]
@@ -579,7 +578,7 @@ def test_transcripts_failure_still_writes_turn_record_from_db_data(tmp_path):
                     transcripts_error=RuntimeError("docker exec agent-runner returned 1: no such container"),
                     **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     record = next(r for r in state.read_metrics(_since(T0)) if r["id"] == "W-a")
@@ -608,7 +607,7 @@ def test_digest_redacts_secrets(tmp_path):
     host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     transcripts={"W-a": leaking_lines}, secrets=["supersecretvalue"], **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     text = result.digest.read_text()
     assert "xoxb-123456789012-abcdefghij" not in text
@@ -625,7 +624,7 @@ def test_measure_digest_has_jensen_reports_scrubbed(tmp_path):
             "modified": "2026-11-19T09:30:00Z"}
     host = FakeHost(collect=_EMPTY, notes=[note], secrets=["supersecretvalue"], **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     # Even though no turns finished this hour, a new note alone is still work.
     assert result.has_work is True
@@ -649,7 +648,7 @@ def test_measure_marks_the_digest_when_notes_cannot_be_read_but_still_advances_t
     host = FakeHost(collect=_EMPTY, notes_error=RuntimeError("docker exec returned 1: /secret/host/path"),
                     **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     text = result.digest.read_text()
@@ -671,7 +670,7 @@ def test_notes_error_with_core_items_present_does_not_re_fetch_them_next_window(
     host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     notes_error=RuntimeError("docker exec returned 1: boom"), **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     assert any(r["id"] == "W-a" for r in state.read_metrics(_since(T0)))  # core's turn is staged despite the error
@@ -694,18 +693,18 @@ def test_notes_gap_is_covered_after_an_error_then_a_successful_collect(tmp_path)
                     **_NO_PRS)
 
     hour_a = T0
-    measure(state, host, hour_a, open_deployed=[])  # notes succeed
+    measure(state, host, hour_a)  # notes succeed
     state.commit()  # notes_committed_end -> hour_a
 
     hour_b = T0 + timedelta(hours=1)
     host._notes_error = RuntimeError("docker exec returned 1: boom")
-    measure(state, host, hour_b, open_deployed=[])  # notes fail
+    measure(state, host, hour_b)  # notes fail
     state.commit()  # main window advances to hour_b; notes' own cursor stays at hour_a
 
     hour_c = T0 + timedelta(hours=2)
     host._notes_error = None
     host.runner_python_calls.clear()
-    measure(state, host, hour_c, open_deployed=[])
+    measure(state, host, hour_c)
 
     [(_, args)] = [call for call in host.runner_python_calls if call[1][0] == "collect"]
     assert args[args.index("--since") + 1] == _iso(hour_a)  # covers the whole gap since the last good read
@@ -717,51 +716,50 @@ def test_a_notes_read_that_keeps_failing_is_work_only_in_the_first_hour_it_fails
     state = State(tmp_path)
     host = FakeHost(collect=_EMPTY, notes_error=RuntimeError("docker exec returned 1: boom"), **_NO_PRS)
 
-    first = measure(state, host, T0, open_deployed=[])
+    first = measure(state, host, T0)
     assert first.has_work is True
     # Claude's run on it failed: the hour is measured again, and is still the first of the streak.
-    again = measure(state, host, T0 + timedelta(minutes=5), open_deployed=[])
+    again = measure(state, host, T0 + timedelta(minutes=5))
     assert again.has_work is True
     state.commit()
 
-    second = measure(state, host, T0 + timedelta(hours=1), open_deployed=[])
+    second = measure(state, host, T0 + timedelta(hours=1))
     assert second.has_work is False and second.skip_reason == "quiet"
     state.commit()
 
     # With other work in a later hour of the streak, the digest still says the notes are unreadable.
     busy = FakeHost(collect={**_EMPTY, "items": [_item("W-a", conversation_id="C-a")]},
                     notes_error=RuntimeError("docker exec returned 1: boom"), **_NO_PRS)
-    third = measure(state, busy, T0 + timedelta(hours=2), open_deployed=[])
+    third = measure(state, busy, T0 + timedelta(hours=2))
     assert third.has_work is True
     assert "Jensen reports: unavailable (RuntimeError)" in third.digest.read_text()
     state.commit()
 
     # A good read ends the streak; the next failure is news again.
     host._notes_error = None
-    assert measure(state, host, T0 + timedelta(hours=3), open_deployed=[]).has_work is False
+    assert measure(state, host, T0 + timedelta(hours=3)).has_work is False
     state.commit()
     host._notes_error = RuntimeError("docker exec returned 1: boom")
-    assert measure(state, host, T0 + timedelta(hours=4), open_deployed=[]).has_work is True
+    assert measure(state, host, T0 + timedelta(hours=4)).has_work is True
 
 
 def test_improve_jensens_own_turns_alone_are_no_work(tmp_path):
-    # The yardstick's and the reviews' own turns are improve-jensen's traffic, not Jensen's work.
+    # The reviews' own turns are improve-jensen's traffic, not Jensen's work.
     state = State(tmp_path)
-    own = [_item("W-y", conversation_id="V-yardstick-20261119T190700Z-ab12-0a1b2c3d"),
-           _item("W-v", conversation_id="V-review-0a1b2c3d", payload={"continuation": 1}),
+    own = [_item("W-v", conversation_id="V-review-0a1b2c3d", payload={"continuation": 1}),
            _item("W-r", conversation_id="C-p", payload={"source": "improve-jensen"})]
     host = FakeHost(collect={**_EMPTY, "items": own}, **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is False and result.skip_reason == "quiet" and result.digest is None
     # Still kept in the metrics, as on any other hour.
     state.commit()
-    assert {r["id"] for r in state.read_metrics(_since(T0))} == {"W-y", "W-v", "W-r"}
+    assert {r["id"] for r in state.read_metrics(_since(T0))} == {"W-v", "W-r"}
 
     person = _item("W-p", conversation_id="C-p", payload={"source": "slack"}, updated_at="2026-11-19T10:30:00Z")
     host2 = FakeHost(collect={**_EMPTY, "items": own + [person]}, **_NO_PRS)
-    assert measure(state, host2, T0 + timedelta(hours=1), open_deployed=[]).has_work is True
+    assert measure(state, host2, T0 + timedelta(hours=1)).has_work is True
 
 
 def test_digest_never_leaks_a_secret_prefix_across_the_truncation_boundary(tmp_path):
@@ -781,7 +779,7 @@ def test_digest_never_leaks_a_secret_prefix_across_the_truncation_boundary(tmp_p
     host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     transcripts={"W-a": leaking_lines}, secrets=[secret], **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     text = result.digest.read_text()
     assert secret not in text
@@ -809,7 +807,7 @@ def test_digest_never_leaks_a_product_secret_or_one_with_json_escapes_across_the
     host = FakeHost(collect={**_EMPTY, "items": [_item("W-a", conversation_id="C-a")]},
                     transcripts={"W-a": leaking_lines}, secrets=secrets, **_NO_PRS)
 
-    result = measure(state := State(tmp_path / "state"), host, T0, open_deployed=[])
+    result = measure(state := State(tmp_path / "state"), host, T0)
 
     text = result.digest.read_text()
     for secret in (product, escaped_in, escaped_out):
@@ -818,21 +816,21 @@ def test_digest_never_leaks_a_product_secret_or_one_with_json_escapes_across_the
     assert state.read_metrics(_since(T0))  # and the turn was still measured
 
 
-# -- digest totals and deployed issues --
+# -- digest totals --
 
 
-def test_digest_lists_deployed_issues_and_totals(tmp_path):
+def test_digest_lists_totals(tmp_path):
     state = State(tmp_path)
+    # A newest failed-deploy record is a simple way to force `has_work` with an otherwise empty collection.
+    state.log_deploy({"ts": "2026-11-19T09:00:00Z", "from": "a" * 40, "to": "b" * 40, "services": [],
+                      "result": "check_failed: compose up exited 1"})
     host = FakeHost(collect={"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
                     **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[{"number": 7, "title": "Fix the thing"},
-                                                      {"number": 9, "title": "Another issue"}])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     text = result.digest.read_text()
-    assert "#7 Fix the thing" in text
-    assert "#9 Another issue" in text
     for signal in ("context_first", "context_peak", "inline_code_chars", "lost_background", "still_running",
                    "turn_failed", "no_delegation", "big_start_small_ask", "reclone", "tool_errors",
                    "missing_tools", "midturn_wait_s", "pr"):
@@ -847,7 +845,7 @@ def test_digest_names_the_conversation_behind_each_new_pr():
            {"url": "https://github.com/o/r/pull/2", "repo": "o/r", "lines": 5, "ci": "none",
             "open_to_merge_s": None, "conversation": None}]
 
-    text = render(window, [], {}, prs, [])
+    text = render(window, [], {}, prs)
 
     assert ("- https://github.com/o/r/pull/1 (o/r): 10 lines, ci=passed, open_to_merge_s=60.0, "
             "conversation=C-made-it") in text
@@ -872,7 +870,7 @@ def test_first_render_attempt_never_recuts_a_turn_facts_line():
                                                                                           "missing_tools": []}}
     convos = [ConvoView(id="C-a", project=None, turns=[turn])]
 
-    text = render(window, convos, {}, [], [])
+    text = render(window, convos, {}, [])
 
     assert tool_line in text
     assert error_line in text
@@ -897,7 +895,7 @@ def test_digest_shrinks_tool_lines_not_messages():
                 "asked": asked, "replied": f"reply {i}", "facts": facts, "signals": dict(base_signals)}
         convos.append(ConvoView(id=f"C-{i}", project=None, turns=[turn]))
 
-    text = render(window, convos, {"context_peak": "context_peak since x: n=0 median=0 p90=0 max=0"}, [], [],
+    text = render(window, convos, {"context_peak": "context_peak since x: n=0 median=0 p90=0 max=0"}, [],
                  budget=400_000)
 
     assert len(text) <= 400_000
@@ -921,7 +919,7 @@ def test_core_unreachable_still_reports_work_and_keeps_the_window_open(tmp_path)
     host = FakeHost(collect=None, core_error=RuntimeError("docker exec returned 1: Error: No such container: x"),
                     **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     text = result.digest.read_text()
@@ -938,7 +936,7 @@ def test_core_answering_garbage_counts_as_unreachable(tmp_path):
     host = FakeHost(collect=None, **_NO_PRS)
     host.core_python = lambda module_file, args: "Traceback (most recent call last): not json"
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     assert "Jensen's core is unreachable" in result.digest.read_text()
@@ -956,7 +954,7 @@ def test_newest_failed_deploy_record_forces_work_on_a_quiet_hour(tmp_path):
         state = State(tmp_path / str(n))
         _deploys(state, "ok", failure)
 
-        result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+        result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0)
 
         assert result.has_work is True, failure
         text = result.digest.read_text()
@@ -968,7 +966,7 @@ def test_an_ok_deploy_after_a_failed_one_leaves_a_quiet_hour_quiet(tmp_path):
     state = State(tmp_path)
     _deploys(state, "check_failed: smoke test did not print smoke ok", "ok")
 
-    result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+    result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0)
 
     assert result.has_work is False
     assert result.skip_reason == "quiet"
@@ -980,13 +978,12 @@ def _attention(digest: Path) -> list[str]:
 
 
 def test_a_behaviour_changing_deploy_that_landed_this_window_is_work(tmp_path):
-    # A deploy that was pending (Jensen busy) can land in an otherwise quiet hour: the watch must still see it, to
-    # gate it.
+    # A deploy that was pending (Jensen busy) can land in an otherwise quiet hour: the watch must still see it.
     state = State(tmp_path)
     state.log_deploy({"ts": "2026-11-19T09:30:00Z", "from": "a" * 40, "to": "b" * 40,
                       "services": ["agent", "core"], "result": "ok"})
 
-    result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+    result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0)
 
     assert result.has_work is True
     assert _attention(result.digest) == [
@@ -997,7 +994,7 @@ def test_a_behaviour_changing_deploy_that_landed_this_window_is_work(tmp_path):
     other = State(tmp_path / "other")
     other.log_deploy({"ts": "2026-11-19T09:45:00Z", "from": None, "to": "acme-widgets main",
                       "services": ["agent"], "result": "ok"})
-    attention = _attention(measure(other, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[]).digest)
+    attention = _attention(measure(other, FakeHost(collect=_EMPTY, **_NO_PRS), T0).digest)
     assert attention == ["- A behaviour-changing deploy landed (from unknown to unknown, at 2026-11-19T09:45:00Z): "
                          "Jensen's running services changed."]
 
@@ -1014,7 +1011,7 @@ def test_deploys_that_change_no_service_or_land_outside_the_window_leave_a_quiet
         state = State(tmp_path / str(n))
         state.log_deploy({"from": "a" * 40, "to": "b" * 40, **record})
 
-        result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+        result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0)
 
         assert result.has_work is False and result.skip_reason == "quiet", record
 
@@ -1025,7 +1022,7 @@ def test_a_pr_with_no_created_at_still_gets_a_record(tmp_path):
     host = FakeHost(collect=_EMPTY, login=_cp(stdout="jensen-bot\n"), search=_search(url),
                     views={url: _pr_view(created_at=None)}, checks={url: _cp(returncode=0)})
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     [record] = [r for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"]
@@ -1040,7 +1037,7 @@ def test_an_unexpected_error_on_one_pr_names_only_its_type(tmp_path, capsys):
                     views={bad: TypeError("a detail naming /srv/private/path"), good: _pr_view()},
                     checks={good: _cp(returncode=0)})
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     assert {r["url"] for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"} == {good}
@@ -1064,7 +1061,7 @@ def test_records_are_stamped_with_the_event_time_not_the_measurement_time(tmp_pa
                            still_open: _pr_view(created_at="2026-11-19T09:45:00Z", merged_at=None)},
                     checks={merged: _cp(returncode=0), still_open: _cp(returncode=0)})
 
-    measure(state, host, T0, open_deployed=[])
+    measure(state, host, T0)
 
     stamps = {r.get("id") or r.get("url"): r["ts"] for r in state.read_metrics(_since(T0))}
     assert stamps == {"W-t": "2026-11-19T09:20:00Z", "W-m": "2026-11-19T09:31:00Z",
@@ -1085,7 +1082,7 @@ def test_a_pr_opened_by_a_turn_still_running_maps_to_that_turns_conversation(tmp
                     transcripts={"W-run": still_writing}, login=_cp(stdout="jensen-bot\n"), search=_search(url),
                     views={url: _pr_view(merged_at=None)}, checks={url: _cp(returncode=0)})
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     records = state.read_metrics(_since(T0))
     assert [r["conversation"] for r in records if r["kind"] == "pr"] == ["C-run"]
@@ -1103,7 +1100,7 @@ def test_a_running_turn_whose_transcript_breaks_turn_facts_costs_nothing_else(tm
                              "running": [{"id": "W-run", "conversation_id": "C-run"}]},
                     transcripts={"W-run": broken, "W-done": _bash_calls(1)}, **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     assert result.has_work is True
     assert [r["id"] for r in state.read_metrics(_since(T0)) if r["kind"] == "turn"] == ["W-done"]
@@ -1126,7 +1123,7 @@ def test_improve_jensens_own_turns_show_in_the_digest_but_not_in_the_totals(tmp_
     host = FakeHost(collect={**_EMPTY, "items": [person, review, check, person_mid, review_mid]},
                     transcripts={"W-p": _bash_calls(45), "W-r": _bash_calls(45), "W-v": _bash_calls(45)}, **_NO_PRS)
 
-    result = measure(state, host, T0, open_deployed=[])
+    result = measure(state, host, T0)
 
     records = {r["id"]: r for r in state.read_metrics(_since(T0))}
     assert records["W-r"]["source"] == "improve-jensen"
@@ -1169,7 +1166,7 @@ def test_ci_reads_commit_statuses_when_the_head_commit_has_no_actions_runs(tmp_p
     host = FakeHost(collect=_EMPTY, login=_cp(stdout="jensen-bot\n"), search=_search(*urls), views=views,
                     checks=checks, runs=runs, statuses=statuses)
 
-    measure(state, host, T0, open_deployed=[])
+    measure(state, host, T0)
 
     prs = {r["repo"]: r["ci"] for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"}
     assert prs == {f"org/{repo}": want for repo, (_, want) in cases.items()}

@@ -80,7 +80,7 @@ def _render_turn(turn: dict, cap: int | None) -> list[str]:
 
 
 def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
-               deployed: list[dict], notes: list[dict], cap: int | None, alerts: list[str]) -> str:
+               notes: list[dict], cap: int | None, alerts: list[str]) -> str:
     start, end = window
     out = ["# Jensen hourly digest", "", f"Window: {_iso(start)} to {_iso(end)}", "", "## Needs attention"]
     if alerts:
@@ -101,13 +101,6 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
             out.append(f"- {pr.get('url')} ({pr.get('repo')}): {pr.get('lines')} lines, "
                         f"ci={pr.get('ci')}, open_to_merge_s={pr.get('open_to_merge_s')}, "
                         f"conversation={pr.get('conversation') or 'none'}")
-    else:
-        out.append("- none")
-
-    out += ["", "## Being watched"]
-    if deployed:
-        for issue in deployed:
-            out.append(f"- #{issue.get('number')} {issue.get('title')}")
     else:
         out.append("- none")
 
@@ -136,8 +129,7 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
 
 
 def render(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
-           deployed: list[dict], budget: int = 400_000, *, notes: list[dict] | None = None,
-           alerts: list[str] | None = None) -> str:
+           budget: int = 400_000, *, notes: list[dict] | None = None, alerts: list[str] | None = None) -> str:
     """The digest's markdown text. `alerts` (core unreachable, a failed deploy, a behaviour-changing deploy that
     landed) go first, under "Needs attention". `notes` (already-scrubbed Jensen reports, each `{name, text,
     modified}`) get their own "## Jensen reports" section, one `###` subsection per note, each line of its text
@@ -147,7 +139,7 @@ def render(window: tuple[datetime, datetime], convos: list[ConvoView], totals: d
     (narrowest) one anyway."""
     text = ""
     for cap in _CAPS:
-        text = _render_at(window, convos, totals, prs, deployed, list(notes or []), cap, list(alerts or []))
+        text = _render_at(window, convos, totals, prs, list(notes or []), cap, list(alerts or []))
         if len(text) <= budget:
             return text
     return text

@@ -1,6 +1,0 @@
-prompt = """
-In this repo, rename calc_total to order_total everywhere, and fix the rounding bug in \
-discount() (it rounds to the wrong number of decimal places). Make these two separate commits, \
-one for the rename and one for the rounding fix, and make sure the tests pass after each commit.
-"""
-time_limit_min = 15
