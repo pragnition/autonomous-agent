@@ -307,7 +307,7 @@ def test_improve_jensen_triggers_and_jobs(improve_jensen):
 def test_jobs_run_on_the_right_runners(improve_jensen):
     jobs = improve_jensen["jobs"]
     for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"),
-                             ("assess", "work"), ("project", "work"), ("approvals", "work")):
+                             ("assess", "watch"), ("project", "work"), ("approvals", "work")):
         labels = _runs_on_labels(jobs[name])
         assert labels == {"self-hosted", "improve-jensen", want_label}, name
 
@@ -483,7 +483,7 @@ def test_listener_unit():
 
 def test_new_jobs_runners_timeouts_and_files(improve_jensen):
     jobs = improve_jensen["jobs"]
-    assert _runs_on_labels(jobs["assess"]) == {"self-hosted", "improve-jensen", "work"}
+    assert _runs_on_labels(jobs["assess"]) == {"self-hosted", "improve-jensen", "watch"}
     assert jobs["assess"]["timeout-minutes"] == 90
     assert _runs_on_labels(jobs["project"]) == {"self-hosted", "improve-jensen", "work"}
     assert jobs["project"]["timeout-minutes"] == 360

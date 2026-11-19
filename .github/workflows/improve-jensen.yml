@@ -3,7 +3,7 @@
 # Host setup: deploy/improve-jensen.md.
 #
 # The clock is the host listener (deploy/improve-jensen-listen.service), not GitHub's cron, which never fired these:
-# it sends `improve-jensen-watch` at :17 and `improve-jensen-assess` at :55 every hour, and
+# it sends `improve-jensen-watch` at :17 and `improve-jensen-assess` at :10 every hour, and
 # `improve-jensen-approvals` every 10 minutes (and at once after a decision in Slack), as repository_dispatch events.
 # Each wakes its job only while `vars.IMPROVE_JENSEN_ENGINE` is `on`. The listener also answers replies to the
 # proposals in Slack in plain language and stores the decisions it read for `approvals` to apply.
@@ -125,7 +125,7 @@ jobs:
       (github.event_name == 'repository_dispatch' && github.event.action == 'improve-jensen-assess' &&
        vars.IMPROVE_JENSEN_ENGINE == 'on') ||
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'assess')
-    runs-on: [self-hosted, improve-jensen, work]
+    runs-on: [self-hosted, improve-jensen, watch]   # never queued behind a fix or project being shipped
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4

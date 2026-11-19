@@ -35,11 +35,11 @@ def _clock(root: Path) -> dict:
 
 
 @pytest.mark.parametrize("now, watch, assess, approvals", [
-    ("10:05:00", "09:17", "09:55", "10:00"),
-    ("10:17:00", "10:17", "09:55", "10:10"),
-    ("10:54:59", "10:17", "09:55", "10:50"),
-    ("10:55:00", "10:17", "10:55", "10:50"),
-    ("00:16:59", "23:17", "23:55", "00:10"),
+    ("10:05:00", "09:17", "09:10", "10:00"),
+    ("10:17:00", "10:17", "10:10", "10:10"),
+    ("10:09:59", "09:17", "09:10", "10:00"),
+    ("10:10:00", "09:17", "10:10", "10:10"),
+    ("00:16:59", "23:17", "00:10", "00:10"),
 ])
 def test_latest_slots(now, watch, assess, approvals):
     at = datetime.fromisoformat(f"2026-11-19T{now}+00:00")
@@ -53,7 +53,7 @@ def test_first_start_records_the_latest_slots_without_sending(tmp_path):
     listen.tick(dispatch, tmp_path, T0)
     assert dispatch.sent == []
     assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T09:17:00Z",
-                                "improve-jensen-assess": "2026-11-19T09:55:00Z",
+                                "improve-jensen-assess": "2026-11-19T09:10:00Z",
                                 "improve-jensen-approvals": "2026-11-19T10:00:00Z"}
 
 
@@ -62,7 +62,7 @@ def test_each_slot_is_sent_once(tmp_path):
     listen.tick(dispatch, tmp_path, T0)
     for minute, second in ((10, 0), (10, 15), (12, 30), (17, 0), (17, 45)):
         listen.tick(dispatch, tmp_path, T0.replace(minute=minute, second=second))
-    assert dispatch.sent == ["improve-jensen-approvals", "improve-jensen-watch"]
+    assert dispatch.sent == ["improve-jensen-assess", "improve-jensen-approvals", "improve-jensen-watch"]
 
 
 def test_catch_up_after_downtime_sends_the_latest_slot_once(tmp_path):
@@ -73,18 +73,18 @@ def test_catch_up_after_downtime_sends_the_latest_slot_once(tmp_path):
     listen.tick(dispatch, tmp_path, later + timedelta(seconds=15))
     assert sorted(dispatch.sent) == ["improve-jensen-approvals", "improve-jensen-assess", "improve-jensen-watch"]
     assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T13:17:00Z",
-                                "improve-jensen-assess": "2026-11-19T12:55:00Z",
+                                "improve-jensen-assess": "2026-11-19T13:10:00Z",
                                 "improve-jensen-approvals": "2026-11-19T13:20:00Z"}
 
 
 def test_a_failed_send_is_tried_again_next_tick(tmp_path, capsys):
     dispatch = Dispatch(fail={"improve-jensen-approvals"})
-    listen.tick(dispatch, tmp_path, T0)
-    listen.tick(dispatch, tmp_path, T0.replace(minute=10))
-    assert dispatch.sent == [] and _clock(tmp_path)["improve-jensen-approvals"] == "2026-11-19T10:00:00Z"
+    listen.tick(dispatch, tmp_path, T0.replace(minute=18))   # every other slot this hour already recorded
+    listen.tick(dispatch, tmp_path, T0.replace(minute=20))
+    assert dispatch.sent == [] and _clock(tmp_path)["improve-jensen-approvals"] == "2026-11-19T10:10:00Z"
     assert "CalledProcessError" in capsys.readouterr().err
     dispatch.fail = set()
-    listen.tick(dispatch, tmp_path, T0.replace(minute=10, second=15))
+    listen.tick(dispatch, tmp_path, T0.replace(minute=20, second=15))
     assert dispatch.sent == ["improve-jensen-approvals"]
 
 
@@ -316,7 +316,7 @@ def test_the_loop_exits_when_the_checkout_moves(tmp_path, capsys):
     live = tmp_path / "live"
     (live / "data" / "secrets").mkdir(parents=True)
     host = LoopHost(live, ["a" * 40, "a" * 40, "a" * 40, "b" * 40])
-    times = iter([T0, T0.replace(minute=10, second=5), T0.replace(minute=10, second=20)])
+    times = iter([T0.replace(minute=18), T0.replace(minute=20, second=5), T0.replace(minute=20, second=20)])
     slept = []
 
     rc = listen.run(host, tmp_path / "state", REPO, ask=Claude(), clock=lambda: next(times), sleep=slept.append)
