@@ -1042,14 +1042,16 @@ async def test_a_finished_spawned_agent_starts_a_turn_in_its_parents_thread(conv
     assert [(p["channel"], p["thread_ts"], p["text"]) for p in slack.posts] == [("C-SAMPLE", "7.0", "Done: B wins")]
 
 
-async def test_a_spawned_agent_reports_once_after_its_carry_ons(convos, conn, queue):
+async def test_a_spawned_agent_reports_once_after_it_is_carried_on(convos, conn, queue):
+    # A turn has no time limit to carry on from any more (#24); a usage limit still cuts one off and carries it on
     parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
     spawn(conn, queue, parent)
     item = queue.claim()
     queue.complete(item.id, {})
-    await convos.on_result(queue.get(item.id), {"outcome": "timeout", "text": ""})
-    carry_on = last_item(queue)
-    assert carry_on.conversation_id != parent and carry_on.payload.get("continuation") == 1
+    await convos.on_result(queue.get(item.id), {"outcome": "error", "text": "", "error": "429 rate limit"})
+    assert conn.execute("SELECT COUNT(*) FROM work_items WHERE conversation_id = ?", (parent,)).fetchone()[0] == 0
+    carry_on = queue.get(convos.resume_after_limit(item.id))
+    assert carry_on.conversation_id != parent
     await finish_turn(convos, queue, "done now")
     reports = conn.execute("SELECT payload FROM work_items WHERE conversation_id = ?", (parent,)).fetchall()
     assert len(reports) == 1 and "done now" in reports[0]["payload"]

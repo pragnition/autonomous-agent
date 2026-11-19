@@ -453,7 +453,7 @@ class Conversations:
                               "VALUES (?, ?, ?, ?)", (item.id, convo["id"], result.get("error"), db.utcnow()))
             events.append(self.conn, "usage_limit_cut", task_id=convo["task_id"], actor=None,
                           data={"work_item": item.id, "conversation_id": convo["id"], "error": result.get("error")})
-        if not continuing and not waiting:  # a spawned agent's last turn reports to the session that spawned it
+        if not retrying and not waiting:  # a spawned agent's last turn reports to the session that spawned it
             self._report_to_spawner(convo, item, outcome, failed, text)
         if failed and not convo["channel"] and item.payload.get("report_to"):
             await self._report_scheduled_failure(convo, item.payload["report_to"], text)
