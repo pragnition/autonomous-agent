@@ -16,8 +16,10 @@
 #             and update the pinned assessment issue, then records which project (if any) to run next.
 #   project - the one active improvement project, from the assess job's plan (or a manual dispatch's target),
 #             serialised so only one project runs at a time.
-#   yardstick - nightly, and after a behaviour-changing deploy (a manual dispatch with target=gate): runs the
-#             yardstick tasks, ends an active gate, and reverts the change if the gate failed.
+#   yardstick - nightly, and after any of watch/fix/project/respond that leaves a yardstick gate active (each ends
+#             with a `gate status` step and reports it as its `gate` output): runs the yardstick tasks. A gate run
+#             ends the gate once it could be measured, removes `gating`, and reverts the change if it failed; a gate
+#             it couldn't measure stays active, and the next job that reports it starts the gate run again.
 name: improve-jensen
 
 on:
@@ -34,8 +36,7 @@ on:
         default: watch
       target:
         type: string
-        description: PR URL (review); issue number (fix, project); 'gate' for a yardstick gate run; ignored for
-          watch and assess
+        description: PR URL (review); issue number (fix, project); ignored for watch, assess and yardstick
   issues:
     types: [opened, labeled, assigned]
   issue_comment:
@@ -66,6 +67,7 @@ jobs:
       fix: ${{ steps.plan.outputs.fix }}
       has_reviews: ${{ steps.plan.outputs.has_reviews }}
       has_fix: ${{ steps.plan.outputs.has_fix }}
+      gate: ${{ steps.gate.outputs.active }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -103,6 +105,10 @@ jobs:
       - name: commit
         if: steps.measure.outputs.skip_reason != 'pool_hold' && (steps.claude.outcome == 'success' || steps.claude.outcome == 'skipped')
         run: python scripts/jensen_watch.py commit
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"
 
   assess:
     if: github.event.schedule == '13 */6 * * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'assess')
@@ -156,6 +162,8 @@ jobs:
     concurrency:
       group: improve-jensen-project
       cancel-in-progress: false
+    outputs:
+      gate: ${{ steps.gate.outputs.active }}
     env:
       # Resolved once, here, so every step below reads the same value through `$TARGET`/`env.TARGET` -- never by
       # re-interpolating `${{ inputs.target }}` directly into a `run:` script, which would hand a workflow-
@@ -195,11 +203,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh issue edit "$TARGET" --remove-label project-active -R ${{ github.repository }}
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"
 
   yardstick:
-    if: github.event.schedule == '7 19 * * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'yardstick')
+    # After watch/fix/project/respond, so a job that started a gate gets its gate run once it has ended. `!cancelled()`
+    # keeps the jobs this one needs from skipping it when they were skipped themselves (the nightly and a manual run).
+    needs: [watch, fix, project, respond]
+    if: >
+      !cancelled() && (
+        github.event.schedule == '7 19 * * *' ||
+        (github.event_name == 'workflow_dispatch' && inputs.mode == 'yardstick') ||
+        needs.watch.outputs.gate == 'true' || needs.fix.outputs.gate == 'true' ||
+        needs.project.outputs.gate == 'true' || needs.respond.outputs.gate == 'true')
     runs-on: [self-hosted, improve-jensen, work]
     timeout-minutes: 240
+    concurrency:
+      group: improve-jensen-yardstick
+      cancel-in-progress: false
+    env:
+      # A gate run when a job before this one reported an active gate. The nightly and a manual run never revert.
+      GATE: >-
+        ${{ (needs.watch.outputs.gate == 'true' || needs.fix.outputs.gate == 'true' ||
+        needs.project.outputs.gate == 'true' || needs.respond.outputs.gate == 'true') && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -212,19 +240,34 @@ jobs:
         id: yardstick
         run: >-
           python scripts/jensen_watch.py yardstick run
-          ${{ inputs.mode == 'yardstick' && inputs.target == 'gate' && '--gate' || '' }}
+          ${{ env.GATE == 'true' && '--gate' || '' }}
           --github-output "$GITHUB_OUTPUT"
+      # `gate_result` is passed or failed once the gate was measured; retry (couldn't measure it this time) and none
+      # (no active gate) leave the gate as it is.
       - name: gate end
-        if: always() && inputs.mode == 'yardstick' && inputs.target == 'gate'
-        run: python scripts/jensen_watch.py gate end
+        id: gate-end
+        if: steps.yardstick.outputs.gate_result == 'passed' || steps.yardstick.outputs.gate_result == 'failed'
+        env:
+          GATE_RESULT: ${{ steps.yardstick.outputs.gate_result }}
+        run: python scripts/jensen_watch.py gate end --result "$GATE_RESULT"
+      - name: remove the gating label
+        if: steps.gate-end.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          issue=$(python scripts/jensen_watch.py gate status --last |
+            python -c 'import json, sys; print(json.load(sys.stdin)["issue"])')
+          gh issue edit "$issue" --remove-label gating -R ${{ github.repository }}
       - name: claude
-        if: steps.yardstick.outputs.gate_failed == 'true'
+        if: >-
+          !cancelled() && steps.gate-end.outcome == 'success' && steps.yardstick.outputs.gate_result == 'failed'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
           prompt: |
-            The yardstick gate failed for the change recorded in the gate record. Revert it through its handle
-            and record the failed attempt. Follow .github/improve-jensen.md.
+            The yardstick gate failed for the change in the last gate record
+            (`python scripts/jensen_watch.py gate status --last`). Revert it through its handle and record the
+            failed attempt. Follow .github/improve-jensen.md, "The failed gate".
           claude_args: |
             --model claude-opus-5-5
             --max-turns 200
@@ -276,6 +319,8 @@ jobs:
     concurrency:
       group: improve-jensen-fix
       cancel-in-progress: false
+    outputs:
+      gate: ${{ steps.gate.outputs.active }}
     env:
       # Resolved once, here, so every step below reads the same value through `$TARGET`/`env.TARGET` -- never by
       # re-interpolating `${{ inputs.target }}` directly into a `run:` script, which would hand a workflow-
@@ -315,10 +360,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh issue edit "$TARGET" --remove-label fixing -R ${{ github.repository }}
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"
 
   respond:
     if: >
-      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'improve-jensen')) ||
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@improve-jensen'))
@@ -327,6 +377,8 @@ jobs:
     concurrency:
       group: improve-jensen-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
+    outputs:
+      gate: ${{ steps.gate.outputs.active }}
     steps:
       - uses: actions/checkout@v4   # persist-credentials: false for the same reason as in `fix`
         with:
@@ -348,3 +400,7 @@ jobs:
             --max-turns 200
             --append-system-prompt-file .github/improve-jensen.md
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"
