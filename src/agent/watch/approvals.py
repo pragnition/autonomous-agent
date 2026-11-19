@@ -44,8 +44,9 @@ _PROPOSALS_DIR = "proposals"
 _WORKFLOW = "improve-jensen.yml"
 _DECIDE_DAYS = 14  # a proposal nobody decided on by then is released
 _RELEASED = f"No decision in Slack within {_DECIDE_DAYS} days; the watch can propose it again."
-# A run that isn't finished has one of these statuses; `gh run list --status` asks for each.
-_UNFINISHED = ("in_progress", "queued", "waiting", "pending", "requested")
+# A run that isn't finished has one of these statuses; `gh run list --status` asks for each. (`pending` is a status
+# the API reports but `gh run list --status` rejects, and a rejected flag would fire nothing ever again.)
+_UNFINISHED = ("in_progress", "queued", "waiting", "requested")
 # Consecutive project runs that didn't succeed, per issue, and how many of them make a project `stuck`.
 _FAILURES_FILE = "project-failures.json"
 _FAILURES_BEFORE_STUCK = 2
