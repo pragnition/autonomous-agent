@@ -3,11 +3,13 @@ import base64
 import json
 from pathlib import Path
 
-from claude_agent_sdk import AssistantMessage, CLIConnectionError, ResultMessage, TextBlock, UserMessage, tool
+from claude_agent_sdk import (AssistantMessage, CLIConnectionError, ResultMessage, TaskNotificationMessage,
+                              TaskStartedMessage, TaskUpdatedMessage, TextBlock, UserMessage, tool)
 
 from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, ProxyUnavailable, SoftCap, Usage
 from agent.runner.base import RunSpec
 from agent.runner.claude import ClaudeRunner
+from agent.runner.idle_wait import block_idle_waits
 
 HANG = "HANG"
 WAIT_SENT = "WAIT_SENT"  # wait until the runner writes a message into the session
@@ -599,3 +601,65 @@ async def test_a_forking_result_before_the_prompt_is_read_still_forks(tmp_path):
     runner, _ = make_runner(tmp_path, [[forbidden, echo_prompt, result()], [echo_prompt, result()]])
     out = await runner.run(spec(tmp_path))
     assert (out.outcome, out.forks, out.read) == ("done", 1, [])
+
+
+def task_started(task_id, task_type="local_agent"):
+    def make(c):
+        return TaskStartedMessage(subtype="task_started", data={}, task_id=task_id, description="lane",
+                                  uuid=f"u-{task_id}", session_id=c.options.session_id, task_type=task_type)
+    return make
+
+
+def task_done(task_id):
+    def make(c):
+        return TaskNotificationMessage(subtype="task_notification", data={}, task_id=task_id, status="completed",
+                                       output_file="", summary="done", uuid=f"n-{task_id}",
+                                       session_id=c.options.session_id)
+    return make
+
+
+def task_killed(task_id):
+    def make(c):
+        return TaskUpdatedMessage(subtype="task_updated", data={}, task_id=task_id, patch={"status": "killed"},
+                                  status="killed")
+    return make
+
+
+async def test_the_bash_hook_turning_away_idle_waits_is_on_every_session(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, result()]])
+    await runner.run(spec(tmp_path))
+    (matcher,) = clients[0].options.hooks["PreToolUse"]
+    assert matcher.matcher == "Bash" and matcher.hooks == [block_idle_waits]
+
+
+async def test_a_turn_ended_while_background_agents_run_is_interim(tmp_path):
+    # The session launches two agents and ends its turn; the run reads on, and finishes only on the result after the
+    # last agent is done (one by notification, one killed and reported only by task_updated)
+    runner, clients = make_runner(tmp_path, [[echo_prompt, task_started("a1"), task_started("a2"),
+                                              result(text="lanes running", num_turns=2), task_done("a1"),
+                                              result(text="a1 in", num_turns=1), task_killed("a2"),
+                                              result(text="all done", num_turns=3), HANG]])
+    out = await runner.run(spec(tmp_path))
+    assert out.outcome == "done" and out.turns == 6
+    assert out.summary == "lanes running\n\na1 in\n\nall done"
+    assert not clients[0].interrupted
+
+
+async def test_a_message_sent_while_agents_run_is_read_before_they_finish(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, task_started("a1"), result(text="lane running"),
+                                              WAIT_SENT, replay, result(text="answered"),
+                                              task_done("a1"), result(text="lane done"), HANG]])
+    task = asyncio.create_task(runner.run(spec(tmp_path)))
+    await wait_until(lambda: runner.accepting("R1"))
+    await asyncio.sleep(0.05)  # the interim result has come and gone: the run is still open
+    assert runner.accepting("R1")
+    assert await runner.send("R1", "W-2", "how's it going?")
+    out = await task
+    assert out.read == ["W-2"] and out.summary == "lane running\n\nanswered\n\nlane done"
+
+
+async def test_a_background_shell_does_not_hold_the_run_open(tmp_path):
+    # a dev server started with run_in_background runs until it's stopped: the turn's result still ends the run
+    runner, _ = make_runner(tmp_path, [[echo_prompt, task_started("b1", "local_bash"), result(), HANG]])
+    out = await asyncio.wait_for(runner.run(spec(tmp_path)), 2)
+    assert out.outcome == "done"
