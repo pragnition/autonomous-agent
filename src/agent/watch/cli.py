@@ -50,6 +50,8 @@ from pathlib import Path
 from agent.watch import feedback, yardstick
 from agent.watch.host import Host, pool_is_holding
 from agent.watch.measure import measure
+from agent.watch import approvals
+from agent.watch.slack import Slack, SlackError, load_approvers, load_token
 from agent.watch.state import FMT, State
 
 # Labels every install needs regardless of what the seed file's own entries use, so a fresh repo always has
@@ -296,6 +298,7 @@ def _build_parser() -> argparse.ArgumentParser:
     project_mark_p.add_argument("--issue", type=int, required=True)
     project_mark_p.add_argument("--status", choices=["active", "done"], required=True)
 
+    _add_approvals_parsers(sub)
     return parser
 
 
@@ -577,6 +580,136 @@ def _cmd_project_mark(state: State, issue: int, status: str, now: datetime) -> i
     return 0
 
 
+# -- propose / approvals / fired (approval in Slack) --
+
+# The channel the proposals go to when `IMPROVE_JENSEN_SLACK_CHANNEL` doesn't name one, and where its id is kept.
+_SLACK_CHANNEL = "autonomous-agent"
+_SLACK_CHANNEL_CACHE = "slack-channel.json"
+
+
+def _add_approvals_parsers(sub) -> None:
+    propose_p = sub.add_parser("propose")
+    propose_p.add_argument("--from", dest="source", choices=["watch", "assess"], required=True)
+
+    approvals_p = sub.add_parser("approvals")
+    approvals_p.add_argument("--github-output")
+
+    fired_p = sub.add_parser("fired")
+    fired_p.add_argument("--issue", type=int, required=True)
+    fired_p.add_argument("--kind", choices=["fix", "project"], required=True)
+
+
+class _GhFailed(RuntimeError):
+    """A plain `gh` call that exited non-zero. Its message names only the command and the exit code."""
+
+
+def _plain_gh(host: Host, repo: str):
+    """The job's own `gh` against `repo` (`host.run`, never Jensen's token), as `approvals` calls it: `args` in,
+    stdout out, `_GhFailed` on a non-zero exit -- without `gh`'s stderr, which can carry a path or a token error
+    into the public workflow log."""
+    def gh(args: list[str]) -> str:
+        result = host.run(["gh", *args, "-R", repo], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise _GhFailed(f"gh {' '.join(args[:2])} failed (exit {result.returncode})")
+        return result.stdout or ""
+    return gh
+
+
+def _proposals(state: State, source: str) -> list[dict]:
+    """The validated `propose` list of the watch's `plan.json` or the assessment's `assess-plan.json`; none when
+    the plan has no such list."""
+    plan = state.plan() if source == "watch" else state.assess_plan()
+    return approvals._validate_proposals(plan.get("propose", []))
+
+
+def _failure(command: str, exc: Exception) -> str:
+    """One stderr line for a failed Slack or `gh` call: Slack's code, `gh`'s command and exit code, or else only
+    the exception's type."""
+    if isinstance(exc, SlackError):
+        return f"{command}: Slack error {exc}"
+    if isinstance(exc, _GhFailed):
+        return f"{command}: {exc}"
+    return f"{command} failed ({type(exc).__name__})"
+
+
+def _cmd_propose(host: Host, state: State, now: datetime, source: str) -> int:
+    """Post the plan's proposals to the Slack channel and print `proposed=<n>`. `--from assess` spends the
+    assessment's plan whether or not posting works, the way `assess-plan` did. Exit 1 when Slack or `gh` fails."""
+    items = _proposals(state, source)
+    if source == "assess":
+        state.clear_assess_plan()
+    if not items:
+        print("proposed=0")
+        return 0
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        print("propose needs GITHUB_REPOSITORY", file=sys.stderr)
+        return 2
+    try:
+        slack = Slack(load_token(host.live))
+        channel = slack.channel_id(os.environ.get("IMPROVE_JENSEN_SLACK_CHANNEL") or _SLACK_CHANNEL,
+                                   cache=state.root / _SLACK_CHANNEL_CACHE)
+        posted = approvals.post_proposals(slack, _plain_gh(host, repo), state.root, channel, items, repo, now)
+    except Exception as exc:
+        print(_failure("propose", exc), file=sys.stderr)
+        return 1
+    print(f"proposed={posted}")
+    return 0
+
+
+def _cmd_approvals(host: Host, state: State, now: datetime, github_output: str | None) -> int:
+    """Apply the decisions in the proposals' threads and emit what to fire: `fix`, `has_fix`, `project`,
+    `has_project`. Reading Slack, the token or `gh` failing is one stderr line and empty outputs, exit 0: the
+    next tick tries again."""
+    picked: dict = {"fix": None, "project": None}
+    rc = 0
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        print("approvals needs GITHUB_REPOSITORY", file=sys.stderr)
+        rc = 2
+    else:
+        try:
+            slack = Slack(load_token(host.live))
+            picked = approvals.poll(slack, _plain_gh(host, repo), state.root, load_approvers(host.live), repo, now)
+        except Exception as exc:
+            print(_failure("approvals", exc) + "; nothing fires this time", file=sys.stderr)
+    fix, project = picked["fix"], picked["project"]
+    _emit([f"fix={fix if fix is not None else ''}", f"has_fix={_bool_str(fix is not None)}",
+           f"project={project if project is not None else ''}", f"has_project={_bool_str(project is not None)}"],
+          github_output)
+    return rc
+
+
+def _cmd_fired(host: Host, state: State, now: datetime, issue: int, kind: str) -> int:
+    """Close the loop on a fix or project run (`approvals.fired`). Slack failing, the token included, is a stderr
+    line and exit 0 -- GitHub is still updated; `gh` failing exits 1."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        print("fired needs GITHUB_REPOSITORY", file=sys.stderr)
+        return 2
+    try:
+        slack = Slack(load_token(host.live))
+    except SlackError as exc:
+        print(_failure("fired", exc), file=sys.stderr)
+        slack = None
+    try:
+        approvals.fired(slack, _plain_gh(host, repo), state.root, issue, kind, repo, now)
+    except SlackError as exc:
+        print(_failure("fired", exc), file=sys.stderr)
+    except Exception as exc:
+        print(_failure("fired", exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_slack_approval(host: Host, state: State, now: datetime, args: argparse.Namespace) -> int:
+    if args.command == "propose":
+        return _cmd_propose(host, state, now, args.source)
+    if args.command == "approvals":
+        return _cmd_approvals(host, state, now, args.github_output)
+    return _cmd_fired(host, state, now, args.issue, args.kind)
+
+
 # -- gh passthrough --
 
 
@@ -637,4 +770,6 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
         return _cmd_assess_commit(state, args.at, now)
     if args.command == "project-mark":
         return _cmd_project_mark(state, args.issue, args.status, now)
+    if args.command in ("propose", "approvals", "fired"):
+        return _cmd_slack_approval(host, state, now, args)
     raise AssertionError(f"unhandled command: {args.command!r}")  # pragma: no cover - argparse already validated
