@@ -411,7 +411,9 @@ class Conversations:
             return
         outcome, step = result.get("outcome", "done"), int(item.payload.get("continuation") or 0)
         failures = int(item.payload.get("failures") or 0)
-        retrying = outcome in RETRY_OUTCOMES and failures < BUILD_RETRIES and self._builds(convo["id"])
+        # a spawned agent that fails is never retried by itself: it reports the failure and its parent decides
+        retrying = outcome in RETRY_OUTCOMES and failures < BUILD_RETRIES and self._builds(convo["id"]) and \
+            not spawned.is_spawned(self.conn, convo["id"])
         # cut off by a usage limit: waits for capacity and is carried on once (see resume_after_limit)
         waiting = not retrying and not item.payload.get("limit_resume") and \
             cut_by_limit(outcome, result.get("error"))

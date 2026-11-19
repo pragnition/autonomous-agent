@@ -1108,3 +1108,17 @@ async def test_a_spawned_agent_with_another_turn_queued_reports_after_that_one(c
     await finish_turn(convos, queue, "A, B and C done")
     (report,) = reports_to(conn, parent)
     assert "A, B and C done" in report
+
+
+async def test_a_failed_spawned_agent_is_not_retried_the_parent_decides(convos, conn, queue):
+    # even when the agent's conversation became a long project's build, whose failed turns otherwise retry
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    child = spawn(conn, queue, parent)
+    projects.start(conn, name="ab", repo="acme/ab", conversation_id=child, thread_link=None, started_by="ann")
+    item = queue.claim()
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"outcome": "error", "text": "", "error": "boom"})
+    assert conn.execute("SELECT COUNT(*) FROM work_items WHERE conversation_id = ? AND status = 'queued'",
+                        (child,)).fetchone()[0] == 0
+    (report,) = reports_to(conn, parent)
+    assert "failed (error)" in report and "won't be retried" in report

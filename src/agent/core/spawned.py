@@ -1,11 +1,13 @@
 """Spawned agents: sessions a session starts that outlive its turn and report back to it.
 
 spawn_agent gives the agent its own conversation, with no Slack thread, and queues its brief as that conversation's
-first turn. From there it runs like any other conversation: it carries on after a time or step limit and waits out a
-usage limit. Its turns don't depend on the spawning session's turn. When its last turn ends, the outcome and final
-message are queued as a message in the spawning conversation. If that conversation is idle, the message starts a
-new turn in its Slack thread. If it is running, the message reaches it mid-turn, like any message that arrives
-while a turn runs.
+first turn. From there it runs like any other conversation: it waits out a usage limit and can park itself. Its turns
+don't depend on the spawning session's turn. Once it is finished (its turn ended with nothing queued, parked or
+waiting in its conversation), the outcome and final message are queued as a message in the spawning conversation.
+If that conversation is idle, the message starts a new turn in its Slack thread. If it is running, the message
+reaches it mid-turn, like any message that arrives while a turn runs. One that fails reports the failure and is not
+retried: the spawning session decides. A conversation may have MAX_RUNNING running at once, and all conversations
+together MAX_RUNNING_ALL.
 """
 
 from __future__ import annotations
@@ -15,7 +17,8 @@ import uuid
 
 from agent import db, events
 
-MAX_RUNNING = 10        # spawned agents one conversation may have running at once
+MAX_RUNNING = 3         # spawned agents one conversation may have running at once
+MAX_RUNNING_ALL = 4     # spawned agents running at once across every conversation
 REPORT_CHARS = 20_000   # the longest report passed back; the rest is cut with a note
 BRIEF_CHARS = 300       # how much of the brief the report repeats, so the spawning session knows which one it is
 
@@ -43,13 +46,20 @@ def more_to_come(conn: sqlite3.Connection, conversation_id: str) -> bool:
                         (conversation_id,) * 3).fetchone()[0] == 1
 
 
+# A spawned agent still running: not yet reported, with something still to run in its conversation. One whose turn
+# was cancelled (stop_all, cancel_task) or gave up after the runner died never reports, and doesn't count.
+_RUNNING = "s.status = 'running' AND (" + _MORE_TO_COME.format(c="s.child_conversation_id") + ")"
+
+
 def running_count(conn: sqlite3.Connection, parent_conversation_id: str) -> int:
-    """Agents still running for a conversation: not yet reported, with a turn queued or running. One whose turn was
-    cancelled (stop_all, cancel_task) or gave up after the runner died never reports, and doesn't count."""
-    return conn.execute(
-        "SELECT COUNT(*) FROM spawned_agents s WHERE s.parent_conversation_id = ? AND s.status = 'running' AND EXISTS "
-        "(SELECT 1 FROM work_items w WHERE w.conversation_id = s.child_conversation_id AND "
-        "w.status IN ('queued', 'claimed', 'delivered'))", (parent_conversation_id,)).fetchone()[0]
+    """The agents a conversation spawned that are still running, a parked one or one waiting out a usage limit too."""
+    return conn.execute(f"SELECT COUNT(*) FROM spawned_agents s WHERE s.parent_conversation_id = ? AND {_RUNNING}",
+                        (parent_conversation_id,)).fetchone()[0]
+
+
+def running_total(conn: sqlite3.Connection) -> int:
+    """Every conversation's spawned agents still running."""
+    return conn.execute(f"SELECT COUNT(*) FROM spawned_agents s WHERE {_RUNNING}").fetchone()[0]
 
 
 def is_spawned(conn: sqlite3.Connection, conversation_id: str | None) -> bool:
@@ -92,7 +102,8 @@ def report_text(row: sqlite3.Row, status: str, outcome: str, text: str) -> str:
     report = text.strip() or "(it ended without a final message)"
     if len(report) > REPORT_CHARS:
         report = report[:REPORT_CHARS] + f"\n[cut: {len(text)} characters in all]"
-    how = "finished" if status == "done" else f"failed ({outcome})"
+    how = "finished" if status == "done" else \
+        f"failed ({outcome}). It won't be retried: spawn it again if the work still needs it"
     return (f"<agent-notification>\nAgent {row['id']}, which you spawned with spawn_agent, {how}.\n"
             f"Its brief: {brief}\nIts report:\n{report}\n</agent-notification>\n"
             "Act on it: carry on with the work it was part of, and tell the thread what it found when that matters to "

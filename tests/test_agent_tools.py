@@ -436,12 +436,32 @@ async def test_a_spawned_agent_cannot_spawn(router, ctx_member):
     assert "can't spawn" in (await router.call(child, "spawn_agent", {"prompt": "q"})).text
 
 
-async def test_spawn_agent_caps_running_agents_per_conversation(router, ctx_member, monkeypatch):
-    from agent.core import spawned
-    monkeypatch.setattr(spawned, "MAX_RUNNING", 2)
-    for _ in range(2):
-        await router.call(ctx_member, "spawn_agent", {"prompt": "p"})
-    assert "still running" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+async def test_spawn_agent_caps_running_agents_per_conversation(router, ctx_member):
+    for _ in range(3):
+        assert "Spawned" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+    refused = (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+    assert refused.startswith("3 agents you spawned are still running, the most one conversation may have")
+    assert router.conn.execute("SELECT COUNT(*) FROM spawned_agents").fetchone()[0] == 3
     # one whose turn was cancelled never reports back, and stops counting
     router.queue.cancel(latest_item(router).id)
     assert "Spawned" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+
+
+async def test_spawn_agent_caps_running_agents_overall(router):
+    first, second = ctx_for(router, actor="bob"), ctx_for(router, actor="bob", channel="C2")
+    for _ in range(3):
+        await router.call(first, "spawn_agent", {"prompt": "p"})
+    assert "Spawned" in (await router.call(second, "spawn_agent", {"prompt": "p"})).text
+    refused = (await router.call(second, "spawn_agent", {"prompt": "p"})).text
+    assert refused.startswith("4 spawned agents are running already, the most at once")
+    assert router.conn.execute("SELECT COUNT(*) FROM spawned_agents").fetchone()[0] == 4
+
+
+async def test_a_parked_spawned_agent_still_counts_as_running(router, ctx_member):
+    for _ in range(3):
+        await router.call(ctx_member, "spawn_agent", {"prompt": "p"})
+    child = latest_item(router)
+    router.queue.complete(child.id, {})   # its turn ended parked: nothing queued, but it carries on later
+    router.conn.execute("INSERT INTO parks(conversation_id, work_item_id, until_at, created_at) VALUES (?, ?, ?, ?)",
+                        (child.conversation_id, child.id, "2099-01-01T00:00:00Z", db.utcnow()))
+    assert "still running" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text

@@ -321,8 +321,12 @@ class AgentToolRouter:
         if spawned.is_spawned(self.conn, ctx.conversation_id):
             return ToolReply("a spawned agent can't spawn agents of its own; do the work in this session")
         if spawned.running_count(self.conn, ctx.conversation_id) >= spawned.MAX_RUNNING:
-            return ToolReply(f"{spawned.MAX_RUNNING} agents you spawned are still running; wait for one to report "
-                             "back before spawning another")
+            return ToolReply(f"{spawned.MAX_RUNNING} agents you spawned are still running, the most one conversation "
+                             "may have at once: wait for one to report back before spawning another, or do the work "
+                             "yourself")
+        if spawned.running_total(self.conn) >= spawned.MAX_RUNNING_ALL:
+            return ToolReply(f"{spawned.MAX_RUNNING_ALL} spawned agents are running already, the most at once across "
+                             "every conversation: do the work yourself, or spawn it once one of yours reports back")
         cwd = str(args.get("cwd") or "").strip() or None  # the runner makes it absolute and checks it exists
         agent_id = spawned.new_id()
         child = create_conversation(self.conn, channel=None, thread_ts=None, project=ctx.project, is_primary=0,
