@@ -1,8 +1,9 @@
 """A session's activity, read from runs/<work item>.jsonl.
 
 Each line is one Claude Agent SDK message as the runner forwarded it (a dataclass as a dict: SystemMessage,
-AssistantMessage, UserMessage, RateLimitEvent, ResultMessage), or {"type", "truncated"} for one over 20 kB; core
-stamps each with "_ts" when it arrives. Lines become timeline entries; nothing here ever raises on a strange line.
+AssistantMessage, UserMessage, RateLimitEvent, ResultMessage), or {"type", "truncated"} for one over 20 kB, or the
+runner's own RunUsage, its count of every API call the run has made so far; core stamps each with "_ts" when it
+arrives. Lines become timeline entries; nothing here ever raises on a strange line.
 """
 
 from __future__ import annotations
@@ -103,7 +104,7 @@ def parse_record(record: dict, line: int, scrub: Scrub) -> list[dict]:
     if "truncated" in record:
         return raw()
     content = record.get("content")
-    if kind == "SystemMessage":
+    if kind in ("SystemMessage", "RunUsage"):
         return out
     if kind == "AssistantMessage":
         if not isinstance(content, list):
@@ -184,13 +185,15 @@ class LiveStats:
 
 class _Totals:
     """What a session has used so far, fed one record at a time. The SDK splits one reply into several messages
-    that carry the same usage, so usage counts once per message id; the ResultMessage, when it comes, is the real
-    total."""
+    that carry the same usage, so usage counts once per message id. The stream misses background agents' calls and a
+    ResultMessage covers the main thread only: the runner's latest RunUsage, from the CLI's own logs, has every call,
+    so its tokens stand whenever there is one."""
 
     def __init__(self):
         self.session_id: str | None = None
         self.by_message: dict[str, dict] = {}
         self.result: LiveStats | None = None
+        self.counted: dict | None = None
 
     def feed(self, record: dict) -> None:
         kind = record.get("type")
@@ -202,15 +205,20 @@ class _Totals:
         elif kind == "ResultMessage":
             self.result = LiveStats(tokens=tokens_of(record.get("usage")), turns=int(record.get("num_turns") or 0),
                                     done=True)
+        elif kind == "RunUsage":
+            self.counted = tokens_of(record.get("usage"))
 
     def stats(self) -> LiveStats:
         if self.result is not None:
-            return LiveStats(self.session_id, dict(self.result.tokens), self.result.turns, True)
-        tokens = zero_tokens()
-        for usage in self.by_message.values():
-            for key, value in usage.items():
-                tokens[key] += value
-        return LiveStats(self.session_id, tokens, len(self.by_message))
+            stats = LiveStats(self.session_id, dict(self.result.tokens), self.result.turns, True)
+        else:
+            stats = LiveStats(self.session_id, zero_tokens(), len(self.by_message))
+            for usage in self.by_message.values():
+                for key, value in usage.items():
+                    stats.tokens[key] += value
+        if self.counted is not None:
+            stats.tokens = dict(self.counted)
+        return stats
 
 
 @dataclass
