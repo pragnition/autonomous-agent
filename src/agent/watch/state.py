@@ -567,10 +567,13 @@ class State:
     def gate_start(self, issue: int, kind: str, handle: str, now: datetime) -> None:
         """Writes `gate.json`: `{issue, kind, handle, started}`. Raises `RuntimeError` if a gate is already
         active -- checked with `gate(now)`, the same call `deploy.py` and the watch use, so an *expired* gate
-        (older than 12 hours) never blocks a fresh `gate_start` either."""
+        (older than 12 hours) never blocks a fresh `gate_start` either -- or while a deploy is pending: that
+        change would land, unmeasured, the moment this gate ended."""
         active = self.gate(now)
         if active is not None:
             raise RuntimeError(f"a gate is already active for issue {active.get('issue')}")
+        if self.deploy_pending():
+            raise RuntimeError("a deploy is pending: it lands before a gate can start")
         _atomic_write(self.root / _GATE_FILE,
                       json.dumps({"issue": issue, "kind": kind, "handle": handle, "started": _iso(now)}))
 
@@ -592,17 +595,29 @@ class State:
             return None
         return data
 
-    def gate_end(self, result: str | None = None, now: datetime | None = None) -> None:
+    def gate_end(self, result: str | None = None, now: datetime | None = None, *, started: str | None = None,
+                 drop: int | None = None, regressions: int | None = None) -> None:
         """End the gate: `gate.json` (expired or not) is archived to `gate-last.json` with `result` (`passed`,
-        `failed`, or `None` for a gate a person ended by hand) and `ended` added, replacing the gate archived
-        before it, then removed. With no `gate.json` there is nothing to end, and the last archived gate stays as
-        it was. Any other `result` raises `ValueError`."""
+        `failed`, or `None` for a gate a person ended by hand), `ended`, and the yardstick's `drop` and
+        `regressions` (counts, or `None`) added, replacing the gate archived before it, then removed. With no
+        `gate.json` there is nothing to end, and the last archived gate stays as it was. Any other `result` raises
+        `ValueError`.
+
+        With `started` (the gate a yardstick run measured), only that gate is ended: when the active one started
+        at another time, or there is none, this raises `RuntimeError` and changes nothing -- the gate measured
+        already ended, and the one there now is another change's."""
         if result is not None and result not in _GATE_RESULTS:
             raise ValueError(f"bad gate result: {result!r}")
         data = self._read_json_object(_GATE_FILE)
+        if started is not None:
+            if data is None:
+                raise RuntimeError("there is no active gate to end")
+            if data.get("started") != started:
+                raise RuntimeError(f"the active gate started at {data.get('started')}, not {started}")
         if data is not None:
             ended = _iso(now if now is not None else datetime.now(UTC))
-            _atomic_write(self.root / _GATE_LAST_FILE, json.dumps({**data, "result": result, "ended": ended}))
+            _atomic_write(self.root / _GATE_LAST_FILE, json.dumps({**data, "result": result, "ended": ended,
+                                                                   "drop": drop, "regressions": regressions}))
         (self.root / _GATE_FILE).unlink(missing_ok=True)
 
     def last_gate(self) -> dict | None:

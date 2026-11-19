@@ -1063,7 +1063,7 @@ def test_cli_gate_run_records_its_verdict_so_a_failed_one_is_never_a_baseline(tm
     state.gate_start(12, "repo", "abc123", T0 - timedelta(hours=2))
     rc, kv = _gate_run(state, FakeHost(tmp_path, check_rc=fails_d_and_e), tmp_path / "out.txt",
                        now=T0 - timedelta(hours=1))
-    assert rc == 0 and kv["gate_result"] == "failed"
+    assert rc == 0 and kv["gate_result"] == "failed" and kv["drop"] == "2" and kv["regressions"] == "2"
     gate_a_lines = [r for r in _read_results(state) if r["run"] == kv["run_id"]]
     assert {r["gate"] for r in gate_a_lines} == {"2026-11-19T17:07:00Z"}
     state.gate_end("failed", T0 - timedelta(minutes=50))
@@ -1093,7 +1093,7 @@ def test_cli_gate_run_ignores_a_nightly_run_after_the_gate_started(tmp_path, mon
 
     rc, kv = _gate_run(state, host, tmp_path / "out.txt")
 
-    assert rc == 0 and kv["gate_result"] == "failed" and kv["gate_failed"] == "true"
+    assert rc == 0 and kv["gate_result"] == "failed" and kv["drop"] == "2" and "gate_failed" not in kv
 
 
 # -- memory cleanup --
@@ -1269,7 +1269,8 @@ def test_cli_yardstick_run_skips_while_pool_holds(tmp_path):
     assert main(["yardstick", "run", "--github-output", str(out)], host=host, state=state, now=T0) == 0
 
     kv = _kv(out.read_text())
-    assert kv["skip_reason"] == "pool_hold" and kv["gate_failed"] == "false"
+    assert kv["skip_reason"] == "pool_hold" and kv["gate_result"] == "none" and "gate_failed" not in kv
+    assert kv["gate_started"] == "" and kv["drop"] == "0" and kv["regressions"] == "0"
     assert kv["score"] == "0" and kv["counted"] == "0" and kv["run_id"] == ""
     assert host.kinds("ask") == [] and host.kinds("tar") == [] and host.kinds("memory") == []
 
@@ -1293,7 +1294,7 @@ def test_cli_yardstick_run_goes_ahead_when_core_cannot_be_read(tmp_path, monkeyp
 
     assert main(["yardstick", "run", "--gate", "--github-output", str(out)], host=host, state=state, now=T0) == 0
     kv = _kv(out.read_text())
-    assert kv["skip_reason"] == "" and kv["score"] == "1" and kv["counted"] == "1" and kv["gate_failed"] == "false"
+    assert kv["skip_reason"] == "" and kv["score"] == "1" and kv["counted"] == "1"
     assert kv["gate_result"] == "passed"  # the first run ever: the baseline
 
 
@@ -1324,7 +1325,9 @@ def test_cli_yardstick_run_writes_outputs_and_gate(tmp_path, monkeypatch, capsys
     kv = _kv(out.read_text())
     assert kv["score"] == "1" and kv["counted"] == "3" and kv["skip_reason"] == ""
     assert re.fullmatch(r"20261119T190700Z-[0-9a-f]{4}", kv["run_id"])
-    assert kv["gate_result"] == "failed" and kv["gate_failed"] == "true"
+    assert kv["gate_result"] == "failed" and "gate_failed" not in kv
+    # What the gate measured, and the counts it found -- never a task id.
+    assert kv["gate_started"] == "2026-11-19T19:07:00Z" and kv["drop"] == "2" and kv["regressions"] == "0"
     assert state.gate(T0) is not None  # the run never ends the gate itself: the workflow does, with its result
     printed = capsys.readouterr()
     assert printed.out.strip().splitlines()[-1] == "score=1/3"
@@ -1346,8 +1349,8 @@ def test_cli_gate_run_without_an_active_gate_measures_nothing(tmp_path):
     rc, kv = _gate_run(state, host, out)
 
     assert rc == 0
-    assert kv["gate_result"] == "none" and kv["gate_failed"] == "false" and kv["skip_reason"] == "no_gate"
-    assert kv["run_id"] == "" and kv["counted"] == "0"
+    assert kv["gate_result"] == "none" and kv["skip_reason"] == "no_gate" and kv["gate_started"] == ""
+    assert kv["run_id"] == "" and kv["counted"] == "0" and kv["drop"] == "0" and kv["regressions"] == "0"
     assert host.calls == [] and not yardstick.results_path(state).exists()
 
 
@@ -1360,12 +1363,14 @@ def test_cli_gate_run_retries_when_it_cannot_measure(tmp_path, monkeypatch, caps
     # No tasks installed: nothing to measure, now or on a retry.
     rc, kv = _gate_run(state, FakeHost(tmp_path), out)
     assert rc == 0 and kv["gate_result"] == "none" and kv["skip_reason"] == "no_tasks"
+    assert kv["gate_started"] == "2026-11-19T19:07:00Z"  # the gate it would have measured
 
     # The pool holds.
     _write_task(state.root / "yardstick" / "tasks", "t1")
     _write_task(state.root / "yardstick" / "tasks", "t2")
     rc, kv = _gate_run(state, FakeHost(tmp_path, pool="hold_scheduled"), out)
     assert rc == 0 and kv["gate_result"] == "retry" and kv["skip_reason"] == "pool_hold"
+    assert kv["gate_started"] == "2026-11-19T19:07:00Z" and kv["drop"] == "0" and kv["regressions"] == "0"
 
     # The run itself raises.
     def broken_run(*args, **kwargs):
@@ -1374,7 +1379,7 @@ def test_cli_gate_run_retries_when_it_cannot_measure(tmp_path, monkeypatch, caps
     with monkeypatch.context() as m:
         m.setattr(yardstick, "run", broken_run)
         rc, kv = _gate_run(state, FakeHost(tmp_path), out)
-    assert rc == 1 and kv["gate_result"] == "retry" and kv["gate_failed"] == "false"
+    assert rc == 1 and kv["gate_result"] == "retry" and kv["gate_started"] == "2026-11-19T19:07:00Z"
 
     # The comparison raises.
     def broken_verdict(*args, **kwargs):
@@ -1415,7 +1420,8 @@ def test_cli_gate_run_passes_without_a_drop(tmp_path, monkeypatch):
 
     rc, kv = _gate_run(state, FakeHost(tmp_path), tmp_path / "out.txt")
 
-    assert rc == 0 and kv["gate_result"] == "passed" and kv["gate_failed"] == "false" and kv["score"] == "3"
+    assert rc == 0 and kv["gate_result"] == "passed" and kv["score"] == "3"
+    assert kv["drop"] == "-1" and kv["regressions"] == "0"
 
 
 def test_cli_nightly_run_never_judges_a_gate(tmp_path, monkeypatch):
@@ -1431,7 +1437,8 @@ def test_cli_nightly_run_never_judges_a_gate(tmp_path, monkeypatch):
                 state=state, now=T0) == 0
 
     kv = _kv(out.read_text())
-    assert kv["gate_result"] == "none" and kv["gate_failed"] == "false" and kv["score"] == "0"
+    assert kv["gate_result"] == "none" and kv["score"] == "0" and kv["gate_started"] == ""
+    assert kv["drop"] == "2"  # against the run before it, for the record
     assert state.gate(T0) is not None
 
 
