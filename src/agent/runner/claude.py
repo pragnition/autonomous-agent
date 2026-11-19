@@ -19,6 +19,11 @@ waits is turned away (idle_wait), since nothing sent into the session is read un
 A run has no time or step limit of its own. A session that sends nothing for `idle_s` is stuck, and is stopped as
 stalled. A run with a time budget (`timeout_s`, which a scheduled run has) is stopped when it runs out, however busy
 it is; the budget covers the whole run, every session it moves through.
+
+A run's tokens are every API call its sessions made, main thread and agents alike, counted from the CLI's own logs
+(usage.SessionUsage), never less than the results' own counts, which stand in when there is no log. While the run
+goes, its count so far goes into its stream as a RunUsage record whenever it has grown, checked every
+`usage_every_s`.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import dataclasses
 import json
 import os
 import re
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -44,6 +50,7 @@ from agent.runner.base import RunResult, RunSpec
 from agent.runner.handoff import handoff_note
 from agent.runner.idle_wait import block_idle_waits
 from agent.runner.outcome import ACCOUNT_TROUBLE, FORK_STATUSES, map_result, usage_tokens
+from agent.runner.usage import USAGE_FIELDS, SessionUsage
 
 # The SDK hands the parent's whole environment to the CLI, so anything secret-looking is overridden with "".
 SECRETISH = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_KEY|_KEY)$|^(GH|GITHUB|SLACK|LINEAR|AWS)_", re.I)
@@ -92,11 +99,11 @@ class _Attempt:
 class ClaudeRunner:
     def __init__(self, proxy: ProxyClient, base_url: str, transcripts_dir: Path, *,
                  client_factory: Callable | None = None, watchdog_s: float = 60,
-                 uuid_factory: Callable[[], str] | None = None, max_forks: int = 2):
+                 uuid_factory: Callable[[], str] | None = None, max_forks: int = 2, usage_every_s: float = 30):
         self.proxy, self.base_url = proxy, base_url
         self.transcripts_dir = Path(transcripts_dir)
         self.client_factory = client_factory or (lambda options: ClaudeSDKClient(options=options))
-        self.watchdog_s, self.max_forks = watchdog_s, max_forks
+        self.watchdog_s, self.max_forks, self.usage_every_s = watchdog_s, max_forks, usage_every_s
         self.uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
         self._active: dict[str, tuple[object, dict]] = {}
         self._stopped: set[str] = set()
@@ -196,10 +203,16 @@ class ClaudeRunner:
             return RunResult(run_id=spec.run_id, session_id=resume, outcome="interrupted", error="interrupted")
         self._read[spec.run_id] = []
         end = asyncio.get_running_loop().time() + spec.timeout_s if spec.timeout_s else None
+        usage = SessionUsage(spec.env.get("CLAUDE_CONFIG_DIR"))
+        reporter = asyncio.create_task(self._report_usage(spec, usage)) if spec.on_message else None
+        spent = [0, 0, 0, 0]  # the results' own counts over every session, for when no log is found
         try:
             while True:
                 attempt = await self._attempt(spec, resume=resume, prompt=prompt, can_fork=forks < self.max_forks,
-                                              end=end)
+                                              end=end, usage=usage)
+                r = attempt.result
+                spent = [a + b for a, b in zip(spent, (r.input_tokens, r.output_tokens, r.cache_read_tokens,
+                                                       r.cache_write_tokens))]
                 if attempt.switch_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
                     # Never resume (or fork) the session onto another account: start a fresh one, which the proxy
                     # pins to a working account, and tell it which session to pick up from
@@ -208,10 +221,31 @@ class ClaudeRunner:
                     if earlier:
                         prompt = self._handoff(spec, earlier, self.transcripts_dir / f"{spec.run_id}.jsonl")
                     continue
-                attempt.result.forks, attempt.result.read = forks, self._read[spec.run_id]
-                return attempt.result
+                r.forks, r.read = forks, self._read[spec.run_id]
+                break
         finally:
             self._read.pop(spec.run_id, None)
+            if reporter is not None:
+                reporter.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await reporter
+        # the logs have every agent's calls, but now and then miss a reply a result counted: never below the results
+        counted = await asyncio.to_thread(usage.poll)
+        counted = max(counted or spent, spent, key=sum)
+        r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens = counted
+        return r
+
+    async def _report_usage(self, spec: RunSpec, usage: SessionUsage) -> None:
+        """Send the run's count so far into its stream whenever it has grown: the stream misses background agents'
+        calls, and a result covers the main thread only."""
+        sent = None
+        while True:
+            await asyncio.sleep(self.usage_every_s)
+            with contextlib.suppress(Exception):
+                counted = await asyncio.to_thread(usage.poll)
+                if counted is not None and counted != sent:
+                    await spec.on_message({"type": "RunUsage", "usage": dict(zip(USAGE_FIELDS, counted))})
+                    sent = counted
 
     async def _watch(self, client, state: dict) -> None:
         while True:
@@ -265,9 +299,11 @@ class ClaudeRunner:
         return record
 
     async def _attempt(self, spec: RunSpec, *, resume: str | None, prompt: str, can_fork: bool = True,
-                       end: float | None = None) -> _Attempt:
-        """One session of the run. `end` is the loop time the run's time budget runs out at, None when it has none."""
+                       end: float | None = None, usage: SessionUsage | None = None) -> _Attempt:
+        """One session of the run. `end` is the loop time the run's time budget runs out at, None when it has none.
+        `usage` counts the calls of each session the attempt runs from when it starts."""
         loop = asyncio.get_running_loop()
+        usage, started = usage or SessionUsage(None), time.time()
 
         def deadline() -> float:  # the idle window from now, cut short by the run's time budget
             if state["reason"] and not state["turn"]:  # stopped between turns: no result is coming (_end_between_turns)
@@ -277,6 +313,7 @@ class ClaudeRunner:
 
         session_id = None if resume else self.uuid_factory()
         prompt_uuid = self.uuid_factory()
+        usage.watch(session_id or resume, started)
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume))
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
@@ -307,6 +344,7 @@ class ClaudeRunner:
                             await spec.on_message(json.loads(json.dumps(record, default=str)))
                     if getattr(msg, "session_id", None):
                         state["sid"] = msg.session_id
+                        usage.watch(msg.session_id, started)
                     if isinstance(msg, AssistantMessage) and not state["asked"]:
                         state["asked"] = True
                         with contextlib.suppress(ProxyUnavailable):

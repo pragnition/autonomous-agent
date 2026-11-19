@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_agent_sdk import (TERMINAL_TASK_STATUSES, AssistantMessage, CLIConnectionError, ResultMessage, TextBlock,
@@ -750,3 +751,89 @@ async def test_a_session_waiting_on_agents_that_hears_nothing_is_stalled(tmp_pat
     runner, clients = make_runner(tmp_path, [[echo_prompt, task_started("a1"), result(text="lane running"), HANG]])
     out = await asyncio.wait_for(runner.run(spec(tmp_path, idle_s=0.1)), 2)
     assert (out.outcome, out.error, clients[0].interrupted) == ("stalled", "no progress for 0.1 s", True)
+
+
+# What a run used: every API call its sessions' CLI logs show, main thread and subagents alike
+
+def logged(mid, agent=None, read=1000):
+    """The session's next API reply, written to the CLI's own log the way the CLI does (a subagent's to the agent's
+    log, which never reaches the SDK stream when it runs in the background); the main thread's also streams."""
+    def make(c):
+        sid = c.options.session_id or c.options.resume
+        home = Path(c.options.env["CLAUDE_CONFIG_DIR"]) / "projects" / "-var-agent-scratch-V-1"
+        path = home / sid / "subagents" / f"agent-{agent}.jsonl" if agent else home / f"{sid}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with path.open("a") as f:
+            f.write(json.dumps({"type": "assistant", "timestamp": at, "sessionId": sid, "message": {
+                "id": mid, "content": [], "usage": {"input_tokens": 1, "output_tokens": 10,
+                                                    "cache_read_input_tokens": read,
+                                                    "cache_creation_input_tokens": 50}}}) + "\n")
+        return assistant(c)
+    return make
+
+
+def home_spec(tmp_path, **kw):
+    return spec(tmp_path, env={"TZ": "Asia/Singapore", "CLAUDE_CONFIG_DIR": str(tmp_path / "claude")}, **kw)
+
+
+async def test_a_run_reports_every_call_its_session_made_its_agents_included(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, logged("m1"), logged("a1", agent="a1", read=4000),
+                                        logged("m2"), result()]])
+    out = await runner.run(home_spec(tmp_path))
+    # not the result's own usage (100, 20, 5, 7), which covers the main thread only
+    assert (out.input_tokens, out.output_tokens, out.cache_read_tokens, out.cache_write_tokens) == (3, 30, 6000, 150)
+
+
+async def test_a_stalled_run_still_reports_the_calls_it_made(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, logged("m1"), HANG]])
+    out = await runner.run(home_spec(tmp_path, idle_s=0.05))
+    assert (out.outcome, out.input_tokens, out.cache_read_tokens) == ("stalled", 1, 1000)
+
+
+async def test_a_run_that_moves_to_another_account_counts_the_session_it_left(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, logged("m1"), result("error_during_execution",
+                                                                          api_error_status=503)],
+                                       [echo_prompt, logged("m2", read=3000), result()]])
+    out = await runner.run(home_spec(tmp_path))
+    assert (out.forks, out.input_tokens, out.cache_read_tokens) == (1, 2, 4000)
+
+
+async def test_a_resumed_session_counts_only_this_run(tmp_path):
+    resumed = "11111111-1111-4111-8111-111111111111"
+    earlier = tmp_path / "claude" / "projects" / "-var-agent-scratch-V-1" / f"{resumed}.jsonl"
+    earlier.parent.mkdir(parents=True)
+    earlier.write_text(json.dumps({"type": "assistant", "timestamp": "2026-11-01T00:00:00.000Z", "message": {
+        "id": "old", "usage": {"input_tokens": 9, "output_tokens": 9, "cache_read_input_tokens": 9_000_000}}}) + "\n")
+    runner, _ = make_runner(tmp_path, [[echo_prompt, logged("m1"), result()]])
+    out = await runner.run(home_spec(tmp_path, resume_session_id=resumed, resume_account="maple"))
+    assert (out.input_tokens, out.cache_read_tokens) == (1, 1000)
+
+
+async def test_without_a_log_the_results_of_every_session_count(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, result("error_during_execution", api_error_status=503)],
+                                       [echo_prompt, result()]])
+    out = await runner.run(spec(tmp_path))
+    assert (out.forks, out.input_tokens, out.output_tokens, out.cache_read_tokens, out.cache_write_tokens) == \
+        (1, 200, 40, 10, 14)
+
+
+async def test_a_running_session_sends_what_it_has_used_so_far(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, logged("m1"), logged("a1", agent="a1"), 0.3, result()]])
+    runner.usage_every_s = 0.02
+    seen = []
+
+    async def on_message(record):
+        seen.append(record)
+    await runner.run(home_spec(tmp_path, on_message=on_message))
+    counts = [r["usage"] for r in seen if r["type"] == "RunUsage"]
+    assert counts and counts[-1] == {"input_tokens": 2, "output_tokens": 20, "cache_read_input_tokens": 2000,
+                                     "cache_creation_input_tokens": 100}
+    assert len(counts) == len({json.dumps(c) for c in counts})  # sent when it changes, not every tick
+
+
+async def test_a_log_short_of_what_the_results_report_does_not_lower_the_count(tmp_path):
+    # now and then a reply the result counts never reaches the log; the run's count is never below the results'
+    runner, _ = make_runner(tmp_path, [[echo_prompt, logged("m1", read=0), result()]])
+    out = await runner.run(home_spec(tmp_path))
+    assert (out.input_tokens, out.output_tokens, out.cache_read_tokens, out.cache_write_tokens) == (100, 20, 5, 7)
