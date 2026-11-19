@@ -46,6 +46,9 @@ LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the
 # A person's message with files attached arrives with this subtype; every other subtype (edits, joins, bot
 # messages, deletions) is not something a person said to the agent
 FILE_SHARE = "file_share"
+# How improve-jensen's proposals start (agent/watch/approvals.py). It posts them with the agent's bot token and
+# answers the replies in their threads itself, so those threads are not the agent's own.
+IMPROVE_JENSEN_PROPOSALS = "*improve-jensen wants to change Jensen*"
 
 
 def message_files(event: dict) -> list[dict]:
@@ -161,8 +164,9 @@ class Conversations:
     def _note_own_post(self, event: dict) -> None:
         """The agent's own top-level message in a channel opens a thread whose replies should reach it, even when it
         was posted straight through Slack's Web API and core never recorded it. A DM needs nothing: every DM message
-        reaches the agent."""
-        if event.get("subtype") or event.get("thread_ts") or event.get("channel_type") == "im" or not event.get("ts"):
+        reaches the agent. improve-jensen's proposals are left out: it answers the replies in those itself."""
+        if event.get("subtype") not in (None, FILE_SHARE) or event.get("thread_ts") or not event.get("ts") \
+                or event.get("channel_type") == "im" or (event.get("text") or "").startswith(IMPROVE_JENSEN_PROPOSALS):
             return
         self.conn.execute("INSERT OR IGNORE INTO own_threads(channel, ts, at) VALUES (?, ?, ?)",
                           (event["channel"], event["ts"], db.utcnow()))

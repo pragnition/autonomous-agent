@@ -1,5 +1,6 @@
 import asyncio
 import itertools
+from datetime import UTC, datetime
 
 import pytest
 
@@ -234,6 +235,44 @@ async def test_only_the_agents_own_top_level_channel_posts_open_a_thread(convos,
     await convos.handle_slack({**own_post("8.4"), "user": "UOTHER", "bot_id": "B1"})  # another bot
     for thread in ("8.0", "8.2", "8.3", "8.4"):
         await convos.handle_slack(reply(thread, "hello?"))
+    assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
+
+
+async def test_a_file_the_agent_posts_itself_opens_a_thread_too(convos, queue):
+    await convos.handle_slack(own_post("8.5", subtype="file_share"))
+    await convos.handle_slack(reply("8.5", "nice"))
+    assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 1
+
+
+async def test_a_thread_core_recorded_still_routes_to_its_conversation(convos, queue, conn):
+    await convos.handle_slack(mention("8.6", "fix it"))
+    first = queue.claim()
+    queue.complete(first.id, {})
+    await convos.handle_slack(own_post("8.6"))  # no-op: core's own posts are already known
+    await convos.handle_slack(reply("8.6", "and the other one"))
+    assert last_item(queue).conversation_id == first.conversation_id
+
+
+async def test_replies_to_improve_jensens_proposals_are_left_to_it(convos, queue, tmp_path):
+    from agent.watch.approvals import post_proposals
+
+    class Posts:
+        def __init__(self):
+            self.texts = []
+
+        def post(self, channel, text, thread_ts=None):
+            self.texts.append(text)
+            return "8.7"
+
+    def gh(args):  # every issue open and unlabelled; edits and comments succeed
+        return '[{"number": 31, "labels": []}]' if args[:2] == ["issue", "list"] else ""
+
+    posts = Posts()
+    post_proposals(posts, gh, tmp_path, "C-SAMPLE", [{"issue": 31, "change": "x"}], "acme/widgets",
+                   datetime.now(UTC))
+    assert posts.texts, "post_proposals posted nothing"
+    await convos.handle_slack(own_post("8.7", text=posts.texts[0]))
+    await convos.handle_slack(reply("8.7", "approve"))
     assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
 
 
