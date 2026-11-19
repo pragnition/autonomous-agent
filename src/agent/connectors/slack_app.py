@@ -7,7 +7,9 @@ from slack_bolt.async_app import AsyncApp
 
 
 def build_app(bot_token: str, intake) -> AsyncApp:
-    app = AsyncApp(token=bot_token)
+    # The bot's own messages come through too: a thread the agent starts with chat.postMessage is noted, so the
+    # replies in it reach the agent (Conversations.handle_slack)
+    app = AsyncApp(token=bot_token, ignoring_self_events_enabled=False)
 
     @app.event("app_mention")
     async def on_mention(event):
