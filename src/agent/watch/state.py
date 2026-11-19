@@ -4,8 +4,9 @@ Everything the hourly watch remembers between runs lives under one root director
 `~/.local/state/improve-jensen`, overridden by env `IMPROVE_JENSEN_STATE`), as a handful of small files:
 `state.json` (the window boundary, known clones, and Jensen's notes' own, separate cursor --
 `notes_committed_end`/`notes_pending_end`, two-phase exactly like the main window but never held back by it or
-holding it back: see `hold_window`'s own warning about why), `metrics.jsonl` (one line per turn, midturn or PR, stamped
-with when it happened and read back by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's
+holding it back: see `hold_window`'s own warning about why -- and whether the last notes read failed),
+`metrics.jsonl` (one line per turn, midturn or PR, stamped with when it happened and read back by `count`),
+`pending-metrics.jsonl`/`pending-clones.json` (this window's
 not-yet-final measurement, written by `stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line
 per `log_deploy`), `deploy-pending` (present means a deploy is pending -- its own file, not a `state.json` key,
 since `deploy.py` runs as a separate process from the hourly watch and a shared read-modify-write could race
@@ -291,6 +292,17 @@ class State:
         data["notes_pending_end"] = _iso(end)
         self._write_state(data)
 
+    def notes_failing(self) -> bool:
+        """Whether the notes read failed in the last committed window, so a failure now is no longer news."""
+        return self._read_state().get("notes_failing") is True
+
+    def stage_notes_failing(self, failing: bool) -> None:
+        """Record whether this window's notes read failed, staged until the next `commit()` the same way the notes
+        cursor is: a window measured again before it is committed still sees the streak as it stood before it."""
+        data = self._read_state()
+        data["notes_failing_pending"] = failing
+        self._write_state(data)
+
     def commit(self) -> None:
         """Make the last window's end the new starting point (`committed_end = pending_end`), and fold whatever
         is staged for it into the permanent record: staged metrics are appended to `metrics.jsonl`, staged
@@ -302,12 +314,15 @@ class State:
         = notes_pending_end` when a `stage_notes_end` call landed one (a successful notes read happened at some
         point since the last commit), then `notes_pending_end` is cleared either way -- so a run whose notes kept
         failing right up to this commit leaves `notes_committed_end` exactly where it was, lagging behind the
-        main window until notes finally succeed."""
+        main window until notes finally succeed. Whether this window's notes read failed (`stage_notes_failing`)
+        becomes `notes_failing()` the same way."""
         data = self._read_state()
         data["committed_end"] = data.get("pending_end")
         if data.get("notes_pending_end"):
             data["notes_committed_end"] = data["notes_pending_end"]
         data.pop("notes_pending_end", None)
+        if "notes_failing_pending" in data:
+            data["notes_failing"] = data.pop("notes_failing_pending") is True
         self._write_state(data)
 
         staged_metrics = self._read_pending_metrics()

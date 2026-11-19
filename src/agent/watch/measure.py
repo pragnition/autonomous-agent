@@ -14,6 +14,9 @@ first, since it might end up quoted back out in a public issue; so is every tool
 text *before* `turn_facts` truncates it (its `clean` hook, on the decoded strings), since a secret that straddles
 that cut would otherwise leak a prefix no exact-value or pattern match could catch after the fact.
 
+improve-jensen's own turns (its reviews and yardstick runs, `is_improve_jensens_own`) are measured and kept like
+any other, but alone they never give `has_work`: they're not Jensen's work.
+
 Every record is stamped with when its event happened, not when it was measured: a turn or midturn with its
 `updated_at`, a PR with its `mergedAt`, else its `createdAt`. So `count --since <deploy time>` reads only what
 happened after a deploy, even from a window that straddled it.
@@ -40,7 +43,8 @@ the one after a deploy broke Jensen -- and only Claude reverts it. So:
   message can carry a host path or worse.
 - a note Jensen wrote this window, with nothing else to show for the hour, still gives `has_work`; the runner
   being unreachable (or anything else going wrong) when reading notes is caught and named in the digest by type
-  only. Unlike core, notes do *not* hold the main window open on failure: that window still has turns/PRs core
+  only, and gives `has_work` on its own only in the first hour of a run of failed reads (`State.notes_failing`).
+  Unlike core, notes do *not* hold the main window open on failure: that window still has turns/PRs core
   genuinely handed over this hour, and holding it back would mean re-fetching (and, since `metrics.jsonl` only
   appends, re-committing) those same turns next time. Notes instead keep their own cursor
   (`State.notes_committed_end`/`State.stage_notes_end`), advanced only on a successful read, so a run of failures
@@ -469,20 +473,30 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     notes, notes_error = _collect_notes(host, notes_start, end, secrets)
     if not notes_error:
         state.stage_notes_end(end)
+    # A notes read that keeps failing is news in the first hour it fails only: the runner staying unreachable must
+    # not hand Claude a near-empty digest every hour. The digest still names it whenever there's other work.
+    new_notes_error = bool(notes_error) and not state.notes_failing()
+    state.stage_notes_failing(bool(notes_error))
 
-    if (not items and not pr_records and not open_deployed and not deploy_alert and not landed and not core_down
-            and not notes and not notes_error):
+    produced = turn_records + midturn_records + pr_records
+    # Staged, not appended: committing this window (merging into metrics.jsonl/known_clones for good) is a
+    # separate step, taken only once Claude's own run against this digest succeeds -- or, on a quiet hour, right
+    # away. A re-measure of the same window before that overwrites this same staging rather than piling another
+    # copy on top.
+    state.stage(produced, new_clones)
+
+    # improve-jensen's own turns (its reviews and yardstick runs) are kept in the metrics, but alone they are no
+    # work for the watch: they're not Jensen's.
+    jensens_items = [item for item in items if not is_improve_jensens_own(
+        {"kind": "turn", "source": (item.get("payload") or {}).get("source"),
+         "conversation": item.get("conversation_id")})]
+    if (not jensens_items and not pr_records and not open_deployed and not deploy_alert and not landed
+            and not core_down and not notes and not new_notes_error):
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
     # Claude gets a new hour: the last hour's plan is spent. Nothing else consumes plan.json, so a run that
     # succeeds without writing one would otherwise have `plan` dispatch last hour's fix and reviews again.
     state.clear_plan()
-
-    produced = turn_records + midturn_records + pr_records
-    # Staged, not appended: committing this window (merging into metrics.jsonl/known_clones for good) is a
-    # separate step, taken only once Claude's own run against this digest succeeds. A re-measure of the same
-    # window before that overwrites this same staging rather than piling another copy on top.
-    state.stage(produced, new_clones)
 
     # Totals summarize exactly what this run produced, never a disk read "since start": a PR committed by an earlier
     # window keeps the ts of its own creation or merge, which can fall inside this window too, and this window's

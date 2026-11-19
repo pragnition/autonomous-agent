@@ -712,6 +712,58 @@ def test_notes_gap_is_covered_after_an_error_then_a_successful_collect(tmp_path)
     assert args[args.index("--until") + 1] == _iso(hour_c)
 
 
+def test_a_notes_read_that_keeps_failing_is_work_only_in_the_first_hour_it_fails(tmp_path):
+    # The runner staying unreachable for a day must not hand Claude a near-empty digest every hour.
+    state = State(tmp_path)
+    host = FakeHost(collect=_EMPTY, notes_error=RuntimeError("docker exec returned 1: boom"), **_NO_PRS)
+
+    first = measure(state, host, T0, open_deployed=[])
+    assert first.has_work is True
+    # Claude's run on it failed: the hour is measured again, and is still the first of the streak.
+    again = measure(state, host, T0 + timedelta(minutes=5), open_deployed=[])
+    assert again.has_work is True
+    state.commit()
+
+    second = measure(state, host, T0 + timedelta(hours=1), open_deployed=[])
+    assert second.has_work is False and second.skip_reason == "quiet"
+    state.commit()
+
+    # With other work in a later hour of the streak, the digest still says the notes are unreadable.
+    busy = FakeHost(collect={**_EMPTY, "items": [_item("W-a", conversation_id="C-a")]},
+                    notes_error=RuntimeError("docker exec returned 1: boom"), **_NO_PRS)
+    third = measure(state, busy, T0 + timedelta(hours=2), open_deployed=[])
+    assert third.has_work is True
+    assert "Jensen reports: unavailable (RuntimeError)" in third.digest.read_text()
+    state.commit()
+
+    # A good read ends the streak; the next failure is news again.
+    host._notes_error = None
+    assert measure(state, host, T0 + timedelta(hours=3), open_deployed=[]).has_work is False
+    state.commit()
+    host._notes_error = RuntimeError("docker exec returned 1: boom")
+    assert measure(state, host, T0 + timedelta(hours=4), open_deployed=[]).has_work is True
+
+
+def test_improve_jensens_own_turns_alone_are_no_work(tmp_path):
+    # The yardstick's and the reviews' own turns are improve-jensen's traffic, not Jensen's work.
+    state = State(tmp_path)
+    own = [_item("W-y", conversation_id="V-yardstick-20261119T190700Z-ab12-0a1b2c3d"),
+           _item("W-v", conversation_id="V-review-0a1b2c3d", payload={"continuation": 1}),
+           _item("W-r", conversation_id="C-p", payload={"source": "improve-jensen"})]
+    host = FakeHost(collect={**_EMPTY, "items": own}, **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is False and result.skip_reason == "quiet" and result.digest is None
+    # Still kept in the metrics, as on any other hour.
+    state.commit()
+    assert {r["id"] for r in state.read_metrics(_since(T0))} == {"W-y", "W-v", "W-r"}
+
+    person = _item("W-p", conversation_id="C-p", payload={"source": "slack"}, updated_at="2026-11-19T10:30:00Z")
+    host2 = FakeHost(collect={**_EMPTY, "items": own + [person]}, **_NO_PRS)
+    assert measure(state, host2, T0 + timedelta(hours=1), open_deployed=[]).has_work is True
+
+
 def test_digest_never_leaks_a_secret_prefix_across_the_truncation_boundary(tmp_path):
     # turn_facts truncates a tool call's output to 300 characters when it builds the tool line. A secret that
     # starts at position 296 of the raw output would, if scrubbing ran only after that cut, show up as just its
