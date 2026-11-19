@@ -197,3 +197,25 @@ async def test_a_reply_in_the_thread_resumes_earlier(setup, conn):
     clock[0] = RESET
     await parking.tick()   # nothing left to carry on
     assert conn.execute("SELECT COUNT(*) FROM work_items WHERE status = 'queued'").fetchone()[0] == 0
+
+
+async def test_one_park_that_fails_to_carry_on_does_not_hold_up_the_others(setup, conn, caplog):
+    router, convos, parking, _, queue, _ = setup
+    bad, bad_item = turn_in(conn, queue, thread_ts="t1")
+    good, good_item = turn_in(conn, queue, thread_ts="t2")
+    for item in (bad_item, good_item):
+        await router.call(router.context_for(item), "park", {"until": "11:00"})
+        queue.complete(item, {"text": "ok"})
+
+    def resume(conversation_id, work_item_id, note):
+        if conversation_id == bad:
+            raise RuntimeError("secret-looking detail")
+        return convos.resume_parked(conversation_id, work_item_id, note)
+    parking.resume = resume
+    clock[0] = NOW + 3600
+    await parking.tick()
+    assert queue.claim().conversation_id == good
+    # the failed one stays open, to be tried again at the next tick; the log names the error's type only
+    assert [tuple(r) for r in conn.execute("SELECT conversation_id, ended_how FROM parks ORDER BY id")] == \
+        [(bad, None), (good, "resumed")]
+    assert "RuntimeError" in caplog.text and "secret-looking detail" not in caplog.text

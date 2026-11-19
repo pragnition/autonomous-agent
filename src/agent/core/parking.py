@@ -201,7 +201,12 @@ class Parking:
             text = (f"(You parked this conversation at {parked_at} until {self.when(_epoch(row['until_at']), now)}. "
                     "It's time: carry on from where you stopped"
                     + (f". Your note: {row['note']})" if row["note"] else ".)"))
-            new_id = self.resume(row["conversation_id"], row["work_item_id"], text)
+            try:
+                new_id = self.resume(row["conversation_id"], row["work_item_id"], text)
+            except Exception as e:  # the park stays open for the next tick; the others still carry on now
+                log.warning("couldn't carry on park %s of %s: %s", row["id"], row["conversation_id"],
+                            type(e).__name__)
+                continue
             self.conn.execute("UPDATE parks SET ended_at = ?, ended_how = 'resumed', resumed_as = ? WHERE id = ?",
                               (_iso(now), new_id, row["id"]))
             events.append(self.conn, "park_resumed", task_id=None, actor="parking",
