@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Pass when Jensen's reserve() passes the hidden acceptance tests and Jensen's own tests, and
+those same tests actually catch a bug: they must fail once hidden/mutant.py stands in for
+inventory.py."""
+from __future__ import annotations
+
+import importlib.util
+import io
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_tests(paths: list[Path], unique: str) -> tuple[int, bool, str]:
+    suite = unittest.TestSuite()
+    total = 0
+    errors = []
+    for i, path in enumerate(paths):
+        try:
+            module = load_module(path, f"_yardstick_{unique}_{i}_{path.stem}")
+        except Exception as exc:  # a test file that fails to even import counts as a failure
+            errors.append(f"{path.name}: {exc!r}")
+            continue
+        loaded = unittest.defaultTestLoader.loadTestsFromModule(module)
+        total += loaded.countTestCases()
+        suite.addTests(loaded)
+    stream = io.StringIO()
+    result = unittest.TextTestRunner(stream=stream, verbosity=2).run(suite)
+    ok = result.wasSuccessful() and not errors
+    out = stream.getvalue() + ("\n" + "\n".join(errors) if errors else "")
+    return total, ok, out
+
+
+def main() -> int:
+    hidden_test = ROOT / "hidden" / "test_inventory_hidden.py"
+    mutant = ROOT / "hidden" / "mutant.py"
+    if not hidden_test.exists() or not mutant.exists():
+        print("check error: missing hidden fixtures")
+        return 1
+
+    own_tests = sorted(p for p in ROOT.glob("test_*.py"))
+    if not own_tests:
+        print("no tests found at the top level (expected a test_*.py file)")
+        return 1
+
+    # 1) hidden acceptance tests against Jensen's own inventory.py.
+    sys.modules.pop("inventory", None)
+    if str(ROOT) in sys.path:
+        sys.path.remove(str(ROOT))
+    sys.path.insert(0, str(ROOT))
+    _, hidden_ok, hidden_out = run_tests([hidden_test], "hidden")
+    if not hidden_ok:
+        print("hidden acceptance tests failed:")
+        print(hidden_out)
+        return 1
+
+    # 2) Jensen's own tests against Jensen's own inventory.py.
+    sys.modules.pop("inventory", None)
+    own_count, own_ok, own_out = run_tests(own_tests, "own")
+    if own_count == 0:
+        print("Jensen's test file has no test cases in it")
+        return 1
+    if not own_ok:
+        print("Jensen's own tests failed against Jensen's own code:")
+        print(own_out)
+        return 1
+
+    # 3) The same tests must FAIL once the mutant stands in for inventory.py.
+    with tempfile.TemporaryDirectory() as tmp_s:
+        tmp = Path(tmp_s)
+        shutil.copytree(ROOT, tmp, dirs_exist_ok=True,
+                         ignore=shutil.ignore_patterns(".git", "hidden", "check"))
+        shutil.copy(mutant, tmp / "inventory.py")
+        tmp_tests = sorted(p for p in tmp.glob("test_*.py"))
+
+        sys.modules.pop("inventory", None)
+        sys.path.remove(str(ROOT))
+        sys.path.insert(0, str(tmp))
+        mutant_count, mutant_ok, mutant_out = run_tests(tmp_tests, "mutant")
+        sys.path.remove(str(tmp))
+
+    if mutant_count == 0 or mutant_ok:
+        print("Jensen's tests did not notice the mutant -- they must fail against hidden/mutant.py")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
