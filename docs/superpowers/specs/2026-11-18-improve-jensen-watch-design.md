@@ -211,10 +211,12 @@ Each run reads the record and the state folder, so it picks up where the last on
 
 ### 1. Runners and jobs
 
-**Runners.** Three GitHub Actions runners on the host, all running as `pragnition`, the user that owns the live
+**Runners.** Five GitHub Actions runners on the host, all running as `pragnition`, the user that owns the live
 checkout. That user has Docker and passwordless sudo, so the runners have full access to the host.
 - One runner is labelled `watch`, so the hourly watch never queues behind a long fix.
-- Two are labelled `work`, for reviews, fixes and the runs that answer issues.
+- Four are labelled `work`, for reviews, fixes, assessments, the yardstick, projects and the runs that answer issues.
+  A project and a yardstick run can each hold a runner for hours, so four keeps reviews within the hour. That's five
+  runners in total.
 - The runners' work folders stay outside `~/autonomous-agent`.
 - `gh` is installed on the host.
 
@@ -362,6 +364,8 @@ Then:
   - a count line that the watch keeps current.
 - **State labels:**
   - `fixing`: a fix job has the issue.
+  - `gating`: its change is being measured by the yardstick (§12).
+  - `priority`: one of the assessment's top fix-scale items (§11).
   - `fix-deployed`: the improvement is live; a comment gives the commit and deploy time.
   - `needs-person`: only a person can make the change.
   - `stuck`: two attempts failed.
@@ -516,6 +520,11 @@ The list stays at 10 items or fewer.
 - **New yardstick tasks** for failures the yardstick doesn't cover yet (§12).
 - **At most one project start** when no project is running: it writes the issue number to `assess-plan.json`, and the
   `project` job takes it. An unfinished project is picked up again before any new one starts.
+- **Up to 3 fix-scale items labelled `priority`.** The watch's plan (§3) picks a qualifying `priority` issue before any
+  other.
+  - A `priority` issue qualifies on the assessment's evidence alone, even when that is a single yardstick failure or
+    review finding.
+  - The assessment removes `priority` from items that drop out of its top three.
 
 It skips the hour when nothing is new since the last assessment and no project is waiting. It posts nothing in Slack.
 
@@ -552,16 +561,39 @@ results are marked "judged".
 Each request tells Jensen to work only in that folder, push nowhere and message no one. A failed task is run once more
 before it counts as failed. Yardstick turns are improve-jensen's own traffic and stay out of Jensen's evidence counts.
 
-**The score** is the number of tasks passed out of those run. A **regression** is a task that passed on each of its
-last 3 runs and now fails both tries.
+**The score** is the number of tasks passed out of those run. Only tasks with a mechanical `check` count. Judged
+tasks are recorded and shown, but they never count toward the score or the gate, so improve-jensen is never the judge
+of its own change.
 
-**As a gate.** After a deploy that changes how Jensen behaves (a change to core, the runner, the prompt, skills or
-Jensen's Claude home), the fix or project run dispatches the yardstick. The change is reverted the same way as a failed
-deploy check (§8), and the issue gets a failed attempt, when either:
+A **regression** is a task that passed on each of its last 3 runs and now fails both tries.
+
+**Memory.** Yardstick turns run with Jensen's real memory and Claude home, because that is the setup being measured.
+- The hidden tests and the `check` script stay on the host and are copied into the task folder only after Jensen's turn
+  has ended.
+- When the run ends, it removes any memory note created during the run that mentions `/var/agent/yardstick/`. That way
+  Jensen never carries a task's answers into the next run or into people's work.
+
+**As a gate.** After a change that alters how Jensen behaves, the fix or project run dispatches the yardstick. That
+means a deploy touching core, the runner, the prompt or skills, or an edit to Jensen's Claude home or `data/`.
+
+Before dispatching, it writes `gate.json` in the state folder: the issue, and the revert handle. The handle is the
+merge commit for repo changes, or the backup paths for host and Claude-home changes.
+
+While `gate.json` exists:
+- `deploy.py` treats any other deploy that changes behaviour as pending (exit 3), so the gate measures one change;
+- the watch picks no new fix;
+- the issue carries the `gating` label.
+
+The change is the one blamed, and the gate fails when either:
 - the score drops by 2 or more against the previous run on the same tasks; or
 - a regression appears.
 
-**Nightly**, the full set runs at 03:00 Singapore time to track the trend.
+On a failed gate, the yardstick job reverts the change through its handle. A repo change is reverted by a revert PR,
+CI and `just deploy`, the same as §8; a host or Claude-home change by restoring its backups. The issue gets a failed
+attempt. Then `gate.json` is removed, pass or fail.
+
+**Nightly**, the full set runs at 03:00 Singapore time to track the trend. A nightly run never reverts anything. A
+drop there becomes evidence for the next assessment.
 
 ### 13. Improvement projects
 
@@ -610,8 +642,8 @@ The notes stay on the host. Public issues describe them in general terms only.
 
 The build ships nothing to the live install. When Jensen is idle and a person is around:
 1. Widen Jensen's GitHub token: checks, statuses and Actions, read.
-2. Install `gh` on the host, and re-register the runner as three runners running as `pragnition` (`watch`, `work`,
-   `work`).
+2. Install `gh` on the host, and re-register the runner as five runners running as `pragnition`: one labelled `watch` and
+   four labelled `work`.
 3. Merge the PR. Protect `main` so that CI is required.
 4. Run the live core-rebuild check (§8).
 5. `just deploy` once by hand, then `jensen_watch.py seed`.
