@@ -709,7 +709,8 @@ async def test_a_stop_while_agents_run_between_turns_ends_the_run_at_once(tmp_pa
     await wait_until(lambda: "ResultMessage" in seen)
     await runner.interrupt("R1")
     out = await asyncio.wait_for(task, 1)
-    assert (out.outcome, out.summary, clients[0].interrupted) == ("interrupted", "lanes running", True)
+    # nothing to interrupt between turns: the session is closed, with no control request left waiting on it
+    assert (out.outcome, out.summary, clients[0].interrupted) == ("interrupted", "lanes running", False)
 
 
 async def test_a_soft_cap_handoff_while_agents_run_between_turns_moves_at_once(tmp_path):
@@ -717,7 +718,7 @@ async def test_a_soft_cap_handoff_while_agents_run_between_turns_moves_at_once(t
                                              [echo_prompt, result()]],
                                   proxy=CapProxy({"maple": (2, 0.66), "oak": (1, 0.1)}), watchdog_s=0.05)
     out = await asyncio.wait_for(runner.run(spec(tmp_path, handoff=lambda sid, transcript: "HANDOFF " + sid)), 1)
-    assert (out.outcome, out.forks, clients[0].interrupted) == ("done", 1, True)
+    assert (out.outcome, out.forks, clients[0].interrupted) == ("done", 1, False)
 
 
 async def test_a_stop_while_a_woken_turn_runs_still_waits_for_its_result(tmp_path):

@@ -183,8 +183,8 @@ class ClaudeRunner:
         if active:
             client, state = active
             state["reason"] = state["reason"] or "external"
-            self._end_between_turns(state)
-            await client.interrupt()
+            if not self._end_between_turns(state):
+                await client.interrupt()
 
     def release(self, run_id: str) -> None:
         """Forget a stop once the claim it came with is over: core may hand the same item to this runner again."""
@@ -225,26 +225,29 @@ class ClaudeRunner:
             status = usage.status_of(state["account"])
             if status in ACCOUNT_TROUBLE:
                 state["reason"], state["trouble"] = "watchdog", status
-                self._end_between_turns(state)
-                await client.interrupt()
+                if not self._end_between_turns(state):
+                    await client.interrupt()
                 return
             # Over the soft cap: hand off like a rejected account, but only when the fresh session would land on an
             # account under its cap and the run may still fork; otherwise keep going here rather than end the run
             if state["can_fork"] and usage.over_cap(state["account"]) and usage.handoff_target(state["account"]):
                 state["reason"], state["trouble"] = "watchdog", "over its 5-hour soft cap"
-                self._end_between_turns(state)
-                await client.interrupt()
+                if not self._end_between_turns(state):
+                    await client.interrupt()
                 return
 
     @staticmethod
-    def _end_between_turns(state: dict) -> None:
+    def _end_between_turns(state: dict) -> bool:
         """A stop ends the run at the result the CLI sends for the turn it interrupts. Between turns (the session
         waiting on its background agents) there is no turn to interrupt and no result coming, so the attempt's window
-        closes now instead (see deadline in _attempt)."""
+        closes now instead (see deadline in _attempt), and the session is closed with nothing sent to it. Returns
+        whether it did that, so the caller interrupts only a running turn."""
         window = state.get("window")
-        if window is not None and not state["turn"]:
-            with contextlib.suppress(RuntimeError):  # the window has already closed: the attempt is ending anyway
-                window.reschedule(asyncio.get_running_loop().time())
+        if window is None or state["turn"]:
+            return False
+        with contextlib.suppress(RuntimeError):  # the window has already closed: the attempt is ending anyway
+            window.reschedule(asyncio.get_running_loop().time())
+        return True
 
     async def _account_status(self, state: dict) -> str | None:
         try:
