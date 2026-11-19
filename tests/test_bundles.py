@@ -77,7 +77,15 @@ def test_every_skill_has_name_and_description(skill):
 
 def test_core_skills_present():
     assert {p.parent.name for p in SKILL_DIRS[0].glob("*/SKILL.md")} == {
-        "find-features", "playwright-cli", "schedules", "task-history", "long-project"}
+        "find-features", "playwright-cli", "schedules", "task-history", "long-project", "ui-audit"}
+
+
+def test_ui_audit_skill_measures_before_and_after_and_reuses_the_audit_plugin():
+    text = (SKILL_DIRS[0] / "ui-audit" / "SKILL.md").read_text()
+    for phrase in ("impeccable", "web-design-guidelines", "no frontend-design", "subagents", "playwright-cli", "before-<page>.png", "after-<page>.png",
+                   "Measure again", "tokens"):
+        assert phrase in text
+    assert "jensen" not in text.lower()
 
 
 def test_long_project_skill_runs_on_superpowers_and_an_hourly_schedule():
