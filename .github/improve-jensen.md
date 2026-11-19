@@ -6,8 +6,9 @@ improvements to Jensen end to end: change, PR, CI, review, merge, deploy, check,
 
 Two kinds of runs follow this file, and improvement projects follow it through `.github/improve-jensen-project.md`:
 - **fix:** your prompt names an issue a person approved in Slack. Its `Proposed in Slack: <change>` comment says what
-  was approved: find the cause and make that change, nothing wider. An issue labelled `learned` is something that
-  worked and that Jensen should keep, with no cause to find: see Learned changes.
+  was approved, and any `Note from Slack:` comments after it are conditions the person put on it, part of what was
+  approved: find the cause and make that change, as those notes say, nothing wider. An issue labelled `learned` is
+  something that worked and that Jensen should keep, with no cause to find: see Learned changes.
 - **respond:** an issue labelled `improve-jensen` or a comment that mentions `@improve-jensen`. It is a person's own
   request and needs no approval in Slack. Work that request. If it needs no change, answer in the issue.
 

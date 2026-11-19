@@ -1,5 +1,6 @@
 """Slack for improve-jensen: the few Web API calls its approval flow makes as Jensen's own bot (find the channel,
-post, read a thread's replies and a message's reactions), plus where the bot's token and the approvers come from.
+post, read a thread's replies and a message's reactions, react), plus where the bot's token and the approvers come
+from.
 
 Stdlib only (`urllib`): the watch's workflow steps install nothing but this package, and `slack_sdk` is core's
 dependency, not the watch's. `Slack` takes its `urlopen` as a constructor argument so tests can answer calls
@@ -131,6 +132,14 @@ class Slack:
         return [{"name": r["name"], "users": [u for u in r.get("users") or [] if isinstance(u, str)]}
                 for r in message.get("reactions") or [] if isinstance(r, dict) and isinstance(r.get("name"), str)]
 
+    def react(self, channel: str, ts: str, name: str) -> None:
+        """Add the `name` reaction to the message at `ts`; one the bot already added is fine."""
+        try:
+            self._call("reactions.add", channel=channel, timestamp=ts, name=name)
+        except SlackError as exc:
+            if str(exc) != "already_reacted":
+                raise
+
 
 def _read_cache(path: Path) -> dict:
     try:
@@ -158,16 +167,22 @@ def load_token(live: Path) -> str:
     return token
 
 
-def load_approvers(live: Path) -> set[str]:
-    """The Slack user id of every `[people.*]` entry in `<live>/data/config/agent.toml`: the people whose replies
-    and reactions count. An empty set when the file can't be read or parsed, so nothing is approved."""
+def load_people(live: Path) -> dict[str, str]:
+    """Each `[people.<key>]` entry in `<live>/data/config/agent.toml` with a Slack id, as `{slack id: key}`: the
+    people whose replies and reactions count, and the names the listener gives them. Empty when the file can't be
+    read or parsed, so nothing is approved."""
     try:
         with open(Path(live) / "data" / "config" / "agent.toml", "rb") as fh:
             data = tomllib.load(fh)
     except (OSError, tomllib.TOMLDecodeError):
-        return set()
+        return {}
     people = data.get("people")
     if not isinstance(people, dict):
-        return set()
-    return {person["slack"].strip() for person in people.values()
+        return {}
+    return {person["slack"].strip(): key for key, person in people.items()
             if isinstance(person, dict) and isinstance(person.get("slack"), str) and person["slack"].strip()}
+
+
+def load_approvers(live: Path) -> set[str]:
+    """The Slack user id of every `[people.*]` entry (`load_people`)."""
+    return set(load_people(live))

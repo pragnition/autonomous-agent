@@ -5,7 +5,7 @@ import urllib.parse
 
 import pytest
 
-from agent.watch.slack import Slack, SlackError, load_approvers, load_token
+from agent.watch.slack import Slack, SlackError, load_approvers, load_people, load_token
 
 TOKEN = "xoxb-test-0000-secret"
 
@@ -107,6 +107,18 @@ def test_reactions_ask_for_every_user_and_return_name_and_users():
 
     assert reactions == [{"name": "white_check_mark", "users": ["U1", "U2"]}, {"name": "x", "users": ["U3"]}]
     assert api.requests[0][1] == {"channel": "C1", "timestamp": "1.000100", "full": "true"}
+
+
+def test_react_adds_a_reaction_and_one_already_there_is_fine():
+    api = FakeApi({"reactions.add": [{"ok": True}, {"ok": False, "error": "already_reacted"},
+                                     {"ok": False, "error": "message_not_found"}]})
+    slack = Slack(TOKEN, urlopen=api)
+
+    slack.react("C1", "1.000200", "eyes")
+    slack.react("C1", "1.000200", "eyes")
+    with pytest.raises(SlackError, match="message_not_found"):
+        slack.react("C1", "1.000300", "eyes")
+    assert api.requests[0][1] == {"channel": "C1", "timestamp": "1.000200", "name": "eyes"}
 
 
 def test_reactions_on_a_message_without_any():
@@ -256,6 +268,7 @@ linear = "second@example.com"
 linear = "third@example.com"
 """)
     assert load_approvers(live) == {"U00000001", "U00000002"}
+    assert load_people(live) == {"U00000001": "first", "U00000002": "second"}
 
 
 @pytest.mark.parametrize("toml", [None, "this is = = not toml", "people = 3\n", "name = 'agent'\n"])

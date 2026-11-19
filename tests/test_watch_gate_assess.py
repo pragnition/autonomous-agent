@@ -79,30 +79,47 @@ def test_assess_check_new_feedback_counts_as_work(tmp_path, capsys):
     assert kv["skip_reason"] == ""
 
 
-def test_assess_check_new_digest_counts_as_work(tmp_path, capsys):
-    state = State(tmp_path / "state")
-    # Set last_assess well in the past, so a digest written *right now* by the test unambiguously postdates it
-    # regardless of the sandbox's own wall clock.
-    state.set_last_assess(datetime(2000, 1, 1, tzinfo=UTC))
-    state.write_digest(_dt(2026, 11, 19, 9, 0, 0), "a digest")
-    host = _AssessHost()
-
-    rc = main(["assess-check"], host=host, state=state, now=T0)
-
-    assert rc == 0
-    assert _kv(capsys.readouterr().out)["has_work"] == "true"
+def _turn(ts: str, **extra) -> dict:
+    return {"kind": "turn", "ts": ts, "conversation": "C-1", **extra}
 
 
-def test_assess_check_active_project_counts_as_work(tmp_path, capsys):
+@pytest.mark.parametrize("staged, has_work", [
+    ([], "false"),                                                      # no new conversation
+    ([_turn("2026-11-19T10:30:00Z", source="improve-jensen"),          # only improve-jensen's own turns
+      _turn("2026-11-19T10:31:00Z", conversation="V-review-3")], "false"),
+    ([_turn("2026-11-19T09:59:00Z"), _turn("2026-11-19T10:00:00Z")], "false"),  # turns before the last assessment
+    ([{"kind": "pr", "ts": "2026-11-19T10:30:00Z"}], "false"),          # not a turn
+    ([_turn("2026-11-19T10:30:00Z")], "true"),                          # one of Jensen's turns since
+])
+def test_assess_check_runs_only_on_new_conversation(tmp_path, capsys, staged, has_work):
     state = State(tmp_path / "state")
     state.set_last_assess(T0)
-    state.project_mark(42, "active", T0)
-    host = _AssessHost()
+    state.stage(staged, [])
 
-    rc = main(["assess-check"], host=host, state=state, now=T0 + timedelta(hours=1))
+    assert main(["assess-check"], host=_AssessHost(), state=state, now=T0 + timedelta(hours=1)) == 0
 
-    assert rc == 0
+    kv = _kv(capsys.readouterr().out)
+    assert kv["has_work"] == has_work
+    assert kv["skip_reason"] == ("" if has_work == "true" else "quiet")
+
+
+def test_assess_check_counts_a_committed_turn_too(tmp_path, capsys):
+    state = State(tmp_path / "state")
+    state.set_last_assess(T0)
+    (state.root / "metrics.jsonl").write_text(json.dumps(_turn("2026-11-19T10:30:00Z")) + "\n")
+    assert main(["assess-check"], host=_AssessHost(), state=state, now=T0 + timedelta(hours=1)) == 0
     assert _kv(capsys.readouterr().out)["has_work"] == "true"
+
+
+def test_assess_check_a_new_digest_or_an_active_project_alone_is_quiet(tmp_path, capsys):
+    state = State(tmp_path / "state")
+    state.set_last_assess(datetime(2000, 1, 1, tzinfo=UTC))
+    state.write_digest(_dt(2026, 11, 19, 9, 0, 0), "a digest")
+    state.project_mark(42, "active", T0)
+
+    assert main(["assess-check"], host=_AssessHost(), state=state, now=T0 + timedelta(hours=1)) == 0
+
+    assert _kv(capsys.readouterr().out)["has_work"] == "false"
 
 
 def test_assess_check_pool_hold(tmp_path, capsys):

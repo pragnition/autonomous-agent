@@ -2,6 +2,12 @@
 # Claude through the account proxy's `improve-jensen` origin, so it shares the team's account pool.
 # Host setup: deploy/improve-jensen.md.
 #
+# The clock is the host listener (deploy/improve-jensen-listen.service), not GitHub's cron, which never fired these:
+# it sends `improve-jensen-watch` at :17 and `improve-jensen-assess` at :47 every hour, and
+# `improve-jensen-approvals` every 10 minutes (and at once after a decision in Slack), as repository_dispatch events.
+# Each wakes its job only while `vars.IMPROVE_JENSEN_ENGINE` is `on`. The listener also answers replies to the
+# proposals in Slack in plain language and stores the decisions it read for `approvals` to apply.
+#
 #   watch     - hourly (and on manual dispatch): deploys a pending change, measures what's outstanding, lets
 #               Claude work through the watch instructions, then plans what the review jobs should pick up and posts
 #               the changes it proposes to Slack for a person to approve.
@@ -9,12 +15,12 @@
 #               The scheduled path never puts a PR URL in this workflow's own prompt or logs: it names a review by
 #               index into this run's own `runs/<run id>-reviews.json`, and Claude looks the URL/conversation up
 #               itself with `review-target`.
-#   assess    - four times a day: decides whether there's anything new to assess, lets Claude write an assessment
+#   assess    - every hour when there's new conversation since the last one: lets Claude write an assessment
 #               (what holds Jensen back, and what worked that Jensen should keep) and update the pinned assessment
 #               issue, then posts the changes it proposes to Slack, learned ones marked as such.
-#   approvals - every 10 minutes, no Claude: reads the replies and reactions on the Slack proposals, labels each
-#               issue `approved` or `rejected`, answers in the thread, and names the next approved fix and project
-#               (none while core's usage watch holds the pool).
+#   approvals - every 10 minutes, no Claude: applies the decisions the listener stored and any plain reply or
+#               reaction on the Slack proposals, labels each issue `approved` or `rejected`, and names the next
+#               approved fix and project (none while core's usage watch holds the pool).
 #   fix       - the one approved issue the approvals job named (or a manual dispatch's target), serialised so only
 #               one fix runs at a time. Starts by checking the issue is still approved; ends by telling the
 #               proposal's Slack thread whether it shipped.
@@ -25,10 +31,8 @@
 name: improve-jensen
 
 on:
-  schedule:
-    - cron: "17 * * * *"
-    - cron: "13 */6 * * *"
-    - cron: "*/10 * * * *"
+  repository_dispatch:
+    types: [improve-jensen-watch, improve-jensen-assess, improve-jensen-approvals]
   workflow_dispatch:
     inputs:
       mode:
@@ -62,7 +66,8 @@ env:
 jobs:
   watch:
     if: >
-      (github.event.schedule == '17 * * * *' && vars.IMPROVE_JENSEN_ENGINE == 'on') ||
+      (github.event_name == 'repository_dispatch' && github.event.action == 'improve-jensen-watch' &&
+       vars.IMPROVE_JENSEN_ENGINE == 'on') ||
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'watch')
     runs-on: [self-hosted, improve-jensen, watch]
     timeout-minutes: 60
@@ -117,7 +122,8 @@ jobs:
 
   assess:
     if: >
-      (github.event.schedule == '13 */6 * * *' && vars.IMPROVE_JENSEN_ENGINE == 'on') ||
+      (github.event_name == 'repository_dispatch' && github.event.action == 'improve-jensen-assess' &&
+       vars.IMPROVE_JENSEN_ENGINE == 'on') ||
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'assess')
     runs-on: [self-hosted, improve-jensen, work]
     timeout-minutes: 90
@@ -166,7 +172,8 @@ jobs:
   approvals:
     # No Claude here: it reads the Slack threads, labels the issues and names what `fix` and `project` run next.
     if: >
-      (github.event.schedule == '*/10 * * * *' && vars.IMPROVE_JENSEN_ENGINE == 'on') ||
+      (github.event_name == 'repository_dispatch' && github.event.action == 'improve-jensen-approvals' &&
+       vars.IMPROVE_JENSEN_ENGINE == 'on') ||
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'approvals')
     runs-on: [self-hosted, improve-jensen, work]
     timeout-minutes: 15

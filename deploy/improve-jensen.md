@@ -242,20 +242,37 @@ it or a skill installed for one project, credited to whose session it came from.
   `autonomous-agent`.
 - The approvers are the people in `data/config/agent.toml`: the `slack` id of each `[people.*]` entry. Replies and
   reactions from anyone else are ignored; with no one listed, nothing is approved.
-- To approve, reply in the list's thread with just the word and, if you like, item numbers: `approve` (or `yes`,
-  `ok`, `lgtm`, `ship it`) ships them all, `approve 1 3`, `approve 1, 3` or `approve 1-3` ships some, `reject 2`
-  (or `no`, `skip`, `drop`) drops one. Anything more in the reply (`ok, I'll check 2 tomorrow`) and it counts for
-  nothing. Or react on the list itself: `:white_check_mark:` or `:ballot_box_with_check:` approves them all, `:x:`
+- Reply in the list's thread in your own words: approve all or some, drop one, add a condition, or ask about an
+  item. The listener (below) puts :eyes: on the reply at once, has Claude read it against the items and their
+  issues, and answers in the thread with what it took and what happens next. A condition goes on the issue as
+  `Note from Slack: <note>`, in general terms, and the fix follows it. If Claude can't be reached, the thread says
+  so, and the plain words still work: `approve` (or `yes`, `ok`, `lgtm`, `ship it`) ships them all, `approve 1 3`,
+  `approve 1, 3` or `approve 1-3` ships some, `reject 2` (or `no`, `skip`, `drop`) drops one. Or react on the list
+  itself: `:white_check_mark:` or `:ballot_box_with_check:` approves them all, `:x:`
   or `:-1:` rejects them all; a `:+1:` doesn't approve. A later reply overrides an earlier one for the items it
   names. A dropped item can still be approved later in the same thread, by its number (`approve 2`): a bare
   `approve` or a reaction never brings it back. An approved item is final. Items nobody answers within 14 days are
   released, and a later watch can propose them again.
-- Every 10 minutes the `approvals` job reads the threads, labels each issue `approved` or `rejected`, says in the
-  thread what it took, and starts the next approved fix and the next approved project, one of each at a time; while
+- Every 10 minutes, and at once after the listener stores a decision, the `approvals` job applies the decisions,
+  labels each issue `approved` or `rejected`, and starts the next approved fix and the next approved project, one of each at a time; while
   core's usage watch holds the pool it starts neither. Each fix or project run first checks that its issue is still
   approved and does nothing if not. When a fix or project ends, its thread hears whether it shipped or needs a
   person (the issue then has `stuck`); a project whose runs fail twice in a row is marked `stuck` too.
 - Nothing checks a change after it ships, beyond the deploy's own check: an approved change that ships is done.
+
+The listener, `deploy/improve-jensen-listen.service`, is also the workflow's clock: GitHub's cron never fires it, so
+the listener sends the `watch`, `assess` and `approvals` runs as repository_dispatch events through Jensen's `gh`
+token. It reaches Claude through `~/.local/bin/claude` (installed by the workflow's Claude steps) and the proxy's
+`improve-jensen` origin. Install and start it once, from `~/autonomous-agent`:
+
+```sh
+sudo cp deploy/improve-jensen-listen.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now improve-jensen-listen
+journalctl -u improve-jensen-listen -f   # only warnings; quiet while all is well
+```
+
+Its first start sends nothing and only records the clock (`clock.json` in the state folder). After a deploy moves
+`~/autonomous-agent`, it exits and systemd starts it on the new code.
 
 ## 10. First watch and the token check
 
@@ -270,7 +287,7 @@ gh auth logout                                               # the runners share
 
 Until this line, `IMPROVE_JENSEN_ENGINE` is unset (anything but `on` means off): `respond` keeps matching today's one
 runner and answering issues and `@improve-jensen` comments with a PR, the old way, and `watch`, `assess` and
-`approvals` never fire on their cron. Nothing about the issue flow changes before it.
+`approvals` never fire on the listener's clock. Nothing about the issue flow changes before it.
 
 Start the first watch from the repo's Actions tab (improve-jensen → Run workflow, mode `watch`) and follow it there.
 Once it's done:
@@ -283,7 +300,8 @@ cat ~/.local/state/improve-jensen/plan.json                 # the reviews and th
 The first window is the last hour. An hour with no finished turns, no new PRs and nothing that needs attention
 (core unreachable, a failed deploy) starts no Claude run and writes no plan, and neither does one while core's usage
 watch is holding scheduled runs. The changes it proposes, if any, are in the Slack channel (step 9). From here the
-watch runs every hour at :17, the assessment every 6 hours at :13, and the approvals job every 10 minutes.
+listener (step 9) starts the watch every hour at :17, the assessment every hour at :47 (it runs only when there's new
+conversation since the last one), and the approvals job every 10 minutes.
 
 Then check, once, that the jobs work on their own tokens. The `fix` and `respond` jobs check out with
 `persist-credentials: false`, so Claude pushes and opens PRs as the Claude app: a push made with a job's own
@@ -317,8 +335,8 @@ cat ~/.local/state/improve-jensen/assessment.md
 ```
 
 The pinned `jensen-assessment` issue shows the same list in general terms, and the changes it proposes, projects
-included, are in the Slack channel for a person to approve. An assessment with nothing new since the last one, and no
-project active, starts no Claude run.
+included, are in the Slack channel for a person to approve. An assessment with no new conversation since the last
+one (no turn of Jensen's, no note from Jensen) starts no Claude run.
 
 ## Manual runs
 
@@ -337,7 +355,8 @@ project active, starts no Claude run.
 gh variable set IMPROVE_JENSEN_ENGINE --body off -R pragnition/autonomous-agent
 ```
 
-This takes `respond` back to today's one runner and stops `watch`, `assess` and `approvals` firing on their cron; a
+This takes `respond` back to today's one runner and stops `watch`, `assess` and `approvals` firing on the
+listener's clock; a
 manual `workflow_dispatch` run still works regardless. Issues and `@improve-jensen` comments still get answered with
 a PR, the old way, for a person to merge — nothing about the issue flow changes either side of the switch.
 

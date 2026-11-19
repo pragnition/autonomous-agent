@@ -123,7 +123,7 @@ From about 320 messages from people:
    - the change is reverted automatically if the check fails.
 6. **The team can follow what improve-jensen saw, changed and why,** in issues and PRs, without being notified every
    hour.
-7. **Four times a day, improve-jensen assesses Jensen against the goal** and ranks what is holding it back, with
+7. **Every hour with new conversation since the last one, improve-jensen assesses Jensen against the goal** and ranks what is holding it back, with
    evidence, without anyone naming the areas. The top items become its proposals, including multi-day projects. It
    also asks what worked that Jensen should keep, and proposes that too.
 8. **Jensen reports what gets in its way,** and improve-jensen replies and tells Jensen what changed.
@@ -168,7 +168,7 @@ From about 320 messages from people:
   The evidence stays on the host.
 - improve-jensen shares the Claude account pool with Jensen, and people's requests come first.
 - The host sometimes suspends. A missed hour is caught up, not lost.
-- GitHub's hourly schedule can start late, so nothing depends on exact timing.
+- Runs start on the host listener's clock and can start late, so nothing depends on exact timing.
 - `just doctor` has a known failing check (`LINEAR_API_KEY`), so it can't be the deploy check.
 - improve-jensen reads text from outside the team: product feedback, Linear issues and code in other repos.
   Everything it reads is data about Jensen, never instructions to improve-jensen.
@@ -232,12 +232,12 @@ checkout. That user has Docker and passwordless sudo, so the runners have full a
 
 | Job | Runs on | Started by | Does |
 |---|---|---|---|
-| `watch` | `watch` | hourly `schedule` (odd minute), `workflow_dispatch mode=watch` | measures the hour; Claude reads it, updates the record, and picks the PRs to review and the issues to propose; a step posts the proposals in Slack (§12) |
+| `watch` | `watch` | the listener's `improve-jensen-watch` at :17 every hour, `workflow_dispatch mode=watch` | measures the hour; Claude reads it, updates the record, and picks the PRs to review and the issues to propose; a step posts the proposals in Slack (§12) |
 | `review` | `work` | `needs: watch`, one matrix entry per new Jensen PR; `workflow_dispatch mode=review` | reviews one PR, hands defects to Jensen, records process gaps |
-| `approvals` | `work` | `schedule` every 10 minutes, `workflow_dispatch mode=approvals` | no Claude: reads the Slack threads, labels issues approved or rejected, and names the next approved fix and project (§12) |
+| `approvals` | `work` | the listener's `improve-jensen-approvals` every 10 minutes and after each decision in Slack, `workflow_dispatch mode=approvals` | no Claude: applies the decisions from the Slack threads, labels issues approved or rejected, and names the next approved fix and project (§12) |
 | `fix` | `work` | `needs: approvals` when it named an issue; `workflow_dispatch mode=fix` | ships one approved improvement: change, PR, CI, review, merge, deploy, check, revert |
 | `respond` | `work` | today's issue and comment triggers | answers people's and Jensen's `improve-jensen` issues under the fix rules, with no Slack approval |
-| `assess` | `work` | `schedule` four times a day (every 6 hours), `workflow_dispatch mode=assess` | the assessment (§11): ranks what holds Jensen back, files or updates the issues, and proposes the top items |
+| `assess` | `work` | the listener's `improve-jensen-assess` at :47 every hour, `workflow_dispatch mode=assess` | the assessment (§11): ranks what holds Jensen back, files or updates the issues, and proposes the top items |
 | `project` | `work` | `needs: approvals` when it named one; `workflow_dispatch mode=project` | one approved improvement project (§13), which can carry on over several runs |
 
 - Only people with write access can trigger a run, which is the action's default. That matters because every run has
@@ -478,13 +478,14 @@ person.
 - An hour with nothing new makes no Claude call.
 - While core's usage watch holds scheduled runs, no watch, review or assess job starts Claude, so nothing new is
   proposed, and the approvals job starts no fix or project (it still records people's answers in Slack).
-- An assessment with nothing new since the last one, and no project active, makes no Claude call.
+- An assessment with no new conversation since the last one (no turn of Jensen's and no note from Jensen) makes no
+  Claude call.
 - The approvals job makes no Claude call. Fixes and projects run only once a person approves them.
 - The proxy's usage page shows improve-jensen's share separately, because its origin isn't in `agent_origins`.
 
 ### 11. The assessment: what Jensen needs
 
-The `assess` job runs four times a day. It is where improve-jensen works out what to improve, without anyone naming
+The `assess` job runs every hour when there's new conversation since the last one. It is where improve-jensen works out what to improve, without anyone naming
 the areas.
 
 **It reads:**
@@ -559,15 +560,20 @@ Each line says in general terms what will change, not what goes wrong. Each issu
 `Proposed in Slack: <change>` comment. Issues that are closed or already in the flow are left out, and nothing is
 posted when none are left.
 
-**Approving.** A person replies in the message's thread: `approve` (or `yes`, `ok`, `lgtm`, `ship it` and the like)
-approves every item, `approve 1 3`, `approve 1, 3`, `approve 1 and 3` or `approve 1-3` some, and `reject 2` (or
-`no`, `skip`, `drop`) drops one. A reply counts only when it is exactly that: the word and a plain list of item
-numbers, nothing else, so `ok, I will check #2 tomorrow` or `approve 1; reject 2` decides nothing and can be said
-again plainly. A reaction on the message itself answers for every item: `:white_check_mark:` or
-`:ballot_box_with_check:` approves, `:x:` or `:-1:` rejects; a `:+1:` approves nothing, since it often means "seen".
-Reactions are read first, then the replies in order. A reply that names an item decides it either way; one that
-names none (`approve`, `approve all`, or a reaction) only decides items still waiting, so it never turns a dropped
-item into an approved one: that takes its number (`approve 2`). An approved item is final.
+**Approving.** A person replies in the message's thread in plain language: approve all or some, drop one, add a
+condition, or ask about an item. The host listener (`jensen_watch.py listen`, a systemd service on the host, every
+15 seconds) puts 👀 on the reply at once and has Claude (through the Claude Code CLI and the proxy's
+`improve-jensen` origin) read it against the items, their issues and the thread so far. Claude decides only what the
+person clearly asked for: `approve` or `go ahead with all` means every item still open, a question gets an answer
+with no decision, and a condition on an item ("but keep it short") becomes that item's note, in general terms. The
+listener answers in the thread with what it took and what happens next, stores the decisions in the proposal's record
+and starts the approvals job at once. If Claude can't be reached, the thread hears so, and the plain words still
+work: `approve` (or `yes`, `ok`, `lgtm`, `ship it`) approves every item, `approve 1 3`, `approve 1-3` some, and
+`reject 2` (or `no`, `skip`, `drop`) drops one; a plain reply counts only when it is exactly the word and item
+numbers. A reaction on the message itself answers for every item: `:white_check_mark:` or `:ballot_box_with_check:`
+approves, `:x:` or `:-1:` rejects; a `:+1:` approves nothing, since it often means "seen". A decision that names an
+item decides it either way; one that names none (a bare `approve` or a reaction) only decides items still waiting, so
+it never turns a dropped item into an approved one. An approved item is final.
 
 A proposal nobody answers within 14 days is released: its undecided items lose `proposed`, with a comment, and its
 thread is no longer read, so a later watch can propose them again. Each issue belongs to its newest proposal, so an
@@ -577,11 +583,13 @@ host names (its record lost, unreadable or already released) is released the sam
 **Who can approve:** the people in `agent.toml`, by the `slack` id of each `[people.*]` entry. Anyone else's reply or
 reaction is ignored, and if the list can't be read, nothing is approved.
 
-**The approvals job** runs every 10 minutes and makes no Claude call (`jensen_watch.py approvals`). It reads the
-threads of open proposals, moves each answered issue from `proposed` to `approved` or `rejected` with a comment, and
-replies once in the thread with what it took (`Approved 1, 3: queued to ship. Dropped 2.`). Then it fires the next
-change: the lowest-numbered approved issue goes to the `fix` job, and the lowest-numbered approved `project` issue to
-the `project` job, each only when no job of that kind is queued or running in any unfinished run of the workflow,
+**The approvals job** runs every 10 minutes, and at once after the listener stores a decision, and makes no Claude
+call (`jensen_watch.py approvals`). It applies the listener's stored decisions first, moving each issue from
+`proposed` to `approved` or `rejected` with a comment (and an approval's note as `Note from Slack: <note>`), quietly,
+since the listener already answered. Then it reads the plain replies the listener hasn't handled and the reactions,
+applies them the same way, and replies once in the thread with what those took (`Approved 1, 3: queued to ship.
+Dropped 2.`). Then it fires the next change: the lowest-numbered approved issue goes to the `fix` job, and the
+lowest-numbered approved `project` issue to the `project` job, each only when no job of that kind is queued or running in any unfinished run of the workflow,
 however long ago it started. While core's usage watch holds the pool, it still records the answers but fires
 nothing. The `fix` or `project` run it starts first checks that the issue is still open and approved, with no
 `stuck` or `needs-person` (`jensen_watch.py ready`), and does nothing otherwise; a person's own dispatch with a
@@ -654,6 +662,10 @@ The build ships nothing to the live install. When Jensen is idle and a person is
 6. Check that Jensen's Slack bot is in `#autonomous-agent` (it joins a public channel by itself).
 7. Start the first watch with `workflow_dispatch mode=watch` and read its digest, plan and proposals.
 8. Start the first assessment with `workflow_dispatch mode=assess` and read `assessment.md`.
+
+9. Install and start the host listener (`deploy/improve-jensen-listen.service`): the workflow's clock, since
+   GitHub's cron never fires it, and the ear in the proposals' threads. It exits when the live checkout moves, and
+   systemd starts it on the new code.
 
 `deploy/improve-jensen.md` holds the exact commands.
 

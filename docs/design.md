@@ -644,7 +644,9 @@ better engineer. It runs outside the stack, as a Claude Code GitHub Action (`.gi
 on two self-hosted runners on the host, below Jensen on CPU and disk (one for the hourly watch, one for everything else), and reaches Claude
 through the proxy's `improve-jensen` origin. A bad deploy can break the agent, but not the agent that has to undo it.
 Nobody tells it what to improve: it works that out from the evidence, and a person approves each change in Slack
-before it ships. The workflow has seven jobs:
+before it ships. Its clock is a listener on the host (`jensen_watch.py listen`, a systemd service), since GitHub's
+cron never fires the workflow: it starts `watch`, `assess` and `approvals` as `repository_dispatch` events. The
+workflow has seven jobs:
 
 - `watch`, hourly: `scripts/jensen_watch.py measure` turns the hour's turns, transcripts and the agent's PRs into
   signals and a digest, which also lists what the agent added (installs, and the skills, memory, instructions and
@@ -654,15 +656,16 @@ before it ships. The workflow has seven jobs:
 - `review`, one per new PR of the agent's, in any repo: reads its CI, reviews the diff for defects it can prove,
   hands them to the agent in the conversation that made the PR (`scripts/ask_jensen.py`) and records the gap in the
   agent's process (`.github/improve-jensen-review.md`).
-- `assess`, four times a day: ranks at most ten things that hold the agent back, against the goal (enterprise-grade
+- `assess`, every hour when there's new conversation since the last one (a turn of the agent's or a note from it):
+  ranks at most ten things that hold the agent back, against the goal (enterprise-grade
   products, little human help, long runs) and only on evidence from the agent's own work. It writes `assessment.md`
   on the host and the pinned `jensen-assessment` issue in general terms, files issues and proposes up to three of
   the top items, projects included, the same way (`.github/improve-jensen-assess.md`). It also asks what worked
   that the agent should keep (ways people drove it that worked, skills or plugins installed for one project,
   instructions people repeat), files those as `learned` issues and proposes up to two, credited in Slack only to
   whose session they came from. Once approved, a fix makes them part of the agent's setup in every project.
-- `approvals`, every 10 minutes, with no Claude: reads the Slack threads, labels each issue `approved` or `rejected`,
-  answers in the thread, and names the next approved fix and the next approved project (none while core's usage
+- `approvals`, every 10 minutes and at once after a decision in Slack, with no Claude: applies the decisions from the
+  Slack threads, labels each issue `approved` or `rejected`, and names the next approved fix and the next approved project (none while core's usage
   watch holds the pool). Each fix or project run first checks that its issue is still approved.
 - `fix`, one at a time: ships one approved change through a PR that closes its issue, CI, a fresh review, the merge,
   `just deploy`, its health check and a revert if the check fails (`.github/improve-jensen.md`).
@@ -674,8 +677,11 @@ before it ships. The workflow has seven jobs:
 
 Proposals go to `#autonomous-agent` (or the channel the repo variable `IMPROVE_JENSEN_SLACK_CHANNEL` names) through
 the agent's Slack bot, as one short numbered list of what will change, and each issue gets `proposed`. A person in
-`[people]` answers in the thread with just the word and item numbers (`approve`, `approve 1 3`, `reject 2`), or with
-`:white_check_mark:` (approve all) or `:x:` (reject all) on the list. When a fix or project ends, `jensen_watch.py
+`[people]` answers in the thread in plain language. The listener puts 👀 on the reply at once, has Claude (through the
+Claude Code CLI and the proxy) read it against the items and their issues, answers in the thread with what it took
+and what happens next, and stores the decisions for `approvals` to apply; a condition on an item goes on its issue as
+`Note from Slack: <note>`, which the fix follows. If Claude can't be reached, the plain words still work (`approve`,
+`approve 1 3`, `reject 2`), as do `:white_check_mark:` (approve all) or `:x:` (reject all) on the list. When a fix or project ends, `jensen_watch.py
 fired` tells the thread whether it shipped; a fix that didn't ship, or a project whose runs failed twice in a row, is
 marked `stuck` for a person. Nothing measures a change after it ships beyond the deploy's health check.
 
