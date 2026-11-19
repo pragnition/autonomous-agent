@@ -48,6 +48,12 @@ _DIGEST_SUFFIX = ".md"
 _DIGEST_FMT = "%Y%m%dT%H%MZ"
 _RUNS_DIR = "runs"
 _RUN_REVIEWS_SUFFIX = "-reviews.json"
+_GATE_FILE = "gate.json"
+# A gate.json older than this counts as expired (Review Focus 5): the yardstick job that was meant to call
+# gate_end() can die, and an unending gate must never block deploys or the watch's own fix picks forever.
+_GATE_MAX_AGE = timedelta(hours=12)
+_ASSESS_PLAN_FILE = "assess-plan.json"
+_PROJECT_ACTIVE_FILE = "project-active.json"
 
 # Numeric per-turn/per-midturn signals `count` reports as n/median/p90/max, and which record `kind` they live on.
 _TURN_NUMERIC = {"context_first", "context_peak", "inline_code_chars"}
@@ -522,3 +528,102 @@ class State:
         """The newest `deploys.jsonl` record, or `None` with none yet."""
         records = _read_jsonl(self.root / _DEPLOYS_FILE)
         return records[-1] if records else None
+
+    # -- gate (holds other behaviour changes while the yardstick measures one) --
+
+    def gate_start(self, issue: int, kind: str, handle: str, now: datetime) -> None:
+        """Writes `gate.json`: `{issue, kind, handle, started}`. Raises `RuntimeError` if a gate is already
+        active -- checked with `gate(now)`, the same call `deploy.py` and the watch use, so an *expired* gate
+        (older than 12 hours) never blocks a fresh `gate_start` either."""
+        active = self.gate(now)
+        if active is not None:
+            raise RuntimeError(f"a gate is already active for issue {active.get('issue')}")
+        _atomic_write(self.root / _GATE_FILE,
+                      json.dumps({"issue": issue, "kind": kind, "handle": handle, "started": _iso(now)}))
+
+    def gate(self, now: datetime) -> dict | None:
+        """The active gate (`gate.json`), or `None` if there isn't one, it can't be read, or it's older than 12
+        hours -- an expired gate counts as no gate at all (Review Focus 5)."""
+        path = self.root / _GATE_FILE
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        started = data.get("started")
+        if not isinstance(started, str):
+            return None
+        try:
+            started_at = _parse(started)
+        except ValueError:
+            return None
+        if now - started_at > _GATE_MAX_AGE:
+            return None
+        return data
+
+    def gate_end(self) -> None:
+        (self.root / _GATE_FILE).unlink(missing_ok=True)
+
+    # -- assessment (what Jensen needs) --
+
+    def last_assess(self) -> datetime | None:
+        """When the assessment last ran to completion, or `None` if it never has."""
+        value = self._read_state().get("last_assess")
+        return _parse(value) if value else None
+
+    def set_last_assess(self, ts: datetime) -> None:
+        data = self._read_state()
+        data["last_assess"] = _iso(ts)
+        self._write_state(data)
+
+    def assess_plan(self) -> dict:
+        """The validated `assess-plan.json`: `{"project": int | None}`. A missing file, invalid JSON, a value
+        that isn't an object, or a `project` that isn't a positive int (a bool doesn't count, same rule as
+        `plan()`'s own `fix`) all fall back to `{"project": None}`."""
+        path = self.root / _ASSESS_PLAN_FILE
+        try:
+            raw = path.read_text()
+        except OSError:
+            return {"project": None}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"project": None}
+        if not isinstance(data, dict):
+            return {"project": None}
+        project = data.get("project")
+        if isinstance(project, bool) or not isinstance(project, int) or project <= 0:
+            project = None
+        return {"project": project}
+
+    def clear_assess_plan(self) -> None:
+        """Remove `assess-plan.json` -- `assess-plan` calls this right after reading it, successful or not, so
+        this run's project pick is spent either way and is never re-read by a later run."""
+        (self.root / _ASSESS_PLAN_FILE).unlink(missing_ok=True)
+
+    # -- project tracking (deterministic: a file, not a search over issue comments) --
+
+    def project_mark(self, issue: int, status: str, now: datetime) -> None:
+        """`status == "active"` writes `project-active.json` (`{issue, started}`), replacing whatever was
+        there; `status == "done"` removes it. Any other `status` raises `ValueError` -- the CLI's own
+        `--status` choices already keep this from happening through normal use."""
+        if status == "active":
+            _atomic_write(self.root / _PROJECT_ACTIVE_FILE, json.dumps({"issue": issue, "started": _iso(now)}))
+        elif status == "done":
+            (self.root / _PROJECT_ACTIVE_FILE).unlink(missing_ok=True)
+        else:
+            raise ValueError(f"bad project status: {status!r}")
+
+    def project_active(self) -> dict | None:
+        """The active project (`project-active.json`), or `None` if there isn't one or it can't be read."""
+        path = self.root / _PROJECT_ACTIVE_FILE
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None

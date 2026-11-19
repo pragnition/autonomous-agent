@@ -53,7 +53,10 @@ running container), then, only if `agent`'s own queue needs to be idle for this 
 non-zero one is `check_failed: compose <step> exited N`, never silently treated as `ok`.
 
 A rebuild is "pending" (exit 3, retried by the next hourly run) when the host-wide lock is held by another
-deploy for the whole `wait_idle_s` wait, or when `agent`'s queue never goes idle in time, in which case
+deploy for the whole `wait_idle_s` wait, when `agent`'s queue never goes idle in time, or when a gate is active
+(`state.gate`, written by the yardstick -- see `agent.watch.state`) and this change's services aren't empty, so
+the yardstick measures exactly one change at a time; a docs-only change (empty services) still lands regardless
+of a gate, and the gate check runs before any fast-forward or build. Whichever reason it is,
 `state.set_deploy_pending(True)` and a `"pending"` log record are both written. The flag converges back to
 `False` as soon as a run commits to actually landing the pending change -- right after the pre-merge drift
 check passes, not at the very end -- and also on the "nothing outstanding" path, so a pending flag never
@@ -451,6 +454,12 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
         state.set_deploy_pending(False)
         state.log_deploy({"ts": _iso_now(), "from": head, "to": target, "services": [], "result": "ok"})
         return 0
+
+    # A gate holds any change that touches real services while the yardstick measures one change at a time
+    # (Review Focus 5's flip side -- an *active*, non-expired gate still holds). A docs-only change above never
+    # reaches this check at all, gate or no gate.
+    if state.gate(datetime.now(UTC)) is not None:
+        return _log_pending(state, head, target, services)
 
     if services & {"agent", "*"}:
         if not _wait_for_idle(host, wait_idle_s, sleep, clock):
