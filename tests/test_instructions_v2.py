@@ -178,6 +178,10 @@ def test_finished_and_blocked_projects():
         "gh issue edit <N> --remove-label project", "An issue with `fix-deployed` stays open",
         "doesn't dispatch the project again while it has `needs-person` or `stuck`",
     ))
+    _assert_anchors(ASSESS, (
+        "none of `fix-deployed`, `gating`, `stuck` or `needs-person`",
+        "While its issue has `stuck` or `needs-person` it waits for a person: `{\"project\": null}`",
+    ))
 
 
 def test_staged_projects_wait_for_their_gate():
@@ -188,6 +192,44 @@ def test_staged_projects_wait_for_their_gate():
         "leave progress and end the run", "After 4 hours, start no new build step",
     ))
     assert "After 5 hours" not in _flat(PROJECT)
+
+
+def test_assessment_records_evidence_on_the_issues_it_files():
+    _assert_anchors(ASSESS, (
+        "python scripts/jensen_watch.py note <N> <ref> \"<line>\"", "`yardstick/<task id>`", "`feedback/<name>`",
+        "Set its `Seen:` line to the total the last `note` printed",
+    ))
+
+
+def test_assessment_grows_the_yardstick_without_duplicates():
+    _assert_anchors(ASSESS, (
+        'ls "$STATE/yardstick/tasks/" "$STATE/yardstick/retired/"', "`task.toml` for its prompt",
+        "the yardstick task that covers it: its id, or `none`", "At most 2 new tasks per assessment",
+        "pick a new id only for a genuinely different failure",
+    ))
+    assert "pick another." not in _flat(ASSESS)
+
+
+def test_assessment_window_starts_when_it_starts_reading():
+    _assert_anchors(ASSESS, (
+        "date -u +%Y-%m-%dT%H:%M:%SZ", "-newermt \"<the previous Assessed: time>\"",
+        "`Assessed: <the time you noted before reading>`",
+    ))
+    assert '-newer "$STATE/assessment.md"' not in _flat(ASSESS)
+
+
+def test_priority_is_exactly_the_top_three():
+    _assert_anchors(ASSESS, (
+        "**`priority` on exactly the top 3 fix-scale items**", "keep the issue that already has `priority`",
+        "so exactly those three have it afterwards",
+    ))
+
+
+def test_issue_queries_split_open_and_recently_closed():
+    text = _flat(ASSESS)
+    assert "--state all" not in text
+    assert "gh issue list --label jensen-watch --state open" in text
+    assert "gh issue list --label jensen-watch --state closed --search \"closed:>=" in text
 
 
 def test_deploy_doc_assess_skip_rule():
