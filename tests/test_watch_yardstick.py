@@ -136,6 +136,9 @@ class FakeHost:
             self.asks[item] = {"args": list(args), "text": text, "folder": folder}
             self.calls.append(("ask", item, folder))
             return item + "\n"
+        if module_file == "core_items.py" and "--cancel" in args:
+            self.calls.append(("cancel", args[args.index("--cancel") + 1]))
+            return json.dumps({"cancelled": True})
         if module_file == "core_items.py":
             ids = args[args.index("--ids") + 1].split(",")
             self.polls += 1
@@ -335,6 +338,7 @@ def test_run_times_out_without_hanging(tmp_path):
 
     assert result["passed"] is False and result["reason"] == "timeout" and result["infra"] is False
     assert result["minutes"] >= 2
+    assert host.kinds("cancel") == []  # a turn that started is left running, never cancelled
     # Every wait went through the injected sleep, 30 s at a time, and stopped at the limit (both tries).
     assert set(clock.sleeps) == {30}
     assert len(clock.sleeps) <= 2 * (2 * 60 // 30) + 2
@@ -361,7 +365,7 @@ def test_run_times_out_when_status_reads_keep_failing(tmp_path, capsys):
                              sleep=clock.sleep, clock=clock.clock)
 
     assert result["passed"] is False and result["reason"] == "timeout" and result["tries"] == 2
-    assert host.kinds("check") == []
+    assert host.kinds("check") == [] and host.kinds("cancel") == []  # never known to be queued: nothing to cancel
     printed = capsys.readouterr()
     assert "status read" in printed.err and "secret" not in printed.out + printed.err
 
@@ -629,6 +633,31 @@ def test_a_turn_that_never_leaves_the_queue_times_out_at_three_times_its_limit(t
     assert result["passed"] is False and result["reason"] == "never left the queue" and result["infra"] is True
     assert result["minutes"] == 6.0
     assert len(host.kinds("poll")) == 12  # never cut off at the 2-minute limit while it was still queued
+    # Still queued, it would start long after the run gave up on it: it is cancelled.
+    assert host.kinds("cancel") == [("cancel", "W-1")]
+    assert host.calls.index(host.kinds("cancel")[0]) > host.calls.index(host.kinds("poll")[-1])
+
+
+def test_a_cancel_that_fails_is_only_counted(tmp_path, capsys):
+    root = tmp_path / "tasks"
+    _write_task(root, "stuck", time_limit_min=1, rubric="Judge it.", check=False)
+
+    class NoCancelHost(FakeHost):
+        def core_python(self, module_file, args, timeout=None):
+            if "--cancel" in args:
+                self.calls.append(("cancel-failed",))
+                assert timeout == 120
+                raise RuntimeError("docker exec returned 1: /home/someone/secret")
+            return super().core_python(module_file, args, timeout)
+
+    host, clock = NoCancelHost(tmp_path, status=lambda item, poll: "queued"), FakeClock()
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["reason"] == "never left the queue" and len(host.kinds("cancel-failed")) == 1
+    printed = capsys.readouterr()
+    assert "1 yardstick turn(s) still queued could not be cancelled" in printed.err
+    assert "secret" not in printed.out + printed.err
 
 
 def test_every_exec_in_the_run_loop_has_a_timeout(tmp_path):
@@ -1166,6 +1195,29 @@ def test_core_items_reports_status_and_follows_continuations(tmp_path):
     assert out["W-5"]["status"] == "done"
     assert "W-missing" not in out
     assert "secret reply text" not in json.dumps(out)
+
+
+def test_core_items_cancels_only_a_queued_yardstick_turn(tmp_path, monkeypatch, capsys):
+    conn = db.connect(tmp_path / "agent.db")
+    db.create_schema(conn)
+    _item(conn, "W-q", f"V-yardstick-{RUN}-0a1b2c3d", "queued")
+    _item(conn, "W-c", f"V-yardstick-{RUN}-1a1b2c3d", "claimed")
+    _item(conn, "W-p", "C-person", "queued")  # a person's turn: never touched
+    _item(conn, "W-r", "V-review-0a1b2c3d", "queued")
+
+    assert core_items.cancel(conn, "W-q") is True
+    assert [core_items.cancel(conn, item) for item in ("W-c", "W-p", "W-r", "W-missing")] == [False] * 4
+    statuses = {row["id"]: row["status"] for row in conn.execute("SELECT id, status FROM work_items")}
+    assert statuses == {"W-q": "cancelled", "W-c": "claimed", "W-p": "queued", "W-r": "queued"}
+
+    # On the command line it opens core's DB for writing, and says whether it cancelled.
+    _item(conn, "W-q2", f"V-yardstick-{RUN}-2a1b2c3d", "queued")
+    monkeypatch.setattr(core_items, "_DB_PATH", str(tmp_path / "agent.db"))
+    assert core_items.main(["--cancel", "W-q2"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"cancelled": True}
+    assert WorkQueue(conn).get("W-q2").status == "cancelled"
+    with pytest.raises(SystemExit):
+        core_items.main(["--cancel", "W-q2", "--ids", "W-q"])
 
 
 # -- CLI --

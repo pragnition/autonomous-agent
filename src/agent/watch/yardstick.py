@@ -23,13 +23,15 @@ already there is refused, never reused), queues its prompt as a turn in a fresh 
 turn first leaves `queued` (a turn waiting behind people's work isn't slow), with an overall cap of three times the
 limit from when it was queued (a turn that never starts can't hold the run); time the turn spends `waiting` for an
 account with capacity (a usage limit) counts toward neither. A failure of a mechanical task is tried once more in a
-fresh folder, `<id>-r`. A turn that never finishes is recorded as a timeout and left running, never cancelled; the
-run moves on regardless, so a hung Jensen or a runner that is down can't hang the job: every `docker exec` here has
-a timeout, and `build.sh` and `check` also run under `timeout` inside the runner. A failure that says nothing about
-Jensen -- the copy, build, queueing or check's own `docker exec` failed, the folder was already there, the turn
-never left the queue -- is recorded with `infra: true` (`INFRA_REASONS`), and no score or comparison counts it.
-Each task's result is appended to `$STATE/yardstick/results.jsonl` as soon as it is final, its `ts` in
-`state.FMT`. When the run ends, the memory notes it left behind are removed (`runner_memory.py`).
+fresh folder, `<id>-r`. A turn that started but never finishes is recorded as a timeout and left running, never
+cancelled; one that never left the queue is cancelled (`core_items.py --cancel`), or it would still start long
+after the run gave up on it. The run moves on regardless, so a hung Jensen or a runner that is down can't hang the
+job: every `docker exec` here has a timeout, and `build.sh` and `check` also run under `timeout` inside the runner.
+A failure that says nothing about Jensen -- the copy, build, queueing or check's own `docker exec` failed, the
+folder was already there, the turn never left the queue -- is recorded with `infra: true` (`INFRA_REASONS`), and
+no score or comparison counts it. Each task's result is appended to `$STATE/yardstick/results.jsonl` as soon as it
+is final, its `ts` in `state.FMT`. When the run ends, the memory notes it left behind are removed
+(`runner_memory.py`).
 
 Nothing here prints a task id, a note's name, a host path or anything a container wrote to stderr: task ids written
 by the assessment come from real products, and this output ends up in a public workflow log.
@@ -536,6 +538,15 @@ def _poll(host, ids: list[str]) -> dict | None:
     return statuses if isinstance(statuses, dict) else None
 
 
+def _cancel(host, item: str) -> bool:
+    """Cancel a turn still queued (`core_items.py --cancel`); whether it was. Any failure is just `False`."""
+    try:
+        reply = json.loads(host.core_python("core_items.py", ["--cancel", item], timeout=_EXEC_TIMEOUT_S))
+    except Exception:
+        return False
+    return isinstance(reply, dict) and reply.get("cancelled") is True
+
+
 def _check(host, attempt: _Attempt, status: str) -> tuple[bool, str]:
     """Copy `hidden/` and `check` in (replacing anything by those names the turn left there), run the check, then
     remove both again, whatever the check's outcome."""
@@ -606,7 +617,13 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None 
     final: dict[str, dict] = {}
     pending: deque[tuple[Task, int]] = deque((task, 1) for task in tasks)
     in_flight: list[_Attempt] = []
-    failed_polls = 0
+    failed_polls = failed_cancels = 0
+
+    def give_up(attempt: _Attempt) -> None:
+        """A turn still queued would start long after the run gave up on it: cancel it."""
+        nonlocal failed_cancels
+        if not _cancel(host, attempt.item):
+            failed_cancels += 1
 
     def finish(attempt: _Attempt, passed: bool, reason: str) -> None:
         task = attempt.task
@@ -650,8 +667,12 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None 
                     in_flight.remove(attempt)
                     finish(attempt, *_check(host, attempt, status))
                 elif attempt.timed_out(clock()):
-                    in_flight.remove(attempt)  # left running in Jensen: never cancelled
-                    finish(attempt, False, "never left the queue" if attempt.never_left_the_queue() else "timeout")
+                    in_flight.remove(attempt)
+                    if attempt.never_left_the_queue():
+                        give_up(attempt)
+                        finish(attempt, False, "never left the queue")
+                    else:  # left running in Jensen: never cancelled
+                        finish(attempt, False, "timeout")
     finally:
         report = _memory(host, ["--root", MEMORY_ROOT, "--since", str(since), "--marker", MARKER,
                                 "--existing-file", before])
@@ -663,6 +684,8 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None 
                   file=sys.stderr)
         if failed_polls:
             _warn(f"{failed_polls} status read(s) of the yardstick turns failed")
+        if failed_cancels:
+            _warn(f"{failed_cancels} yardstick turn(s) still queued could not be cancelled")
     return [final[task.id] for task in tasks if task.id in final]
 
 
