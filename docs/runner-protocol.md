@@ -27,8 +27,8 @@ Long-polls for up to 25 s; replies `204` when there's nothing claimable. Otherwi
       "origin": "[from Sam Taylor (sam) · DM · https://team.slack.com/archives/D1/p51]",
       "model": "claude-opus-5-5",
       "system_prompt": "...",
-      "max_turns": 400,
-      "timeout_s": 5400,
+      "idle_s": 1800,
+      "timeout_s": null,
       "mcp": {},
       "resume_session_id": null,
       "resume_account": null,
@@ -43,7 +43,7 @@ Long-polls for up to 25 s; replies `204` when there's nothing claimable. Otherwi
 ```
 
 The runner reads these payload fields: `text` and `origin` (the prompt: the origin line, if any, then any note,
-then the text), `model`, `system_prompt`, `max_turns`, `timeout_s`, `mcp` (server definitions, `${VAR}` filled in
+then the text), `model`, `system_prompt`, `idle_s`, `timeout_s`, `mcp` (server definitions, `${VAR}` filled in
 from the runner's own env), `resume_session_id`, `resume_account` (the account that session last ran on; the
 runner resumes it only if the proxy still has it pinned there, and otherwise starts a fresh session with a handoff
 note) and `test_secrets`. `attempts` is read from the work item itself,
@@ -142,13 +142,18 @@ Every field the runner sends:
 so a message this turn answered inline is never requeued even if the on-beat bookkeeping that usually does the
 same thing failed or never ran. The reply is always `{"ok": true}`.
 
+A turn has no time or step limit: it runs until the session finishes. `idle_s` is how long the session may go
+without sending a single message before the runner treats it as stuck, interrupts it and reports `stalled`.
+`timeout_s`, when it isn't null, is the whole run's time budget, across every session it moves through; the runner
+interrupts the run when it runs out, however busy it is, and reports `timeout`. Only a scheduled run has one.
+
 `outcome` is one of:
 - **`done`**: the turn finished. The control plane posts `text` to the thread.
-- **`timeout` / `max_turns`**: the turn ran out of time or steps. If it's under its carry-on cap (100 for a
-  request, 3 for a scheduled run), the control plane carries on silently — nothing is posted, and a new turn is
-  queued that resumes the session and says "carry on from where you stopped." Once the cap is spent, it's
-  treated as a failure instead.
-- **`error`**: never carries on. The session is dropped (the next turn starts fresh) and the failure, with
-  `error`'s text, is posted.
+- **`stalled`**: the session sent nothing for `idle_s`. The session is kept and the failure is posted. A long
+  project's build carries on in a new turn that resumes the session, up to three failed turns in a row.
+- **`timeout`**: a scheduled run used up its time budget. It's a failure, reported where the schedule says, and
+  never carries on.
+- **`error`**: the session is dropped (the next turn starts fresh) and the failure, with `error`'s text, is posted.
+  A long project's build carries on in a new turn, as for `stalled`.
 - **`interrupted`**: never carries on either, but the session is kept (a later turn can still resume it); the
   failure is posted as "stopped before I finished it."

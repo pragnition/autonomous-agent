@@ -282,8 +282,8 @@ class Runner:
         attached = await save_slack_files(self.link, tok, session, payload.get("files") or [])
         origin, prompt = origin_of(payload), origin_of(payload) + note + payload["text"] + attached
         spec = RunSpec(run_id=item_id, prompt=prompt, cwd=session,
-                       model=payload["model"], system_prompt=system_prompt, max_turns=payload["max_turns"],
-                       timeout_s=payload["timeout_s"],
+                       model=payload["model"], system_prompt=system_prompt, idle_s=payload["idle_s"],
+                       timeout_s=payload.get("timeout_s"),
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,
                        # plugins/effortless/hooks) are forced last, so a pack's test secret or the container's
                        # extra env can never override them

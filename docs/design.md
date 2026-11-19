@@ -277,8 +277,9 @@ retries (below) instead, and the gate holds them until there is capacity.
 A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
 whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or
 losing an item revokes its session token, and the runner interrupts the session at its next heartbeat; a later
-claim of the same item runs afresh. Each turn is limited to `[limits] task_minutes` (default 90) of wall time and
-`max_turns` (default 400) model turns.
+claim of the same item runs afresh. A turn has no time or step limit: it runs until the session is done. A session
+that sends nothing for `[limits] idle_minutes` (default 30) is stuck, and the runner stops it as `stalled`. A
+scheduled run, which no one is watching, also has a time budget of `schedule_hours` (default 6) for the whole run.
 
 When the runner claims a turn, core refreshes its payload from the conversation as it is at that moment: the
 session to resume, the project, the checkout and the test keys. A turn queued behind another one therefore
@@ -288,11 +289,10 @@ resumes the session that turn ended with.
 
 The runner reports the outcome, the session's final text, the session id and token counts. core records a row in
 `runs`, saves the session id on the conversation and posts the text, scrubbed of secrets, in the thread as
-Markdown. A turn that hit its time or turn limit carries on silently in a new turn (`[limits] continuations`,
-default 100; 3 for a scheduled run). An active long project's build also carries on after an error or an
-interrupted turn, up to three in a row, and the thread gets the error. Otherwise a failed turn (error, timeout,
-turn limit, interrupted) gets a short failure reply, and its task, if any, becomes `failed`. After an error the
-next turn starts a fresh session.
+Markdown. An active long project's build carries on in a new turn after an error or a stalled turn, up to three
+in a row, and the thread gets the error. Otherwise a failed turn (error, stalled, a scheduled run out of time,
+interrupted) gets a short failure reply, and its task, if any, becomes `failed`. After an error the next turn starts
+a fresh session; a stalled turn keeps its session, so a reply picks it up where it stopped.
 
 ### Linear
 
@@ -550,7 +550,7 @@ Linear app also `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` and `LINEAR_WEBHOOK_S
 |---|---|
 | `name`, `github`, `timezone` | the agent's name (display name, Linear label), its GitHub login, the timezone for digests, caps and schedules |
 | `[people.<key>]` | `slack` user id and `linear` email (required), `github` login, `role` (`member` or `admin`), `tailscale` login |
-| `[limits]` | `max_concurrent_sessions` (10), `max_tasks_per_day` (20), `task_minutes` (90), `max_turns` (400) |
+| `[limits]` | `max_concurrent_sessions` (10), `max_tasks_per_day` (20), `idle_minutes` (30): a turn with no progress for this long is stopped, `schedule_hours` (6): a scheduled run's time budget, 0 for none |
 | `[claude.models]` | `default` for every session, `hard` after "use fable" |
 | `[agent]` | `uid` of the agent container's user (1001) |
 | `[linear]` | `public_url`: the Funnel URL for Linear's webhook and OAuth callback; empty means no Linear app |

@@ -37,7 +37,8 @@ def test_turn_payload_for_a_known_project(payloads, conn):
     p = payloads.turn(row(conn, bound(conn)), "fix the export crash", "bob")
     assert p["text"] == "fix the export crash" and p["actor"] == "bob" and p["project"] == "sample"
     assert PERSONA in p["system_prompt"] and "full development environment" in p["system_prompt"]
-    assert p["model"] == "claude-opus-5-5" and p["max_turns"] == 400 and p["timeout_s"] == 90 * 60
+    assert p["model"] == "claude-opus-5-5" and p["idle_s"] == 30 * 60 and p["timeout_s"] is None
+    assert "max_turns" not in p     # no step limit: a turn runs until it's done
     assert p["test_secrets"] == {"SAMPLE_TEST_USER": "tester@example.com"}
     assert not {"worktree", "workdir", "branch"} & set(p)   # the session gets and sets up the code itself
 
@@ -78,6 +79,15 @@ def test_a_turn_carried_on_after_a_usage_limit_gets_the_same_account_check(paylo
     started = payloads.refresh_turn(row(conn, cid), queued)
     assert (started["resume_session_id"], started["resume_account"], started["limit_resume"]) == \
         ("s-1", "badger", 1)
+
+
+def test_only_a_scheduled_turn_gets_a_time_budget_when_it_starts(payloads, conn):
+    cid = bound(conn)
+    queued = {**payloads.turn(row(conn, cid), "sweep", None, unattended=True), "source": "schedule"}
+    assert payloads.refresh_turn(row(conn, cid), queued)["timeout_s"] == 6 * 3600
+    # a turn queued before the limits changed starts with the ones the config has now
+    stale = {**payloads.turn(row(conn, cid), "fix it", "bob"), "source": "slack", "timeout_s": 5400}
+    assert payloads.refresh_turn(row(conn, cid), stale)["timeout_s"] is None
 
 
 def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):

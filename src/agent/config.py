@@ -61,10 +61,9 @@ class ObservabilitySettings:
 class Limits:
     max_concurrent_sessions: int = 10
     max_tasks_per_day: int = 20
-    task_minutes: int = 90
-    max_turns: int = 400
-    continuations: int = 100       # times a turn that hit task_minutes or max_turns carries on by itself
-    schedule_continuations: int = 3  # the same, but for a scheduled run, which has no one watching it carry on
+    # A turn has no time or step limit: it runs until it's done
+    idle_minutes: int = 30         # a turn that shows no progress for this long is stuck, and is stopped
+    schedule_hours: int = 6        # a scheduled run's time budget, as no one is watching it; 0 means none
 
 
 @dataclass
@@ -301,10 +300,10 @@ def load_agent_config(path: Path) -> AgentConfig:
     lw = f"{where} [limits]"
     limits = Limits(max_concurrent_sessions=_int(lim, "max_concurrent_sessions", 10, lw, problems),
                     max_tasks_per_day=_int(lim, "max_tasks_per_day", 20, lw, problems),
-                    task_minutes=_int(lim, "task_minutes", 90, lw, problems),
-                    max_turns=_int(lim, "max_turns", 400, lw, problems),
-                    continuations=_int(lim, "continuations", 100, lw, problems),
-                    schedule_continuations=_int(lim, "schedule_continuations", 3, lw, problems))
+                    idle_minutes=_int(lim, "idle_minutes", 30, lw, problems),
+                    schedule_hours=_int(lim, "schedule_hours", 6, lw, problems))
+    if limits.idle_minutes < 1:
+        problems.append(f"{lw}: 'idle_minutes' must be at least 1")
 
     claude = (data.get("claude") or {}).get("models") or {}
     models = Models()

@@ -124,7 +124,7 @@ class FakeClaude:
 
 def item(conversation_id="V-1", **payload_over):
     payload = {"text": "fix the export", "actor": "bob", "unattended": False,
-               "model": "claude-opus-5-5", "system_prompt": "SYS", "max_turns": 400, "timeout_s": 5400,
+               "model": "claude-opus-5-5", "system_prompt": "SYS", "idle_s": 1800,
                "resume_session_id": None, "test_secrets": {"SAMPLE_TEST_USER": "tester@example.com"},
                "project": "sample"}
     payload.update(payload_over)
@@ -147,6 +147,14 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path):
     assert [p.name for p in spec.plugins] == ["core", "effortless", "a", "b"] and spec.system_prompt == "SYS"
     assert link.results[-1]["text"] == "all done" and link.results[-1]["session_id"] == "sess-1"
     assert link.results[-1]["outcome"] == "done" and link.results[-1]["cost_usd_est"] == 0.5
+
+
+async def test_the_spec_carries_the_idle_window_and_a_time_budget_only_when_given(tmp_path):
+    claude = FakeClaude()
+    runner = make_runner(tmp_path, FakeLink(), claude)
+    await runner.handle(item("V-1"), "tok", [])
+    await runner.handle(item("V-2", timeout_s=21600), "tok", [])
+    assert [(s.idle_s, s.timeout_s) for s in claude.specs] == [(1800, None), (1800, 21600)]
 
 
 async def test_every_turn_runs_in_its_conversations_own_folder(tmp_path):

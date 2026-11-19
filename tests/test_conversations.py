@@ -283,7 +283,6 @@ async def test_reaction_moves_from_seen_to_working_to_done(convos, queue, slack)
 
 
 async def test_failed_turn_ends_on_a_warning(convos, queue, slack):
-    convos.config.limits.continuations = 0
     await convos.handle_slack(mention("t13", "question"))
     item = queue.claim()
     queue.complete(item.id, {})
@@ -291,12 +290,11 @@ async def test_failed_turn_ends_on_a_warning(convos, queue, slack):
     assert slack.reactions[-1]["name"] == "warning"
 
 
-async def test_a_continued_turn_stays_working_until_it_finishes(convos, queue, slack):
-    await convos.handle_slack(mention("t14", "big job"))
-    first = queue.claim()
+async def test_a_continued_turn_stays_working_until_it_finishes(convos, queue, slack, conn):
+    first = await start_build(convos, queue, conn, "t14")
     await convos.on_start(first)
     queue.complete(first.id, {})
-    await convos.on_result(queue.get(first.id), {"outcome": "max_turns"})
+    await convos.on_result(queue.get(first.id), {"outcome": "stalled", "error": "no progress for 1800 s"})
     assert slack.reactions[-1]["name"] == "hourglass_flowing_sand"
     nxt = queue.claim()
     await convos.on_start(nxt)
@@ -496,51 +494,21 @@ async def test_failed_turn_without_an_error_says_so(convos, queue, slack):
     assert slack.posts[-1]["text"] == "That failed before I could finish it, and the runner didn't say why."
 
 
-async def test_timed_out_turn_says_it_ran_out_of_time(convos, queue, slack):
-    convos.config.limits.continuations = 0
-    await failed_turn(convos, queue, "t10t", {"outcome": "timeout", "error": "no result within 3600 s"})
-    assert slack.posts[-1]["text"] == "I ran out of time before finishing that (no result within 3600 s)."
+async def test_timed_out_turn_says_it_ran_out_of_time_and_stops(convos, queue, slack):
+    await failed_turn(convos, queue, "t10t", {"outcome": "timeout", "error": "no result within 21600 s"})
+    assert slack.posts[-1]["text"] == "I ran out of time before finishing that (no result within 21600 s)."
+    assert queue.claim() is None    # a time budget is the end of the run: it is never carried on
 
 
-async def test_turn_at_the_step_limit_says_so(convos, queue, slack):
-    convos.config.limits.continuations = 0
-    await failed_turn(convos, queue, "t10m", {"outcome": "max_turns"})
-    assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
-
-
-async def test_turn_that_hits_a_limit_carries_on_silently(convos, queue, slack, conn):
-    await convos.handle_slack(mention("t40", "build it"))
-    first = queue.claim()
-    posts, reactions = len(slack.posts), len(slack.reactions)
-    result = {"outcome": "timeout", "error": "no result within 5400 s", "session_id": "sess-1"}
-    queue.complete(first.id, result)
-    await convos.on_result(queue.get(first.id), result)
-    assert len(slack.posts) == posts            # no "Still on it"
-    assert len(slack.reactions) == reactions    # the message keeps its ⏳
-    nxt = queue.claim()
-    assert nxt.conversation_id == first.conversation_id and nxt.payload["continuation"] == 1
-    assert nxt.payload["text"] == ("(Your last turn hit its 90-minute limit before you finished. Carry on from where "
-                                   "you stopped.)")
-    assert conn.execute("SELECT session_id FROM conversations WHERE id = ?",
-                        (first.conversation_id,)).fetchone()[0] == "sess-1"
-
-
-async def test_carrying_on_stops_after_the_configured_number_of_times(convos, fake_linear, queue, slack, conn):
-    convos.config.limits.continuations = 3
-    fake_linear.new = ["Export broken"]
-    task_id = (await convos.intake_linear())[0]
-    posts_before = len(slack.posts)
-    for n in range(4):
-        item = queue.claim()
-        assert item.payload.get("continuation", 0) == n and item.payload["unattended"] is True
-        queue.complete(item.id, {"outcome": "max_turns"})
-        await convos.on_result(queue.get(item.id), {"outcome": "max_turns"})
-        if n < 3:
-            assert len(slack.posts) == posts_before
-            assert tasks.get_task(conn, task_id).status == Status.working
-    assert slack.posts[-1]["text"] == "I hit my step limit before finishing that."
-    assert queue.claim() is None
-    assert tasks.get_task(conn, task_id).status == Status.failed
+async def test_a_stalled_turn_says_it_got_stuck_and_keeps_its_session(convos, queue, slack, conn):
+    await convos.handle_slack(mention("t10i", "question"))
+    item = queue.claim()
+    result = {"outcome": "stalled", "error": "no progress for 1800 s", "session_id": "sess-1"}
+    queue.complete(item.id, result)
+    await convos.on_result(queue.get(item.id), result)
+    assert slack.posts[-1]["text"] == "I got stuck before finishing that (no progress for 1800 s)."
+    assert slack.reactions[-1]["name"] == "warning" and queue.claim() is None
+    assert convo(conn, "t10i")["session_id"] == "sess-1"    # a reply picks the session up where it stopped
 
 
 async def start_build(convos, queue, conn, thread):
@@ -585,12 +553,23 @@ async def test_an_interrupted_build_turn_stops(convos, queue, slack, conn):
     assert queue.claim() is None
 
 
-async def test_a_limit_carry_on_resets_the_failures_in_a_row(convos, queue, slack, conn):
-    item = await start_build(convos, queue, conn, "t62")
-    for outcome in ("error", "error", "timeout", "error", "error"):
+async def test_a_stalled_build_turn_says_so_and_carries_on_in_its_session(convos, queue, slack, conn):
+    first = await start_build(convos, queue, conn, "t62")
+    await fail(convos, queue, first, {"outcome": "stalled", "error": "no progress for 1800 s", "session_id": "s-1"})
+    assert slack.posts[-1]["text"] == "I got stuck before finishing that (no progress for 1800 s)."
+    nxt = queue.claim()
+    assert nxt.conversation_id == first.conversation_id and nxt.payload["continuation"] == 1
+    assert nxt.payload["text"].startswith("(Your last turn got stuck: no progress for 1800 s. Carry on")
+    assert convo(conn, "t62")["session_id"] == "s-1"
+
+
+async def test_stalled_and_failed_build_turns_count_together_toward_the_three_in_a_row(convos, queue, slack, conn):
+    item = await start_build(convos, queue, conn, "t65")
+    for outcome in ("error", "stalled", "error"):
         await fail(convos, queue, item, {"outcome": outcome, "error": "x"})
         item = queue.claim()
-    assert item is not None and item.payload["continuation"] == 5
+    await fail(convos, queue, item, {"outcome": "stalled", "error": "x"})
+    assert queue.claim() is None
 
 
 async def test_a_failed_turn_outside_a_build_still_stops(convos, queue, slack, conn):
@@ -890,25 +869,14 @@ async def test_scheduled_runs_final_message_goes_nowhere(convos, slack, queue):
     assert slack.posts == [] and slack.reactions == []
 
 
-async def test_scheduled_run_carries_on_without_posting(convos, slack, queue):
+async def test_a_scheduled_run_out_of_time_stops_and_says_so(convos, queue, slack):
     await convos.start_scheduled(scheduled())
-    first = queue.claim()
-    queue.complete(first.id, {"outcome": "max_turns"})
-    await convos.on_result(queue.get(first.id), {"outcome": "max_turns"})
-    assert slack.posts == []
-    assert queue.claim().payload["report_to"] == first.payload["report_to"]
-
-
-async def test_a_scheduled_run_carries_on_at_most_three_times(convos, queue, slack):
-    convos.config.limits.continuations = 100
-    await convos.start_scheduled(scheduled())
-    for n in range(4):
-        item = queue.claim()
-        assert item.payload.get("continuation", 0) == n and item.payload["source"] == "schedule"
-        queue.complete(item.id, {"outcome": "timeout"})
-        await convos.on_result(queue.get(item.id), {"outcome": "timeout"})
+    item = queue.claim()
+    result = {"outcome": "timeout", "error": "no result within 21600 s"}
+    queue.complete(item.id, result)
+    await convos.on_result(queue.get(item.id), result)
     assert queue.claim() is None
-    assert "didn't finish" in slack.posts[-1]["text"]      # the schedule's existing failure report
+    assert "didn't finish" in slack.posts[-1]["text"] and "21600 s" in slack.posts[-1]["text"]
 
 
 async def test_failed_scheduled_run_says_so_and_replies_continue_it(convos, slack, queue, conn):
@@ -957,10 +925,9 @@ async def test_scheduled_turn_by_someone_unknown_keeps_their_name(convos, queue,
     assert only_item(queue, conn).payload["requester"] == "carol"
 
 
-async def test_continuation_follows_the_turn_it_continues(convos, queue):
-    await convos.handle_slack(mention("t41", "build it"))
-    first = queue.claim()
-    result = {"outcome": "max_turns"}
+async def test_continuation_follows_the_turn_it_continues(convos, queue, conn):
+    first = await start_build(convos, queue, conn, "t41")
+    result = {"outcome": "stalled", "error": "no progress for 1800 s"}
     queue.complete(first.id, result)
     await convos.on_result(queue.get(first.id), result)
     nxt = queue.claim()
@@ -991,12 +958,11 @@ async def test_a_read_message_is_done_and_ticked(convos, queue, slack):
     assert slack.reactions[-1]["name"] == "white_check_mark"
 
 
-async def test_an_unread_message_runs_before_the_carry_on(convos, queue):
-    await convos.handle_slack(mention("t52", "build the app"))
-    first = queue.claim()
+async def test_an_unread_message_runs_before_the_carry_on(convos, queue, conn):
+    first = await start_build(convos, queue, conn, "t52")
     await convos.handle_slack(reply("t52", "status?"))
     [msg] = (await convos.on_beat(first, {"accepts_messages": True}))["messages"]
-    result = {"outcome": "timeout", "session_id": "live-1"}
+    result = {"outcome": "stalled", "error": "no progress for 1800 s", "session_id": "live-1"}
     queue.complete(first.id, result)
     await convos.on_result(queue.get(first.id), result)
     assert queue.claim().id == msg["id"]
@@ -1006,17 +972,16 @@ def last_reaction_for(slack, ts):
     return [r for r in slack.reactions if r["timestamp"] == ts][-1]
 
 
-async def test_a_carry_on_never_lands_in_the_next_turn_that_runs_the_unread_message(convos, queue, slack):
-    """Turn A times out with message M delivered but unread. complete(A) releases M back to queued, and
+async def test_a_carry_on_never_lands_in_the_next_turn_that_runs_the_unread_message(convos, queue, slack, conn):
+    """Build turn A stalls with message M delivered but unread. complete(A) releases M back to queued, and
     on_result(A) enqueues carry-on C. M is older than C, so it is claimed and run first — but its own heartbeat
     must not deliver C into it: C runs as its own turn, after M, not folded into M as a mid-turn message. Until
     C actually runs, the original request (t52) keeps its hourglass, not a checkmark."""
-    await convos.handle_slack(mention("t52", "build the app"))
-    first = queue.claim()
+    first = await start_build(convos, queue, conn, "t52")
     await convos.on_start(first)
     await convos.handle_slack(reply("t52", "status?"))
     [msg] = (await convos.on_beat(first, {"accepts_messages": True}))["messages"]
-    result = {"outcome": "timeout", "session_id": "live-1"}
+    result = {"outcome": "stalled", "error": "no progress for 1800 s", "session_id": "live-1"}
     queue.complete(first.id, result)
     await convos.on_result(queue.get(first.id), result)
     assert last_reaction_for(slack, "t52")["name"] == "hourglass_flowing_sand"
