@@ -18,8 +18,11 @@
 #             serialised so only one project runs at a time.
 #   yardstick - nightly, and after any of watch/fix/project/respond that leaves a yardstick gate active (each ends
 #             with a `gate status` step and reports it as its `gate` output): runs the yardstick tasks. A gate run
-#             ends the gate once it could be measured, removes `gating`, and reverts the change if it failed; a gate
-#             it couldn't measure stays active, and the next job that reports it starts the gate run again.
+#             ends the gate once it could be measured and removes `gating`; a failed gate also gets a `Yardstick
+#             gate failed ...: picked to revert.` comment on its issue. A gate it couldn't measure stays active, and
+#             the next job that reports it starts the gate run again.
+#   gate-revert - after a failed gate: reverts the change it measured, in a job of its own. If it dies before the
+#             revert lands, the watch picks the issue again from that comment.
 name: improve-jensen
 
 on:
@@ -223,15 +226,23 @@ jobs:
     concurrency:
       group: improve-jensen-yardstick
       cancel-in-progress: false
+    outputs:
+      # `failed` only once the failed gate has really ended: a `gate end` that refused (another gate is active by
+      # now) reverts nothing.
+      gate_result: ${{ steps.gate-end.outcome == 'success' && steps.yardstick.outputs.gate_result || 'none' }}
     env:
       # A gate run when a job before this one reported an active gate. The nightly and a manual run never revert.
       GATE: >-
         ${{ (needs.watch.outputs.gate == 'true' || needs.fix.outputs.gate == 'true' ||
         needs.project.outputs.gate == 'true' || needs.respond.outputs.gate == 'true') && 'true' || 'false' }}
     steps:
+      # `main` itself, whatever event started the run (a PR review's run would otherwise check out the PR's merge
+      # ref), and no job token left in the git config.
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -243,24 +254,58 @@ jobs:
           ${{ env.GATE == 'true' && '--gate' || '' }}
           --github-output "$GITHUB_OUTPUT"
       # `gate_result` is passed or failed once the gate was measured; retry (couldn't measure it this time) and none
-      # (no active gate) leave the gate as it is.
+      # (no active gate) leave the gate as it is. `--started` ends only the gate this run measured.
       - name: gate end
         id: gate-end
         if: steps.yardstick.outputs.gate_result == 'passed' || steps.yardstick.outputs.gate_result == 'failed'
         env:
           GATE_RESULT: ${{ steps.yardstick.outputs.gate_result }}
-        run: python scripts/jensen_watch.py gate end --result "$GATE_RESULT"
+          GATE_STARTED: ${{ steps.yardstick.outputs.gate_started }}
+          DROP: ${{ steps.yardstick.outputs.drop }}
+          REGRESSIONS: ${{ steps.yardstick.outputs.regressions }}
+        run: >-
+          python scripts/jensen_watch.py gate end --result "$GATE_RESULT" --started "$GATE_STARTED"
+          --drop "$DROP" --regressions "$REGRESSIONS"
+      # The comment is the failed gate's record on its issue: if `gate-revert` dies before the revert lands, the
+      # watch picks the issue again from it. The merge sha only, never a host gate's backup paths.
+      - name: comment on the failed gate's issue
+        if: >-
+          !cancelled() && steps.gate-end.outcome == 'success' && steps.yardstick.outputs.gate_result == 'failed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(python scripts/jensen_watch.py gate status --last)
+          issue=$(python -c 'import json, sys; print(json.loads(sys.argv[1])["issue"])' "$last")
+          body=$(python -c 'import json, sys; g = json.loads(sys.argv[1]); print("Yardstick gate failed " + (
+            "at " + g["handle"] if g["kind"] == "repo" else "(host change)") + ": picked to revert.")' "$last")
+          gh issue comment "$issue" --body "$body" -R ${{ github.repository }}
       - name: remove the gating label
-        if: steps.gate-end.outcome == 'success'
+        if: "!cancelled() && steps.gate-end.outcome == 'success'"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           issue=$(python scripts/jensen_watch.py gate status --last |
             python -c 'import json, sys; print(json.load(sys.stdin)["issue"])')
           gh issue edit "$issue" --remove-label gating -R ${{ github.repository }}
+
+  gate-revert:
+    # The failed gate's change comes out in a job of its own, with the charter, its own runner and its own time.
+    needs: yardstick
+    if: "!cancelled() && needs.yardstick.outputs.gate_result == 'failed'"
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 120
+    steps:
+      # `main`, and no job token in the git config, for the same reasons as in `yardstick` and `fix`.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
       - name: claude
-        if: >-
-          !cancelled() && steps.gate-end.outcome == 'success' && steps.yardstick.outputs.gate_result == 'failed'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account

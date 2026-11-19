@@ -91,9 +91,9 @@ pending is left to the section above):
 - An issue seen only once (a total of 1 on its `Seen:` line) and not again within 7 days: close it with a short
   comment. Never close one labelled `priority`, `project` or `fix-deployed` this way: the assessment ranked it, or a
   deploy is being followed.
-- A `fix`, `respond`, `project` or `yardstick` job is running when `gh run list --workflow improve-jensen.yml
-  --status in_progress --json databaseId` lists a run other than `$GITHUB_RUN_ID` whose `gh run view <id> --json
-  jobs` shows that job not `completed`. All four can deploy.
+- A `fix`, `respond`, `project`, `yardstick` or `gate-revert` job is running when `gh run list --workflow
+  improve-jensen.yml --status in_progress --json databaseId` lists a run other than `$GITHUB_RUN_ID` whose
+  `gh run view <id> --json jobs` shows that job not `completed`. All of them but `yardstick` can deploy.
 - A stale `gating` label: an issue with `gating` while `python scripts/jensen_watch.py gate status` shows no active
   gate and no `yardstick` job is running. Its gate has ended without the yardstick job removing the label (it
   expired, or the removal failed): remove `gating`, with no comment.
@@ -112,6 +112,14 @@ pending is left to the section above):
     revert.` and make the issue the plan's `fix`, whatever the rules below say, with no `Picked for a fix:` comment.
     With two such comments already, the revert has failed twice: add `needs-person`, @-mention the admins with what
     was tried, and send them the Slack DM.
+- A failed gate whose revert didn't finish: an open issue whose newest `Yardstick gate failed at <merge sha>: picked
+  to revert.` (or `Yardstick gate failed (host change): picked to revert.`) comment has no `Attempt failed:` comment
+  after it, while no job that deploys is running. Find them with `gh issue list --state open --search '"Yardstick
+  gate failed" in:comments' --json number,title,labels`. Skip one that has `needs-person`. Treat it like a failed
+  deploy: count its `Yardstick gate failed` comments since its last `Deployed` comment. With one (the workflow's;
+  the `gate-revert` run died before the revert landed), comment the same line again and make the issue the plan's
+  `fix`, whatever the rules below say, with no `Picked for a fix:` comment. With two, the revert has failed twice:
+  add `needs-person`, @-mention the admins with what was tried, and send them the Slack DM.
 - A deploy that can't land: the newest record in `deploys.jsonl` is `not_deployable` (the live checkout is dirty or
   diverged, or the fetch failed) and no job that deploys is running. Only a person can make `~/autonomous-agent`
   deployable; never touch it yourself. Tell the admins once: if the record's `from..to` holds a merged PR whose
@@ -155,4 +163,4 @@ Write `plan.json` in the state folder on every run, even when it's empty:
 
   The evidence stays on the host.
 - Your final message is in the workflow log: keep it to counts and issue numbers.
-- Post nothing in Slack, except the DM above for a failed deploy that a revert can't fix.
+- Post nothing in Slack, except the DM above for a failed deploy or gate that a revert can't fix.
