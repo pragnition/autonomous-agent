@@ -68,7 +68,8 @@ from agent.watch.transcript import TurnFacts, turn_facts
 # A person-started turn counts as failed on any of these outcomes.
 _FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
 
-# Values from the spec (see global-constraints.md).
+# When a turn counts as `no_delegation` (this many tool calls, none of them to a subagent) or
+# `big_start_small_ask` (a first context this big, then at most this many tool calls).
 _NO_DELEGATION_CALLS = 40
 _BIG_START_TOKENS = 100_000
 _BIG_START_MAX_CALLS = 5

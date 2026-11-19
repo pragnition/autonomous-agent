@@ -249,16 +249,6 @@ def _build_parser() -> argparse.ArgumentParser:
     changes_add_p = sub.add_parser("changes-add")
     changes_add_p.add_argument("text")
 
-    _add_gate_assess_parsers(sub)
-
-    return parser
-
-
-def _add_gate_assess_parsers(sub: argparse._SubParsersAction) -> None:
-    """Adds `gate start|status|end`, `assess-check`, `assess-plan`, `assess-commit` and `project-mark` to
-    `_build_parser`'s shared subparsers object. Kept in its own function -- with its own handler functions and
-    its own dispatch branches in `main` (see `_dispatch_gate_assess`) -- so a parallel edit to `cli.py` adding
-    other subcommands (the yardstick's, say) merges without conflict."""
     gate_p = sub.add_parser("gate")
     gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
     gate_start_p = gate_sub.add_parser("start")
@@ -283,6 +273,8 @@ def _add_gate_assess_parsers(sub: argparse._SubParsersAction) -> None:
     project_mark_p = sub.add_parser("project-mark")
     project_mark_p.add_argument("--issue", type=int, required=True)
     project_mark_p.add_argument("--status", choices=["active", "done"], required=True)
+
+    return parser
 
 
 # -- measure --
@@ -490,7 +482,7 @@ def _cmd_gate_end(state: State, result: str | None, now: datetime) -> int:
 
 
 def _has_new_notes(host: Host, since: datetime, until: datetime) -> bool:
-    """Whether Jensen wrote a note in `(since, until]` (`feedback.collect`, Task 1). A failed read (the runner
+    """Whether Jensen wrote a note in `(since, until]` (`feedback.collect`). A failed read (the runner
     unreachable, anything else) counts as nothing new -- logged by exception type only, the same as every other
     optional source in this codebase, never its message."""
     try:
@@ -545,33 +537,6 @@ def _cmd_project_mark(state: State, issue: int, status: str, now: datetime) -> i
     return 0
 
 
-# -- gate / assess / project-mark dispatch --
-
-
-def _dispatch_gate_assess(args: argparse.Namespace, host: Host, state: State, now: datetime) -> int | None:
-    """Handles `gate`/`assess-*`/`project-mark`, dispatched from `main`. Returns `None` for every other command
-    so `main` falls through to its own dispatch chain unchanged -- kept separate, alongside its own parser
-    helper (`_add_gate_assess_parsers`) and handler functions above, so a parallel edit to `main` adding other
-    subcommands merges without conflict."""
-    if args.command == "gate":
-        if args.gate_command == "start":
-            return _cmd_gate_start(state, args.issue, args.kind, args.handle, now)
-        if args.gate_command == "status":
-            return _cmd_gate_status(state, now, args.last, args.github_output)
-        if args.gate_command == "end":
-            return _cmd_gate_end(state, args.result, now)
-        raise AssertionError(f"unhandled gate command: {args.gate_command!r}")  # pragma: no cover
-    if args.command == "assess-check":
-        return _cmd_assess_check(host, state, now, args.github_output)
-    if args.command == "assess-plan":
-        return _cmd_assess_plan(state, args.github_output)
-    if args.command == "assess-commit":
-        return _cmd_assess_commit(state, now)
-    if args.command == "project-mark":
-        return _cmd_project_mark(state, args.issue, args.status, now)
-    return None
-
-
 # -- gh passthrough --
 
 
@@ -598,10 +563,6 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
 
     args = _build_parser().parse_args(argv)
 
-    gate_assess_result = _dispatch_gate_assess(args, host, state, now)
-    if gate_assess_result is not None:
-        return gate_assess_result
-
     if args.command == "yardstick":
         return _cmd_yardstick(host, state, now, args)
     if args.command == "measure":
@@ -622,4 +583,18 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
         return _cmd_feedback_reply(host, args.name, args.status, now)
     if args.command == "changes-add":
         return _cmd_changes_add(host, args.text, now)
+    if args.command == "gate":
+        if args.gate_command == "start":
+            return _cmd_gate_start(state, args.issue, args.kind, args.handle, now)
+        if args.gate_command == "status":
+            return _cmd_gate_status(state, now, args.last, args.github_output)
+        return _cmd_gate_end(state, args.result, now)
+    if args.command == "assess-check":
+        return _cmd_assess_check(host, state, now, args.github_output)
+    if args.command == "assess-plan":
+        return _cmd_assess_plan(state, args.github_output)
+    if args.command == "assess-commit":
+        return _cmd_assess_commit(state, now)
+    if args.command == "project-mark":
+        return _cmd_project_mark(state, args.issue, args.status, now)
     raise AssertionError(f"unhandled command: {args.command!r}")  # pragma: no cover - argparse already validated

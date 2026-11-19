@@ -2,7 +2,7 @@
 touch, rebuild only those, wait for an idle runner before touching `agent`, and check the stack is actually
 healthy live before calling the deploy done.
 
-`services_for` maps changed paths to service names (see the table in the plan's Task 6). `deploy` runs the whole
+`services_for` maps changed paths to service names (the rules in `_services_for_one`). `deploy` runs the whole
 pipeline under a host-wide `fcntl.flock` on `<state>/deploy.lock`, so two jobs never deploy at once; `check` is
 the live probe after a rebuild that decides whether a deploy counts as `ok` or `check_failed`. Every wait here --
 the lock poll, the two idle-runner polls, the container-stability wait inside `check` -- takes `sleep`/`clock`
@@ -21,8 +21,8 @@ only ever lands the commit it actually planned around.
 
 A checkout that is dirty or has drifted from `target` (an uncommitted change, a local commit never pushed, a
 failed fetch, a non-fast-forward) fails loudly with exit 2 before anything is rebuilt, and every such failure is
-logged to `deploys.jsonl` as `not_deployable: <reason>` -- this is Review Focus 4 of the plan: a drifted live
-install must never get silently papered over by a deploy. Since waiting for an idle runner can take up to
+logged to `deploys.jsonl` as `not_deployable: <reason>`: a drifted live install must never get silently papered
+over by a deploy. Since waiting for an idle runner can take up to
 `wait_idle_s` (30 minutes), the drift check runs twice: once right after the fetch, and again right before the
 fast-forward merge, in case the checkout itself moved while this run was waiting.
 
@@ -139,7 +139,7 @@ def _services_for_one(path: str) -> frozenset[str]:
 
 def services_for(paths: Iterable[str]) -> set[str]:
     """Which Compose services a deploy needs to rebuild for `paths` (a `--no-renames` `git diff --name-only`),
-    unioned across all of them. See the module docstring's table for the mapping; `"*"` (a `compose.yaml`
+    unioned across all of them. See `_services_for_one` for the mapping; `"*"` (a `compose.yaml`
     change) means every service, since the stack definition itself might have changed in a way no single
     service name covers."""
     services: set[str] = set()
@@ -395,7 +395,7 @@ def deploy(host: Host, state: State, *, wait_idle_s: int = 1800, if_pending: boo
     """Fetch, decide what to rebuild, wait for an idle runner if needed, fast-forward, rebuild and check.
 
     Exit codes: 0 deployed and checked (or nothing outstanding); 1 the post-deploy check failed; 2 the checkout
-    isn't deployable (dirty, diverged, a failed fetch or a failed fast-forward -- Review Focus 4); 3 pending (the
+    isn't deployable (dirty, diverged, a failed fetch or a failed fast-forward); 3 pending (the
     lock held by another deploy, or `agent` never went idle within `wait_idle_s`).
     """
     if if_pending and not state.deploy_pending():
@@ -456,7 +456,7 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
         return 0
 
     # A gate holds any change that touches real services while the yardstick measures one change at a time
-    # (Review Focus 5's flip side -- an *active*, non-expired gate still holds). A docs-only change above never
+    # (only an *active*, non-expired gate holds; an expired one counts as none). A docs-only change above never
     # reaches this check at all, gate or no gate.
     if state.gate(datetime.now(UTC)) is not None:
         return _log_pending(state, head, target, services)
@@ -466,7 +466,7 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
             return _log_pending(state, head, target, services)
 
     # The checkout may have moved while this run was waiting for the runner to go idle; re-check right before
-    # committing to the fast-forward (Review Focus 4).
+    # committing to the fast-forward: a drifted checkout is never papered over.
     reason = _drift_reason(host, target)
     if reason:
         return _log_not_deployable(host, state, reason, target)

@@ -52,7 +52,7 @@ _GATE_FILE = "gate.json"
 # The gate that ended last, with its `result` and `ended` time: what the workflow reads after it ends a gate.
 _GATE_LAST_FILE = "gate-last.json"
 _GATE_RESULTS = ("passed", "failed")
-# A gate.json older than this counts as expired (Review Focus 5): the yardstick job that was meant to call
+# A gate.json older than this counts as expired: the yardstick job that was meant to call
 # gate_end() can die, and an unending gate must never block deploys or the watch's own fix picks forever.
 _GATE_MAX_AGE = timedelta(hours=12)
 _ASSESS_PLAN_FILE = "assess-plan.json"
@@ -576,7 +576,8 @@ class State:
 
     def gate(self, now: datetime) -> dict | None:
         """The active gate (`gate.json`), or `None` if there isn't one, it can't be read, or it's older than 12
-        hours -- an expired gate counts as no gate at all (Review Focus 5)."""
+        hours -- an expired gate counts as no gate at all, so a gate whose yardstick job died never blocks deploys
+        and fixes for good."""
         data = self._read_json_object(_GATE_FILE)
         if data is None:
             return None
