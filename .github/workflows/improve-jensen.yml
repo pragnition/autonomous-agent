@@ -3,7 +3,7 @@
 # Host setup: deploy/improve-jensen.md.
 #
 # The clock is the host listener (deploy/improve-jensen-listen.service), not GitHub's cron, which never fired these:
-# it sends `improve-jensen-watch` at :17 and `improve-jensen-assess` at :47 every hour, and
+# it sends `improve-jensen-watch` at :17 and `improve-jensen-assess` at :55 every hour, and
 # `improve-jensen-approvals` every 10 minutes (and at once after a decision in Slack), as repository_dispatch events.
 # Each wakes its job only while `vars.IMPROVE_JENSEN_ENGINE` is `on`. The listener also answers replies to the
 # proposals in Slack in plain language and stores the decisions it read for `approvals` to apply.

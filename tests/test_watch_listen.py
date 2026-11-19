@@ -35,11 +35,11 @@ def _clock(root: Path) -> dict:
 
 
 @pytest.mark.parametrize("now, watch, assess, approvals", [
-    ("10:05:00", "09:17", "09:47", "10:00"),
-    ("10:17:00", "10:17", "09:47", "10:10"),
-    ("10:46:59", "10:17", "09:47", "10:40"),
-    ("10:47:00", "10:17", "10:47", "10:40"),
-    ("00:16:59", "23:17", "23:47", "00:10"),
+    ("10:05:00", "09:17", "09:55", "10:00"),
+    ("10:17:00", "10:17", "09:55", "10:10"),
+    ("10:54:59", "10:17", "09:55", "10:50"),
+    ("10:55:00", "10:17", "10:55", "10:50"),
+    ("00:16:59", "23:17", "23:55", "00:10"),
 ])
 def test_latest_slots(now, watch, assess, approvals):
     at = datetime.fromisoformat(f"2026-11-19T{now}+00:00")
@@ -53,7 +53,7 @@ def test_first_start_records_the_latest_slots_without_sending(tmp_path):
     listen.tick(dispatch, tmp_path, T0)
     assert dispatch.sent == []
     assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T09:17:00Z",
-                                "improve-jensen-assess": "2026-11-19T09:47:00Z",
+                                "improve-jensen-assess": "2026-11-19T09:55:00Z",
                                 "improve-jensen-approvals": "2026-11-19T10:00:00Z"}
 
 
@@ -73,7 +73,7 @@ def test_catch_up_after_downtime_sends_the_latest_slot_once(tmp_path):
     listen.tick(dispatch, tmp_path, later + timedelta(seconds=15))
     assert sorted(dispatch.sent) == ["improve-jensen-approvals", "improve-jensen-assess", "improve-jensen-watch"]
     assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T13:17:00Z",
-                                "improve-jensen-assess": "2026-11-19T12:47:00Z",
+                                "improve-jensen-assess": "2026-11-19T12:55:00Z",
                                 "improve-jensen-approvals": "2026-11-19T13:20:00Z"}
 
 
