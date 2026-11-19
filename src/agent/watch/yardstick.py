@@ -30,8 +30,9 @@ job: every `docker exec` here has a timeout, and `build.sh` and `check` also run
 A failure that says nothing about Jensen -- the copy, build, queueing or check's own `docker exec` failed, the
 folder was already there, the turn never left the queue -- is recorded with `infra: true` (`INFRA_REASONS`), and
 no score or comparison counts it. Each task's result is appended to `$STATE/yardstick/results.jsonl` as soon as it
-is final, its `ts` in `state.FMT`. When the run ends, the memory notes it left behind are removed
-(`runner_memory.py`).
+is final, its `ts` in `state.FMT`. A run has a time budget (`DEFAULT_BUDGET_MIN`): once it is spent, every task
+still in flight or to run is recorded as `skipped: time budget` (an infrastructure failure too) and the run
+returns. When the run ends, the memory notes it left behind are removed (`runner_memory.py`).
 
 Nothing here prints a task id, a note's name, a host path or anything a container wrote to stderr: task ids written
 by the assessment come from real products, and this output ends up in a public workflow log.
@@ -77,6 +78,10 @@ _BACKSTOP_S = 60
 _COPY_TIMEOUT_S = 120
 _EXEC_TIMEOUT_S = 120  # each `core_python`/`runner_python` call: queue, poll, memory
 PRUNE_DAYS = 7
+# A run stops after this many minutes, well inside its job's own timeout, so the run's results and its memory
+# cleanup always happen.
+DEFAULT_BUDGET_MIN = 200
+_OUT_OF_TIME = "skipped: time budget"
 # A run is compared with an earlier one only when they share at least this many mechanical tasks.
 MIN_SHARED = 2
 # A run id starts with when the run started, in this format.
@@ -601,11 +606,13 @@ def _memory(host, args: list[str]) -> dict | None:
 
 
 def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None = None, concurrency: int = 4,
-        sleep=time.sleep, clock=time.monotonic) -> list[dict]:
+        budget_min: int = DEFAULT_BUDGET_MIN, sleep=time.sleep, clock=time.monotonic) -> list[dict]:
     """Run `tasks` (see the module docstring); one result per task, in `tasks`' order. A gate run passes the
-    gate's `started` as `gate`, and each of its results carries it."""
+    gate's `started` as `gate`, and each of its results carries it. Once `budget_min` minutes are spent, every task
+    still to run or in flight is recorded as `skipped: time budget` and the run returns."""
     if not tasks:
         return []
+    deadline = clock() + budget_min * 60
     sha = _sha(host)
     since = int(time.time())
     base = f"{RUNNER_BASE}/{run_id}"
@@ -639,9 +646,23 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None 
         final[task.id] = record
         _append_result(state, record)
 
+    def out_of_time() -> None:
+        """Record everything still in flight or to run as skipped (cancelling a turn still queued)."""
+        for attempt in in_flight:
+            if attempt.never_left_the_queue():
+                give_up(attempt)
+            finish(attempt, False, _OUT_OF_TIME)
+        for task, tries in pending:
+            finish(_Attempt(task, tries, ""), False, _OUT_OF_TIME)
+        in_flight.clear()
+        pending.clear()
+
     try:
         while pending or in_flight:
-            while pending and len(in_flight) < concurrency:
+            if clock() >= deadline:
+                out_of_time()
+                break
+            while pending and len(in_flight) < concurrency and clock() < deadline:
                 task, tries = pending.popleft()
                 attempt = _Attempt(task, tries, f"{base}/{task.id}" + (_RETRY_SUFFIX if tries > 1 else ""))
                 reason = _prepare(host, task, attempt.folder)

@@ -660,6 +660,43 @@ def test_a_cancel_that_fails_is_only_counted(tmp_path, capsys):
     assert "secret" not in printed.out + printed.err
 
 
+def test_run_stops_at_its_time_budget(tmp_path):
+    # One turn at a time: t1 runs out its 30 minutes, t2 is still queued when the 40-minute budget is spent.
+    root = tmp_path / "tasks"
+    for task_id in ("t1", "t2", "t3"):
+        _write_task(root, task_id, time_limit_min=30)
+    host = FakeHost(tmp_path, status=lambda item, poll: "claimed" if item == "W-1" else "queued")
+    clock, state = FakeClock(), State(tmp_path / "state")
+
+    results = yardstick.run(host, state, yardstick.load_tasks(root), run_id=RUN, concurrency=1, budget_min=40,
+                            sleep=clock.sleep, clock=clock.clock)
+
+    assert clock.t - 5_000 <= 40 * 60
+    # t1's retry, t2 in flight and t3 never started: none of them says anything about Jensen.
+    assert [(r["task"], r["reason"], r["infra"], r["tries"]) for r in results] == [
+        ("t1", "skipped: time budget", True, 2), ("t2", "skipped: time budget", True, 1),
+        ("t3", "skipped: time budget", True, 1)]
+    assert sorted(_read_results(state), key=lambda r: r["task"]) == results
+    assert [ask[2] for ask in host.kinds("ask")] == [f"{BASE}/t1", f"{BASE}/t2"]
+    assert host.kinds("cancel") == [("cancel", "W-2")]  # still queued: it would start after the run gave up
+    assert host.kinds("memory")[-1][1] == "clean"
+
+
+def test_run_has_a_200_minute_budget_by_default(tmp_path):
+    root = tmp_path / "tasks"
+    for n in range(4):
+        _write_task(root, f"t{n}", time_limit_min=120)
+    host = FakeHost(tmp_path, status=lambda item, poll: "claimed")  # nothing ever finishes
+    clock = FakeClock()
+
+    results = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                            sleep=clock.sleep, clock=clock.clock)
+
+    assert clock.t - 5_000 <= 200 * 60
+    # Four first tries time out after two hours; their four retries run into the budget.
+    assert {(r["reason"], r["tries"]) for r in results} == {("skipped: time budget", 2)}
+
+
 def test_every_exec_in_the_run_loop_has_a_timeout(tmp_path):
     root = tmp_path / "tasks"
     _write_task(root, "t1")
