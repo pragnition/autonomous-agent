@@ -1,6 +1,0 @@
-prompt = """
-There's a small roles.py in this repo that grants and looks up roles. A role administrator was \
-able to grant themselves a role, which should never be allowed. Find the bug and fix it, then \
-add a regression test for it.
-"""
-time_limit_min = 15

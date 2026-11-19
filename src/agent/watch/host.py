@@ -5,9 +5,9 @@ can swap in a fake that records calls instead of touching Docker or the network.
 `_run`): later commands call it directly for a plain `docker inspect` or `docker exec` that doesn't fit one of the
 named helpers here.
 
-`pool_is_holding(host)` is the one reading of core's usage-watch pool that `measure`, `yardstick run` and
-`assess-check` all share: `True` while the pool holds (improve-jensen sits it out), `False` when it doesn't, `None`
-when it couldn't be read -- each caller decides for itself what an unreadable pool means for it.
+`pool_is_holding(host)` is the one reading of core's usage-watch pool that `measure` and `assess-check` share:
+`True` while the pool holds (improve-jensen sits it out), `False` when it doesn't, `None` when it couldn't be read
+-- each caller decides for itself what an unreadable pool means for it.
 """
 
 from __future__ import annotations

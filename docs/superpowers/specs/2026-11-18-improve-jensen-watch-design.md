@@ -11,21 +11,20 @@ improve-jensen is the agent that owns this repo. It becomes an engine that keeps
 - how it holds up over long runs;
 - how it deals with people.
 
-improve-jensen finds what holds Jensen back and ships the improvement itself, end to end: change, merge, deploy, check,
-and revert if the check fails. Continuous checking is the core. An improvement counts only when the evidence that
-prompted it goes away in Jensen's real work.
+improve-jensen finds what holds Jensen back and proposes the changes in Slack. Once a person approves one, it ships it
+itself, end to end: change, merge, deploy, check, and revert if the check fails. Continuous checking of Jensen's work
+is the core.
 
 **Nobody tells improve-jensen what to improve.** It is given the goal and the evidence, and it works out for itself
 what Jensen needs, the way a sharp engineer would:
 - reading Jensen's transcripts;
 - auditing the code Jensen shipped;
 - hearing what Jensen and people report;
-- reading current research and practice;
-- measuring Jensen on real tasks.
+- reading current research and practice.
 
-Several times a day it decides what matters most and works on that, from one-line fixes to multi-day changes to
-Jensen's architecture. It and Jensen talk to each other: Jensen reports what gets in its way, and improve-jensen tells
-Jensen what it changed.
+Several times a day it decides what matters most and proposes work on that, from one-line fixes to multi-day changes
+to Jensen's architecture. It and Jensen talk to each other: Jensen reports what gets in its way, and improve-jensen
+tells Jensen what it changed.
 
 improve-jensen runs outside Jensen's containers, on the host's self-hosted runner. A bad deploy can break Jensen, but
 it can't break the agent that has to undo it.
@@ -116,24 +115,23 @@ From about 320 messages from people:
    repo's CI results and reviews the diff for defects it can prove.
 3. **Product defects go back to Jensen as work.** The gap in Jensen's process that let a defect through becomes an
    improvement to Jensen.
-4. **Improvements ship without a person,** to the same bar we ask of Jensen:
+4. **A person approves each change before it ships.** improve-jensen posts the changes it wants as short bullets in
+   Slack, and only an approved one is made.
+5. **Approved improvements ship without a person,** to the same bar we ask of Jensen:
    - CI passes and a fresh-context review runs before merge;
-   - the change is checked live after deploy;
-   - it is reverted automatically if the check fails.
-5. **Each improvement is judged by its evidence going away,** measured by a script, not by improve-jensen's opinion.
-   It is tried again when the evidence doesn't go away.
+   - the deploy is checked;
+   - the change is reverted automatically if the check fails.
 6. **The team can follow what improve-jensen saw, changed and why,** in issues and PRs, without being notified every
    hour.
 7. **Four times a day, improve-jensen assesses Jensen against the goal** and ranks what is holding it back, with
-   evidence, without anyone naming the areas. The top items become its work, including multi-day projects.
-8. **A yardstick of real tasks shows whether Jensen as a whole is getting better.** A change that makes the score drop
-   is reverted.
-9. **Jensen reports what gets in its way,** and improve-jensen replies and tells Jensen what changed.
+   evidence, without anyone naming the areas. The top items become its proposals, including multi-day projects.
+8. **Jensen reports what gets in its way,** and improve-jensen replies and tells Jensen what changed.
 
 ## Non-goals
 
-- Public benchmarks, large eval suites, replay harnesses or scoring dashboards. The yardstick (§12) is small and built
-  from Jensen's own work, and Jensen's real work stays the main test.
+- Public benchmarks, large eval suites, replay harnesses or scoring dashboards. Jensen's real work is the test.
+- Following a shipped change up to see whether it helped. A person approved it; beyond the deploy's check (§9),
+  nothing measures it afterwards.
 - improve-jensen fixing product code itself. The products are Jensen's, and their defects are handed to Jensen.
 - Rubrics, checklists or build skills of our own. Quality comes from mechanical checks and maintained tools (see the
   off-the-shelf toolkit design).
@@ -141,7 +139,7 @@ From about 320 messages from people:
   plugin already solves its problem.
 - Pruning Jensen's toolkit by usage. Skills like test-driven development and verification go unused because Jensen's
   process skips them. The fix is that process, not deleting the skills.
-- Slack announcements of what improve-jensen did.
+- Slack announcements of what improve-jensen did, beyond the proposals and their thread replies (§12).
 
 ## Anti-goals (failures even if everything technically works)
 
@@ -149,12 +147,13 @@ From about 320 messages from people:
 - Jensen's prompt growing with every fix. A mechanism (runner behaviour, config, a CI check, a maintained tool) is
   preferred over another line of prompt.
 - improve-jensen grading its own work, or changing how a problem is measured so that it looks fixed.
-- improve-jensen merging its own changes on its own say-so. It is held to the bar it holds Jensen to.
+- improve-jensen changing Jensen on its own say-so. A person approves each change, and the change is held to the bar
+  improve-jensen holds Jensen to.
 - A review and Jensen trading nitpicks back and forth.
 - improve-jensen overriding something a person told Jensen. It works within the instruction.
 - Jensen left broken after a deploy with nobody knowing.
 - Jensen's conversations, people's names, or the details of products and customers ending up in this public repo.
-- Hourly notification noise, and bot-style Slack posts.
+- Hourly notification noise. A proposal is one short list, posted only when there is something to approve.
 
 ## Constraints
 
@@ -182,25 +181,26 @@ From about 320 messages from people:
   - Every hour, a script measures Jensen's new work, and improve-jensen reads the result.
   - Each new Jensen PR gets a review job.
   - Each problem gets an issue with a running count.
-  - A problem that qualifies gets a fix job, which ships the change and checks the deploy.
+  - A problem that qualifies is proposed in Slack; once a person approves it, a fix job ships the change and checks
+    the deploy.
 - **B. One hourly agent that watches, reviews and fixes in a single run,** with its own notes file. There's less
   wiring, but there's no visible record, and a busy hour crowds out the reviews and the fixes.
 - **C. Coaching only.** improve-jensen tells Jensen what went wrong so Jensen saves notes or skills. This can't fix the
   biggest problems found above, which are runner architecture, CI and toolkit problems. C was rejected because the
   improver must ship code.
 
-A was chosen. It reuses improve-jensen and its runner, the issues are a record the team can read, and every
-improvement is judged by evidence that a script measures. C's lever, editing Jensen's memory and skills, is one of A's
-fix targets.
+A was chosen. It reuses improve-jensen and its runner, the issues are a record the team can read, and every problem
+is counted by a script. C's lever, editing Jensen's memory and skills, is one of A's fix targets.
 
 **Project-scale problems go to improvement projects (§13), not fix jobs.** Two known ones are:
 - background work that outlives the turn;
 - a fresh context at milestone boundaries.
 
 Both are runner rewrites. They need a design and live checks of long builds, so they carry the `project` label. The
-assessment (§11) decides when to take them on, and a project run (§13) builds them. A fix job never picks them up.
+assessment (§11) proposes them, and once a person approves one, project runs (§13) build it. A fix job never picks
+them up.
 
-**The assessment, yardstick and projects extend approach A.** Making improve-jensen a separate always-on agent instead
+**The assessment and projects extend approach A.** Making improve-jensen a separate always-on agent instead
 was considered and rejected:
 - it would need its own memory, process supervision and restarts;
 - it would duplicate what the runners and the record already give.
@@ -214,9 +214,8 @@ Each run reads the record and the state folder, so it picks up where the last on
 **Runners.** Five GitHub Actions runners on the host, all running as `pragnition`, the user that owns the live
 checkout. That user has Docker and passwordless sudo, so the runners have full access to the host.
 - One runner is labelled `watch`, so the hourly watch never queues behind a long fix.
-- Four are labelled `work`, for reviews, fixes, assessments, the yardstick, projects and the runs that answer issues.
-  A project and a yardstick run can each hold a runner for hours, so four keeps reviews within the hour. That's five
-  runners in total.
+- Four are labelled `work`, for reviews, fixes, assessments, approvals, projects and the runs that answer issues. A
+  project run can hold a runner for hours, so four keeps reviews within the hour. That's five runners in total.
 - The runners' work folders stay outside `~/autonomous-agent`.
 - `gh` is installed on the host.
 
@@ -230,20 +229,21 @@ checkout. That user has Docker and passwordless sudo, so the runners have full a
 
 | Job | Runs on | Started by | Does |
 |---|---|---|---|
-| `watch` | `watch` | hourly `schedule` (odd minute), `workflow_dispatch mode=watch` | measures the hour; Claude reads it, updates the record, and picks the PRs to review and at most one issue to fix |
+| `watch` | `watch` | hourly `schedule` (odd minute), `workflow_dispatch mode=watch` | measures the hour; Claude reads it, updates the record, and picks the PRs to review and the issues to propose; a step posts the proposals in Slack (§12) |
 | `review` | `work` | `needs: watch`, one matrix entry per new Jensen PR; `workflow_dispatch mode=review` | reviews one PR, hands defects to Jensen, records process gaps |
-| `fix` | `work` | `needs: watch` when it picked an issue; `workflow_dispatch mode=fix` | ships one improvement: change, PR, CI, review, merge, deploy, check, revert |
-| `respond` | `work` | today's issue and comment triggers | answers people's and Jensen's `improve-jensen` issues under the fix rules |
-| `assess` | `work` | `schedule` four times a day (every 6 hours), `workflow_dispatch mode=assess` | the assessment (§11): ranks what holds Jensen back, files or updates the issues, and starts at most one project |
-| `yardstick` | `work` | nightly `schedule`, `workflow_dispatch mode=yardstick` (the fix and project runs dispatch it after a deploy that changes how Jensen behaves) | runs the yardstick (§12), records the score and reverts a change that made it drop |
-| `project` | `work` | `needs: assess` when it started one; `workflow_dispatch mode=project` | one improvement project (§13), which can carry on over several runs |
+| `approvals` | `work` | `schedule` every 10 minutes, `workflow_dispatch mode=approvals` | no Claude: reads the Slack threads, labels issues approved or rejected, and names the next approved fix and project (§12) |
+| `fix` | `work` | `needs: approvals` when it named an issue; `workflow_dispatch mode=fix` | ships one approved improvement: change, PR, CI, review, merge, deploy, check, revert |
+| `respond` | `work` | today's issue and comment triggers | answers people's and Jensen's `improve-jensen` issues under the fix rules, with no Slack approval |
+| `assess` | `work` | `schedule` four times a day (every 6 hours), `workflow_dispatch mode=assess` | the assessment (§11): ranks what holds Jensen back, files or updates the issues, and proposes the top items |
+| `project` | `work` | `needs: approvals` when it named one; `workflow_dispatch mode=project` | one approved improvement project (§13), which can carry on over several runs |
 
 - Only people with write access can trigger a run, which is the action's default. That matters because every run has
   the host.
 - All runs use the `improve-jensen` proxy origin and `claude-opus-5-5`, and use subagents freely.
 - The `fix` job is in one concurrency group, so at most one fix runs, with at most one waiting.
-- The watch picks a new issue only when no open issue has the `fixing` label. The fix job adds the label when it
-  starts and always removes it when it ends.
+- The approvals job starts a fix only when no other fix job is queued or running. The fix job first checks that its
+  issue is still open and approved (`jensen_watch.py ready`), adds the `fixing` label when it starts and always
+  removes it when it ends.
 - Deploys from any job are serialised by a host lock (§8).
 - At most one `project` run at a time, in its own concurrency group. A project and a fix can run side by side, and
   their deploys queue on the host lock.
@@ -286,7 +286,6 @@ New signals are added only in a PR of their own (§7).
   - the turn's signals.
 - The window's totals for each signal.
 - The new Jensen PRs.
-- The open issues with `fix-deployed`, each with the signal it is meant to move.
 - It stays under about 100k tokens by shortening tool lines first. People's messages and Jensen's replies are never
   dropped.
 
@@ -299,7 +298,7 @@ New signals are added only in a PR of their own (§7).
 - `seed <file>` files the starting issues (§5).
 
 **When Claude doesn't start.** `measure` reports `has_work=false`, and Claude never starts, when either:
-- the window has no finished turns, no new PRs and no open `fix-deployed` issue; or
+- the window has no finished turns, no new PRs, no notes from Jensen and nothing that needs attention; or
 - core's usage watch is holding scheduled runs because the pool is low.
 
 ### 3. The watch run
@@ -308,16 +307,16 @@ improve-jensen reads the digest and the open `jensen-watch` issues. It uses a su
 runs, people) when the window is busy. Then it:
 - **Records problems.** For each problem it sees, it notes the occurrence (`note`) on the matching issue and updates
   the count line in the issue's description, or opens a new issue. Editing a description notifies nobody.
-- **Watches deployed improvements.** For each issue with `fix-deployed`, it reads the issue's signal (`count`) since
-  the deploy.
-  - Gone for 3 days of normal traffic: it closes the issue with a comment.
-  - Back: it removes `fix-deployed` and comments that the attempt failed.
+- **Follows pending deploys.** When a deploy that was left pending lands, it comments `Deployed` on the issue and
+  tells Jensen what changed (§14).
+- **Flags a broken deploy.** A failed deploy check that no run reverted gets `needs-person`, an @-mention of the
+  admins and a Slack DM. The watch never reverts anything itself.
 - **Closes stale issues.** A problem seen once and not again within 7 days is closed.
-- **Writes `plan.json`** in the state folder: the PRs to review, and at most one issue to fix.
-  - The issue to fix is picked only when none has `fixing`, from those that qualify (§6).
-  - Shipped harm and lost work come first, then how Jensen works, then problems with people.
+- **Writes `plan.json`** in the state folder: the PRs to review, and up to five qualifying issues (§6) to propose,
+  each with one short line saying what will change in Jensen. Shipped harm and lost work come first, then how Jensen
+  works, then problems with people. A step after the run posts them in Slack (§12).
 
-It comments on an issue only when its state changes, and it posts nothing in Slack.
+It comments on an issue only when its state changes, and posts nothing in Slack itself.
 
 ### 4. The review job (one Jensen PR)
 
@@ -363,16 +362,15 @@ Then:
   - where the fix probably belongs;
   - a count line that the watch keeps current.
 - **State labels:**
+  - `proposed`: posted in Slack, waiting for a person (§12).
+  - `approved` or `rejected`: a person's answer in Slack.
   - `fixing`: a fix job has the issue.
-  - `gating`: its change is being measured by the yardstick (§12).
-  - `priority`: one of the assessment's top fix-scale items (§11).
-  - `fix-deployed`: the improvement is live; a comment gives the commit and deploy time.
   - `needs-person`: only a person can make the change.
-  - `stuck`: two attempts failed.
+  - `stuck`: an approved change that didn't ship; a person looks at it.
   - `project`: built as an improvement project (§13), never by a fix job.
 - **One pinned issue, labelled `jensen-assessment`, holds the current ranked assessment** (§11) in general terms.
   Each assessment rewrites its description rather than commenting.
-- **Comments** go out only on state changes: picked, deployed, failed, fixed, stuck.
+- **Comments** go out only on state changes: proposed, approved, deployed, failed, stuck.
 - **Seeding.** `deploy/improve-jensen-seed.json` holds the problems listed under "Where things stand", in general
   terms. `jensen_watch.py seed` files them at switch-on if they aren't open already.
 
@@ -387,17 +385,20 @@ Any one of these is enough:
 A note Jensen writes about the problem (§14) counts as one occurrence. A note about visible harm qualifies on its
 own, like a person's complaint.
 
-Issues labelled `stuck` or `needs-person` never qualify. `project` issues go to the assessment (§11) and run as
-improvement projects (§13).
+Issues labelled `stuck` or `needs-person` never qualify, and one already `proposed`, `approved` or `rejected` isn't
+proposed again. `project` issues go to the assessment (§11) and run as improvement projects (§13).
 
 ### 7. The fix job
 
-The fix job reads the issue and its evidence on the host, finds the cause, and makes the change that removes it.
-**First,** it checks whether an existing Claude Code feature, setting or maintained plugin already solves the problem.
+The fix job takes the next approved issue. Its `Proposed in Slack:` comment says what was approved: the job makes
+that change, nothing wider. It reads the issue and its evidence on the host, finds the cause, and makes the change
+that removes it. **First,** it checks whether an existing Claude Code feature, setting or maintained plugin already
+solves the problem.
 
 **Where the change goes**
 - **The repo:** core, runner, the system prompt, core plugin skills, the Dockerfile, compose and the dashboard.
-  - It works on a branch, adds or updates tests, and opens a PR that says `Refs #N`.
+  - It works on a branch, adds or updates tests, and opens a PR that says `Closes #N`, so the issue closes on the
+    merge.
   - A change to how turns run comes with a short design note in the PR.
 - **Host config in `data/`** (`agent.toml`, schedules, project registrations): a dated backup next to the file, then a
   restart of whatever reads it. Secrets are never printed or written.
@@ -417,8 +418,8 @@ The fix job reads the issue and its evidence on the host, finds the cause, and m
   under 150 lines. An edit that would cross either limit merges or removes text elsewhere.
 - An improvement never changes `scripts/jensen_watch.py` or how its own evidence is measured. Changes to measurement go
   in a PR of their own, with an issue of their own.
-- Runs started by people's and Jensen's issues (`respond`) follow the same rules, merge and deploy too, and their PRs
-  still say who asked.
+- Runs started by people's and Jensen's issues (`respond`) are a request in their own right and need no approval in
+  Slack. They follow the same rules, merge and deploy too, and their PRs still say who asked.
 
 ### 8. Merge, deploy, check, revert
 
@@ -448,38 +449,31 @@ The fix job reads the issue and its evidence on the host, finds the cause, and m
 **Check after every deploy:**
 - the rebuilt containers are running and their restart counts don't move for 2 minutes;
 - core's `/health` and `/health/runner` answer 200;
-- `scripts/smoke.py` prints `smoke ok`;
-- for a change to how turns run, a live test of that behaviour in a silent test conversation, the way the
-  long-projects work was checked. The fix job writes that test as part of the change.
+- `scripts/smoke.py` prints `smoke ok`.
 
 **Revert when a check fails:**
-- The fix job reverts the merge commit on `main`, pushes and runs `just deploy` again. Then it comments on the issue,
-  which counts as a failed attempt.
+- The fix job reverts the merge commit on `main`, pushes and runs `just deploy` again. Then it reopens the issue and
+  comments; the workflow marks it `stuck` and says in its Slack thread that the change didn't ship.
 - Host-config and Claude-home changes are reverted by restoring their backups.
-- If the redeploy's check also fails, the admins in `agent.toml` get a Slack DM through Jensen's bot token. This is the
-  only Slack message improve-jensen ever sends.
+- If the redeploy's check also fails, the admins in `agent.toml` get a Slack DM through Jensen's bot token. Besides the
+  proposals and their thread replies (§12), it is the only Slack message improve-jensen sends.
 
 **Before switch-on:** one live check that a running turn survives a core rebuild. The turn keeps running, or is
 re-queued, resumes its session and finishes. If it doesn't survive, core changes also wait for no running turn.
 
 ### 9. Did it work
 
-After a deploy the issue stays open with `fix-deployed`, and the watch keeps reading its signal:
-- Gone for 3 days of normal traffic: the issue is closed.
-- Back: the attempt failed and `fix-deployed` comes off. A failed deploy check also counts as a failed attempt.
-- The next fix job gets the earlier attempts as context and decides whether to keep or revert each earlier change. A
-  prompt or memory edit that didn't help is always removed.
-- After two failed attempts the issue is `stuck`, and the admins are @-mentioned with what was tried. A person's
-  comment lifts `stuck`.
+The deploy's check (§8) is the last check on a change. One that passes it is done: its issue closed on the merge, and
+nothing measures it afterwards. One that fails it is reverted, and its issue is reopened and marked `stuck` for a
+person.
 
 ### 10. Cost and the account pool
 
 - An hour with nothing new makes no Claude call.
-- While core's usage watch holds scheduled runs, no watch, review, fix, assess, yardstick or project job starts
-  Claude.
-- An assessment with nothing new since the last one, and no project waiting, makes no Claude call.
-- The yardstick runs at most 4 of Jensen's turns at once, so people's requests still get sessions. Its nightly run is
-  at a quiet hour (03:00 Singapore time).
+- While core's usage watch holds scheduled runs, no watch, review or assess job starts Claude, so nothing new is
+  proposed, and the approvals job starts no fix or project (it still records people's answers in Slack).
+- An assessment with nothing new since the last one, and no project active, makes no Claude call.
+- The approvals job makes no Claude call. Fixes and projects run only once a person approves them.
 - The proxy's usage page shows improve-jensen's share separately, because its origin isn't in `agent_origins`.
 
 ### 11. The assessment: what Jensen needs
@@ -490,7 +484,6 @@ the areas.
 **It reads:**
 - the digests and metrics since the last assessment;
 - the open and recently closed `jensen-watch` issues and their counts;
-- the yardstick's latest results and trend (§12);
 - Jensen's own reports and improve-jensen's replies to them (§14);
 - the review findings on Jensen's PRs since the last assessment;
 - its previous assessment;
@@ -504,8 +497,8 @@ runs. Rank order:
 3. what makes people step in;
 4. everything else.
 
-**Every item needs evidence from Jensen's own work:** a count, a yardstick result, a review finding, a Jensen report or
-a person's correction. Research can suggest a fix or a better way, but it never puts an item on the list by itself.
+**Every item needs evidence from Jensen's own work:** a count, a review finding, a Jensen report or a person's
+correction. Research can suggest a fix or a better way, but it never puts an item on the list by itself.
 The list stays at 10 items or fewer.
 
 **It writes:**
@@ -517,88 +510,78 @@ The list stays at 10 items or fewer.
   Earlier versions are kept with their dates.
 - **The pinned `jensen-assessment` issue:** the same ranked list in general terms (the public-repo rule applies).
 - **New `jensen-watch` issues** for items it has no issue for, labelled `project` when they're project-scale.
-- **New yardstick tasks** for failures the yardstick doesn't cover yet (§12).
-- **At most one project start** when no project is running: it writes the issue number to `assess-plan.json`, and the
-  `project` job takes it. An unfinished project is picked up again before any new one starts.
-- **Up to 3 fix-scale items labelled `priority`.** The watch's plan (§3) picks a qualifying `priority` issue before any
-  other.
-  - A `priority` issue qualifies on the assessment's evidence alone, even when that is a single yardstick failure or
-    review finding.
-  - The assessment removes `priority` from items that drop out of its top three.
+- **Its proposals** in `assess-plan.json`: up to three of the top-ranked items, fix-scale or project, that aren't
+  already proposed, approved, rejected, stuck or being fixed, each with one short line saying what will change in
+  Jensen. A step after the run posts them in Slack (§12). A proposed item needs no other qualification: the
+  assessment's evidence is enough.
 
-It skips the hour when nothing is new since the last assessment and no project is waiting. It posts nothing in Slack.
+It skips the hour when nothing is new since the last assessment and no project is active. It posts nothing in Slack
+itself.
 
-### 12. The yardstick
+### 12. Approval in Slack
 
-A small set of real tasks that improve-jensen runs Jensen through, so it can tell whether Jensen as a whole got better
-or worse after a change.
+improve-jensen changes Jensen only once a person approves the change.
 
-**Tasks.** Each task is a folder:
-- `task.toml`: the request to Jensen, a time limit, and an optional judging rubric;
-- `fixture/`: the code or files Jensen works on. It's a plain folder with a local git repo inside, with no remote;
-- `check`: a script that runs in the fixture after Jensen finishes and exits 0 on a pass.
+**The proposal.** After the watch or the assessment, a workflow step (`jensen_watch.py propose --from watch` or
+`--from assess`) posts one message through Jensen's Slack bot to `#autonomous-agent` (the repo variable
+`IMPROVE_JENSEN_SLACK_CHANNEL` can name another channel):
 
-A mechanical `check` is required wherever one is possible. A rubric is only for what no script can check, and those
-results are marked "judged".
+```
+*improve-jensen wants to change Jensen*
+1. <what will change in Jensen> (#31)
+2. <what will change in Jensen> (#40)
+Reply here: `approve` ships them all, `approve 1 3` ships some, `reject 2` drops one.
+```
 
-- **Five seed tasks ship in this repo (`deploy/yardstick/`),** built on synthetic code:
-  - answering questions about its own setup;
-  - fixing a bug in a small API with a planted authorisation hole that hidden tests catch;
-  - adding a small feature whose hidden acceptance tests are checked, along with whether Jensen's own tests can fail;
-  - a build step whose result only arrives from background work;
-  - a two-part change that should be split and checked.
-- **Tasks drawn from Jensen's real failures are written by the assessment** and live only on the host
-  (`$STATE/yardstick/tasks/`), because they come from real products.
-- **improve-jensen may add tasks, but never edits or deletes one, or its check.** `yardstick add` refuses to overwrite.
-  Only a person retires a task, by moving it to `retired/`.
+Each line says in general terms what will change, not what goes wrong. Each issue gets the `proposed` label and a
+`Proposed in Slack: <change>` comment. Issues that are closed or already in the flow are left out, and nothing is
+posted when none are left.
 
-**Running.** `jensen_watch.py yardstick run`:
-- copies each task's fixture into `agent-runner` under `/var/agent/yardstick/<run>/<task>/`;
-- queues the request as a silent turn in its own `V-yardstick-<run>-<task>` conversation, running up to 4 at once;
-- waits for each turn, then runs its `check` inside `agent-runner`;
-- records `{run, ts, deployed sha, task, passed, minutes, judged}` in `yardstick.jsonl`.
+**Approving.** A person replies in the message's thread: `approve` (or `yes`, `ok`, `lgtm`, `ship it` and the like)
+approves every item, `approve 1 3`, `approve 1, 3`, `approve 1 and 3` or `approve 1-3` some, and `reject 2` (or
+`no`, `skip`, `drop`) drops one. A reply counts only when it is exactly that: the word and a plain list of item
+numbers, nothing else, so `ok, I will check #2 tomorrow` or `approve 1; reject 2` decides nothing and can be said
+again plainly. A reaction on the message itself answers for every item: `:white_check_mark:` or
+`:ballot_box_with_check:` approves, `:x:` or `:-1:` rejects; a `:+1:` approves nothing, since it often means "seen".
+Reactions are read first, then the replies in order. A reply that names an item decides it either way; one that
+names none (`approve`, `approve all`, or a reaction) only decides items still waiting, so it never turns a dropped
+item into an approved one: that takes its number (`approve 2`). An approved item is final.
 
-Each request tells Jensen to work only in that folder, push nowhere and message no one. A failed task is run once more
-before it counts as failed. Yardstick turns are improve-jensen's own traffic and stay out of Jensen's evidence counts.
+A proposal nobody answers within 14 days is released: its undecided items lose `proposed`, with a comment, and its
+thread is no longer read, so a later watch can propose them again. Each issue belongs to its newest proposal, so an
+old one never touches a newer proposal of the same issue. An issue labelled `proposed` that no live proposal on the
+host names (its record lost, unreadable or already released) is released the same way.
 
-**The score** is the number of tasks passed out of those run. Only tasks with a mechanical `check` count. Judged
-tasks are recorded and shown, but they never count toward the score or the gate, so improve-jensen is never the judge
-of its own change.
+**Who can approve:** the people in `agent.toml`, by the `slack` id of each `[people.*]` entry. Anyone else's reply or
+reaction is ignored, and if the list can't be read, nothing is approved.
 
-A **regression** is a task that passed on each of its last 3 runs and now fails both tries.
+**The approvals job** runs every 10 minutes and makes no Claude call (`jensen_watch.py approvals`). It reads the
+threads of open proposals, moves each answered issue from `proposed` to `approved` or `rejected` with a comment, and
+replies once in the thread with what it took (`Approved 1, 3: queued to ship. Dropped 2.`). Then it fires the next
+change: the lowest-numbered approved issue goes to the `fix` job, and the lowest-numbered approved `project` issue to
+the `project` job, each only when no job of that kind is queued or running in any unfinished run of the workflow,
+however long ago it started. While core's usage watch holds the pool, it still records the answers but fires
+nothing. The `fix` or `project` run it starts first checks that the issue is still open and approved, with no
+`stuck` or `needs-person` (`jensen_watch.py ready`), and does nothing otherwise; a person's own dispatch with a
+target skips that check.
 
-**Memory.** Yardstick turns run with Jensen's real memory and Claude home, because that is the setup being measured.
-- The hidden tests and the `check` script stay on the host and are copied into the task folder only after Jensen's turn
-  has ended.
-- When the run ends, it removes any memory note created during the run that mentions `/var/agent/yardstick/`. That way
-  Jensen never carries a task's answers into the next run or into people's work.
+**After the run,** the last step of the `fix` and `project` jobs (`jensen_watch.py fired`) answers in the proposal's
+thread:
+- the issue is closed: `Shipped <n>: <change>.`;
+- a fix whose issue is still open didn't ship: the issue gets `stuck` in place of `approved`, and the thread hears
+  `Couldn't ship <n>: <change>. It needs a person (#N).`;
+- a project whose last two runs failed is marked `stuck` in place of `approved`, with a comment, so it doesn't run
+  again and again; a run that succeeds starts the count afresh.
+- a project that needs a person (`stuck` or `needs-person`) says so once (`<n> needs a person (#N).`). An
+  unfinished project says nothing, and the next approvals run starts its next run.
 
-**As a gate.** After a change that alters how Jensen behaves, the fix or project run dispatches the yardstick. That
-means a deploy touching core, the runner, the prompt or skills, or an edit to Jensen's Claude home or `data/`.
-
-Before dispatching, it writes `gate.json` in the state folder: the issue, and the revert handle. The handle is the
-merge commit for repo changes, or the backup paths for host and Claude-home changes.
-
-While `gate.json` exists:
-- `deploy.py` treats any other deploy that changes behaviour as pending (exit 3), so the gate measures one change;
-- the watch picks no new fix;
-- the issue carries the `gating` label.
-
-The change is the one blamed, and the gate fails when either:
-- the score drops by 2 or more against the previous run on the same tasks; or
-- a regression appears.
-
-On a failed gate, the yardstick job reverts the change through its handle. A repo change is reverted by a revert PR,
-CI and `just deploy`, the same as §8; a host or Claude-home change by restoring its backups. The issue gets a failed
-attempt. Then `gate.json` is removed, pass or fail.
-
-**Nightly**, the full set runs at 03:00 Singapore time to track the trend. A nightly run never reverts anything. A
-drop there becomes evidence for the next assessment.
+A run started by an `improve-jensen` issue or an `@improve-jensen` mention (`respond`) is a person's own request and
+needs no approval.
 
 ### 13. Improvement projects
 
-A project is a `project` issue the assessment chose. The `project` job runs improve-jensen with
-`.github/improve-jensen-project.md`.
+A project is a `project` issue the assessment proposed and a person approved in Slack (§12). The `project` job runs
+improve-jensen with `.github/improve-jensen-project.md`.
 
 **The flow:**
 1. A short design note, posted as a comment on the issue before building. It's visible to people, but nothing waits
@@ -606,13 +589,12 @@ A project is a `project` issue the assessment chose. The `project` job runs impr
 2. A plan and a progress file on the branch `improve-jensen/project-<n>`. The file names the steps, what's done, the
    decisions and what's next, in general terms.
 3. Building with subagents, tests first, in small reviewed steps.
-4. A PR, CI, a fresh-context review, merge, `just deploy`, and the deploy check (§8). For a change to how turns run,
-   add the live behaviour test.
-5. The yardstick gate (§12), then the same "did it work" tracking as a fix (§9).
+4. A PR, CI, a fresh-context review, merge, `just deploy`, and the deploy check (§8). Stages ship back to back.
+5. The last stage, or a decision to stop, closes the issue.
 
 **Carrying on.** A `project` run lasts up to 6 hours. When it ends unfinished, the progress file on the branch carries
-it, and the next assessment dispatches it again. After 5 days the assessment must decide whether to continue, split or
-drop the project, and it says which on the issue.
+it, and the next approvals run starts the next one. After 5 days the assessment must decide whether to continue, split
+or drop the project, and it says which on the issue.
 
 Only one project runs at a time. Projects follow every fix rule in §7 and §8.
 
@@ -647,8 +629,8 @@ The build ships nothing to the live install. When Jensen is idle and a person is
 3. Merge the PR. Protect `main` so that CI is required.
 4. Run the live core-rebuild check (§8).
 5. `just deploy` once by hand, then `jensen_watch.py seed`.
-6. Start the first watch with `workflow_dispatch mode=watch` and read its digest and plan.
-7. `jensen_watch.py yardstick install deploy/yardstick`, then one yardstick run by hand to set the baseline.
+6. Check that Jensen's Slack bot is in `#autonomous-agent` (it joins a public channel by itself).
+7. Start the first watch with `workflow_dispatch mode=watch` and read its digest, plan and proposals.
 8. Start the first assessment with `workflow_dispatch mode=assess` and read `assessment.md`.
 
 `deploy/improve-jensen.md` holds the exact commands.
@@ -667,9 +649,9 @@ The build ships nothing to the live install. When Jensen is idle and a person is
 - `docs/design.md`: an improve-jensen section.
 - `.github/improve-jensen-assess.md` and `.github/improve-jensen-project.md` (new): the assessment and project
   instructions.
-- The `assess`, `yardstick` and `project` jobs in the workflow.
-- `src/agent/watch/yardstick.py` and `src/agent/watch/feedback.py` (new), with CLI subcommands and tests.
-- `deploy/yardstick/` (new): the five seed tasks.
+- The `assess`, `approvals` and `project` jobs in the workflow.
+- `src/agent/watch/feedback.py`, `src/agent/watch/slack.py` and `src/agent/watch/approvals.py` (new), with CLI
+  subcommands and tests.
 - `src/agent/defaults/system.md`: one line asking Jensen to report what gets in its way, and to read `CHANGES.md`.
 
 If the Claude GitHub App's token can't change files under `.github/workflows/`, changes to workflow files come from a

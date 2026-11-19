@@ -25,12 +25,7 @@ def _kv(text: str) -> dict:
 
 
 class _MeasureHost:
-    """A host for `measure` wiring: an empty-but-valid core collection, no Jensen PRs, and a canned reply to
-    the plain `gh issue list` call that fetches open `fix-deployed` issues."""
-
-    def __init__(self, open_deployed_cp):
-        self.open_deployed_cp = open_deployed_cp
-        self.run_calls: list[list[str]] = []
+    """A host for `measure` wiring: an empty-but-valid core collection, no Jensen PRs."""
 
     def core_python(self, module_file, args):
         return json.dumps({"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0})
@@ -48,16 +43,13 @@ class _MeasureHost:
             return _cp(stdout="[]")
         raise AssertionError(f"unexpected jensen_gh call: {args}")
 
-    def run(self, args, **kwargs):
-        self.run_calls.append(list(args))
-        return self.open_deployed_cp
 
-
-def test_measure_writes_github_outputs(tmp_path, monkeypatch):
-    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/widgets")
-    deployed = [{"number": 7, "title": "Some deployed fix"}]
-    host = _MeasureHost(_cp(stdout=json.dumps(deployed)))
+def test_measure_writes_github_outputs(tmp_path):
+    # A newest failed-deploy record is a simple way to force `has_work` without faking a whole core collection.
     state = State(tmp_path / "state")
+    state.log_deploy({"ts": "2026-11-19T09:00:00Z", "from": "a" * 40, "to": "b" * 40, "services": [],
+                      "result": "check_failed: compose up exited 1"})
+    host = _MeasureHost()
     output_file = tmp_path / "out.txt"
 
     rc = main(["measure", "--github-output", str(output_file)], host=host, state=state, now=T0)
@@ -69,69 +61,19 @@ def test_measure_writes_github_outputs(tmp_path, monkeypatch):
     assert kv["digest"]
     assert Path(kv["digest"]).exists()
 
-    # The open fix-deployed issues are fetched with the plain `gh` (the job's own token via `host.run`), never
-    # through Jensen's token.
-    assert host.run_calls == [["gh", "issue", "list", "-R", "acme/widgets", "--label", "fix-deployed",
-                               "--state", "open", "--json", "number,title"]]
 
-
-def test_measure_warns_and_skips_when_repository_unset(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
-    host = _MeasureHost(_cp(stdout="[]"))
+def test_measure_skips_a_quiet_hour(tmp_path, capsys):
+    host = _MeasureHost()
     state = State(tmp_path / "state")
 
     rc = main(["measure"], host=host, state=state, now=T0)
 
     assert rc == 0
-    assert host.run_calls == []
-    captured = capsys.readouterr()
-    assert "GITHUB_REPOSITORY" in captured.err
-
     # No --github-output: the same lines print to stdout instead.
-    kv = _kv(captured.out)
+    kv = _kv(capsys.readouterr().out)
     assert kv["has_work"] == "false"
     assert kv["skip_reason"] == "quiet"
     assert kv["digest"] == ""
-
-
-def test_measure_warns_and_skips_when_gh_call_fails(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/widgets")
-    host = _MeasureHost(_cp(returncode=1, stderr="gh: not authenticated"))
-    state = State(tmp_path / "state")
-
-    rc = main(["measure"], host=host, state=state, now=T0)
-
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "warning" in captured.err.lower()
-    kv = _kv(captured.out)
-    assert kv["has_work"] == "false"
-    assert kv["skip_reason"] == "quiet"
-
-
-def test_open_deployed_lookup_failures_log_only_the_exit_code_or_type(tmp_path, monkeypatch, capsys):
-    # The workflow log is public: gh's own stderr or an exception's message (a path, a token error) never goes in it.
-    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/widgets")
-    host = _MeasureHost(_cp(returncode=4, stderr="HTTP 401: Bad credentials (/home/someone/.config/gh/hosts.yml)"))
-    assert main(["measure"], host=host, state=State(tmp_path / "a"), now=T0) == 0
-    err = capsys.readouterr().err
-    assert "gh issue list failed (exit 4)" in err
-    assert "Bad credentials" not in err and "/home/someone" not in err
-
-    class _NoGhHost(_MeasureHost):
-        def run(self, args, **kwargs):
-            raise FileNotFoundError(2, "No such file or directory", "/opt/private/bin/gh")
-
-    assert main(["measure"], host=_NoGhHost(None), state=State(tmp_path / "b"), now=T0) == 0
-    err = capsys.readouterr().err
-    assert "gh issue list failed (FileNotFoundError)" in err
-    assert "/opt/private" not in err
-
-    host = _MeasureHost(_cp(stdout="not json at /srv/private/thing"))
-    assert main(["measure"], host=host, state=State(tmp_path / "c"), now=T0) == 0
-    err = capsys.readouterr().err
-    assert "gh issue list returned unparseable output" in err
-    assert "Expecting value" not in err
 
 
 # -- commit --
@@ -189,9 +131,7 @@ def test_plan_outputs_fallback(tmp_path):
     assert rc == 0
     kv = _kv(output_file.read_text())
     assert kv["review_indices"] == "[]"
-    assert kv["fix"] == ""
     assert kv["has_reviews"] == "false"
-    assert kv["has_fix"] == "false"
     assert "reviews" not in kv    # plan never outputs raw PR URLs -- see review-target
     assert json.loads((state_dir / "runs" / "42-reviews.json").read_text()) == []
 
@@ -200,7 +140,8 @@ def test_plan_outputs_real_plan_to_stdout(tmp_path, capsys):
     state_dir = tmp_path / "state"
     state = State(state_dir)
     (state_dir / "plan.json").write_text(json.dumps({
-        "reviews": [{"url": "https://github.com/acme/widgets/pull/1", "conversation": "C1"}], "fix": 9,
+        "reviews": [{"url": "https://github.com/acme/widgets/pull/1", "conversation": "C1"}],
+        "propose": [{"issue": 9, "change": "stop doing the thing"}],
     }))
 
     rc = main(["plan", "--run-id", "77"], host=object(), state=state, now=T0)
@@ -208,10 +149,9 @@ def test_plan_outputs_real_plan_to_stdout(tmp_path, capsys):
     assert rc == 0
     kv = _kv(capsys.readouterr().out)
     assert json.loads(kv["review_indices"]) == [0]
-    assert kv["fix"] == "9"
     assert kv["has_reviews"] == "true"
-    assert kv["has_fix"] == "true"
     assert "reviews" not in kv
+    assert "propose" not in kv  # plan never outputs the propose list -- that's `propose --from watch`'s job
     saved = json.loads((state_dir / "runs" / "77-reviews.json").read_text())
     assert saved == [{"url": "https://github.com/acme/widgets/pull/1", "conversation": "C1"}]
 
@@ -237,15 +177,17 @@ def test_plan_drops_prs_an_earlier_run_already_reviewed(tmp_path, capsys):
     assert json.loads(_kv(capsys.readouterr().out)["review_indices"]) == [0]
 
 
-def test_measure_with_work_clears_last_hours_plan(tmp_path, monkeypatch, capsys):
+def test_measure_with_work_clears_last_hours_plan(tmp_path, capsys):
     # Nothing else consumes plan.json: if Claude's run this hour succeeds without writing one, `plan` must not
-    # dispatch last hour's fix and reviews again.
-    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/widgets")
+    # dispatch last hour's reviews and proposals again.
     state_dir = tmp_path / "state"
     state = State(state_dir)
     (state_dir / "plan.json").write_text(json.dumps(
-        {"reviews": [{"url": "https://github.com/acme/widgets/pull/1", "conversation": None}], "fix": 9}))
-    host = _MeasureHost(_cp(stdout=json.dumps([{"number": 7, "title": "Some deployed fix"}])))
+        {"reviews": [{"url": "https://github.com/acme/widgets/pull/1", "conversation": None}],
+         "propose": [{"issue": 9, "change": "stop doing the thing"}]}))
+    state.log_deploy({"ts": "2026-11-19T09:00:00Z", "from": "a" * 40, "to": "b" * 40, "services": [],
+                      "result": "check_failed: compose up exited 1"})
+    host = _MeasureHost()
 
     assert main(["measure"], host=host, state=state, now=T0) == 0
     assert _kv(capsys.readouterr().out)["has_work"] == "true"
@@ -253,7 +195,7 @@ def test_measure_with_work_clears_last_hours_plan(tmp_path, monkeypatch, capsys)
     assert not (state_dir / "plan.json").exists()
     assert main(["plan", "--run-id", "43"], host=object(), state=state, now=T0) == 0
     kv = _kv(capsys.readouterr().out)
-    assert kv["review_indices"] == "[]" and kv["has_fix"] == "false"
+    assert kv["review_indices"] == "[]"
 
 
 def test_plan_run_id_defaults_to_the_github_run_id_env_var(tmp_path, monkeypatch):
@@ -453,8 +395,8 @@ def test_seed_skips_existing_titles_and_creates_labels(tmp_path):
     label_calls = [c for c in host.calls if c[1:3] == ["label", "create"]]
     created_labels = {c[3] for c in label_calls}
     assert created_labels == {"jensen-watch", "works", "people", "needs-person",
-                              "fixing", "fix-deployed", "stuck", "project",
-                              "gating", "priority", "jensen-assessment"}
+                              "fixing", "stuck", "project",
+                              "proposed", "approved", "rejected", "jensen-assessment"}
     for c in label_calls:
         assert c[4] == "--force"
         assert c[5:7] == ["-R", "acme/widgets"]
