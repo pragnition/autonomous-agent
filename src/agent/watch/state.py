@@ -49,17 +49,8 @@ _DIGEST_SUFFIX = ".md"
 _DIGEST_FMT = "%Y%m%dT%H%MZ"
 _RUNS_DIR = "runs"
 _RUN_REVIEWS_SUFFIX = "-reviews.json"
-_GATE_FILE = "gate.json"
-# The gate that ended last, with its `result` and `ended` time: what the workflow reads after it ends a gate.
-_GATE_LAST_FILE = "gate-last.json"
-_GATE_RESULTS = ("passed", "failed")
-# A gate.json older than this counts as expired: the yardstick job that was meant to call
-# gate_end() can die, and an unending gate must never block deploys or the watch's own fix picks forever.
-_GATE_MAX_AGE = timedelta(hours=12)
 _ASSESS_PLAN_FILE = "assess-plan.json"
 _PROJECT_ACTIVE_FILE = "project-active.json"
-# The yardstick's results (`agent.watch.yardstick`), one JSON line per task per run, each with a `ts` in `FMT`.
-_YARDSTICK_RESULTS = Path("yardstick") / "results.jsonl"
 
 # Numeric per-turn/per-midturn signals `count` reports as n/median/p90/max, and which record `kind` they live on.
 _TURN_NUMERIC = {"context_first", "context_peak", "inline_code_chars"}
@@ -71,15 +62,17 @@ _COUNTED = _LIST_VALUED | {
 }
 
 _MAX_PLAN_REVIEWS = 10
+# `validate_proposals`: at most this many proposed changes survive, and each `change` is cut to this many
+# characters (ending in `…` when it is).
+_MAX_PROPOSALS = 5
+_PROPOSAL_CHANGE_MAX = 140
 
 # improve-jensen's own traffic: the turns it queues into Jensen (`core_ask.py` marks them with this source) and
-# anything in the fresh `V-review-*` and `V-yardstick-*` conversations it opens. Kept in the metrics and shown in
-# the digest, but never counted as evidence about Jensen -- improve-jensen must not grade its own reviews, live
-# checks and yardstick runs as Jensen's work.
+# anything in the fresh `V-review-*` conversations it opens. Kept in the metrics and shown in the digest, but
+# never counted as evidence about Jensen -- improve-jensen must not grade its own reviews and live checks as
+# Jensen's work.
 IMPROVE_JENSEN_SOURCE = "improve-jensen"
 _REVIEW_CONVERSATION_PREFIX = "V-review-"
-_YARDSTICK_CONVERSATION_PREFIX = "V-yardstick-"
-_OWN_CONVERSATION_PREFIXES = (_REVIEW_CONVERSATION_PREFIX, _YARDSTICK_CONVERSATION_PREFIX)
 
 
 def _iso(value: datetime) -> str:
@@ -158,7 +151,40 @@ def is_improve_jensens_own(record: dict) -> bool:
     if record.get("kind") not in ("turn", "midturn"):
         return False
     return (record.get("source") == IMPROVE_JENSEN_SOURCE
-            or str(record.get("conversation") or "").startswith(_OWN_CONVERSATION_PREFIXES))
+            or str(record.get("conversation") or "").startswith(_REVIEW_CONVERSATION_PREFIX))
+
+
+def validate_proposals(value: object) -> list[dict]:
+    """A raw `propose` value (from `plan.json` or `assess-plan.json`) validated into `[{"issue": int, "change":
+    str}, ...]`: anything that isn't a list falls back to `[]`. An entry survives only when its `issue` is a
+    positive int (a bool doesn't count, even though `bool` is an `int` subclass) and its `change` is a non-empty
+    string once its whitespace is collapsed (runs of whitespace folded to single spaces, then stripped); `change`
+    is then cut to `_PROPOSAL_CHANGE_MAX` characters, ending in `…` when it had to be. The first entry for a given
+    `issue` wins over any later one for the same issue, and the result is cut to the first `_MAX_PROPOSALS` that
+    remain."""
+    if not isinstance(value, list):
+        return []
+    seen: set[int] = set()
+    out: list[dict] = []
+    for entry in value:
+        if len(out) >= _MAX_PROPOSALS:
+            break
+        if not isinstance(entry, dict):
+            continue
+        issue = entry.get("issue")
+        if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0 or issue in seen:
+            continue
+        change = entry.get("change")
+        if not isinstance(change, str):
+            continue
+        change = " ".join(change.split())
+        if not change:
+            continue
+        if len(change) > _PROPOSAL_CHANGE_MAX:
+            change = change[:_PROPOSAL_CHANGE_MAX - 1].rstrip() + "…"
+        seen.add(issue)
+        out.append({"issue": issue, "change": change})
+    return out
 
 
 def _latest_per_pr(records: list[dict]) -> list[dict]:
@@ -439,22 +465,21 @@ class State:
 
     def clear_plan(self) -> None:
         """Remove `plan.json`. `measure` calls this whenever it hands Claude a new hour, so a run that succeeds
-        without writing a plan never re-dispatches the previous hour's fix and reviews."""
+        without writing a plan never re-dispatches the previous hour's reviews and proposed changes."""
         (self.root / _PLAN_FILE).unlink(missing_ok=True)
 
     def plan(self, run_id: str | None = None) -> dict:
-        """The validated `plan.json`: `{"reviews": [...], "fix": int | None}`.
+        """The validated `plan.json`: `{"reviews": [...], "propose": [Proposal]}`.
 
-        A missing file or invalid JSON falls back to `{"reviews": [], "fix": None}`. Otherwise: each review is
+        A missing file or invalid JSON falls back to `{"reviews": [], "propose": []}`. Otherwise: each review is
         normalised to exactly `{"url": str, "conversation": str | None}` -- a review without a string `url` is
         dropped entirely, and its own `conversation` is kept only when it's a string (never a plan-level field
         shared across every review -- each review names its own conversation, or none). A URL listed twice is kept
         once, and a URL already in another run's `runs/*-reviews.json` is dropped (that PR was already reviewed;
         `run_id`'s own file doesn't count, so the same run attempted again plans the same reviews). The list is
-        cut to the first 10 that remain. `fix` is kept only when it's a positive int (a bool doesn't count, even
-        though `bool` is an `int` subclass).
+        cut to the first 10 that remain. `propose` is validated by the module-level `validate_proposals`.
         """
-        fallback = {"reviews": [], "fix": None}
+        fallback = {"reviews": [], "propose": []}
         path = self.root / _PLAN_FILE
         try:
             raw = path.read_text()
@@ -477,10 +502,7 @@ class State:
             reviews.append({"url": entry["url"],
                             "conversation": conversation if isinstance(conversation, str) else None})
 
-        fix = data.get("fix")
-        if isinstance(fix, bool) or not isinstance(fix, int) or fix <= 0:
-            fix = None
-        return {"reviews": reviews[:_MAX_PLAN_REVIEWS], "fix": fix}
+        return {"reviews": reviews[:_MAX_PLAN_REVIEWS], "propose": validate_proposals(data.get("propose"))}
 
     # -- run reviews (so a scheduled review job never names a PR URL in the workflow's own prompt/logs) --
 
@@ -577,94 +599,6 @@ class State:
                 out.append(record)
         return out
 
-    # -- gate (holds other behaviour changes while the yardstick measures one) --
-
-    def gate_start(self, issue: int, kind: str, handle: str, now: datetime) -> None:
-        """Writes `gate.json`: `{issue, kind, handle, started}`. Raises `RuntimeError` if a gate is already
-        active -- checked with `gate(now)`, the same call `deploy.py` and the watch use, so an *expired* gate
-        (older than 12 hours) never blocks a fresh `gate_start` either -- or while a deploy is pending: that
-        change would land, unmeasured, the moment this gate ended."""
-        active = self.gate(now)
-        if active is not None:
-            raise RuntimeError(f"a gate is already active for issue {active.get('issue')}")
-        if self.deploy_pending():
-            raise RuntimeError("a deploy is pending: it lands before a gate can start")
-        _atomic_write(self.root / _GATE_FILE,
-                      json.dumps({"issue": issue, "kind": kind, "handle": handle, "started": _iso(now)}))
-
-    def gate(self, now: datetime) -> dict | None:
-        """The active gate (`gate.json`), or `None` if there isn't one, it can't be read, or it's older than 12
-        hours -- an expired gate counts as no gate at all, so a gate whose yardstick job died never blocks deploys
-        and fixes for good."""
-        data = self._read_json_object(_GATE_FILE)
-        if data is None:
-            return None
-        started = data.get("started")
-        if not isinstance(started, str):
-            return None
-        try:
-            started_at = _parse(started)
-        except ValueError:
-            return None
-        if now - started_at > _GATE_MAX_AGE:
-            return None
-        return data
-
-    def gate_end(self, result: str | None = None, now: datetime | None = None, *, started: str | None = None,
-                 drop: int | None = None, regressions: int | None = None) -> None:
-        """End the gate: `gate.json` (expired or not) is archived to `gate-last.json` with `result` (`passed`,
-        `failed`, or `None` for a gate a person ended by hand), `ended`, and the yardstick's `drop` and
-        `regressions` (counts, or `None`) added, replacing the gate archived before it, then removed. With no
-        `gate.json` there is nothing to end, and the last archived gate stays as it was. Any other `result` raises
-        `ValueError`.
-
-        With `started` (the gate a yardstick run measured), only that gate is ended: when the active one started
-        at another time, or there is none, this raises `RuntimeError` and changes nothing -- the gate measured
-        already ended, and the one there now is another change's."""
-        if result is not None and result not in _GATE_RESULTS:
-            raise ValueError(f"bad gate result: {result!r}")
-        data = self._read_json_object(_GATE_FILE)
-        if started is not None:
-            if data is None:
-                raise RuntimeError("there is no active gate to end")
-            if data.get("started") != started:
-                raise RuntimeError(f"the active gate started at {data.get('started')}, not {started}")
-        if data is not None:
-            ended = _iso(now if now is not None else datetime.now(UTC))
-            _atomic_write(self.root / _GATE_LAST_FILE, json.dumps({**data, "result": result, "ended": ended,
-                                                                   "drop": drop, "regressions": regressions}))
-        (self.root / _GATE_FILE).unlink(missing_ok=True)
-
-    def last_gate(self) -> dict | None:
-        """The gate that ended last (`gate-last.json`), or `None` if none has, or it can't be read."""
-        return self._read_json_object(_GATE_LAST_FILE)
-
-    def _read_json_object(self, name: str) -> dict | None:
-        try:
-            data = json.loads((self.root / name).read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-        return data if isinstance(data, dict) else None
-
-    # -- yardstick results --
-
-    def yardstick_results_path(self) -> Path:
-        return self.root / _YARDSTICK_RESULTS
-
-    def yardstick_result_newer_than(self, ts: datetime) -> bool:
-        """Whether the yardstick's results hold a line whose `ts` is after `ts`. A missing file, a malformed line or
-        one with no parseable `ts` is simply not a match -- one bad line must not hide every result after it."""
-        for record in _read_jsonl(self.yardstick_results_path()):
-            stamp = record.get("ts")
-            if not isinstance(stamp, str):
-                continue
-            try:
-                if _parse(stamp) > ts:
-                    return True
-            except ValueError:
-                continue
-        return False
-
     # -- assessment (what Jensen needs) --
 
     def last_assess(self) -> datetime | None:
@@ -678,28 +612,25 @@ class State:
         self._write_state(data)
 
     def assess_plan(self) -> dict:
-        """The validated `assess-plan.json`: `{"project": int | None}`. A missing file, invalid JSON, a value
-        that isn't an object, or a `project` that isn't a positive int (a bool doesn't count, same rule as
-        `plan()`'s own `fix`) all fall back to `{"project": None}`."""
+        """The validated `assess-plan.json`: `{"propose": [Proposal]}`. A missing file, invalid JSON, or a value
+        that isn't an object all fall back to `{"propose": []}`; `propose` itself is validated by the
+        module-level `validate_proposals`."""
         path = self.root / _ASSESS_PLAN_FILE
         try:
             raw = path.read_text()
         except OSError:
-            return {"project": None}
+            return {"propose": []}
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            return {"project": None}
+            return {"propose": []}
         if not isinstance(data, dict):
-            return {"project": None}
-        project = data.get("project")
-        if isinstance(project, bool) or not isinstance(project, int) or project <= 0:
-            project = None
-        return {"project": project}
+            return {"propose": []}
+        return {"propose": validate_proposals(data.get("propose"))}
 
     def clear_assess_plan(self) -> None:
-        """Remove `assess-plan.json` -- `assess-plan` calls this right after reading it, successful or not, so
-        this run's project pick is spent either way and is never re-read by a later run."""
+        """Remove `assess-plan.json` -- `propose --from assess` calls this right after reading it, successful or
+        not, so this run's proposed changes are spent either way and never re-read by a later run."""
         (self.root / _ASSESS_PLAN_FILE).unlink(missing_ok=True)
 
     # -- project tracking (deterministic: a file, not a search over issue comments) --

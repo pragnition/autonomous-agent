@@ -20,8 +20,8 @@ from agent.core.sessions import WorkQueue
 # agent/core/conversations.py) — so core_collect.py's watcher can tell a review turn apart from a person's.
 SOURCE = "improve-jensen"
 ORIGIN = "improve-jensen review"
-# A fresh conversation's id is this prefix plus 8 hex. The yardstick passes its own (`V-yardstick-<run>-`); both
-# prefixes mark the conversation as improve-jensen's own (see `agent.watch.state.is_improve_jensens_own`).
+# A fresh conversation's id is this prefix plus 8 hex, which marks it as improve-jensen's own
+# (see `agent.watch.state.is_improve_jensens_own`).
 NEW_PREFIX = "V-review-"
 
 
