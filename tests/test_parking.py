@@ -14,7 +14,7 @@ from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, 
 from test_conversations import FakePayloads, reply
 
 SGT = ZoneInfo("Asia/Singapore")
-# Thu 2026-11-19 10:00 +08; lynus's 5h window resets at 16:00 +08, so its cap lifts at 14:30
+# Thu 2026-11-19 10:00 +08; maple's 5h window resets at 16:00 +08, so its cap lifts at 14:30
 NOW = datetime(2026, 11, 19, 10, 0, tzinfo=SGT).timestamp()
 RESET = datetime(2026, 11, 19, 16, 0, tzinfo=SGT).timestamp()
 
@@ -52,14 +52,14 @@ def setup(conn, tmp_path):
                              notifier=FakeNotifier(), secret_values=[])
     convos = Conversations(conn, config=config, packs={"sample": make_pack()}, queue=queue, slack=slack,
                            payloads=FakePayloads(), notifier=FakeNotifier(), bot_user_id="UBOT")
-    proxy = FakeProxy({"lynus": AccountUsage("allowed", 1, True, used_5h=0.41, reset_5h=RESET),
+    proxy = FakeProxy({"maple": AccountUsage("allowed", 1, True, used_5h=0.41, reset_5h=RESET),
                        "badger": AccountUsage("allowed", 2, True, used_5h=0.70, reset_5h=RESET + 3600)})
     parking = Parking(conn, proxy, resume=convos.resume_parked, timezone="Asia/Singapore", clock=lambda: clock[0])
     register_parking_tools(router, parking)
     return router, convos, parking, proxy, queue, slack
 
 
-def turn_in(conn, queue, *, account="lynus", channel="C-SAMPLE", thread_ts="t1", **payload):
+def turn_in(conn, queue, *, account="maple", channel="C-SAMPLE", thread_ts="t1", **payload):
     cid = add_conversation(conn, channel=channel, thread_ts=thread_ts)
     conn.execute("UPDATE conversations SET session_id = 's-1', session_account = ? WHERE id = ?", (account, cid))
     item = add_item(queue, cid, origin="[from ann · #sample]", source="slack", requester="ann",
@@ -81,12 +81,12 @@ async def test_status_shows_the_accounts_window(setup, conn):
     router, _, _, proxy, queue, _ = setup
     _, item = turn_in(conn, queue)
     text = (await router.call(router.context_for(item), "status", {})).text
-    assert ("account: lynus · 5h window 41% used of its 65% cap · resets 16:00 +08 (in 6h00m) · "
+    assert ("account: maple · 5h window 41% used of its 65% cap · resets 16:00 +08 (in 6h00m) · "
             "cap lifts to 100% at 14:30 +08 (in 4h30m)") in text
     assert "accounts under their cap: 1 of 2" in text
     assert "running: 1" in text   # the built-in lines are still there
 
-    proxy.accounts["lynus"] = AccountUsage("allowed", 1, True, used_5h=0.66, reset_5h=RESET)
+    proxy.accounts["maple"] = AccountUsage("allowed", 1, True, used_5h=0.66, reset_5h=RESET)
     assert "over its cap, like every account: park until one lifts" in \
         (await router.call(router.context_for(item), "status", {})).text
     proxy.accounts["badger"] = AccountUsage("allowed", 2, True, used_5h=0.10, reset_5h=RESET)
@@ -109,7 +109,7 @@ async def test_status_before_the_session_has_an_account(setup, conn):
 
 async def test_park_until_the_cap_lifts_then_carry_on(setup, conn):
     router, _, parking, proxy, queue, slack = setup
-    proxy.accounts["lynus"] = AccountUsage("allowed", 1, True, used_5h=0.70, reset_5h=RESET)   # every account capped
+    proxy.accounts["maple"] = AccountUsage("allowed", 1, True, used_5h=0.70, reset_5h=RESET)   # every account capped
     cid, item = turn_in(conn, queue)
     reply_text = (await router.call(router.context_for(item), "park", {"note": "polish the roster page"})).text
     assert reply_text.startswith("Parked until 14:30 +08 (in 4h30m). End this turn now")
@@ -153,14 +153,14 @@ async def test_park_with_no_cap_to_wait_out_needs_a_time(setup, conn):
     clock[0] = RESET - 3600   # lifted already
     _, item = turn_in(conn, queue)
     text = (await router.call(router.context_for(item), "park", {})).text
-    assert text.startswith("No account needs waiting out: lynus is under its cap")
+    assert text.startswith("No account needs waiting out: maple is under its cap")
     assert conn.execute("SELECT COUNT(*) FROM parks").fetchone()[0] == 0
 
 
 async def test_park_with_an_account_in_the_pool_under_its_cap_needs_a_time(setup, conn):
     # the conversation's own account is over its cap, but another has room: the next turn would just run there
     router, _, _, proxy, queue, _ = setup
-    proxy.accounts["lynus"] = AccountUsage("allowed", 2, True, used_5h=0.70, reset_5h=RESET)
+    proxy.accounts["maple"] = AccountUsage("allowed", 2, True, used_5h=0.70, reset_5h=RESET)
     proxy.accounts["badger"] = AccountUsage("allowed", 1, True, used_5h=0.10, reset_5h=RESET + 3600)
     _, item = turn_in(conn, queue)
     text = (await router.call(router.context_for(item), "park", {})).text
@@ -170,7 +170,7 @@ async def test_park_with_an_account_in_the_pool_under_its_cap_needs_a_time(setup
 
 async def test_park_with_every_account_capped_waits_for_the_earliest_lift_in_the_pool(setup, conn):
     router, _, _, proxy, queue, _ = setup
-    proxy.accounts["lynus"] = AccountUsage("allowed", 1, True, used_5h=0.70, reset_5h=RESET)          # lifts 14:30
+    proxy.accounts["maple"] = AccountUsage("allowed", 1, True, used_5h=0.70, reset_5h=RESET)          # lifts 14:30
     proxy.accounts["badger"] = AccountUsage("allowed", 2, True, used_5h=0.80, reset_5h=RESET - 3600)  # lifts 13:30
     _, item = turn_in(conn, queue)
     assert (await router.call(router.context_for(item), "park", {})).text.startswith("Parked until 13:30 +08")
@@ -179,7 +179,7 @@ async def test_park_with_every_account_capped_waits_for_the_earliest_lift_in_the
 async def test_park_with_no_account_left_waits_for_the_earliest_reset(setup, conn):
     router, _, _, proxy, queue, _ = setup
     clock[0] = RESET - 3600
-    proxy.accounts["lynus"] = AccountUsage("rejected", None, True, used_5h=1.0, reset_5h=RESET)
+    proxy.accounts["maple"] = AccountUsage("rejected", None, True, used_5h=1.0, reset_5h=RESET)
     proxy.accounts["badger"] = AccountUsage("rejected", None, True, used_5h=1.0, reset_5h=RESET + 3600)
     _, item = turn_in(conn, queue)
     assert "Parked until 16:00 +08" in (await router.call(router.context_for(item), "park", {})).text
