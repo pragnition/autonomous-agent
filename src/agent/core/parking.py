@@ -36,11 +36,11 @@ _CLOCK = re.compile(r"^(\d{1,2}):(\d{2})$")
 PARK_DESCRIPTION = (
     "Park this conversation until a time, then end your turn: core carries it on by itself at that time, in a new "
     "turn of this same conversation with your note, and a person's reply in the thread resumes it earlier. Use it "
-    "to wait out your account's 5-hour soft cap (see status) or when someone asks you to pause until a time, instead "
+    "to wait out the 5-hour soft cap when every account is over it (see status) or when someone asks you to pause "
+    "until a time, instead "
     "of keeping the turn alive. until: HH:MM in the team's timezone (the next one), or an ISO date-time; leave it out "
-    "to wait until the soft cap on your account lifts. note: what you were doing and what's next, for the turn that "
-    "carries on. Background agents and shells end with your turn: let them finish first, or say in the note where "
-    "they were.")
+    "to wait until an account has room again (it refuses while one is under its cap). note: what you were doing and "
+    "what's next, for the turn that carries on. Core posts nothing: tell the thread yourself if it should know.")
 
 
 def _iso(epoch: float) -> str:

@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -6,7 +7,7 @@ import pytest
 from agent import db
 from agent.core.agent_tools import AgentToolRouter
 from agent.core.conversations import Conversations
-from agent.core.parking import Parking, parse_until, register_parking_tools
+from agent.core.parking import PARK_DESCRIPTION, Parking, parse_until, register_parking_tools
 from agent.core.sessions import WorkQueue
 from agent.proxy import AccountUsage, ProxyUnavailable, SoftCap, Usage
 from agent_fixtures import FakeNotifier, FakeSlack, add_conversation, add_item, make_config, make_pack
@@ -219,3 +220,8 @@ async def test_one_park_that_fails_to_carry_on_does_not_hold_up_the_others(setup
     assert [tuple(r) for r in conn.execute("SELECT conversation_id, ended_how FROM parks ORDER BY id")] == \
         [(bad, None), (good, "resumed")]
     assert "RuntimeError" in caplog.text and "secret-looking detail" not in caplog.text
+
+
+def test_the_park_description_does_not_say_background_agents_end_with_the_turn():
+    # they don't: a session with background agents running stays open until they finish (runner/claude.py)
+    assert not re.search(r"background (agents|tasks)[^.]*\bend\b", PARK_DESCRIPTION, re.I)
