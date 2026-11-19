@@ -9,13 +9,13 @@ the Actions runs on the PR's head commit, then its commit statuses), reads whate
 `/var/agent/feedback/` this window (`agent.watch.feedback.collect`, run inside `agent-runner` through
 `Host.runner_python`), then stages what `agent.watch.state.State` keeps (`State.stage`) and writes a digest file
 for improve-jensen to read next. Every piece of free text that lands in the digest -- a person's ask, Jensen's
-reply, a tool or error line, a deployed issue's title, a note Jensen wrote itself -- is scrubbed of secrets
-first, since it might end up quoted back out in a public issue; so is every tool input, tool output and error
-text *before* `turn_facts` truncates it (its `clean` hook, on the decoded strings), since a secret that straddles
-that cut would otherwise leak a prefix no exact-value or pattern match could catch after the fact.
+reply, a tool or error line, a note Jensen wrote itself -- is scrubbed of secrets first, since it might end up
+quoted back out in a public issue; so is every tool input, tool output and error text *before* `turn_facts`
+truncates it (its `clean` hook, on the decoded strings), since a secret that straddles that cut would otherwise
+leak a prefix no exact-value or pattern match could catch after the fact.
 
-improve-jensen's own turns (its reviews and yardstick runs, `is_improve_jensens_own`) are measured and kept like
-any other, but alone they never give `has_work`: they're not Jensen's work.
+improve-jensen's own turns (its reviews, `is_improve_jensens_own`) are measured and kept like any other, but alone
+they never give `has_work`: they're not Jensen's work.
 
 Every record is stamped with when its event happened, not when it was measured: a turn or midturn with its
 `updated_at`, a PR with its `mergedAt`, else its `createdAt`. So `count --since <deploy time>` reads only what
@@ -35,8 +35,8 @@ the one after a deploy broke Jensen -- and only Claude reverts it. So:
 - a newest `deploys.jsonl` record of `check_failed` or `not_deployable` gives `has_work` on an otherwise quiet hour,
   with the record named in the digest;
 - so does a deploy that landed this window and changed running services (an `ok` record with `services`): a deploy
-  left pending while Jensen was busy can land in a quiet hour, and the watch must still see it to gate it. Its
-  "Needs attention" line names only the two shas and the time;
+  left pending while Jensen was busy can land in a quiet hour, and the watch must still see it. Its "Needs
+  attention" line names only the two shas and the time;
 - `gh` failing outright, one PR's own calls failing in any way, the runner's transcripts being unavailable, or
   one malformed turn are each caught around just the work that depends on them; the rest of the window is still
   measured and written. A caught error's message never reaches the digest or the log -- only its type, since a
@@ -386,12 +386,12 @@ def _turn_record_and_view(item: dict, facts: TurnFacts, known_clones: set[str],
     return record, view
 
 
-def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) -> MeasureResult:
+def measure(state: State, host: Host, now: datetime) -> MeasureResult:
     start, end = state.window(now)
     window = (start, end)
 
-    # The pool is read first, the way `yardstick run` and `assess-check` read it (`pool_is_holding`). Unreadable
-    # is no reason to sit the hour out: the window's own read below then finds core down and says so.
+    # The pool is read first, the way `assess-check` reads it (`pool_is_holding`). Unreadable is no reason to sit
+    # the hour out: the window's own read below then finds core down and says so.
     if pool_is_holding(host, now):
         return MeasureResult(has_work=False, skip_reason="pool_hold", digest=None, window=window)
 
@@ -485,17 +485,17 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     # copy on top.
     state.stage(produced, new_clones)
 
-    # improve-jensen's own turns (its reviews and yardstick runs) are kept in the metrics, but alone they are no
-    # work for the watch: they're not Jensen's.
+    # improve-jensen's own turns (its reviews) are kept in the metrics, but alone they are no work for the watch:
+    # they're not Jensen's.
     jensens_items = [item for item in items if not is_improve_jensens_own(
         {"kind": "turn", "source": (item.get("payload") or {}).get("source"),
          "conversation": item.get("conversation_id")})]
-    if (not jensens_items and not pr_records and not open_deployed and not deploy_alert and not landed
+    if (not jensens_items and not pr_records and not deploy_alert and not landed
             and not core_down and not notes and not new_notes_error):
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
     # Claude gets a new hour: the last hour's plan is spent. Nothing else consumes plan.json, so a run that
-    # succeeds without writing one would otherwise have `plan` dispatch last hour's fix and reviews again.
+    # succeeds without writing one would otherwise have `plan` dispatch last hour's reviews and proposals again.
     state.clear_plan()
 
     # Totals summarize exactly what this run produced, never a disk read "since start": a PR committed by an earlier
@@ -511,11 +511,8 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
         totals["jensen_reports"] = f"Jensen reports: unavailable ({notes_error})"
 
     alerts = ([_CORE_DOWN] if core_down else []) + ([deploy_alert] if deploy_alert else []) + landed
-    deployed = [{"number": issue.get("number"), "title": scrub(issue.get("title") or "", secrets)}
-                for issue in open_deployed]
 
-    digest_text = render(window, list(convo_views.values()), totals, pr_records, deployed, notes=notes,
-                         alerts=alerts)
+    digest_text = render(window, list(convo_views.values()), totals, pr_records, notes=notes, alerts=alerts)
     digest_text = scrub(digest_text, secrets)
     digest_path = state.write_digest(end, digest_text)
     state.prune(now, days=_RETENTION_DAYS)
