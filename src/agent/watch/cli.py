@@ -19,6 +19,11 @@ output a public Actions log would show) looks the URL and conversation back up.
 `seed` and the open-`fix-deployed`-issues lookup inside `measure` always go through the plain `gh` the job itself
 is logged in as (`host.run`), never through `host.jensen_gh` -- that call is reading the record of Jensen's work
 from the outside, not acting as Jensen.
+
+`gate start`/`gate status`/`gate end` wrap `state.py`'s own gate (held while the yardstick measures one change at a
+time); `assess-check`/`assess-plan`/`assess-commit` drive the assess job the same way `measure`/`plan`/`commit`
+drive the watch; `project-mark` is the deterministic record of which `project` issue, if any, is currently being
+worked (`$STATE/project-active.json`), read back by `assess-check`'s own "is anything waiting" check.
 """
 
 from __future__ import annotations
@@ -32,12 +37,13 @@ from pathlib import Path
 
 from agent.watch import feedback
 from agent.watch.host import Host
-from agent.watch.measure import measure
-from agent.watch.state import FMT, State
+from agent.watch.measure import _POOL_HOLD, measure
+from agent.watch.state import _DIGEST_PREFIX, _DIGEST_SUFFIX, FMT, State
 
 # Labels every install needs regardless of what the seed file's own entries use, so a fresh repo always has
 # somewhere for the fix job and the record to put these states.
-_STATE_LABELS = ("fixing", "fix-deployed", "needs-person", "stuck", "project")
+_STATE_LABELS = ("fixing", "fix-deployed", "needs-person", "stuck", "project", "gating", "priority",
+                 "jensen-assessment")
 
 
 def _bool_str(value: bool) -> str:
@@ -92,7 +98,36 @@ def _build_parser() -> argparse.ArgumentParser:
     changes_add_p = sub.add_parser("changes-add")
     changes_add_p.add_argument("text")
 
+    _add_gate_assess_parsers(sub)
+
     return parser
+
+
+def _add_gate_assess_parsers(sub: argparse._SubParsersAction) -> None:
+    """Adds `gate start|status|end`, `assess-check`, `assess-plan`, `assess-commit` and `project-mark` to
+    `_build_parser`'s shared subparsers object. Kept in its own function -- with its own handler functions and
+    its own dispatch branches in `main` (see `_dispatch_gate_assess`) -- so a parallel edit to `cli.py` adding
+    other subcommands (the yardstick's, say) merges without conflict."""
+    gate_p = sub.add_parser("gate")
+    gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
+    gate_start_p = gate_sub.add_parser("start")
+    gate_start_p.add_argument("--issue", type=int, required=True)
+    gate_start_p.add_argument("--kind", choices=["repo", "host"], required=True)
+    gate_start_p.add_argument("--handle", required=True)
+    gate_sub.add_parser("status")
+    gate_sub.add_parser("end")
+
+    assess_check_p = sub.add_parser("assess-check")
+    assess_check_p.add_argument("--github-output")
+
+    assess_plan_p = sub.add_parser("assess-plan")
+    assess_plan_p.add_argument("--github-output")
+
+    sub.add_parser("assess-commit")
+
+    project_mark_p = sub.add_parser("project-mark")
+    project_mark_p.add_argument("--issue", type=int, required=True)
+    project_mark_p.add_argument("--status", choices=["active", "done"], required=True)
 
 
 # -- measure --
@@ -267,6 +302,167 @@ def _cmd_changes_add(host: Host, text: str, now: datetime) -> int:
     return 0
 
 
+# -- gate --
+
+
+def _cmd_gate_start(state: State, issue: int, kind: str, handle: str, now: datetime) -> int:
+    try:
+        state.gate_start(issue, kind, handle, now)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_gate_status(state: State, now: datetime) -> int:
+    gate = state.gate(now)
+    print(json.dumps(gate) if gate else "none")
+    return 0
+
+
+def _cmd_gate_end(state: State) -> int:
+    state.gate_end()
+    return 0
+
+
+# -- assess-check / assess-plan / assess-commit --
+
+
+def _read_pool(host: Host, now: datetime) -> str | None:
+    """core's current `pool` setting, read the same single call `measure`/`deploy` use for it -- just a single
+    instant (`since == until == now`), since `pool` is a snapshot, not windowed data. `None` on any failure
+    (core down, bad JSON): `assess-check` then falls through to its other signals rather than holding the
+    assessment hostage to one probe failure."""
+    ts = now.astimezone(UTC).strftime(FMT)
+    try:
+        data = json.loads(host.core_python("core_collect.py", ["--since", ts, "--until", ts]))
+    except Exception:
+        return None
+    return data.get("pool") if isinstance(data, dict) else None
+
+
+def _has_new_digest(state: State, since: datetime) -> bool:
+    """Whether any `digest-*.md` in the state root was written after `since`, going by the file's own mtime (not
+    the end time baked into its name -- a window measured late can write a digest well after the hour it's
+    named for)."""
+    cutoff = since.timestamp()
+    for path in state.root.glob(f"{_DIGEST_PREFIX}*{_DIGEST_SUFFIX}"):
+        try:
+            if path.stat().st_mtime > cutoff:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _has_new_notes(host: Host, since: datetime, until: datetime) -> bool:
+    """Whether Jensen wrote a note in `(since, until]` (`feedback.collect`, Task 1). A failed read (the runner
+    unreachable, anything else) counts as nothing new -- logged by exception type only, the same as every other
+    optional source in this codebase, never its message."""
+    try:
+        notes = feedback.collect(host, since, until)
+    except Exception as exc:
+        print(f"warning: reading Jensen's notes failed ({type(exc).__name__})", file=sys.stderr)
+        return False
+    return bool(notes)
+
+
+def _has_new_yardstick_result(state: State, since: datetime) -> bool:
+    """Whether `$STATE/yardstick/results.jsonl` (written by `yardstick run`) holds a line whose `ts` is after
+    `since`. A missing file, a malformed line or one with no parseable `ts` is simply not a match -- one bad
+    line must not hide every result after it."""
+    path = state.root / "yardstick" / "results.jsonl"
+    if not path.exists():
+        return False
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = record.get("ts") if isinstance(record, dict) else None
+        if not isinstance(ts, str):
+            continue
+        try:
+            if datetime.strptime(ts, FMT).replace(tzinfo=UTC) > since:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _cmd_assess_check(host: Host, state: State, now: datetime, github_output: str | None) -> int:
+    """`has_work=false`/`skip_reason=pool_hold` while core's usage watch holds (checked first, the same way
+    `measure` sits a whole hour out on it, regardless of anything else waiting); otherwise `has_work=true` when
+    the assessment has never run, or there's a new digest, a new note from Jensen, a new yardstick result or an
+    active project since the last one; `skip_reason=quiet` when none of those are true."""
+    pool = _read_pool(host, now)
+    if pool in _POOL_HOLD:
+        _emit(["has_work=false", "skip_reason=pool_hold"], github_output)
+        return 0
+
+    last_assess = state.last_assess()
+    if last_assess is None:
+        has_work = True
+    else:
+        has_work = (_has_new_digest(state, last_assess) or _has_new_notes(host, last_assess, now)
+                    or _has_new_yardstick_result(state, last_assess) or state.project_active() is not None)
+
+    _emit([f"has_work={_bool_str(has_work)}", f"skip_reason={'' if has_work else 'quiet'}"], github_output)
+    return 0
+
+
+def _cmd_assess_plan(state: State, github_output: str | None) -> int:
+    plan = state.assess_plan()
+    project = plan["project"]
+    state.clear_assess_plan()
+    _emit([f"project={project if project is not None else ''}",
+           f"has_project={_bool_str(project is not None)}"], github_output)
+    return 0
+
+
+def _cmd_assess_commit(state: State, now: datetime) -> int:
+    state.set_last_assess(now)
+    return 0
+
+
+# -- project-mark --
+
+
+def _cmd_project_mark(state: State, issue: int, status: str, now: datetime) -> int:
+    state.project_mark(issue, status, now)
+    return 0
+
+
+# -- gate / assess / project-mark dispatch --
+
+
+def _dispatch_gate_assess(args: argparse.Namespace, host: Host, state: State, now: datetime) -> int | None:
+    """Handles `gate`/`assess-*`/`project-mark`, dispatched from `main`. Returns `None` for every other command
+    so `main` falls through to its own dispatch chain unchanged -- kept separate, alongside its own parser
+    helper (`_add_gate_assess_parsers`) and handler functions above, so a parallel edit to `main` adding other
+    subcommands merges without conflict."""
+    if args.command == "gate":
+        if args.gate_command == "start":
+            return _cmd_gate_start(state, args.issue, args.kind, args.handle, now)
+        if args.gate_command == "status":
+            return _cmd_gate_status(state, now)
+        if args.gate_command == "end":
+            return _cmd_gate_end(state)
+        raise AssertionError(f"unhandled gate command: {args.gate_command!r}")  # pragma: no cover
+    if args.command == "assess-check":
+        return _cmd_assess_check(host, state, now, args.github_output)
+    if args.command == "assess-plan":
+        return _cmd_assess_plan(state, args.github_output)
+    if args.command == "assess-commit":
+        return _cmd_assess_commit(state, now)
+    if args.command == "project-mark":
+        return _cmd_project_mark(state, args.issue, args.status, now)
+    return None
+
+
 # -- gh passthrough --
 
 
@@ -292,6 +488,10 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
         return _cmd_gh(host, argv[1:])
 
     args = _build_parser().parse_args(argv)
+
+    gate_assess_result = _dispatch_gate_assess(args, host, state, now)
+    if gate_assess_result is not None:
+        return gate_assess_result
 
     if args.command == "measure":
         return _cmd_measure(host, state, now, args.github_output)
