@@ -1,14 +1,14 @@
 # improve-jensen host setup
 
 improve-jensen (`.github/workflows/improve-jensen.yml`; see `docs/design.md`) runs on five self-hosted GitHub Actions
-runners on this host: one for the hourly watch and four for the reviews, fixes, assessments, the yardstick and
+runners on this host: one for the hourly watch and four for the reviews, fixes, assessments, approvals and
 improvement projects. All five run as `pragnition`, the user that owns the live checkout `~/autonomous-agent`, with
 Docker and passwordless sudo, so every run has the whole host. Only people with write access can start a run.
 improve-jensen reaches Claude through the account proxy's `improve-jensen` origin.
 
 The runners share one user, so they share one HOME and one state folder, `~/.local/state/improve-jensen`: every job
-reads what the others wrote there (the watch's plan, the assessment, the yardstick's tasks and results, the gate
-record), and every deploy takes the same lock in it. Their work folders sit in `~/actions-runners/`, outside the live
+reads what the others wrote there (the watch's plan, the assessment, the proposals posted in Slack), and every
+deploy takes the same lock in it. Their work folders sit in `~/actions-runners/`, outside the live
 checkout.
 
 Switch it on when Jensen is idle and a person is around, in this order. Run everything as `pragnition`.
@@ -48,12 +48,12 @@ claude plugin install pr-review-toolkit@claude-plugins-official
 ```
 
 Your `gh` login lands in the HOME the runners share, where any `gh` call without `GH_TOKEN` acts as you. The
-workflow stays disabled until step 9, which logs you out. Without the plugin, reviews fall back to plain subagent
+workflow stays disabled until step 10, which logs you out. Without the plugin, reviews fall back to plain subagent
 reviews and say so.
 
 ## 4. The runners
 
-Disable the workflow, so nothing runs on the new runners before step 9, and remove the old runner and its user:
+Disable the workflow, so nothing runs on the new runners before step 10, and remove the old runner and its user:
 
 ```sh
 gh workflow disable improve-jensen.yml -R pragnition/autonomous-agent
@@ -84,7 +84,7 @@ restriction, and fork-run approval (step 5) is the only guard. (On a plan withou
 instead: `url=https://github.com/pragnition/autonomous-agent; tokens=repos/pragnition/autonomous-agent; group=`.)
 
 Then register the five runners, labelled `improve-jensen` plus `watch` for one and `work` for the other four. A
-project or a yardstick run can hold a `work` runner for hours, so four keep the reviews within the hour:
+project run can hold a `work` runner for hours, so four keep the reviews within the hour:
 
 ```sh
 v=$(gh release view -R actions/runner --json tagName --jq .tagName | sed 's/^v//')
@@ -183,15 +183,10 @@ deploys must also wait for an idle runner (`src/agent/watch/deploy.py`) before t
 cd ~/improve-jensen-setup
 python3 scripts/deploy.py   # deploys main into ~/autonomous-agent, the same as `just deploy` run there
 python3 scripts/jensen_watch.py seed deploy/improve-jensen-seed.json --repo pragnition/autonomous-agent
-python3 scripts/jensen_watch.py yardstick install deploy/yardstick
 python3 scripts/jensen_watch.py gh api 'repos/<a repo Jensen works in>/actions/runs?per_page=1'
 docker exec agent-runner mkdir -p /var/agent/feedback
 cd && rm -rf ~/improve-jensen-setup
 ```
-
-`yardstick install` copies the seed tasks into the state folder (`~/.local/state/improve-jensen/yardstick/tasks/`)
-before the first watch: a gate a job starts with no tasks installed can't be measured, and holds every deploy that
-changes how Jensen behaves until it expires.
 
 `/var/agent/feedback` in `agent-runner` is where Jensen writes its notes about what gets in its way, and where
 improve-jensen answers them and keeps `CHANGES.md`, the list of what changed for Jensen.
@@ -207,14 +202,42 @@ From now on, deploy with `cd ~/autonomous-agent && just deploy`. Its exit codes:
 - 2: the live checkout isn't deployable (dirty, diverged, or the fetch failed; logged). Fix it by hand;
 - 3: pending: Jensen is busy or another deploy holds the lock. The hourly watch retries it.
 
-`seed` creates the labels (`jensen-watch`, `ships`, `works`, `long-runs`, `people`, `fixing`, `fix-deployed`,
-`needs-person`, `stuck`, `project`, `gating`, `priority`, `jensen-assessment`) and files the starting issues that
-aren't open already. An install switched on before the assessment existed runs the same `seed` line once more, from
-`~/autonomous-agent` and logged in to `gh` as in step 3 (log out afterwards): it adds the new labels (`gating`,
-`priority`, `jensen-assessment`) and skips the issues that are open already. Before its next watch, it also runs
-`python3 scripts/jensen_watch.py yardstick install deploy/yardstick` there.
+`seed` creates the labels (`jensen-watch`, `ships`, `works`, `long-runs`, `people`, `fixing`, `needs-person`,
+`stuck`, `project`, `proposed`, `approved`, `rejected`, `jensen-assessment`) and files the starting issues that
+aren't open already. An install switched on before Slack approval existed runs the same `seed` line once more, from
+`~/autonomous-agent` and logged in to `gh` as in step 3 (log out afterwards): it adds the new labels (`proposed`,
+`approved`, `rejected`) and skips the issues that are open already.
 
-## 9. First watch and the token check
+## 9. Slack approval
+
+improve-jensen changes Jensen only once a person says yes. The watch and the assessment each post the changes they
+want as one short numbered list in `#autonomous-agent`:
+
+```
+*improve-jensen wants to change Jensen*
+1. <what will change in Jensen> (#31)
+2. <what will change in Jensen> (#40)
+Reply here: `approve` ships them all, `approve 1 3` ships some, `reject 2` drops one.
+```
+
+- The list goes out as Jensen's Slack bot (`SLACK_BOT_TOKEN` in `data/secrets/agent.env`), which already has the
+  scopes it needs. The bot must be in the channel: it joins a public channel by itself; invite it to a private one
+  (`/invite @<the bot's name>` in the channel).
+- To use another channel, set the repo variable `IMPROVE_JENSEN_SLACK_CHANNEL` to its name:
+  `gh variable set IMPROVE_JENSEN_SLACK_CHANNEL --body <channel> -R pragnition/autonomous-agent`. Unset, it's
+  `autonomous-agent`.
+- The approvers are the people in `data/config/agent.toml`: the `slack` id of each `[people.*]` entry. Replies and
+  reactions from anyone else are ignored; with no one listed, nothing is approved.
+- To approve, reply in the list's thread: `approve` (or `yes`, `ok`, `lgtm`, `ship it`) ships them all, `approve 1 3`
+  or `approve 1-3` ships some, `reject 2` (or `no`, `skip`, `drop`) drops one. Or react on the list itself:
+  `:white_check_mark:` or `:+1:` approves them all, `:x:` or `:-1:` rejects them all. A later reply overrides an
+  earlier one, and a dropped item can still be approved later in the same thread; an approved one is final.
+- Every 10 minutes the `approvals` job reads the threads, labels each issue `approved` or `rejected`, says in the
+  thread what it took, and starts the next approved fix and the next approved project, one of each at a time. When
+  a fix or project ends, its thread hears whether it shipped or needs a person (the issue then has `stuck`).
+- Nothing checks a change after it ships, beyond the deploy's own check: an approved change that ships is done.
+
+## 10. First watch and the token check
 
 Turn the workflow on, switch the engine on, and log out straight away, so that no job can borrow your login (the
 checks below rely on it):
@@ -226,22 +249,21 @@ gh auth logout                                               # the runners share
 ```
 
 Until this line, `IMPROVE_JENSEN_ENGINE` is unset (anything but `on` means off): `respond` keeps matching today's one
-runner and answering issues and `@improve-jensen` comments with a PR, the old way, and `watch`, `assess` and the
-nightly `yardstick` never fire on their cron. Nothing about the issue flow changes before it.
+runner and answering issues and `@improve-jensen` comments with a PR, the old way, and `watch`, `assess` and
+`approvals` never fire on their cron. Nothing about the issue flow changes before it.
 
 Start the first watch from the repo's Actions tab (improve-jensen → Run workflow, mode `watch`) and follow it there.
 Once it's done:
 
 ```sh
 ls -t ~/.local/state/improve-jensen/digest-*.md | head -1   # the digest it read
-cat ~/.local/state/improve-jensen/plan.json                 # the reviews and the fix it planned
+cat ~/.local/state/improve-jensen/plan.json                 # the reviews and the changes it planned
 ```
 
-The first window is the last hour. An hour with no finished turns, no new PRs, no `fix-deployed` issue and nothing
-that needs attention (core unreachable, a failed deploy) starts no Claude run and writes no plan, and neither does
-one while core's usage watch is holding scheduled runs. From here the watch runs every hour at :17, the assessment
-every 6 hours at :13, and the yardstick nightly at 19:07 UTC (03:07 Singapore time) and as a gate after any job that
-starts one.
+The first window is the last hour. An hour with no finished turns, no new PRs and nothing that needs attention
+(core unreachable, a failed deploy) starts no Claude run and writes no plan, and neither does one while core's usage
+watch is holding scheduled runs. The changes it proposes, if any, are in the Slack channel (step 9). From here the
+watch runs every hour at :17, the assessment every 6 hours at :13, and the approvals job every 10 minutes.
 
 Then check, once, that the jobs work on their own tokens. The `fix` and `respond` jobs check out with
 `persist-credentials: false`, so Claude pushes and opens PRs as the Claude app: a push made with a job's own
@@ -250,7 +272,8 @@ Then check, once, that the jobs work on their own tokens. The `fix` and `respond
 1. In this repo, open a trivial issue: a one-word wording fix in a comment of `deploy/improve-jensen.md`, say. Ask
    in it for the run to say in its issue comment whether `gh run list --workflow improve-jensen.yml --limit 1`
    answered (the watch relies on that call).
-2. From the Actions tab, run improve-jensen with mode `fix` and that issue's number as `target`.
+2. From the Actions tab, run improve-jensen with mode `fix` and that issue's number as `target`. A manual run is a
+   person's own choice, so it needs no approval in Slack.
 3. When it's done, check that:
    - the PR's author is the Claude app, `claude[bot]`, not `github-actions[bot]`;
    - `ci`'s `python` and `dashboard` checks ran on the PR's last push (the PR's Checks tab);
@@ -265,18 +288,6 @@ a `git push` refused for lack of credentials, inside the Claude step means the a
 Claude steps then need a token of their own, a workflow change for a person to make. Never log `gh` back in on this
 host to paper over either.
 
-## 10. The yardstick baseline
-
-The seed tasks are in the state folder since step 8. Run the yardstick once to set the baseline that later runs are
-compared with. Start the run from the Actions tab (improve-jensen → Run workflow, mode `yardstick`), or with
-`gh workflow run improve-jensen.yml -R pragnition/autonomous-agent -f mode=yardstick` from a machine logged in to
-`gh`. Start it at a quiet hour: it runs Jensen through each task in a silent `V-yardstick-` conversation, at most four
-at once, and can take a few hours. When it's done:
-
-```sh
-cd ~/autonomous-agent && python3 scripts/jensen_watch.py yardstick score
-```
-
 ## 11. The first assessment
 
 Start it from the Actions tab (improve-jensen → Run workflow, mode `assess`). When it's done, read what it found:
@@ -285,35 +296,15 @@ Start it from the Actions tab (improve-jensen → Run workflow, mode `assess`). 
 cat ~/.local/state/improve-jensen/assessment.md
 ```
 
-The pinned `jensen-assessment` issue shows the same list in general terms, and the same run's `project` job shows
-whether it started an improvement project. An assessment with nothing new since the last one, and no project
-waiting, starts no Claude run.
-
-## The yardstick tasks
-
-The tasks live on the host, in `~/.local/state/improve-jensen/yardstick/tasks/`: the seeds from `deploy/yardstick/`,
-and the ones the assessment adds from Jensen's real failures (synthetic reproductions that never go into this repo).
-improve-jensen adds tasks but never edits or deletes one. Only a person retires a task, by moving its folder:
-
-```sh
-mkdir -p ~/.local/state/improve-jensen/yardstick/retired
-mv ~/.local/state/improve-jensen/yardstick/tasks/<id> ~/.local/state/improve-jensen/yardstick/retired/
-```
-
-New seeds in `deploy/yardstick/` reach the host with `yardstick install deploy/yardstick` again; it copies only the
-tasks that aren't there yet.
+The pinned `jensen-assessment` issue shows the same list in general terms, and the changes it proposes, projects
+included, are in the Slack channel for a person to approve. An assessment with nothing new since the last one, and no
+project active, starts no Claude run.
 
 ## Manual runs
 
-- A `watch` run, a `fix` run for one of this repo's issues, an `assess` run, and a `yardstick` run are safe to start
-  by hand. A `project` run takes a `project` issue's number as its `target`.
-- A gate run is improve-jensen's own. When a watch, fix, project or respond job ends with a gate active (it ran
-  `gate start` after a change), the same run's `yardstick` job measures that change. A failed gate gets a
-  `Yardstick gate failed ...: picked to revert.` comment on its issue, and the same run's `gate-revert` job reverts
-  it; if that job dies first, the hourly watch picks the issue again.
-  A manual `yardstick` run never gates or reverts anything: start one only while
-  `python3 scripts/jensen_watch.py gate status` (in `~/autonomous-agent`) shows none, so it isn't compared with the
-  change being measured.
+- A `watch` run, an `assess` run and an `approvals` run are safe to start by hand.
+- A `fix` run takes one of this repo's issues as its `target`, and a `project` run a `project` issue's number. Either
+  is a person's own choice and skips the approval in Slack.
 - A `review` run takes a product PR's URL as its `target`, and that URL then shows in this public repo's run: in its
   inputs and in the Claude step's prompt. Leave reviews to the hourly watch, which names a PR only by an index into
   the state folder; start one by hand only for a PR whose URL may be public.
@@ -326,10 +317,9 @@ tasks that aren't there yet.
 gh variable set IMPROVE_JENSEN_ENGINE --body off -R pragnition/autonomous-agent
 ```
 
-This takes `respond` back to today's one runner and stops `watch`, `assess` and the nightly `yardstick` firing on
-their cron; a manual `workflow_dispatch` run still works regardless. Issues and `@improve-jensen` comments still get
-answered with a PR, the old way, for a person to merge — nothing about the issue flow changes either side of the
-switch.
+This takes `respond` back to today's one runner and stops `watch`, `assess` and `approvals` firing on their cron; a
+manual `workflow_dispatch` run still works regardless. Issues and `@improve-jensen` comments still get answered with
+a PR, the old way, for a person to merge — nothing about the issue flow changes either side of the switch.
 
 For a full stop — nothing runs at all, not even `respond` — log in to `gh`, and log out afterwards:
 
@@ -342,9 +332,3 @@ A run already going keeps going: list them with
 `gh run cancel <id> -R pragnition/autonomous-agent`. A cancelled fix still clears `fixing`, but a change it merged may
 not be deployed yet: check the end of `deploys.jsonl`. `gh workflow enable` turns it back on, and the next watch
 catches up on the hours missed.
-
-A gate the yardstick couldn't measure (its run died, the host suspended, or core's usage watch held it) stays
-active, and the next job to end with it active, the hourly watch at the latest, starts its gate run again. Deploys
-that change how Jensen behaves wait meanwhile, and the gate expires after 12 hours. To give up on it sooner and keep
-the change, run `cd ~/autonomous-agent && python3 scripts/jensen_watch.py gate end --result passed`; the next watch
-removes `gating` from its issue.
