@@ -830,3 +830,10 @@ async def test_a_running_session_sends_what_it_has_used_so_far(tmp_path):
     assert counts and counts[-1] == {"input_tokens": 2, "output_tokens": 20, "cache_read_input_tokens": 2000,
                                      "cache_creation_input_tokens": 100}
     assert len(counts) == len({json.dumps(c) for c in counts})  # sent when it changes, not every tick
+
+
+async def test_a_log_short_of_what_the_results_report_does_not_lower_the_count(tmp_path):
+    # now and then a reply the result counts never reaches the log; the run's count is never below the results'
+    runner, _ = make_runner(tmp_path, [[echo_prompt, logged("m1", read=0), result()]])
+    out = await runner.run(home_spec(tmp_path))
+    assert (out.input_tokens, out.output_tokens, out.cache_read_tokens, out.cache_write_tokens) == (100, 20, 5, 7)

@@ -21,8 +21,9 @@ stalled. A run with a time budget (`timeout_s`, which a scheduled run has) is st
 it is; the budget covers the whole run, every session it moves through.
 
 A run's tokens are every API call its sessions made, main thread and agents alike, counted from the CLI's own logs
-(usage.SessionUsage); only without a log do the results' own counts stand in. While the run goes, its count so far
-goes into its stream as a RunUsage record whenever it has grown, checked every `usage_every_s`.
+(usage.SessionUsage), never less than the results' own counts, which stand in when there is no log. While the run
+goes, its count so far goes into its stream as a RunUsage record whenever it has grown, checked every
+`usage_every_s`.
 """
 
 from __future__ import annotations
@@ -228,8 +229,10 @@ class ClaudeRunner:
                 reporter.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await reporter
+        # the logs have every agent's calls, but now and then miss a reply a result counted: never below the results
         counted = await asyncio.to_thread(usage.poll)
-        r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens = counted or spent
+        counted = max(counted or spent, spent, key=sum)
+        r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens = counted
         return r
 
     async def _report_usage(self, spec: RunSpec, usage: SessionUsage) -> None:
