@@ -112,8 +112,8 @@ async def test_park_until_the_cap_lifts_then_carry_on(setup, conn):
     cid, item = turn_in(conn, queue)
     reply_text = (await router.call(router.context_for(item), "park", {"note": "polish the roster page"})).text
     assert reply_text.startswith("Parked until 14:30 +08 (in 4h30m). End this turn now")
-    assert slack.posts[-1]["text"] == "Parked until 14:30 +08; reply here to resume earlier."
-    assert slack.posts[-1]["thread_ts"] == "t1"
+    # core says nothing in the thread on the agent's behalf: the agent has the time and says it if it wants
+    assert slack.posts == []
     queue.complete(item, {"text": "ok"})
 
     clock[0] = RESET - 5400 - 60

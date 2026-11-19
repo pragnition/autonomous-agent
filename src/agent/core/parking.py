@@ -1,8 +1,8 @@
 """Parking: a conversation waits out its account's soft cap (or any time a person names) and carries itself on.
 
-The agent calls `park` and ends its turn. Core records the park (the parks table), says in the thread when it carries
-on and that a reply resumes it earlier, and every minute carries on each park that is due: a new turn in the same
-conversation with the agent's own note. Like any next turn, the runner resumes the session when the proxy keeps it on
+The agent calls `park` and ends its turn. Core records the park (the parks table) and tells the agent when it carries
+on; it posts nothing itself, so the agent says so in the thread if it wants to. Every minute core carries on each
+park that is due: a new turn in the same conversation with the agent's own note. Like any next turn, the runner resumes the session when the proxy keeps it on
 the account it ran on, and otherwise starts a fresh one with a digest of it (runner/handoff.py). A person's message
 in the thread ends the park at once (Conversations._unpark) and is the next turn itself.
 
@@ -150,7 +150,7 @@ class Parking:
 
     # the park tool
 
-    async def park(self, router: AgentToolRouter, ctx: ToolContext, args: dict) -> ToolReply:
+    async def park(self, ctx: ToolContext, args: dict) -> ToolReply:
         if ctx.conversation_id is None:
             return ToolReply("this turn has no conversation to park")
         now, raw = self.clock(), str(args.get("until") or "").strip()
@@ -185,8 +185,7 @@ class Parking:
                       data={"conversation_id": ctx.conversation_id, "work_item": ctx.work_item_id,
                             "until": _iso(until)})
         at = self.when(until, now)
-        if ctx.channel:
-            await router._post(ctx, f"Parked until {at}; reply here to resume earlier.")
+        # nothing is posted for the agent: like a teammate, it tells the thread itself if it wants to
         return ToolReply(f"Parked until {at} (in {_span(until - now)}). End this turn now; at {at} core carries "
                          "this conversation on in a new turn with your note. A reply in the thread resumes it "
                          "earlier.")
@@ -215,7 +214,7 @@ class Parking:
 
 def register_parking_tools(router: AgentToolRouter, parking: Parking) -> None:
     async def park(ctx: ToolContext, args: dict) -> ToolReply:
-        return await parking.park(router, ctx, args)
+        return await parking.park(ctx, args)
 
     router.register(ToolSpec("park", PARK_DESCRIPTION, schema(optional={"until": "string", "note": "string"}), "act"),
                     park)
