@@ -282,6 +282,11 @@ def test_ci_runs_tests_on_github_hosted_runners_only(ci):
         assert "self-hosted" not in _runs_on_labels(job), name
 
 
+def test_jensens_own_requests_never_run_without_approval(improve_jensen):
+    # An issue Jensen files itself is proposed in Slack by the watch; only a person's own request runs at once.
+    assert "github.actor != vars.JENSEN_GITHUB_LOGIN" in improve_jensen["jobs"]["respond"]["if"]
+
+
 def test_improve_jensen_waits_for_its_subagents(improve_jensen):
     # A job ends when Claude's turn ends: a background subagent would die with nothing written.
     assert improve_jensen["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"

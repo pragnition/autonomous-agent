@@ -62,6 +62,7 @@ env:
   # A job ends when Claude's turn ends, so a subagent or command left in the background would die with nothing
   # written: Claude waits for each one instead.
   CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+  JENSEN_GITHUB_LOGIN: ${{ vars.JENSEN_GITHUB_LOGIN }}   # Jensen's own GitHub account
 
 jobs:
   watch:
@@ -361,10 +362,13 @@ jobs:
         run: python scripts/jensen_watch.py fired --issue "$TARGET" --kind fix --outcome "${{ steps.claude.outcome }}"
 
   respond:
+    # A person's own request. One Jensen files itself (`vars.JENSEN_GITHUB_LOGIN`) is proposed in Slack instead,
+    # by the hourly watch, and ships only once a person approves it.
     if: >
+      github.actor != vars.JENSEN_GITHUB_LOGIN && (
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen') &&
        (github.event.action != 'labeled' || github.event.label.name == 'improve-jensen')) ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen')))
     runs-on: ${{ fromJSON(vars.IMPROVE_JENSEN_ENGINE == 'on' && '["self-hosted", "improve-jensen", "work"]' ||
       '["self-hosted", "improve-jensen"]') }}
     timeout-minutes: 120

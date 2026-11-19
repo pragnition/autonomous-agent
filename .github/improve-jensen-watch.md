@@ -122,6 +122,10 @@ Write `plan.json` in the state folder on every run, even when it's empty:
   - a person corrected Jensen about it or complained;
   - it did visible harm: shipped a security hole, lost work, posted in the wrong place, approved over failing CI, or
     crashed a turn. A note from Jensen about visible harm qualifies on its own, like a person's complaint.
+- Jensen's own requests: open issues labelled `improve-jensen` that Jensen's account opened (`gh issue list --label
+  improve-jensen --state open --author "$JENSEN_GITHUB_LOGIN" --json number,title,labels`) are Jensen reporting what
+  gets in its way. They don't run on their
+  own: each qualifies like a note from Jensen about visible harm, so propose it (it counts toward the 5).
 - Never propose an issue labelled `proposed`, `approved`, `rejected`, `project`, `stuck`, `needs-person` or `fixing`.
   You propose problems only: `learned` issues are the assessment's to propose.
 - `change`: one plain line under 100 characters saying what will change in Jensen, not what goes wrong ("Jensen
