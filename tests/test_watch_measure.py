@@ -205,6 +205,29 @@ def test_pool_hold_skips_without_consuming_window(tmp_path):
     assert start == baseline
 
 
+def test_pool_hold_comes_from_the_shared_pool_helper(tmp_path, monkeypatch):
+    # measure, `yardstick run` and `assess-check` share one reading of core's pool (`host.pool_is_holding`).
+    from agent.watch import measure as measure_module
+
+    seen = []
+
+    def holding(host, now=None):
+        seen.append(now)
+        return True
+
+    monkeypatch.setattr(measure_module, "pool_is_holding", holding)
+    host = FakeHost(collect=_EMPTY, **_NO_PRS)  # core itself says "normal": only the helper says hold
+
+    result = measure(State(tmp_path), host, T0, open_deployed=[])
+
+    assert result.skip_reason == "pool_hold" and seen == [T0]
+
+    # Unreadable (None) is not a hold: the hour goes on, and core's own reply decides the rest.
+    monkeypatch.setattr(measure_module, "pool_is_holding", lambda host, now=None: None)
+    assert measure(State(tmp_path / "unread"), FakeHost(collect=_EMPTY, **_NO_PRS), T0,
+                   open_deployed=[]).skip_reason == "quiet"
+
+
 # -- turn records and signals --
 
 

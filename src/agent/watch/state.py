@@ -54,6 +54,8 @@ _GATE_FILE = "gate.json"
 _GATE_MAX_AGE = timedelta(hours=12)
 _ASSESS_PLAN_FILE = "assess-plan.json"
 _PROJECT_ACTIVE_FILE = "project-active.json"
+# The yardstick's results (`agent.watch.yardstick`), one JSON line per task per run, each with a `ts` in `FMT`.
+_YARDSTICK_RESULTS = Path("yardstick") / "results.jsonl"
 
 # Numeric per-turn/per-midturn signals `count` reports as n/median/p90/max, and which record `kind` they live on.
 _TURN_NUMERIC = {"context_first", "context_peak", "inline_code_chars"}
@@ -375,6 +377,18 @@ class State:
         _atomic_write(path, text)
         return path
 
+    def digest_newer_than(self, ts: datetime) -> bool:
+        """Whether any digest was written after `ts`, going by the file's own mtime (not the end time baked into
+        its name -- a window measured late can write a digest well after the hour it's named for)."""
+        cutoff = ts.timestamp()
+        for path in self.root.glob(f"{_DIGEST_PREFIX}*{_DIGEST_SUFFIX}"):
+            try:
+                if path.stat().st_mtime > cutoff:
+                    return True
+            except OSError:
+                continue
+        return False
+
     def prune(self, now: datetime, days: int = 30) -> None:
         """Drop digests older than `days`, metric lines whose `ts` is older than `days`, and `runs/*-reviews.json`
         files older than `days` (a run id isn't a timestamp, so age there is the file's own mtime)."""
@@ -569,6 +583,25 @@ class State:
 
     def gate_end(self) -> None:
         (self.root / _GATE_FILE).unlink(missing_ok=True)
+
+    # -- yardstick results --
+
+    def yardstick_results_path(self) -> Path:
+        return self.root / _YARDSTICK_RESULTS
+
+    def yardstick_result_newer_than(self, ts: datetime) -> bool:
+        """Whether the yardstick's results hold a line whose `ts` is after `ts`. A missing file, a malformed line or
+        one with no parseable `ts` is simply not a match -- one bad line must not hide every result after it."""
+        for record in _read_jsonl(self.yardstick_results_path()):
+            stamp = record.get("ts")
+            if not isinstance(stamp, str):
+                continue
+            try:
+                if _parse(stamp) > ts:
+                    return True
+            except ValueError:
+                continue
+        return False
 
     # -- assessment (what Jensen needs) --
 

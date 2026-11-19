@@ -279,6 +279,62 @@ def test_assess_check_writes_to_github_output(tmp_path):
     assert kv["skip_reason"] == ""
 
 
+def test_assess_check_reads_the_pool_through_the_shared_helper(tmp_path, monkeypatch, capsys):
+    from agent.watch import cli
+
+    monkeypatch.setattr(cli, "pool_is_holding", lambda host, now=None: True)
+    assert main(["assess-check"], host=_AssessHost(pool="normal"), state=State(tmp_path / "s"), now=T0) == 0
+    assert _kv(capsys.readouterr().out)["skip_reason"] == "pool_hold"
+
+
+def test_cli_imports_no_private_names_from_other_watch_modules():
+    import ast
+    from pathlib import Path
+
+    import agent.watch.cli as cli
+
+    tree = ast.parse(Path(cli.__file__).read_text())
+    private = [alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+               and (node.module or "").startswith("agent.watch") for alias in node.names
+               if alias.name.startswith("_")]
+    assert private == []
+
+
+def test_state_digest_newer_than(tmp_path):
+    import os
+
+    state = State(tmp_path)
+    assert state.digest_newer_than(T0) is False  # no digest at all
+
+    path = state.write_digest(_dt(2026, 11, 19, 9, 0, 0), "a digest")
+    # Its own mtime decides, not the hour in its name: a window measured late writes its digest late.
+    written = T0 + timedelta(minutes=30)
+    os.utime(path, (written.timestamp(), written.timestamp()))
+    assert state.digest_newer_than(T0) is True
+    assert state.digest_newer_than(written) is False
+    (tmp_path / "not-a-digest.md").write_text("x")
+    assert state.digest_newer_than(written) is False
+
+
+def test_state_yardstick_result_newer_than(tmp_path):
+    state = State(tmp_path)
+    assert state.yardstick_result_newer_than(T0) is False  # no results file
+
+    path = tmp_path / "yardstick" / "results.jsonl"
+    path.parent.mkdir()
+    path.write_text("\n".join([
+        json.dumps({"run": "r1", "ts": "2026-11-19T09:00:00Z", "task": "a"}),
+        "not json",
+        json.dumps({"run": "r1", "ts": "yesterday", "task": "b"}),
+        json.dumps(["a", "list"]),
+        json.dumps({"run": "r2", "ts": "2026-11-19T10:30:00Z", "task": "a"}),
+    ]) + "\n")
+
+    assert state.yardstick_result_newer_than(T0) is True  # one bad line never hides the lines after it
+    assert state.yardstick_result_newer_than(_dt(2026, 11, 19, 10, 30, 0)) is False
+    assert state.yardstick_result_newer_than(_dt(2026, 11, 19, 8, 0, 0)) is True
+
+
 # -- assess-plan --
 
 

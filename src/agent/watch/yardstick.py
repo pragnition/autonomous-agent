@@ -102,7 +102,7 @@ def tasks_root(state: State) -> Path:
 
 
 def results_path(state: State) -> Path:
-    return state.root / "yardstick" / "results.jsonl"
+    return state.yardstick_results_path()
 
 
 def _retired_root(root: Path) -> Path:

@@ -57,12 +57,9 @@ from pathlib import Path
 from agent.scrub import scrub
 from agent.watch import feedback
 from agent.watch.digest import SIGNAL_KEYS, ConvoView, render
-from agent.watch.host import Host
+from agent.watch.host import Host, pool_is_holding
 from agent.watch.state import FMT, State, is_improve_jensens_own, summarize
 from agent.watch.transcript import TurnFacts, turn_facts
-
-# `pool` values that mean improve-jensen should sit this hour out entirely.
-_POOL_HOLD = {"hold_scheduled", "empty"}
 
 # A person-started turn counts as failed on any of these outcomes.
 _FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
@@ -369,13 +366,16 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     start, end = state.window(now)
     window = (start, end)
 
+    # The pool is read first, the way `yardstick run` and `assess-check` read it (`pool_is_holding`). Unreadable
+    # is no reason to sit the hour out: the window's own read below then finds core down and says so.
+    if pool_is_holding(host, now):
+        return MeasureResult(has_work=False, skip_reason="pool_hold", digest=None, window=window)
+
     collected = _collect(host, start, end)
     core_down = collected is None
     if core_down:
         collected = {}
         state.hold_window()
-    elif collected.get("pool", "normal") in _POOL_HOLD:
-        return MeasureResult(has_work=False, skip_reason="pool_hold", digest=None, window=window)
 
     secrets = host.secret_values()
     # Created-at order, not whatever order core returned them in: a repo cloned by two turns in the same window

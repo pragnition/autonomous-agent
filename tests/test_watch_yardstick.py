@@ -6,7 +6,7 @@ import re
 import subprocess
 import tarfile
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,7 @@ from agent import db
 from agent.core.sessions import WorkQueue
 from agent.watch import core_ask, core_items, runner_memory, yardstick
 from agent.watch.cli import main
-from agent.watch.state import State, is_improve_jensens_own, summarize
+from agent.watch.state import FMT, State, is_improve_jensens_own, summarize
 
 T0 = datetime(2026, 11, 19, 19, 7, 0, tzinfo=UTC)
 RUN = "20261119T190700Z-ab12"
@@ -692,6 +692,23 @@ def test_run_survives_core_being_unreachable(tmp_path, capsys):
     assert host.kinds("memory")[-1][1] == "clean"
     printed = capsys.readouterr()
     assert "secret" not in printed.out + printed.err and "/home" not in printed.out + printed.err
+
+
+def test_results_ts_round_trips_through_assess_checks_reader(tmp_path):
+    # `run` writes each result's `ts` in state.FMT; `assess-check` reads them back with
+    # `State.yardstick_result_newer_than` -- the two must agree, or a new result never counts as new.
+    root = tmp_path / "tasks"
+    _write_task(root, "t1")
+    state, host, clock = State(tmp_path / "state"), FakeHost(tmp_path), FakeClock()
+    before = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=1)
+
+    [result] = yardstick.run(host, state, yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
+                             clock=clock.clock)
+
+    assert result["ts"] == datetime.strptime(result["ts"], FMT).strftime(FMT)
+    assert state.yardstick_result_newer_than(before) is True
+    assert state.yardstick_result_newer_than(datetime.strptime(result["ts"], FMT).replace(tzinfo=UTC)) is False
+    assert yardstick.results_path(state) == state.yardstick_results_path()
 
 
 # -- score / compare --

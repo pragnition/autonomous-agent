@@ -36,9 +36,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.watch import feedback, yardstick
-from agent.watch.host import Host
-from agent.watch.measure import _POOL_HOLD, measure
-from agent.watch.state import _DIGEST_PREFIX, _DIGEST_SUFFIX, FMT, State
+from agent.watch.host import Host, pool_is_holding
+from agent.watch.measure import measure
+from agent.watch.state import FMT, State
 
 # Labels every install needs regardless of what the seed file's own entries use, so a fresh repo always has
 # somewhere for the fix job and the record to put these states.
@@ -114,15 +114,12 @@ def _yardstick_add(state: State, folder: str) -> int:
 
 
 def _pool_holding(host: Host, now: datetime) -> bool:
-    """core's usage-watch pool, read through `core_collect.py` as `measure` reads it. Unreadable counts as not
-    holding, as it does there: a change that broke core must fail a gate run, not slip through it unmeasured."""
-    stamp = now.astimezone(UTC).strftime(FMT)
-    try:
-        collected = json.loads(host.core_python("core_collect.py", ["--since", stamp, "--until", stamp]))
-    except Exception as exc:
-        print(f"warning: reading core's pool failed ({type(exc).__name__}); running anyway", file=sys.stderr)
-        return False
-    return isinstance(collected, dict) and collected.get("pool", "normal") in _POOL_HOLD
+    """core's usage-watch pool (`pool_is_holding`, as `measure` reads it). Unreadable counts as not holding, as it
+    does there: a change that broke core must fail a gate run, not slip through it unmeasured."""
+    holding = pool_is_holding(host, now)
+    if holding is None:
+        print("warning: reading core's pool failed; running anyway", file=sys.stderr)
+    return bool(holding)
 
 
 def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | None, gate: bool,
@@ -462,33 +459,6 @@ def _cmd_gate_end(state: State) -> int:
 # -- assess-check / assess-plan / assess-commit --
 
 
-def _read_pool(host: Host, now: datetime) -> str | None:
-    """core's current `pool` setting, read the same single call `measure`/`deploy` use for it -- just a single
-    instant (`since == until == now`), since `pool` is a snapshot, not windowed data. `None` on any failure
-    (core down, bad JSON): `assess-check` then falls through to its other signals rather than holding the
-    assessment hostage to one probe failure."""
-    ts = now.astimezone(UTC).strftime(FMT)
-    try:
-        data = json.loads(host.core_python("core_collect.py", ["--since", ts, "--until", ts]))
-    except Exception:
-        return None
-    return data.get("pool") if isinstance(data, dict) else None
-
-
-def _has_new_digest(state: State, since: datetime) -> bool:
-    """Whether any `digest-*.md` in the state root was written after `since`, going by the file's own mtime (not
-    the end time baked into its name -- a window measured late can write a digest well after the hour it's
-    named for)."""
-    cutoff = since.timestamp()
-    for path in state.root.glob(f"{_DIGEST_PREFIX}*{_DIGEST_SUFFIX}"):
-        try:
-            if path.stat().st_mtime > cutoff:
-                return True
-        except OSError:
-            continue
-    return False
-
-
 def _has_new_notes(host: Host, since: datetime, until: datetime) -> bool:
     """Whether Jensen wrote a note in `(since, until]` (`feedback.collect`, Task 1). A failed read (the runner
     unreachable, anything else) counts as nothing new -- logged by exception type only, the same as every other
@@ -501,39 +471,14 @@ def _has_new_notes(host: Host, since: datetime, until: datetime) -> bool:
     return bool(notes)
 
 
-def _has_new_yardstick_result(state: State, since: datetime) -> bool:
-    """Whether `$STATE/yardstick/results.jsonl` (written by `yardstick run`) holds a line whose `ts` is after
-    `since`. A missing file, a malformed line or one with no parseable `ts` is simply not a match -- one bad
-    line must not hide every result after it."""
-    path = state.root / "yardstick" / "results.jsonl"
-    if not path.exists():
-        return False
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        ts = record.get("ts") if isinstance(record, dict) else None
-        if not isinstance(ts, str):
-            continue
-        try:
-            if datetime.strptime(ts, FMT).replace(tzinfo=UTC) > since:
-                return True
-        except ValueError:
-            continue
-    return False
-
-
 def _cmd_assess_check(host: Host, state: State, now: datetime, github_output: str | None) -> int:
     """`has_work=false`/`skip_reason=pool_hold` while core's usage watch holds (checked first, the same way
     `measure` sits a whole hour out on it, regardless of anything else waiting); otherwise `has_work=true` when
     the assessment has never run, or there's a new digest, a new note from Jensen, a new yardstick result or an
-    active project since the last one; `skip_reason=quiet` when none of those are true."""
-    pool = _read_pool(host, now)
-    if pool in _POOL_HOLD:
+    active project since the last one; `skip_reason=quiet` when none of those are true. A pool that can't be read
+    is not a hold: the check falls through to its other signals rather than holding the assessment hostage to
+    one failed probe."""
+    if pool_is_holding(host, now):
         _emit(["has_work=false", "skip_reason=pool_hold"], github_output)
         return 0
 
@@ -541,8 +486,8 @@ def _cmd_assess_check(host: Host, state: State, now: datetime, github_output: st
     if last_assess is None:
         has_work = True
     else:
-        has_work = (_has_new_digest(state, last_assess) or _has_new_notes(host, last_assess, now)
-                    or _has_new_yardstick_result(state, last_assess) or state.project_active() is not None)
+        has_work = (state.digest_newer_than(last_assess) or _has_new_notes(host, last_assess, now)
+                    or state.yardstick_result_newer_than(last_assess) or state.project_active() is not None)
 
     _emit([f"has_work={_bool_str(has_work)}", f"skip_reason={'' if has_work else 'quiet'}"], github_output)
     return 0
