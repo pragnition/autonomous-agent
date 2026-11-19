@@ -465,3 +465,14 @@ async def test_a_parked_spawned_agent_still_counts_as_running(router, ctx_member
     router.conn.execute("INSERT INTO parks(conversation_id, work_item_id, until_at, created_at) VALUES (?, ?, ?, ?)",
                         (child.conversation_id, child.id, "2099-01-01T00:00:00Z", db.utcnow()))
     assert "still running" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+
+
+async def test_spawn_agent_works_in_its_own_folder_unless_told_and_sharing_a_checkout_is_the_callers_call(
+        router, ctx_member):
+    await router.call(ctx_member, "spawn_agent", {"prompt": "p"})
+    child = latest_item(router)
+    # no cwd: the runner gives the agent its conversation's own new folder, never the caller's
+    assert router.conn.execute("SELECT cwd FROM conversations WHERE id = ?",
+                               (child.conversation_id,)).fetchone()[0] is None
+    description = next(t["description"] for t in router.manifest(ctx_member) if t["name"] == "spawn_agent")
+    assert "its own new folder" in description and "shares that checkout with you" in description

@@ -206,7 +206,9 @@ class AgentToolRouter:
                                     "work that should outlive your turn; the Agent tool's run_in_background agents "
                                     "are stopped when your turn ends. The brief must be self-contained: the agent "
                                     "doesn't see this conversation. cwd: the directory it works in (relative to your "
-                                    "folder, or absolute); by default its own new folder.",
+                                    "folder, or absolute); by default its own new folder. A cwd in your folder (a "
+                                    "clone of yours) shares that checkout with you: only do that when you want it to "
+                                    "work on your checkout, and don't change the same files meanwhile.",
                      s({"prompt": "string"}, {"cwd": "string"}), "act"), self._spawn_agent)
         reg(ToolSpec("status", "What is running and queued, whether the agent is paused, and how much of its 5-hour "
                                "window this session's account has used.", s(), "read"),
