@@ -86,7 +86,11 @@ async def test_status_shows_the_accounts_window(setup, conn):
     assert "running: 1" in text   # the built-in lines are still there
 
     proxy.accounts["lynus"] = AccountUsage("allowed", 1, True, used_5h=0.66, reset_5h=RESET)
-    assert "over its cap: park until it lifts" in (await router.call(router.context_for(item), "status", {})).text
+    assert "over its cap, like every account: park until one lifts" in \
+        (await router.call(router.context_for(item), "status", {})).text
+    proxy.accounts["badger"] = AccountUsage("allowed", 2, True, used_5h=0.10, reset_5h=RESET)
+    text = (await router.call(router.context_for(item), "status", {})).text
+    assert "· over its cap" in text and "park" not in text   # badger has room: nothing to wait out
     clock[0] = RESET - 3600
     text = (await router.call(router.context_for(item), "status", {})).text
     assert "of its 100% cap" in text and "cap lifted" in text and "over its cap" not in text
@@ -103,7 +107,8 @@ async def test_status_before_the_session_has_an_account(setup, conn):
 
 
 async def test_park_until_the_cap_lifts_then_carry_on(setup, conn):
-    router, _, parking, _, queue, slack = setup
+    router, _, parking, proxy, queue, slack = setup
+    proxy.accounts["lynus"] = AccountUsage("allowed", 1, True, used_5h=0.70, reset_5h=RESET)   # every account capped
     cid, item = turn_in(conn, queue)
     reply_text = (await router.call(router.context_for(item), "park", {"note": "polish the roster page"})).text
     assert reply_text.startswith("Parked until 14:30 +08 (in 4h30m). End this turn now")
@@ -147,14 +152,34 @@ async def test_park_with_no_cap_to_wait_out_needs_a_time(setup, conn):
     clock[0] = RESET - 3600   # lifted already
     _, item = turn_in(conn, queue)
     text = (await router.call(router.context_for(item), "park", {})).text
-    assert text.startswith("there is no cap to wait out on account lynus")
+    assert text.startswith("No account needs waiting out: lynus is under its cap")
     assert conn.execute("SELECT COUNT(*) FROM parks").fetchone()[0] == 0
 
 
-async def test_park_on_an_account_without_capacity_waits_for_the_reset(setup, conn):
+async def test_park_with_an_account_in_the_pool_under_its_cap_needs_a_time(setup, conn):
+    # the conversation's own account is over its cap, but another has room: the next turn would just run there
+    router, _, _, proxy, queue, _ = setup
+    proxy.accounts["lynus"] = AccountUsage("allowed", 2, True, used_5h=0.70, reset_5h=RESET)
+    proxy.accounts["badger"] = AccountUsage("allowed", 1, True, used_5h=0.10, reset_5h=RESET + 3600)
+    _, item = turn_in(conn, queue)
+    text = (await router.call(router.context_for(item), "park", {})).text
+    assert text.startswith("No account needs waiting out: badger is under its cap")
+    assert conn.execute("SELECT COUNT(*) FROM parks").fetchone()[0] == 0
+
+
+async def test_park_with_every_account_capped_waits_for_the_earliest_lift_in_the_pool(setup, conn):
+    router, _, _, proxy, queue, _ = setup
+    proxy.accounts["lynus"] = AccountUsage("allowed", 1, True, used_5h=0.70, reset_5h=RESET)          # lifts 14:30
+    proxy.accounts["badger"] = AccountUsage("allowed", 2, True, used_5h=0.80, reset_5h=RESET - 3600)  # lifts 13:30
+    _, item = turn_in(conn, queue)
+    assert (await router.call(router.context_for(item), "park", {})).text.startswith("Parked until 13:30 +08")
+
+
+async def test_park_with_no_account_left_waits_for_the_earliest_reset(setup, conn):
     router, _, _, proxy, queue, _ = setup
     clock[0] = RESET - 3600
     proxy.accounts["lynus"] = AccountUsage("rejected", None, True, used_5h=1.0, reset_5h=RESET)
+    proxy.accounts["badger"] = AccountUsage("rejected", None, True, used_5h=1.0, reset_5h=RESET + 3600)
     _, item = turn_in(conn, queue)
     assert "Parked until 16:00 +08" in (await router.call(router.context_for(item), "park", {})).text
 
@@ -162,7 +187,7 @@ async def test_park_on_an_account_without_capacity_waits_for_the_reset(setup, co
 async def test_a_reply_in_the_thread_resumes_earlier(setup, conn):
     router, convos, parking, _, queue, _ = setup
     cid, item = turn_in(conn, queue)
-    await router.call(router.context_for(item), "park", {})
+    await router.call(router.context_for(item), "park", {"until": "14:30"})
     queue.complete(item, {"text": "ok"})
 
     await convos.handle_slack(reply("t1", "carry on now please"))

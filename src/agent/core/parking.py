@@ -6,8 +6,10 @@ conversation with the agent's own note. Like any next turn, the runner resumes t
 the account it ran on, and otherwise starts a fresh one with a digest of it (runner/handoff.py). A person's message
 in the thread ends the park at once (Conversations._unpark) and is the next turn itself.
 
-Without a time, a park lasts until the soft cap on the conversation's account lifts (proxy.SoftCap: SOFT_CAP_LIFT_S
-before its 5-hour window resets), or until the reset when the account has no capacity at all.
+Without a time, a park waits out the whole pool, since the turn that carries it on runs on whichever account the
+proxy gives it (runner/handoff.py): it refuses while any account the proxy would use is under its cap, and otherwise
+lasts until the first account has room again, the earliest soft-cap lift (proxy.SoftCap: SOFT_CAP_LIFT_S before a
+5-hour window resets) or, for an account with no capacity at all, its reset.
 
 The status tool's account line comes from here too: how much of its 5-hour window the conversation's account has
 used, its cap, and when the window resets and the cap lifts, so the agent can pace itself and tell people.
@@ -100,15 +102,23 @@ class Parking:
         except ProxyUnavailable:
             return None
 
-    def lift_at(self, usage: Usage, code: str | None, now: float) -> float | None:
-        """When the account has room again: its soft cap's lift, or its reset when it has no capacity at all."""
-        account = usage.accounts.get(code) if code else None
-        if account is None or account.reset_5h is None:
-            return None
-        lift = account.reset_5h - usage.soft_cap.lift_s
-        if lift > now:
-            return lift
-        return account.reset_5h if account.rank is None and account.reset_5h > now else None
+    @staticmethod
+    def under_cap(usage: Usage) -> list[str]:
+        """The accounts the proxy would give a session (it ranks them) that are under their cap."""
+        return sorted(code for code, a in usage.accounts.items() if a.rank is not None and not usage.over_cap(code))
+
+    @staticmethod
+    def room_at(usage: Usage, now: float) -> float | None:
+        """When the first account has room again, with none under its cap now: the earliest soft-cap lift of an
+        account the proxy still ranks, or reset of one with no capacity (or past its lift and still over). None when
+        no account says when. A disabled account doesn't come back at a reset, so it doesn't count."""
+        times = []
+        for account in usage.accounts.values():
+            if account.reset_5h is None or account.reset_5h <= now or account.status == "disabled":
+                continue
+            lift = account.reset_5h - usage.soft_cap.lift_s
+            times.append(lift if account.rank is not None and lift > now else account.reset_5h)
+        return min(times, default=None)
 
     # the status tool's lines
 
@@ -118,7 +128,7 @@ class Parking:
         if usage is None:
             return ["account: usage not known (the proxy isn't answering)"]
         now = self.clock()
-        lines = []
+        lines, room = [], len(self.under_cap(usage))
         account = usage.accounts.get(code) if code else None
         if account is None:
             lines.append("account: not known yet for this session")
@@ -131,11 +141,10 @@ class Parking:
                 lift = account.reset_5h - usage.soft_cap.lift_s
                 parts.append(f"cap lifts to 100% at {self.when(lift, now)} (in {_span(lift - now)})" if lift > now
                              else "cap lifted")
-            if usage.over_cap(code):
-                parts.append("over its cap: park until it lifts" if account.rank is not None
-                             else "no capacity: park until it resets")
+            if usage.over_cap(code):  # parking waits for something only when no account has room
+                state = "over its cap" if account.rank is not None else "no capacity"
+                parts.append(state + ("" if room else ", like every account: park until one lifts"))
             lines.append(" · ".join(parts))
-        room = sum(1 for c, a in usage.accounts.items() if a.rank is not None and not usage.over_cap(c))
         lines.append(f"accounts under their cap: {room} of {len(usage.accounts)}")
         return lines
 
@@ -149,12 +158,19 @@ class Parking:
             until = parse_until(raw, now=now, tz=self.tz)
             if until is None:
                 return ToolReply(f"can't read until '{raw}': give HH:MM or an ISO date-time")
-        else:
-            code, usage = self.account_of(ctx.conversation_id), await self._usage()
-            until = self.lift_at(usage, code, now) if usage is not None else None
+        else:  # the turn that carries the park on runs on whichever account the proxy gives it: wait out the pool
+            usage = await self._usage()
+            if usage is None:
+                return ToolReply("the account pool's usage isn't known (the proxy isn't answering). Give until to "
+                                 "park anyway.")
+            if room := self.under_cap(usage):
+                return ToolReply(f"No account needs waiting out: {', '.join(room)} "
+                                 f"{'is' if len(room) == 1 else 'are'} under its cap, so a turn can run now. Give "
+                                 "until to park until a time anyway.")
+            until = self.room_at(usage, now)
             if until is None:
-                return ToolReply(f"there is no cap to wait out on account {code or '(not known yet)'}: its cap is "
-                                 "lifted or its reset isn't known. Give until to park anyway.")
+                return ToolReply("every account is over its cap, but none says when it has room again. Give until "
+                                 "to park anyway.")
         if until <= now:
             return ToolReply(f"{self.when(until, now)} has passed; give a time in the future")
         if until - now > MAX_PARK_S:
