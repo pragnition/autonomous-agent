@@ -10,7 +10,9 @@ STOCK = {
 
 
 def available(item: str) -> int:
-    """Return on-hand stock for `item`. Raises KeyError if `item` isn't tracked."""
+    """Return on-hand stock for `item`. Raises ValueError if `item` isn't tracked."""
+    if item not in STOCK:
+        raise ValueError(f"unknown item: {item!r}")
     return STOCK[item]
 
 
