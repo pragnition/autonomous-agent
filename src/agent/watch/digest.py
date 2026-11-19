@@ -115,7 +115,9 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
     if notes:
         for note in notes:
             out.append(f"### {note.get('name')} (modified {note.get('modified')})")
-            out.extend((note.get("text") or "").splitlines())
+            # Quoted, never raw: a note is Jensen's own free text, and an unquoted "## " or "### " line inside
+            # it would otherwise render as a real digest heading, impersonating a section that was never there.
+            out.extend(f"> {line}" for line in (note.get("text") or "").splitlines())
             out.append("")
     else:
         out.append("- none")
@@ -138,10 +140,11 @@ def render(window: tuple[datetime, datetime], convos: list[ConvoView], totals: d
            alerts: list[str] | None = None) -> str:
     """The digest's markdown text. `alerts` (core unreachable, a failed deploy) go first, under "Needs attention".
     `notes` (already-scrubbed Jensen reports, each `{name, text, modified}`) get their own "## Jensen reports"
-    section, one `###` subsection per note, its text shown in full -- never cut by the tool-line budget below,
-    the same as `asked`/`replied`. Tries the tool-line cap at each step in `_CAPS`, returning the first
-    rendering that fits `budget`; if none fit (the people's own messages alone are already over budget), returns
-    the last (narrowest) one anyway."""
+    section, one `###` subsection per note, each line of its text quoted with `> ` (so a note's own text can't
+    impersonate a digest heading) and shown in full -- never cut by the tool-line budget below, the same as
+    `asked`/`replied`. Tries the tool-line cap at each step in `_CAPS`, returning the first rendering that fits
+    `budget`; if none fit (the people's own messages alone are already over budget), returns the last
+    (narrowest) one anyway."""
     text = ""
     for cap in _CAPS:
         text = _render_at(window, convos, totals, prs, deployed, list(notes or []), cap, list(alerts or []))

@@ -36,7 +36,9 @@ the one after a deploy broke Jensen -- and only Claude reverts it. So:
   measured and written. A caught error's message never reaches the digest or the log -- only its type, since a
   message can carry a host path or worse.
 - a note Jensen wrote this window, with nothing else to show for the hour, still gives `has_work`; the runner
-  being unreachable when reading notes is caught the same way, by type only, and costs just the notes section.
+  being unreachable (or anything else going wrong) when reading notes is caught, named in the digest by type
+  only, and -- like core being unreachable -- holds the window open (`State.hold_window`) so those same notes
+  are read again once the runner answers, rather than silently falling out of every future window's range.
 """
 
 from __future__ import annotations
@@ -270,17 +272,22 @@ def _collect(host: Host, start: datetime, end: datetime) -> dict | None:
     return collected if isinstance(collected, dict) else None
 
 
-def _collect_notes(host: Host, start: datetime, end: datetime, secrets: list[str]) -> list[dict]:
+def _collect_notes(host: Host, start: datetime, end: datetime,
+                   secrets: list[str]) -> tuple[list[dict], str | None]:
     """This window's Jensen notes (`feedback.collect`), each scrubbed the same way a tool line is -- a note can
-    carry a secret or a product name just as easily as a transcript can. The runner being unreachable, or
-    anything else going wrong reading notes, is caught and logged by type only, the same as every other
-    optional source here: a note improve-jensen can't read yet must never cost the rest of the hour."""
+    carry a secret or a product name just as easily as a transcript can.
+
+    The runner being unreachable, or anything else going wrong reading notes, is caught here and logged by type
+    only (never the message), the same as every other optional source in this file -- but unlike those, a failed
+    read here must not look exactly like "no notes this hour": the caller holds the window open on a non-`None`
+    `error`, so the notes already sitting in `/var/agent/feedback/` are read again next time rather than being
+    silently skipped for good once the window moves past them."""
     try:
         notes = feedback.collect(host, start, end)
     except Exception as exc:
         _warn("reading Jensen's notes", exc)
-        return []
-    return [{**note, "text": scrub(note.get("text") or "", secrets)} for note in notes]
+        return [], type(exc).__name__
+    return [{**note, "text": scrub(note.get("text") or "", secrets)} for note in notes], None
 
 
 def _fetch_transcripts(host: Host, ids: list[str]) -> tuple[dict[str, bytes], str | None]:
@@ -428,10 +435,14 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
 
     pr_records, prs_error = _fetch_prs(host, now, start, pr_to_conversation, projects)
     deploy_alert = _deploy_alert(state)
-    notes = _collect_notes(host, start, end, secrets)
+    notes, notes_error = _collect_notes(host, start, end, secrets)
+    if notes_error:
+        # Same mechanism as `core_down`: hold the window so the notes `collect` couldn't read this time are
+        # still inside the next window's `(since, until]`, instead of being skipped for good.
+        state.hold_window()
 
     if (not items and not pr_records and not open_deployed and not deploy_alert and not core_down
-            and not notes):
+            and not notes and not notes_error):
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
     # Claude gets a new hour: the last hour's plan is spent. Nothing else consumes plan.json, so a run that
@@ -453,6 +464,8 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
         totals["transcripts"] = transcripts_error
     if skipped:
         totals["skipped"] = f"turns that could not be measured: {skipped}"
+    if notes_error:
+        totals["jensen_reports"] = f"Jensen reports: unavailable ({notes_error})"
 
     alerts = ([_CORE_DOWN] if core_down else []) + ([deploy_alert] if deploy_alert else [])
     deployed = [{"number": issue.get("number"), "title": scrub(issue.get("title") or "", secrets)}

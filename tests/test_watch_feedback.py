@@ -48,6 +48,31 @@ def test_runner_feedback_collect_missing_folder_gives_empty_list(tmp_path):
     assert notes == []
 
 
+def test_collect_truncates_a_long_note_and_marks_it(tmp_path):
+    long_text = "x" * (runner_feedback.MAX_NOTE_CHARS + 500)
+    _touch(tmp_path / "2026-11-19-long.md", long_text, T0 - timedelta(minutes=10))
+
+    [note] = runner_feedback.collect(tmp_path, _iso(T0 - timedelta(hours=1)), _iso(T0))
+
+    assert note["text"].startswith("x" * runner_feedback.MAX_NOTE_CHARS)
+    assert "[truncated]" in note["text"]
+    assert len(note["text"]) < len(long_text)
+
+
+def test_collect_survives_a_badly_encoded_note(tmp_path, capsys):
+    # A single note with invalid UTF-8 bytes must not crash the whole window's collection (it used to: an
+    # uncaught UnicodeDecodeError inside the container meant `docker exec` failed and every note in the window
+    # -- not just the bad one -- was lost).
+    bad = tmp_path / "2026-11-19-bad-encoding.md"
+    bad.write_bytes(b"what happened: \xff\xfe garbled bytes")
+    os.utime(bad, ((T0 - timedelta(minutes=10)).timestamp(),) * 2)
+    _touch(tmp_path / "2026-11-19-fine.md", "a normal note", T0 - timedelta(minutes=5))
+
+    notes = runner_feedback.collect(tmp_path, _iso(T0 - timedelta(hours=1)), _iso(T0))
+
+    assert {n["name"] for n in notes} == {"2026-11-19-bad-encoding.md", "2026-11-19-fine.md"}
+
+
 # -- reply --
 
 
@@ -63,6 +88,29 @@ def test_reply_appends_status_and_rejects_bad_names(tmp_path):
     for bad_name in ("../x.md", "a/b.md", "x.txt"):
         with pytest.raises(ValueError):
             runner_feedback.reply(tmp_path, bad_name, "status", T0)
+
+
+def test_reply_restores_mtime_so_the_note_is_not_recollected_next_window(tmp_path):
+    # Appending a Status line naturally bumps a file's own mtime; left alone, that would push the note's mtime
+    # into the *next* window, so the next hourly `collect` hands the already-answered note back as if it were
+    # new, forever. `reply` must restore the original mtime so this doesn't happen.
+    note_time = T0 - timedelta(minutes=30)
+    _touch(tmp_path / "2026-11-19-thing.md", "what happened", note_time)
+
+    window1 = runner_feedback.collect(tmp_path, _iso(T0 - timedelta(hours=1)), _iso(T0))
+    assert [n["name"] for n in window1] == ["2026-11-19-thing.md"]
+
+    runner_feedback.reply(tmp_path, "2026-11-19-thing.md", "fixed in the next deploy", T0)
+
+    window2 = runner_feedback.collect(tmp_path, _iso(T0), _iso(T0 + timedelta(hours=1)))
+    assert window2 == []
+
+
+def test_reply_on_a_missing_note_fails_without_creating_it(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        runner_feedback.reply(tmp_path, "2026-11-19-missing.md", "status", T0)
+
+    assert not (tmp_path / "2026-11-19-missing.md").exists()
 
 
 # -- add_change --
@@ -81,6 +129,14 @@ def test_add_change_prepends_and_keeps_30(tmp_path):
     assert lines[0].endswith("change 30")
     assert lines[-1].endswith("change 1")
     assert "change 0" not in text
+
+
+def test_add_change_flattens_embedded_whitespace(tmp_path):
+    runner_feedback.add_change(tmp_path, "line one\nline two   with   extra   spaces\t\ttabs", T0)
+
+    text = (tmp_path / "CHANGES.md").read_text()
+    lines = [line for line in text.splitlines() if line.startswith("- ")]
+    assert lines == ["- 2026-11-19: line one line two with extra spaces tabs"]
 
 
 # -- the prompt line (system.md) --

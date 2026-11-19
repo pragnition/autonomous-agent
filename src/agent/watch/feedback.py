@@ -44,7 +44,9 @@ def reply(host: Host, name: str, status: str, now: datetime) -> None:
     if "/" in name or ".." in name or not name.endswith(".md"):
         raise ValueError(f"bad note name: {name!r}")
     status_b64 = base64.b64encode(status.encode()).decode()
-    host.runner_python(_MODULE, ["reply", "--name", name, "--status-b64", status_b64, "--now", _iso(now)])
+    # `--name=<name>`, not `--name` `<name>` as two tokens: a name that happened to start with `-` would
+    # otherwise be read by argparse as another option rather than this one's value.
+    host.runner_python(_MODULE, ["reply", f"--name={name}", "--status-b64", status_b64, "--now", _iso(now)])
 
 
 def add_change(host: Host, text: str, now: datetime) -> None:

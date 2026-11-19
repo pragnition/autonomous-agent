@@ -38,6 +38,9 @@ class _MeasureHost:
     def secret_values(self):
         return []
 
+    def runner_python(self, module_file, args):
+        return "[]"
+
     def jensen_gh(self, args, *, check=True, capture=True):
         if args[:2] == ["api", "user"]:
             return _cp(stdout="jensen-bot\n")
@@ -300,13 +303,17 @@ def test_review_target_missing_file_or_index_exits_2(tmp_path, capsys):
 
 class _FeedbackHost:
     """Records every `runner_python` call `feedback-reply`/`changes-add` makes, decoding the base64'd payload
-    back out so a test can check exactly what crossed the `docker exec` boundary."""
+    back out so a test can check exactly what crossed the `docker exec` boundary. `fail` lets a test make the
+    call raise, the way `Host.runner_python` does on a non-zero `docker exec` exit."""
 
-    def __init__(self):
+    def __init__(self, fail: Exception | None = None):
         self.calls: list[tuple] = []
+        self._fail = fail
 
     def runner_python(self, module_file, args):
         self.calls.append((module_file, list(args)))
+        if self._fail:
+            raise self._fail
         return "ok\n"
 
 
@@ -324,7 +331,9 @@ def test_feedback_reply_appends_status(tmp_path):
     [(module_file, args)] = host.calls
     assert module_file == "runner_feedback.py"
     assert args[0] == "reply"
-    assert _flag(args, "--name") == "2026-11-19-thing.md"
+    # `--name=<name>`, one token: a name starting with `-` must not be read as another option.
+    assert "--name=2026-11-19-thing.md" in args
+    assert not any(a == "--name" for a in args)
     assert _flag(args, "--now") == "2026-11-19T10:00:00Z"
     assert base64.b64decode(_flag(args, "--status-b64")).decode() == "fixed in the next deploy"
 
@@ -340,6 +349,17 @@ def test_feedback_reply_rejects_bad_names_without_touching_the_runner(tmp_path, 
     assert host.calls == []  # a bad name never reaches docker exec at all
 
 
+def test_feedback_reply_runner_failure_prints_only_the_exception_type(tmp_path, capsys):
+    host = _FeedbackHost(fail=RuntimeError("docker exec returned 1: Traceback .../home/someone/secret"))
+
+    rc = main(["feedback-reply", "2026-11-19-thing.md", "status"], host=host, state=State(tmp_path), now=T0)
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "feedback-reply failed (RuntimeError)" in err
+    assert "/home/someone/secret" not in err and "Traceback" not in err
+
+
 def test_changes_add_prepends_a_changelog_entry(tmp_path):
     host = _FeedbackHost()
 
@@ -351,6 +371,17 @@ def test_changes_add_prepends_a_changelog_entry(tmp_path):
     assert args[0] == "change"
     assert _flag(args, "--now") == "2026-11-19T10:00:00Z"
     assert base64.b64decode(_flag(args, "--text-b64")).decode() == "jensen ran out of disk space"
+
+
+def test_changes_add_runner_failure_prints_only_the_exception_type(tmp_path, capsys):
+    host = _FeedbackHost(fail=RuntimeError("docker exec returned 1: Traceback .../home/someone/secret"))
+
+    rc = main(["changes-add", "jensen ran out of disk space"], host=host, state=State(tmp_path), now=T0)
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "changes-add failed (RuntimeError)" in err
+    assert "/home/someone/secret" not in err and "Traceback" not in err
 
 
 # -- gh passthrough --

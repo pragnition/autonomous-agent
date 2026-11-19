@@ -592,6 +592,30 @@ def test_measure_digest_has_jensen_reports_scrubbed(tmp_path):
     assert "[redacted]" in text
 
 
+def test_measure_holds_the_window_and_marks_the_digest_when_notes_cannot_be_read(tmp_path):
+    # A failed note read must not look exactly like "no notes this hour" (the notes would just fall out of
+    # every future window's range for good); it gets named in the digest, by exception type only, and -- the
+    # same mechanism as core being unreachable -- holds the window open so they're read again next time.
+    state = State(tmp_path)
+    state.window(T0 - timedelta(hours=1))
+    state.commit()  # an earlier, committed hour
+
+    host = FakeHost(collect=_EMPTY, notes_error=RuntimeError("docker exec returned 1: /secret/host/path"),
+                    **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    text = result.digest.read_text()
+    assert "Jensen reports: unavailable (RuntimeError)" in text
+    assert "/secret/host/path" not in text  # the raw error message never reaches the digest
+
+    # Committing this hour must not skip the notes that couldn't be read: the next window starts where this one did.
+    state.commit()
+    start, _ = state.window(T0 + timedelta(hours=1))
+    assert start == T0 - timedelta(hours=1)
+
+
 def test_digest_never_leaks_a_secret_prefix_across_the_truncation_boundary(tmp_path):
     # turn_facts truncates a tool call's output to 300 characters when it builds the tool line. A secret that
     # starts at position 296 of the raw output would, if scrubbing ran only after that cut, show up as just its

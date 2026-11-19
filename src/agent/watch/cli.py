@@ -244,17 +244,26 @@ def _cmd_seed(host: Host, file: str, repo: str | None) -> int:
 
 def _cmd_feedback_reply(host: Host, name: str, status: str, now: datetime) -> int:
     """Answer one of Jensen's notes in place. A bad name (`/`, `..`, not `.md`) is a usage error, not a crash:
-    print it and exit 2, the same as `count`'s unknown-signal case."""
+    print it and exit 2, the same as `count`'s unknown-signal case. A `docker exec` failure (the runner down, a
+    missing note raising inside it) is reported by exception type only, never its message -- which can carry the
+    container's own stderr, a traceback, a host path -- and exits 1, the same as `_cmd_gh`'s own RuntimeError."""
     try:
         feedback.reply(host, name, status, now)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except RuntimeError as exc:
+        print(f"feedback-reply failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
     return 0
 
 
 def _cmd_changes_add(host: Host, text: str, now: datetime) -> int:
-    feedback.add_change(host, text, now)
+    try:
+        feedback.add_change(host, text, now)
+    except RuntimeError as exc:
+        print(f"changes-add failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
     return 0
 
 
