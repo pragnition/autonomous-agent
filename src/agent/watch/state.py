@@ -61,10 +61,13 @@ _COUNTED = _LIST_VALUED | {
 _MAX_PLAN_REVIEWS = 10
 
 # improve-jensen's own traffic: the turns it queues into Jensen (`core_ask.py` marks them with this source) and
-# anything in the fresh `V-review-*` conversations it opens. Kept in the metrics and shown in the digest, but never
-# counted as evidence about Jensen -- improve-jensen must not grade its own reviews and live checks as Jensen's work.
+# anything in the fresh `V-review-*` and `V-yardstick-*` conversations it opens. Kept in the metrics and shown in
+# the digest, but never counted as evidence about Jensen -- improve-jensen must not grade its own reviews, live
+# checks and yardstick runs as Jensen's work.
 IMPROVE_JENSEN_SOURCE = "improve-jensen"
 _REVIEW_CONVERSATION_PREFIX = "V-review-"
+_YARDSTICK_CONVERSATION_PREFIX = "V-yardstick-"
+_OWN_CONVERSATION_PREFIXES = (_REVIEW_CONVERSATION_PREFIX, _YARDSTICK_CONVERSATION_PREFIX)
 
 
 def _iso(value: datetime) -> str:
@@ -143,7 +146,7 @@ def is_improve_jensens_own(record: dict) -> bool:
     if record.get("kind") not in ("turn", "midturn"):
         return False
     return (record.get("source") == IMPROVE_JENSEN_SOURCE
-            or str(record.get("conversation") or "").startswith(_REVIEW_CONVERSATION_PREFIX))
+            or str(record.get("conversation") or "").startswith(_OWN_CONVERSATION_PREFIXES))
 
 
 def _latest_per_pr(records: list[dict]) -> list[dict]:

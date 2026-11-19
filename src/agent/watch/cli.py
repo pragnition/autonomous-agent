@@ -30,9 +30,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.watch import feedback
+from agent.watch import feedback, yardstick
 from agent.watch.host import Host
-from agent.watch.measure import measure
+from agent.watch.measure import _POOL_HOLD, measure
 from agent.watch.state import FMT, State
 
 # Labels every install needs regardless of what the seed file's own entries use, so a fresh repo always has
@@ -55,9 +55,143 @@ def _emit(lines: list[str], github_output: str | None) -> None:
             print(line)
 
 
+# -- yardstick --
+
+
+def _add_yardstick_parser(sub) -> None:
+    yardstick_p = sub.add_parser("yardstick")
+    yardstick_sub = yardstick_p.add_subparsers(dest="yardstick_command", required=True)
+
+    install_p = yardstick_sub.add_parser("install")
+    install_p.add_argument("dir")
+
+    add_p = yardstick_sub.add_parser("add")
+    add_p.add_argument("dir")
+
+    run_p = yardstick_sub.add_parser("run")
+    run_p.add_argument("--tasks", help="comma-separated task ids; every installed task when not given")
+    run_p.add_argument("--gate", action="store_true")
+    run_p.add_argument("--github-output")
+
+    yardstick_sub.add_parser("score")
+
+
+def _yardstick_install(state: State, folder: str) -> int:
+    if not Path(folder).is_dir():
+        print("yardstick install: the folder to install from does not exist", file=sys.stderr)
+        return 2
+    try:
+        added = yardstick.install(Path(folder), yardstick.tasks_root(state))
+    except OSError as exc:
+        print(f"yardstick install failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    print(f"installed={len(added)}")
+    return 0
+
+
+def _yardstick_add(state: State, folder: str) -> int:
+    """Never overwrites: an id already there (or retired) exits 1. The messages name no task id or path -- an
+    assessment-written task's id can come from a real product."""
+    try:
+        yardstick.add(Path(folder), yardstick.tasks_root(state))
+    except FileExistsError as exc:
+        print(f"yardstick add: {exc}; tasks are never overwritten", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"yardstick add: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"yardstick add failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    print("added=1")
+    return 0
+
+
+def _pool_holding(host: Host, now: datetime) -> bool:
+    """core's usage-watch pool, read through `core_collect.py` as `measure` reads it. Unreadable counts as not
+    holding, as it does there: a change that broke core must fail a gate run, not slip through it unmeasured."""
+    stamp = now.astimezone(UTC).strftime(FMT)
+    try:
+        collected = json.loads(host.core_python("core_collect.py", ["--since", stamp, "--until", stamp]))
+    except Exception as exc:
+        print(f"warning: reading core's pool failed ({type(exc).__name__}); running anyway", file=sys.stderr)
+        return False
+    return isinstance(collected, dict) and collected.get("pool", "normal") in _POOL_HOLD
+
+
+def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | None, gate: bool,
+                   github_output: str | None) -> int:
+    """Outputs `score`, `counted`, `skip_reason`, `run_id` and `gate_failed` (the comparison's verdict on a `--gate`
+    run, always `false` otherwise: a nightly run never reverts anything), then prints `score=<passed>/<counted>`."""
+    try:
+        tasks = yardstick.load_tasks(yardstick.tasks_root(state))
+    except OSError as exc:
+        print(f"yardstick run: reading the tasks failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    if tasks_arg is not None:
+        wanted = {task_id for task_id in tasks_arg.split(",") if task_id}
+        unknown = wanted - {task.id for task in tasks}
+        if unknown or not wanted:
+            problem = f"{len(unknown)} of its ids are not installed tasks" if unknown else "it names no task"
+            print(f"yardstick run: --tasks {problem}", file=sys.stderr)
+            return 2
+        tasks = [task for task in tasks if task.id in wanted]
+
+    def emit(passed: int, counted: int, skip_reason: str, run_id: str, gate_failed: bool) -> None:
+        _emit([f"score={passed}", f"counted={counted}", f"skip_reason={skip_reason}", f"run_id={run_id}",
+               f"gate_failed={_bool_str(gate_failed)}"], github_output)
+        print(f"score={passed}/{counted}")
+
+    if not tasks:
+        emit(0, 0, "no_tasks", "", False)
+        return 0
+    if _pool_holding(host, now):
+        emit(0, 0, "pool_hold", "", False)
+        return 0
+
+    run_id = yardstick.new_run_id(now)
+    try:
+        results = yardstick.run(host, state, tasks, run_id=run_id)
+        gate_failed = yardstick.compare(state, run_id)["gate_failed"] if gate else False
+    except Exception as exc:
+        print(f"yardstick run failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    passed, counted = yardstick.score(results)
+    emit(passed, counted, "", run_id, gate_failed)
+    return 0
+
+
+def _yardstick_score(state: State) -> int:
+    """The latest run's score line, then how it compares -- counts only, never a task id."""
+    results = yardstick.read_results(state)
+    if not results:
+        print("no yardstick runs yet")
+        return 0
+    latest = results[-1]["run"]
+    rows = [r for r in results if r["run"] == latest]
+    passed, counted = yardstick.score(rows)
+    judged = sum(1 for r in rows if r.get("judged"))
+    comparison = yardstick.compare(state, latest)
+    print(f"run={latest} sha={rows[-1].get('sha') or 'unknown'} score={passed}/{counted} judged={judged}")
+    print(f"previous={comparison['previous'] or 'none'} drop={comparison['drop']} "
+          f"regressions={len(comparison['regressions'])} gate_failed={_bool_str(comparison['gate_failed'])}")
+    return 0
+
+
+def _cmd_yardstick(host: Host, state: State, now: datetime, args: argparse.Namespace) -> int:
+    if args.yardstick_command == "install":
+        return _yardstick_install(state, args.dir)
+    if args.yardstick_command == "add":
+        return _yardstick_add(state, args.dir)
+    if args.yardstick_command == "run":
+        return _yardstick_run(host, state, now, args.tasks, args.gate, args.github_output)
+    return _yardstick_score(state)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jensen_watch")
     sub = parser.add_subparsers(dest="command", required=True)
+    _add_yardstick_parser(sub)
 
     measure_p = sub.add_parser("measure")
     measure_p.add_argument("--github-output")
@@ -293,6 +427,8 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
 
     args = _build_parser().parse_args(argv)
 
+    if args.command == "yardstick":
+        return _cmd_yardstick(host, state, now, args)
     if args.command == "measure":
         return _cmd_measure(host, state, now, args.github_output)
     if args.command == "commit":

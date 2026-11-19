@@ -1,0 +1,816 @@
+import base64
+import io
+import json
+import os
+import re
+import subprocess
+import tarfile
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from agent import db
+from agent.core.sessions import WorkQueue
+from agent.watch import core_ask, core_items, runner_memory, yardstick
+from agent.watch.cli import main
+from agent.watch.state import State, is_improve_jensens_own, summarize
+
+T0 = datetime(2026, 11, 19, 19, 7, 0, tzinfo=UTC)
+RUN = "20261119T190700Z-ab12"
+BASE = f"/var/agent/yardstick/{RUN}"
+
+
+def _cp(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
+
+
+def _kv(text: str) -> dict:
+    return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+
+
+def _write_task(root: Path, task_id: str, *, prompt: str = "Fix the bug.", time_limit_min: int | None = None,
+                rubric: str | None = None, check: bool = True, hidden: bool = False, build: bool = False) -> Path:
+    folder = root / task_id
+    (folder / "fixture").mkdir(parents=True)
+    (folder / "fixture" / "app.py").write_text("print('hi')\n")
+    if build:
+        (folder / "fixture" / "build.sh").write_text("git init -q && git add -A && git commit -qm start\n")
+    lines = [f"prompt = {json.dumps(prompt)}"]
+    if time_limit_min is not None:
+        lines.append(f"time_limit_min = {time_limit_min}")
+    if rubric is not None:
+        lines.append(f"rubric = {json.dumps(rubric)}")
+    (folder / "task.toml").write_text("\n".join(lines) + "\n")
+    if check:
+        (folder / "check").write_text("#!/bin/sh\npython3 -m pytest -q hidden\n")
+        (folder / "check").chmod(0o755)
+    if hidden:
+        (folder / "hidden").mkdir()
+        (folder / "hidden" / "test_hidden.py").write_text("def test_x():\n    assert True\n")
+    return folder
+
+
+class FakeClock:
+    """`clock`/`sleep` for `yardstick.run`: sleeping only moves the fake clock forward, so a test never waits."""
+
+    def __init__(self):
+        self.t = 5_000.0
+        self.sleeps: list[float] = []
+
+    def clock(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
+class FakeHost:
+    """Stands in for `Host`: records every docker/git call in order in `calls`, as `(kind, detail...)` tuples,
+    and serves the turns' statuses from `status(item_id, poll_number)`. `check_rc(folder)` is the check's exit
+    code for a task folder, `existing` the folders `test -e` finds already there."""
+
+    def __init__(self, tmp_path: Path, *, status=lambda item, poll: "done", check_rc=lambda folder: 0,
+                 existing=(), pool: str = "normal"):
+        self.live = tmp_path / "live"
+        self.status = status
+        self.check_rc = check_rc
+        self.existing = set(existing)
+        self.pool = pool
+        self.calls: list[tuple] = []
+        self.asks: dict[str, dict] = {}  # item id -> {"args", "text", "folder"}
+        self.polls = 0
+
+    def run(self, args, **kwargs):
+        args = list(args)
+        if args[:2] == ["git", "-C"]:
+            assert args[2] == str(self.live) and args[3:] == ["rev-parse", "HEAD"]
+            self.calls.append(("sha",))
+            return _cp(stdout="abc1234def\n")
+        if args[:4] == ["docker", "exec", "agent-runner", "test"]:
+            assert args[4] == "-e"
+            self.calls.append(("exists?", args[5]))
+            return _cp(returncode=0 if args[5] in self.existing else 1)
+        if args[:5] == ["docker", "exec", "-i", "agent-runner", "sh"]:
+            script = args[-1]
+            folder = re.search(r"tar -x -C (\S+)$", script).group(1)
+            with tarfile.open(fileobj=io.BytesIO(kwargs["input"])) as tar:
+                members = {m.name: m for m in tar.getmembers()}
+            self.calls.append(("tar", folder, sorted(members), script))
+            return _cp()
+        if args[:5] == ["docker", "exec", "agent-runner", "sh", "-c"]:
+            script = args[-1]
+            folder = re.match(r"cd (\S+) && ", script).group(1)
+            if script.endswith("./check"):
+                assert kwargs.get("timeout") == 600
+                self.calls.append(("check", folder))
+                return _cp(returncode=self.check_rc(folder))
+            if script.endswith("sh build.sh"):
+                self.calls.append(("build", folder))
+                return _cp()
+        raise AssertionError(f"unexpected run call: {args}")
+
+    def core_python(self, module_file, args):
+        if module_file == "core_ask.py":
+            text = base64.b64decode(args[args.index("--text-b64") + 1]).decode()
+            item = f"W-{len(self.asks) + 1}"
+            folder = re.search(r"`(/var/agent/yardstick/[^`]+)`", text).group(1)
+            self.asks[item] = {"args": list(args), "text": text, "folder": folder}
+            self.calls.append(("ask", item, folder))
+            return item + "\n"
+        if module_file == "core_items.py":
+            ids = args[args.index("--ids") + 1].split(",")
+            self.polls += 1
+            self.calls.append(("poll", tuple(ids)))
+            return json.dumps({i: {"status": self.status(i, self.polls), "outcome": "done"} for i in ids})
+        if module_file == "core_collect.py":
+            self.calls.append(("pool",))
+            return json.dumps({"items": [], "conversations": {}, "projects": [], "pool": self.pool, "claimed": 0,
+                               "running": []})
+        raise AssertionError(f"unexpected core_python call: {module_file} {args}")
+
+    def runner_python(self, module_file, args):
+        assert module_file == "runner_memory.py"
+        mode = "snapshot" if "--snapshot" in args else "clean"
+        self.calls.append(("memory", mode, list(args)))
+        if mode == "snapshot":
+            return json.dumps({"notes": 0})
+        return json.dumps({"removed": [], "index_lines": 0, "kept": []})
+
+    def kinds(self, kind: str) -> list[tuple]:
+        return [call for call in self.calls if call[0] == kind]
+
+
+def _results_file(state: State) -> Path:
+    return state.root / "yardstick" / "results.jsonl"
+
+
+def _read_results(state: State) -> list[dict]:
+    path = _results_file(state)
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+
+# -- tasks --
+
+
+def test_load_tasks_and_mechanical_flag(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "plain", prompt="Do the plain thing.")
+    _write_task(root, "quick", time_limit_min=5)
+    _write_task(root, "rubric", rubric="Is the reply clear?")
+    _write_task(root, "no-check", check=False)
+    (root / "not-a-task").mkdir()  # no task.toml: not a task
+    _write_task(root, ".half-copied")  # a dot folder is an install still in progress, never a task
+
+    tasks = {task.id: task for task in yardstick.load_tasks(root)}
+
+    assert set(tasks) == {"plain", "quick", "rubric", "no-check"}
+    plain = tasks["plain"]
+    assert plain.prompt == "Do the plain thing."
+    assert plain.time_limit_min == 30
+    assert plain.rubric == ""
+    assert plain.path == root / "plain"
+    assert plain.mechanical is True
+    assert tasks["quick"].time_limit_min == 5 and tasks["quick"].mechanical is True
+    assert tasks["rubric"].rubric == "Is the reply clear?" and tasks["rubric"].mechanical is False
+    assert tasks["no-check"].mechanical is False
+
+    assert yardstick.load_tasks(tmp_path / "missing") == []
+
+
+def test_load_tasks_skips_an_unreadable_task_without_naming_it(tmp_path, capsys):
+    root = tmp_path / "tasks"
+    _write_task(root, "good")
+    bad = _write_task(root, "acme-billing")
+    (bad / "task.toml").write_text("prompt = [unclosed\n")
+
+    assert [task.id for task in yardstick.load_tasks(root)] == ["good"]
+    err = capsys.readouterr().err
+    assert "skipped 1" in err and "acme" not in err
+
+
+def test_add_refuses_overwrite(tmp_path):
+    src, root = tmp_path / "src", tmp_path / "yardstick" / "tasks"
+    _write_task(src, "auth-hole", prompt="first version")
+
+    assert yardstick.add(src / "auth-hole", root) == "auth-hole"
+    assert (root / "auth-hole" / "task.toml").read_text() == 'prompt = "first version"\n'
+    assert os.access(root / "auth-hole" / "check", os.X_OK)
+
+    (src / "auth-hole" / "task.toml").write_text('prompt = "edited version"\n')
+    with pytest.raises(FileExistsError):
+        yardstick.add(src / "auth-hole", root)
+    assert (root / "auth-hole" / "task.toml").read_text() == 'prompt = "first version"\n'
+
+    # A retired task's id is taken too: adding it again would quietly undo a person's retirement.
+    _write_task(src, "old-task")
+    (root.parent / "retired").mkdir()
+    (root.parent / "retired" / "old-task").mkdir()
+    with pytest.raises(FileExistsError):
+        yardstick.add(src / "old-task", root)
+    assert not (root / "old-task").exists()
+
+    # Not a task at all (no task.toml) is refused before anything is copied.
+    (src / "junk").mkdir()
+    with pytest.raises(ValueError):
+        yardstick.add(src / "junk", root)
+    assert not (root / "junk").exists()
+
+
+def test_install_copies_only_new(tmp_path):
+    src, root = tmp_path / "deploy-yardstick", tmp_path / "yardstick" / "tasks"
+    _write_task(root, "setup-facts", prompt="already installed")
+    _write_task(src, "setup-facts", prompt="the shipped version")
+    _write_task(src, "split-change")
+    _write_task(src, "background-result")
+    _write_task(src, "retired-one")
+    (root.parent / "retired" / "retired-one").mkdir(parents=True)
+    (src / "README.md").write_text("not a task folder\n")
+
+    assert yardstick.install(src, root) == ["background-result", "split-change"]
+    assert (root / "setup-facts" / "task.toml").read_text() == 'prompt = "already installed"\n'
+    assert (root / "split-change" / "fixture" / "app.py").exists()
+    assert not (root / "retired-one").exists()
+
+    assert yardstick.install(src, root) == []
+
+
+# -- run --
+
+
+def test_run_passes_and_records_results(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "fix-it", prompt="Fix the failing test in calc.py.")
+    _write_task(root, "explain", rubric="Is the explanation right?")
+    tasks = yardstick.load_tasks(root)
+    host, clock, state = FakeHost(tmp_path), FakeClock(), State(tmp_path / "state")
+
+    results = yardstick.run(host, state, tasks, run_id=RUN, sleep=clock.sleep, clock=clock.clock)
+
+    by_task = {r["task"]: r for r in results}
+    assert [r["task"] for r in results] == ["explain", "fix-it"]  # one result per task, in the tasks' order
+    fix = by_task["fix-it"]
+    assert fix["run"] == RUN and fix["sha"] == "abc1234def"
+    assert fix["passed"] is True and fix["judged"] is False and fix["reason"] == ""
+    assert isinstance(fix["minutes"], float) and fix["minutes"] >= 0
+    assert datetime.strptime(fix["ts"], "%Y-%m-%dT%H:%M:%SZ")
+    assert set(fix) >= {"run", "ts", "sha", "task", "passed", "minutes", "judged", "reason"}
+    assert by_task["explain"]["judged"] is True
+
+    assert _read_results(state) == results
+
+    # The fixture is copied into its own folder under the run, then the turn is queued as a fresh
+    # V-yardstick-<run>- conversation with the header naming that folder.
+    [fix_ask] = [a for a in host.asks.values() if a["folder"] == f"{BASE}/fix-it"]
+    assert fix_ask["args"][:3] == ["--new", "--new-prefix", f"V-yardstick-{RUN}-"]
+    assert fix_ask["text"] == (
+        f"This is a yardstick task in `{BASE}/fix-it`. Work only in that folder. It has no remote: don't push, "
+        "don't open PRs, don't message anyone, and don't save memory notes or skills about it. Reply 'done' when "
+        "finished.\n\nFix the failing test in calc.py.")
+    [fixture_tar] = [c for c in host.kinds("tar") if c[1] == f"{BASE}/fix-it" and "app.py" in c[2]]
+    assert fixture_tar[2] == ["app.py"]
+    assert fixture_tar[3] == f"mkdir -p {BASE}/fix-it && tar -x -C {BASE}/fix-it"
+
+    # Memory is snapshotted before the first turn, and cleaned once at the very end.
+    memory = host.kinds("memory")
+    assert [m[1] for m in memory] == ["snapshot", "clean"]
+    assert host.calls.index(memory[0]) < host.calls.index(host.kinds("ask")[0])
+    assert host.calls[-1] == memory[1]
+    snapshot_args, clean_args = memory[0][2], memory[1][2]
+    assert snapshot_args == ["--root", "/var/agent/memory", "--snapshot", f"{BASE}/.memory-before.json"]
+    assert clean_args[clean_args.index("--root") + 1] == "/var/agent/memory"
+    assert clean_args[clean_args.index("--marker") + 1] == "/var/agent/yardstick/"
+    assert clean_args[clean_args.index("--existing-file") + 1] == f"{BASE}/.memory-before.json"
+    since = int(clean_args[clean_args.index("--since") + 1])
+    assert abs(since - time.time()) < 60
+
+    assert yardstick.score(results) == (1, 1)
+
+
+def test_run_times_out_without_hanging(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "slow", time_limit_min=2, hidden=True)
+    host = FakeHost(tmp_path, status=lambda item, poll: "claimed")  # Jensen never finishes
+    clock, state = FakeClock(), State(tmp_path / "state")
+
+    [result] = yardstick.run(host, state, yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
+                             clock=clock.clock)
+
+    assert result["passed"] is False and result["reason"] == "timeout"
+    assert result["minutes"] >= 2
+    # Every wait went through the injected sleep, 30 s at a time, and stopped at the limit (both tries).
+    assert set(clock.sleeps) == {30}
+    assert len(clock.sleeps) <= 2 * (2 * 60 // 30) + 2
+    # The turn was never finished, so neither the hidden tests nor the check were ever copied in or run.
+    assert host.kinds("check") == []
+    assert all("check" not in c[2] for c in host.kinds("tar"))
+    assert host.kinds("memory")[-1][1] == "clean"
+
+
+def test_run_times_out_when_status_reads_keep_failing(tmp_path, capsys):
+    # core goes away after the turn is queued: every status read fails. Still a timeout per task, and the run returns.
+    root = tmp_path / "tasks"
+    _write_task(root, "slow", time_limit_min=1)
+
+    class StatusDownHost(FakeHost):
+        def core_python(self, module_file, args):
+            if module_file == "core_items.py":
+                self.calls.append(("poll", ()))
+                raise RuntimeError("docker exec returned 1: /home/someone/secret")
+            return super().core_python(module_file, args)
+
+    host, clock = StatusDownHost(tmp_path), FakeClock()
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is False and result["reason"] == "timeout" and result["tries"] == 2
+    assert host.kinds("check") == []
+    printed = capsys.readouterr()
+    assert "status read" in printed.err and "secret" not in printed.out + printed.err
+
+
+def test_judged_task_without_a_check_records_the_turn(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "explain", rubric="Is it right?", check=False)
+    host = FakeHost(tmp_path, status=lambda item, poll: "failed")
+    clock = FakeClock()
+
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["judged"] is True and result["passed"] is False and result["reason"] == "turn failed"
+    assert result["tries"] == 1  # judged tasks are never retried
+    assert host.kinds("check") == [] and len(host.kinds("tar")) == 1  # nothing to copy in afterwards
+
+
+def test_hidden_copied_only_after_turn(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "auth-hole", hidden=True)
+    host = FakeHost(tmp_path, status=lambda item, poll: "done" if poll >= 3 else "claimed")
+    clock = FakeClock()
+
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is True
+    tars = host.kinds("tar")
+    fixture_tar, copy_in = tars
+    assert "check" not in fixture_tar[2] and not any(n.startswith("hidden") for n in fixture_tar[2])
+    assert copy_in[1] == f"{BASE}/auth-hole"
+    assert "check" in copy_in[2] and "hidden/test_hidden.py" in copy_in[2]
+
+    polls = host.kinds("poll")
+    assert len(polls) == 3
+    done_poll = host.calls.index(polls[-1])
+    assert host.calls.index(fixture_tar) < host.calls.index(host.kinds("ask")[0]) < host.calls.index(polls[0])
+    assert host.calls.index(copy_in) > done_poll
+    assert host.calls.index(host.kinds("check")[0]) > host.calls.index(copy_in)
+
+
+def test_check_copied_in_executable(tmp_path):
+    root = tmp_path / "tasks"
+    folder = _write_task(root, "t1")
+    (folder / "check").chmod(0o644)  # a check that lost its executable bit on the way still runs
+    host = FakeHost(tmp_path)
+    captured = {}
+    original = host.run
+
+    def run(args, **kwargs):
+        if "input" in kwargs and "rm -rf" in args[-1]:
+            with tarfile.open(fileobj=io.BytesIO(kwargs["input"])) as tar:
+                captured.update({m.name: m for m in tar.getmembers()})
+        return original(args, **kwargs)
+
+    host.run = run
+    clock = FakeClock()
+    yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
+                  clock=clock.clock)
+
+    assert captured["check"].mode & 0o111
+    assert captured["check"].uname == "" and captured["check"].uid == 0
+
+
+def test_failed_task_retried_once(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "flaky")
+    _write_task(root, "broken")
+    _write_task(root, "judged", rubric="Judge the reply.")
+    fails = {f"{BASE}/flaky", f"{BASE}/broken", f"{BASE}/broken-r", f"{BASE}/judged"}
+    host = FakeHost(tmp_path, check_rc=lambda folder: 1 if folder in fails else 0)
+    clock, state = FakeClock(), State(tmp_path / "state")
+
+    results = {r["task"]: r for r in yardstick.run(host, state, yardstick.load_tasks(root), run_id=RUN,
+                                                    sleep=clock.sleep, clock=clock.clock)}
+
+    assert results["flaky"]["passed"] is True and results["flaky"]["tries"] == 2
+    assert results["broken"]["passed"] is False and results["broken"]["tries"] == 2
+    assert results["broken"]["reason"] == "check failed"
+    # Judged tasks are never retried.
+    assert results["judged"]["passed"] is False and results["judged"]["tries"] == 1
+
+    folders = [ask[2] for ask in host.kinds("ask")]
+    assert sorted(folders) == sorted([f"{BASE}/flaky", f"{BASE}/flaky-r", f"{BASE}/broken", f"{BASE}/broken-r",
+                                      f"{BASE}/judged"])
+    # One line per task in the results file, not one per try.
+    assert sorted(r["task"] for r in _read_results(state)) == ["broken", "flaky", "judged"]
+
+
+def test_run_skips_a_task_whose_folder_exists(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1")
+    host = FakeHost(tmp_path, existing={f"{BASE}/t1"})
+    clock = FakeClock()
+
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is False and result["reason"] == "folder exists"
+    assert host.kinds("ask") == [] and host.kinds("tar") == []
+
+
+def test_run_builds_the_fixture_before_queuing(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1", build=True)
+    _write_task(root, "t2")
+    host = FakeHost(tmp_path)
+    clock = FakeClock()
+
+    yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
+                  clock=clock.clock)
+
+    [build] = host.kinds("build")
+    assert build[1] == f"{BASE}/t1"
+    t1_ask = next(c for c in host.kinds("ask") if c[2] == f"{BASE}/t1")
+    assert host.calls.index(build) < host.calls.index(t1_ask)
+
+
+def test_run_keeps_at_most_concurrency_turns_in_flight(tmp_path):
+    root = tmp_path / "tasks"
+    for n in range(6):
+        _write_task(root, f"t{n}")
+    host = FakeHost(tmp_path)
+    clock = FakeClock()
+
+    results = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                            concurrency=4, sleep=clock.sleep, clock=clock.clock)
+
+    assert len(results) == 6
+    polls = host.kinds("poll")
+    assert len(polls[0][1]) == 4
+    assert all(len(p[1]) <= 4 for p in polls)
+    in_flight = peak = 0
+    for call in host.calls:
+        if call[0] == "ask":
+            in_flight += 1
+            peak = max(peak, in_flight)
+        elif call[0] == "check":
+            in_flight -= 1
+    assert peak == 4
+
+
+def test_run_survives_core_being_unreachable(tmp_path, capsys):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1", time_limit_min=1)
+
+    class DownHost(FakeHost):
+        def core_python(self, module_file, args):
+            raise RuntimeError("docker exec returned 1: secret path /home/someone")
+
+    host, clock = DownHost(tmp_path), FakeClock()
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is False and result["reason"] == "queue failed"
+    assert host.kinds("memory")[-1][1] == "clean"
+    printed = capsys.readouterr()
+    assert "secret" not in printed.out + printed.err and "/home" not in printed.out + printed.err
+
+
+# -- score / compare --
+
+
+def test_judged_tasks_not_counted_in_score():
+    results = [
+        {"task": "a", "passed": True, "judged": False},
+        {"task": "b", "passed": False, "judged": False},
+        {"task": "c", "passed": True, "judged": True},
+        {"task": "d", "passed": False, "judged": True},
+    ]
+    assert yardstick.score(results) == (1, 2)
+    assert yardstick.score([]) == (0, 0)
+
+
+def _record(state: State, run: str, outcomes: dict[str, bool], judged: dict[str, bool] | None = None) -> None:
+    path = _results_file(state)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as fh:
+        for task, passed in outcomes.items():
+            fh.write(json.dumps({"run": run, "ts": "2026-11-19T00:00:00Z", "sha": "x", "task": task,
+                                 "passed": passed, "minutes": 1.0, "judged": False, "reason": ""}) + "\n")
+        for task, passed in (judged or {}).items():
+            fh.write(json.dumps({"run": run, "ts": "2026-11-19T00:00:00Z", "sha": "x", "task": task,
+                                 "passed": passed, "minutes": 1.0, "judged": True, "reason": ""}) + "\n")
+
+
+def test_compare_gate_fails_on_drop_of_two_and_on_regression(tmp_path):
+    # A drop of 2 against the previous run on the same tasks fails the gate; a drop of 1 alone does not.
+    state = State(tmp_path / "drop")
+    _record(state, "r1", {"a": True, "b": True, "c": True, "d": False})
+    _record(state, "r2", {"a": True, "b": False, "c": False, "d": False}, judged={"j": False})
+    assert yardstick.compare(state, "r2") == {"previous": "r1", "drop": 2, "regressions": [], "gate_failed": True}
+    _record(state, "r3", {"a": True, "b": True, "c": False, "d": False})
+    assert yardstick.compare(state, "r3") == {"previous": "r2", "drop": -1, "regressions": [], "gate_failed": False}
+
+    # A task that passed its last 3 runs and fails now is a regression, even with a drop of only 1.
+    state = State(tmp_path / "regression")
+    for run in ("r1", "r2", "r3"):
+        _record(state, run, {"a": True, "b": False})
+    _record(state, "r4", {"a": False, "b": False})
+    assert yardstick.compare(state, "r4") == {"previous": "r3", "drop": 1, "regressions": ["a"],
+                                              "gate_failed": True}
+
+    # Two passes in a row is not yet a streak.
+    state = State(tmp_path / "short")
+    _record(state, "r1", {"a": False})
+    _record(state, "r2", {"a": True})
+    _record(state, "r3", {"a": True})
+    _record(state, "r4", {"a": False})
+    assert yardstick.compare(state, "r4")["regressions"] == []
+
+
+def test_compare_previous_is_the_last_run_sharing_tasks_and_new_tasks_never_trip_it(tmp_path):
+    state = State(tmp_path / "state")
+    _record(state, "r1", {"a": True, "b": True})
+    _record(state, "r2", {"z": True})  # a --tasks run over other tasks only: not comparable
+    # Two tasks added since r1 fail on their first run: they're not shared with r1, so no drop.
+    _record(state, "r3", {"a": True, "b": True, "new1": False, "new2": False}, judged={"j": True})
+
+    assert yardstick.compare(state, "r3") == {"previous": "r1", "drop": 0, "regressions": [], "gate_failed": False}
+
+    first = State(tmp_path / "first")
+    _record(first, "r1", {"a": False, "b": False})
+    assert yardstick.compare(first, "r1") == {"previous": None, "drop": 0, "regressions": [], "gate_failed": False}
+    assert yardstick.compare(first, "missing") == {"previous": None, "drop": 0, "regressions": [],
+                                                   "gate_failed": False}
+
+
+# -- memory cleanup --
+
+
+def _note(path: Path, text: str, mtime: float) -> None:
+    path.write_text(text)
+    os.utime(path, (mtime, mtime))
+
+
+def test_memory_cleanup_only_removes_marked_notes_from_this_run(tmp_path, capsys):
+    memory = tmp_path / "memory"
+    memory.mkdir()
+    since = 1_800_000_000
+    snapshot = tmp_path / "yardstick" / RUN / ".memory-before.json"
+
+    _note(memory / "old-marked.md", "learned in /var/agent/yardstick/20261001T000000Z-0000/x/\n", since - 3600)
+    _note(memory / "project-roster.md", "real work note\n", since - 3600)
+    # The snapshot is taken as the run starts: every note above existed before it.
+    assert runner_memory.main(["--root", str(memory), "--snapshot", str(snapshot)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"notes": 2}
+
+    _note(memory / "new-marked.md", f"the answer is in {BASE}/setup-facts/answers.md\n", since + 60)
+    _note(memory / "new-plain.md", "a person asked for shorter replies\n", since + 60)
+    # A note that was there before the run and got touched during it, mentioning the yardstick: still kept.
+    _note(memory / "project-roster.md", f"real work note\nalso see {BASE}/x\n", since + 120)
+    (memory / "MEMORY.md").write_text(
+        "- [Old marked](old-marked.md) — an old one\n"
+        "- [New marked](new-marked.md) — the yardstick answer\n"
+        "- [New plain](new-plain.md) — replies\n"
+        "- [Roster](project-roster.md) — the roster project\n"
+        "- [Not the same](renew-marked.md) — a different file whose name only ends the same\n")
+
+    rc = runner_memory.main(["--root", str(memory), "--since", str(since), "--marker", "/var/agent/yardstick/",
+                             "--existing-file", str(snapshot)])
+
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["removed"] == ["new-marked.md"]
+    assert report["index_lines"] == 1
+    assert report["kept"] == ["project-roster.md"]
+    assert sorted(p.name for p in memory.iterdir()) == ["MEMORY.md", "new-plain.md", "old-marked.md",
+                                                       "project-roster.md"]
+    assert (memory / "MEMORY.md").read_text() == (
+        "- [Old marked](old-marked.md) — an old one\n"
+        "- [New plain](new-plain.md) — replies\n"
+        "- [Roster](project-roster.md) — the roster project\n"
+        "- [Not the same](renew-marked.md) — a different file whose name only ends the same\n")
+
+
+def test_memory_cleanup_without_a_readable_snapshot_removes_nothing(tmp_path):
+    memory = tmp_path / "memory"
+    memory.mkdir()
+    since = 1_800_000_000
+    _note(memory / "new-marked.md", f"see {BASE}/x\n", since + 60)
+
+    report = runner_memory.clean(memory, since, "/var/agent/yardstick/", existing_file=tmp_path / "missing.json")
+    assert report == {"removed": [], "index_lines": 0, "kept": ["new-marked.md"]}
+    assert (memory / "new-marked.md").exists()
+
+    # With no snapshot asked for at all, the plain rule applies: new and marked is removed.
+    assert runner_memory.clean(memory, since, "/var/agent/yardstick/")["removed"] == ["new-marked.md"]
+    assert runner_memory.clean(tmp_path / "missing", since, "/var/agent/yardstick/") == \
+        {"removed": [], "index_lines": 0, "kept": []}
+
+
+# -- improve-jensen's own traffic --
+
+
+def test_yardstick_conversations_count_as_improve_jensens_own(tmp_path):
+    record = {"kind": "turn", "id": "t1", "source": None, "conversation": f"V-yardstick-{RUN}-0a1b2c3d",
+              "no_delegation": 1}
+    assert is_improve_jensens_own(record)
+    assert is_improve_jensens_own({**record, "conversation": "V-review-0a1b2c3d"})
+    assert not is_improve_jensens_own({**record, "conversation": "C-123"})
+    assert summarize([record], "no_delegation", "x") == "no_delegation since x: total=0 turns=0"
+
+    conn = db.connect(tmp_path / "agent.db")
+    db.create_schema(conn)
+
+    class Payloads:
+        def turn(self, convo, text, actor, *, unattended=False):
+            return {"text": text}
+
+    item = WorkQueue(conn).get(core_ask.enqueue_turn(conn, Payloads(), None, "hi",
+                                                     new_prefix=f"V-yardstick-{RUN}-"))
+    assert re.fullmatch(rf"V-yardstick-{RUN}-[0-9a-f]{{8}}", item.conversation_id)
+    assert item.payload["source"] == "improve-jensen"
+    # The default is unchanged.
+    default = WorkQueue(conn).get(core_ask.enqueue_turn(conn, Payloads(), None, "hi"))
+    assert default.conversation_id.startswith("V-review-")
+
+
+def test_core_ask_accepts_new_and_new_prefix():
+    args = core_ask.build_parser().parse_args(["--new", "--new-prefix", f"V-yardstick-{RUN}-", "--text-b64", "aGk="])
+    assert args.new is True and args.new_prefix == f"V-yardstick-{RUN}-" and args.conversation is None
+    assert core_ask.build_parser().parse_args(["--text-b64", "aGk="]).new_prefix == "V-review-"
+    with pytest.raises(SystemExit):
+        core_ask.build_parser().parse_args(["--new", "--conversation", "V-x", "--text-b64", "aGk="])
+
+
+# -- core_items --
+
+
+def _item(conn, item_id, conversation_id, status, *, payload=None, result=None):
+    conn.execute(
+        "INSERT INTO work_items(id, conversation_id, kind, payload, status, result, created_at, updated_at) "
+        "VALUES (?, ?, 'turn', ?, ?, ?, ?, ?)",
+        (item_id, conversation_id, json.dumps(payload or {}), status,
+         json.dumps(result) if result is not None else None, f"2026-11-19T00:00:{len(item_id):02d}Z",
+         "2026-11-19T00:00:00Z"))
+
+
+def test_core_items_reports_status_and_follows_continuations(tmp_path):
+    conn = db.connect(tmp_path / "agent.db")
+    db.create_schema(conn)
+    _item(conn, "W-1", "V-a", "claimed")
+    _item(conn, "W-2", "V-b", "done", result={"outcome": "done", "text": "secret reply text"})
+    # A turn cut off by its step limit is carried on by a new turn in the same conversation.
+    _item(conn, "W-3", "V-c", "done", result={"outcome": "max_turns"})
+    _item(conn, "W-3b", "V-c", "queued", payload={"follows": "W-3", "continuation": 1})
+    # A turn cut off by a usage limit waits for capacity before it is carried on.
+    _item(conn, "W-4", "V-d", "done", result={"outcome": "error"})
+    conn.execute("INSERT INTO limit_waits(work_item_id, conversation_id, error, created_at) "
+                 "VALUES ('W-4', 'V-d', 'limit', '2026-11-19T00:00:00Z')")
+    # A handover into another conversation follows the turn, but is not its continuation.
+    _item(conn, "W-5", "V-e", "done", result={"outcome": "done"})
+    _item(conn, "W-5x", "V-other", "claimed", payload={"follows": "W-5"})
+
+    out = core_items.items(conn, ["W-1", "W-2", "W-3", "W-4", "W-5", "W-missing"])
+
+    assert out["W-1"]["status"] == "claimed"
+    assert out["W-2"] == {"status": "done", "outcome": "done", "latest": "W-2"}
+    assert out["W-3"]["status"] == "queued" and out["W-3"]["latest"] == "W-3b"
+    assert out["W-4"]["status"] == "waiting"
+    assert out["W-5"]["status"] == "done"
+    assert "W-missing" not in out
+    assert "secret reply text" not in json.dumps(out)
+
+
+# -- CLI --
+
+
+def test_cli_yardstick_run_skips_while_pool_holds(tmp_path):
+    state = State(tmp_path / "state")
+    _write_task(state.root / "yardstick" / "tasks", "t1")
+    host = FakeHost(tmp_path, pool="hold_scheduled")
+    out = tmp_path / "out.txt"
+
+    assert main(["yardstick", "run", "--github-output", str(out)], host=host, state=state, now=T0) == 0
+
+    kv = _kv(out.read_text())
+    assert kv["skip_reason"] == "pool_hold" and kv["gate_failed"] == "false"
+    assert kv["score"] == "0" and kv["counted"] == "0" and kv["run_id"] == ""
+    assert host.kinds("ask") == [] and host.kinds("tar") == [] and host.kinds("memory") == []
+
+
+def test_cli_yardstick_run_goes_ahead_when_core_cannot_be_read(tmp_path, monkeypatch):
+    # Like the hourly measure: an unreadable pool is no reason to skip. A change that broke core must fail the gate,
+    # not pass it unmeasured.
+    state = State(tmp_path / "state")
+    _write_task(state.root / "yardstick" / "tasks", "t1")
+
+    class NoPoolHost(FakeHost):
+        def core_python(self, module_file, args):
+            if module_file == "core_collect.py":
+                raise RuntimeError("docker exec returned 1")
+            return super().core_python(module_file, args)
+
+    host = NoPoolHost(tmp_path)
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+    out = tmp_path / "out.txt"
+
+    assert main(["yardstick", "run", "--gate", "--github-output", str(out)], host=host, state=state, now=T0) == 0
+    kv = _kv(out.read_text())
+    assert kv["skip_reason"] == "" and kv["score"] == "1" and kv["counted"] == "1" and kv["gate_failed"] == "false"
+
+
+def test_cli_yardstick_run_with_no_tasks_skips(tmp_path):
+    out = tmp_path / "out.txt"
+    host = FakeHost(tmp_path)
+    assert main(["yardstick", "run", "--github-output", str(out)], host=host, state=State(tmp_path / "state"),
+                now=T0) == 0
+    assert _kv(out.read_text())["skip_reason"] == "no_tasks"
+    assert host.kinds("ask") == []
+
+
+def test_cli_yardstick_run_writes_outputs_and_gate(tmp_path, monkeypatch, capsys):
+    state = State(tmp_path / "state")
+    tasks_root = state.root / "yardstick" / "tasks"
+    _write_task(tasks_root, "acme-a")
+    _write_task(tasks_root, "acme-b")
+    _write_task(tasks_root, "acme-c")
+    _record(state, "20261118T190700Z-0000", {"acme-a": True, "acme-b": True, "acme-c": True})
+    host = FakeHost(tmp_path, check_rc=lambda folder: 0 if folder.endswith("acme-a") else 1)
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)  # the CLI waits with the real sleep: make it instant
+    out = tmp_path / "out.txt"
+
+    rc = main(["yardstick", "run", "--gate", "--github-output", str(out)], host=host, state=state, now=T0)
+
+    assert rc == 0
+    kv = _kv(out.read_text())
+    assert kv["score"] == "1" and kv["counted"] == "3" and kv["skip_reason"] == ""
+    assert re.fullmatch(r"20261119T190700Z-[0-9a-f]{4}", kv["run_id"])
+    assert kv["gate_failed"] == "true"
+    printed = capsys.readouterr()
+    assert printed.out.strip().splitlines()[-1] == "score=1/3"
+    assert "acme" not in printed.out and "acme" not in printed.err
+
+
+def test_cli_yardstick_run_only_named_tasks(tmp_path, monkeypatch, capsys):
+    state = State(tmp_path / "state")
+    tasks_root = state.root / "yardstick" / "tasks"
+    _write_task(tasks_root, "t1")
+    _write_task(tasks_root, "t2")
+    host = FakeHost(tmp_path)
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+
+    assert main(["yardstick", "run", "--tasks", "t2"], host=host, state=state, now=T0) == 0
+    assert [ask[2].rsplit("/", 1)[1] for ask in host.kinds("ask")] == ["t2"]
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "score=1/1"
+
+    assert main(["yardstick", "run", "--tasks", "nope"], host=host, state=state, now=T0) == 2
+
+
+def test_cli_yardstick_install_add_and_score(tmp_path, capsys):
+    state = State(tmp_path / "state")
+    src = tmp_path / "seeds"
+    _write_task(src, "s1")
+    _write_task(src, "s2")
+
+    assert main(["yardstick", "install", str(src)], host=FakeHost(tmp_path), state=state, now=T0) == 0
+    assert capsys.readouterr().out.strip() == "installed=2"
+    assert sorted(p.name for p in (state.root / "yardstick" / "tasks").iterdir()) == ["s1", "s2"]
+
+    extra = tmp_path / "new"
+    _write_task(extra, "n1")
+    assert main(["yardstick", "add", str(extra / "n1")], host=FakeHost(tmp_path), state=state, now=T0) == 0
+    assert capsys.readouterr().out.strip() == "added=1"
+    assert main(["yardstick", "add", str(extra / "n1")], host=FakeHost(tmp_path), state=state, now=T0) == 1
+    err = capsys.readouterr().err
+    assert "exists" in err and "n1" not in err
+    (extra / "junk").mkdir()
+    assert main(["yardstick", "add", str(extra / "junk")], host=FakeHost(tmp_path), state=state, now=T0) == 2
+    assert main(["yardstick", "install", str(tmp_path / "nowhere")], host=FakeHost(tmp_path), state=state,
+                now=T0) == 2
+    capsys.readouterr()
+
+    assert main(["yardstick", "score"], host=FakeHost(tmp_path), state=state, now=T0) == 0
+    assert "no yardstick runs yet" in capsys.readouterr().out
+
+    _record(state, "r1", {"s1": True, "s2": True})
+    _record(state, "r2", {"s1": True, "s2": False}, judged={"n1": True})
+    assert main(["yardstick", "score"], host=FakeHost(tmp_path), state=state, now=T0) == 0
+    # The latest run's score line, then the comparison -- counts only, never a task id (an assessment-written task
+    # can be named after a real product).
+    assert capsys.readouterr().out.splitlines() == [
+        "run=r2 sha=x score=1/2 judged=1",
+        "previous=r1 drop=1 regressions=0 gate_failed=false",
+    ]

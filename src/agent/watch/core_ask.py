@@ -20,20 +20,23 @@ from agent.core.sessions import WorkQueue
 # agent/core/conversations.py) — so core_collect.py's watcher can tell a review turn apart from a person's.
 SOURCE = "improve-jensen"
 ORIGIN = "improve-jensen review"
+# A fresh conversation's id is this prefix plus 8 hex. The yardstick passes its own (`V-yardstick-<run>-`); both
+# prefixes mark the conversation as improve-jensen's own (see `agent.watch.state.is_improve_jensens_own`).
+NEW_PREFIX = "V-review-"
 
 
-def enqueue_turn(conn, payloads, conversation_id: str | None, text: str) -> str:
-    """Queue `text` as a turn in `conversation_id`, or in a fresh `V-review-<8 hex>` conversation (no channel,
+def enqueue_turn(conn, payloads, conversation_id: str | None, text: str, new_prefix: str = NEW_PREFIX) -> str:
+    """Queue `text` as a turn in `conversation_id`, or in a fresh `<new_prefix><8 hex>` conversation (no channel,
     the way `scripts/smoke.py` creates its own) when `conversation_id` is `None`. Raises `KeyError` for a
     `conversation_id` that doesn't exist.
 
     The new conversation (when one is created) and the queued item go in one explicit transaction — `conn` is
     autocommit (`isolation_level=None`, see `agent.db.connect`), so without this, a `payloads.turn` that raises
-    would still leave the just-inserted `V-review-*` conversation committed, with no turn ever queued into it."""
+    would still leave the just-inserted conversation committed, with no turn ever queued into it."""
     conn.execute("BEGIN")
     try:
         if conversation_id is None:
-            conversation_id, now = f"V-review-{uuid.uuid4().hex[:8]}", db.utcnow()
+            conversation_id, now = f"{new_prefix}{uuid.uuid4().hex[:8]}", db.utcnow()
             conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, is_primary, created_at, "
                          "last_active_at) VALUES (?, NULL, NULL, NULL, 0, ?, ?)", (conversation_id, now, now))
 
@@ -52,16 +55,25 @@ def enqueue_turn(conn, payloads, conversation_id: str | None, text: str) -> str:
     return item_id
 
 
+def build_parser() -> argparse.ArgumentParser:
+    """`--conversation ID` queues into that conversation; `--new` (or neither) opens a fresh one named
+    `--new-prefix` plus 8 hex, `V-review-` unless given."""
+    parser = argparse.ArgumentParser()
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("--conversation")
+    target.add_argument("--new", action="store_true")
+    parser.add_argument("--new-prefix", default=NEW_PREFIX)
+    parser.add_argument("--text-b64", required=True)
+    return parser
+
+
 def main(argv: list[str]) -> int:
     from agent import paths
     from agent.config import load_agent_config, load_packs
     from agent.core.payloads import Payloads
     from agent.secrets import load_secrets
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--conversation")
-    parser.add_argument("--text-b64", required=True)
-    args = parser.parse_args(argv)
+    args = build_parser().parse_args(argv)
 
     conn = db.connect(paths.DB_DIR / "agent.db")
     config = load_agent_config(paths.CONFIG_DIR / "agent.toml")
@@ -69,7 +81,7 @@ def main(argv: list[str]) -> int:
                         config_dir=paths.CONFIG_DIR, secrets=load_secrets(paths.SECRETS_FILE))
 
     text = base64.b64decode(args.text_b64).decode()
-    print(enqueue_turn(conn, payloads, args.conversation, text))
+    print(enqueue_turn(conn, payloads, args.conversation, text, new_prefix=args.new_prefix))
     return 0
 
 
