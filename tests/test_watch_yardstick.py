@@ -287,10 +287,10 @@ def test_run_passes_and_records_results(tmp_path):
     assert [r["task"] for r in results] == ["explain", "fix-it"]  # one result per task, in the tasks' order
     fix = by_task["fix-it"]
     assert fix["run"] == RUN and fix["sha"] == "abc1234def"
-    assert fix["passed"] is True and fix["judged"] is False and fix["reason"] == ""
+    assert fix["passed"] is True and fix["judged"] is False and fix["reason"] == "" and fix["infra"] is False
     assert isinstance(fix["minutes"], float) and fix["minutes"] >= 0
     assert datetime.strptime(fix["ts"], "%Y-%m-%dT%H:%M:%SZ")
-    assert set(fix) >= {"run", "ts", "sha", "task", "passed", "minutes", "judged", "reason"}
+    assert set(fix) >= {"run", "ts", "sha", "task", "passed", "minutes", "judged", "reason", "infra"}
     assert by_task["explain"]["judged"] is True
 
     assert _read_results(state) == results
@@ -333,7 +333,7 @@ def test_run_times_out_without_hanging(tmp_path):
     [result] = yardstick.run(host, state, yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
                              clock=clock.clock)
 
-    assert result["passed"] is False and result["reason"] == "timeout"
+    assert result["passed"] is False and result["reason"] == "timeout" and result["infra"] is False
     assert result["minutes"] >= 2
     # Every wait went through the injected sleep, 30 s at a time, and stopped at the limit (both tries).
     assert set(clock.sleeps) == {30}
@@ -462,11 +462,57 @@ def test_run_skips_a_task_whose_folder_exists(tmp_path):
                              sleep=clock.sleep, clock=clock.clock)
 
     assert result["passed"] is False and result["reason"] == "folder exists" and result["tries"] == 1
+    assert result["infra"] is True
     assert host.kinds("ask") == []
     # One atomic attempt: no separate existence check that a folder made in between could slip past.
     [attempt] = host.kinds("tar")
     assert attempt[3] == f"mkdir -p {BASE} && {{ mkdir {BASE}/t1 || exit 17; }} && tar -x -C {BASE}/t1"
     assert not any(call[0] == "exists?" for call in host.calls)
+
+
+def test_infrastructure_failures_are_tagged_and_never_scored(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "copy")
+    _write_task(root, "build", build=True)
+    _write_task(root, "exists")
+    _write_task(root, "real")
+
+    class BrokenSetupHost(FakeHost):
+        def run(self, args, **kwargs):
+            script = str(args[-1])
+            if "/copy" in script and "|| exit 17" in script:  # the fixture's copy, either try
+                return _cp(returncode=1)
+            if script.endswith("sh build.sh"):
+                return _cp(returncode=1)
+            return super().run(args, **kwargs)
+
+    host = BrokenSetupHost(tmp_path, existing={f"{BASE}/exists"},
+                           check_rc=lambda folder: 1 if "/real" in folder else 0)
+    clock = FakeClock()
+
+    results = {r["task"]: r for r in yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root),
+                                                    run_id=RUN, sleep=clock.sleep, clock=clock.clock)}
+
+    assert {task: (r["reason"], r["infra"]) for task, r in results.items()} == {
+        "copy": ("copy failed", True), "build": ("build failed", True), "exists": ("folder exists", True),
+        "real": ("check failed", False)}
+    assert results["copy"]["tries"] == 2 and results["build"]["tries"] == 2  # each gets its retry all the same
+    assert yardstick.score(list(results.values())) == (0, 1)
+
+
+def test_time_spent_waiting_on_a_usage_limit_counts_toward_no_limit(tmp_path):
+    # A 2-minute task: a minute of work, five minutes waiting for an account with capacity, then done.
+    root = tmp_path / "tasks"
+    _write_task(root, "t1", time_limit_min=2)
+    host = FakeHost(tmp_path, status=lambda item, poll: "claimed" if poll <= 2 or poll == 13
+                    else "waiting" if poll <= 12 else "done")
+    clock = FakeClock()
+
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is True and result["tries"] == 1 and result["reason"] == ""
+    assert result["minutes"] == 7.0
 
 
 def test_run_builds_the_fixture_before_queuing(tmp_path):
@@ -579,7 +625,8 @@ def test_a_turn_that_never_leaves_the_queue_times_out_at_three_times_its_limit(t
     [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
                              sleep=clock.sleep, clock=clock.clock)
 
-    assert result["passed"] is False and result["reason"] == "timeout"
+    # Not Jensen's doing: an infrastructure failure, which no score or comparison counts.
+    assert result["passed"] is False and result["reason"] == "never left the queue" and result["infra"] is True
     assert result["minutes"] == 6.0
     assert len(host.kinds("poll")) == 12  # never cut off at the 2-minute limit while it was still queued
 
@@ -688,7 +735,7 @@ def test_run_survives_core_being_unreachable(tmp_path, capsys):
     [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
                              sleep=clock.sleep, clock=clock.clock)
 
-    assert result["passed"] is False and result["reason"] == "queue failed"
+    assert result["passed"] is False and result["reason"] == "queue failed" and result["infra"] is True
     assert host.kinds("memory")[-1][1] == "clean"
     printed = capsys.readouterr()
     assert "secret" not in printed.out + printed.err and "/home" not in printed.out + printed.err
@@ -723,9 +770,13 @@ def test_judged_tasks_not_counted_in_score():
     ]
     assert yardstick.score(results) == (1, 2)
     assert yardstick.score([]) == (0, 0)
+    assert yardstick.score(results + [{"task": "e", "passed": False, "judged": False, "infra": True}]) == (1, 2)
 
 
-def _record(state: State, run: str, outcomes: dict[str, bool], judged: dict[str, bool] | None = None) -> None:
+def _record(state: State, run: str, outcomes: dict[str, bool], judged: dict[str, bool] | None = None,
+            infra: tuple[str, ...] = ()) -> None:
+    """Result lines for `run`: mechanical `outcomes`, `judged` ones, and mechanical tasks that failed for an
+    infrastructure reason (`infra`)."""
     path = _results_file(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as fh:
@@ -735,6 +786,10 @@ def _record(state: State, run: str, outcomes: dict[str, bool], judged: dict[str,
         for task, passed in (judged or {}).items():
             fh.write(json.dumps({"run": run, "ts": "2026-11-19T00:00:00Z", "sha": "x", "task": task,
                                  "passed": passed, "minutes": 1.0, "judged": True, "reason": ""}) + "\n")
+        for task in infra:
+            fh.write(json.dumps({"run": run, "ts": "2026-11-19T00:00:00Z", "sha": "x", "task": task,
+                                 "passed": False, "minutes": 0.0, "judged": False, "reason": "copy failed",
+                                 "infra": True}) + "\n")
 
 
 def test_compare_gate_fails_on_drop_of_two_and_on_regression(tmp_path):
@@ -796,6 +851,43 @@ def test_compare_needs_two_shared_tasks_and_looks_past_a_run_that_shares_fewer(t
     _record(lone, "r1", {"a": True, "b": True})
     _record(lone, "r2", {"a": False, "c": False})
     assert yardstick.compare(lone, "r2")["previous"] is None
+
+
+def test_compare_leaves_infra_results_out(tmp_path):
+    # Two tasks the runner couldn't even set up are no drop.
+    state = State(tmp_path / "state")
+    _record(state, "r1", {"a": True, "b": True, "c": True, "d": True})
+    _record(state, "r2", {"a": True, "b": True}, infra=("c", "d"))
+    assert yardstick.compare(state, "r2") == {"previous": "r1", "shared": 2, "drop": 0, "regressions": [],
+                                              "gate_failed": False}
+
+    # An earlier infra result is no result either: never a baseline's pass or fail, never a break in a streak.
+    streak = State(tmp_path / "streak")
+    for run in ("r1", "r2", "r3"):
+        _record(streak, run, {"a": True, "b": True})
+    _record(streak, "r4", {"b": True}, infra=("a",))
+    _record(streak, "r5", {"a": False, "b": True})
+    assert yardstick.compare(streak, "r5")["regressions"] == ["a"]
+    assert yardstick.compare(streak, "r5")["previous"] == "r3"  # r4 shares only b once its infra result is out
+
+
+def test_a_gate_run_spoiled_by_infra_failures_is_retried(tmp_path):
+    gate_started = datetime(2026, 11, 19, 12, 0, 0, tzinfo=UTC)
+    before, gate_run = "20261118T190700Z-0000", "20261119T130000Z-2222"
+    state = State(tmp_path / "state")
+    _record(state, before, {"a": True, "b": True, "c": True})
+    _record(state, gate_run, {"c": True}, infra=("a", "b"))
+    assert yardstick.gate_verdict(state, gate_run, gate_started) == "retry"
+
+    # With no run before the gate, or none that ever shared its tasks, there is nothing a retry could compare it
+    # with: it passes as the baseline, as any first run does.
+    first = State(tmp_path / "first")
+    _record(first, gate_run, {"c": True}, infra=("a", "b"))
+    assert yardstick.gate_verdict(first, gate_run, gate_started) == "passed"
+    other = State(tmp_path / "other")
+    _record(other, before, {"x": True, "y": True})
+    _record(other, gate_run, {"c": True}, infra=("a", "b"))
+    assert yardstick.gate_verdict(other, gate_run, gate_started) == "passed"
 
 
 def test_gate_verdict(tmp_path):

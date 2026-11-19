@@ -21,12 +21,15 @@ already there is refused, never reused), queues its prompt as a turn in a fresh 
 (`core_ask.py`), keeps at most `concurrency` of those turns in flight, polls them (`core_items.py`) every
 `POLL_SECONDS` until each finishes or runs out its time limit, then runs its check. The time limit starts when the
 turn first leaves `queued` (a turn waiting behind people's work isn't slow), with an overall cap of three times the
-limit from when it was queued (a turn that never starts can't hold the run). A failure of a mechanical task is
-tried once more in a fresh folder, `<id>-r`. A turn that never finishes is recorded as a timeout and left running,
-never cancelled; the run moves on regardless, so a hung Jensen or a runner that is down can't hang the job: every
-`docker exec` here has a timeout, and `build.sh` and `check` also run under `timeout` inside the runner. Each task's
-result is appended to `$STATE/yardstick/results.jsonl` as soon as it is final, its `ts` in `state.FMT`. When the run
-ends, the memory notes it left behind are removed (`runner_memory.py`).
+limit from when it was queued (a turn that never starts can't hold the run); time the turn spends `waiting` for an
+account with capacity (a usage limit) counts toward neither. A failure of a mechanical task is tried once more in a
+fresh folder, `<id>-r`. A turn that never finishes is recorded as a timeout and left running, never cancelled; the
+run moves on regardless, so a hung Jensen or a runner that is down can't hang the job: every `docker exec` here has
+a timeout, and `build.sh` and `check` also run under `timeout` inside the runner. A failure that says nothing about
+Jensen -- the copy, build, queueing or check's own `docker exec` failed, the folder was already there, the turn
+never left the queue -- is recorded with `infra: true` (`INFRA_REASONS`), and no score or comparison counts it.
+Each task's result is appended to `$STATE/yardstick/results.jsonl` as soon as it is final, its `ts` in
+`state.FMT`. When the run ends, the memory notes it left behind are removed (`runner_memory.py`).
 
 Nothing here prints a task id, a note's name, a host path or anything a container wrote to stderr: task ids written
 by the assessment come from real products, and this output ends up in a public workflow log.
@@ -78,6 +81,15 @@ MIN_SHARED = 2
 _RUN_ID_FMT = "%Y%m%dT%H%M%SZ"
 _FINISHED = ("done", "failed", "cancelled")
 _QUEUED = "queued"
+# A turn a usage limit cut off, waiting for an account with capacity (`core_items.py`): its wait counts toward no
+# time limit -- that's capacity, not Jensen.
+_WAITING = "waiting"
+# Results that say nothing about Jensen: the task couldn't be set up, handed over, checked or got no turn at all.
+# They're recorded with `infra: true`, and the score, `compare` and its regressions leave them out.
+INFRA_REASONS = ("queue failed", "queue error", "copy failed", "build failed", "check error", "folder exists",
+                 "never left the queue", "skipped: time budget")
+# Failures that are never retried: the folder is someone else's, or the run is out of time.
+_NO_RETRY = ("folder exists", "skipped: time budget")
 # Exit codes of `timeout` when it stopped the command: 124 after SIGTERM, 137 when it had to SIGKILL it too.
 _TIMED_OUT = (124, 137)
 # The exit code the copy uses when the task's folder is already there (its plain `mkdir` failed).
@@ -272,8 +284,8 @@ def _failed_gate_runs(state: State) -> set[str]:
 
 
 def score(results: list[dict]) -> tuple[int, int]:
-    """`(passed, counted)` over the mechanical tasks only; judged ones never count."""
-    counted = [r for r in results if not r.get("judged")]
+    """`(passed, counted)` over the mechanical tasks only; judged ones and infrastructure failures never count."""
+    counted = [r for r in results if not r.get("judged") and not r.get("infra")]
     return sum(1 for r in counted if r.get("passed") is True), len(counted)
 
 
@@ -301,7 +313,8 @@ def _run_started(run_id: str, first_ts: datetime | None) -> datetime | None:
 @dataclass
 class _Runs:
     order: list[str]  # run ids in the order they first appear in the results file
-    by_run: dict[str, dict[str, bool]]  # each run's mechanical results by task
+    by_run: dict[str, dict[str, bool]]  # each run's mechanical results by task, infrastructure failures left out
+    mechanical: dict[str, set[str]]  # each run's mechanical tasks, infrastructure failures included
     started: dict[str, datetime | None]  # each run's start (`_run_started`)
     failed_gates: set[str]  # runs whose gate verdict was `failed` (`record_gate_run`)
 
@@ -317,19 +330,22 @@ class _Runs:
 def _runs(state: State) -> _Runs:
     order: list[str] = []
     by_run: dict[str, dict[str, bool]] = {}
+    mechanical: dict[str, set[str]] = {}
     first_ts: dict[str, datetime] = {}
     for record in read_results(state):
         run_id = str(record["run"])
         if run_id not in by_run:
             order.append(run_id)
-            by_run[run_id] = {}
+            by_run[run_id], mechanical[run_id] = {}, set()
         if not record.get("judged"):
-            by_run[run_id][str(record["task"])] = record.get("passed") is True
+            mechanical[run_id].add(str(record["task"]))
+            if not record.get("infra"):
+                by_run[run_id][str(record["task"])] = record.get("passed") is True
         ts = _parse_ts(record.get("ts"))
         if ts is not None and (run_id not in first_ts or ts < first_ts[run_id]):
             first_ts[run_id] = ts
-    return _Runs(order, by_run, {run_id: _run_started(run_id, first_ts.get(run_id)) for run_id in order},
-                 _failed_gate_runs(state))
+    return _Runs(order, by_run, mechanical,
+                 {run_id: _run_started(run_id, first_ts.get(run_id)) for run_id in order}, _failed_gate_runs(state))
 
 
 def compare(state: State, current_run_id: str, before: datetime | None = None) -> dict:
@@ -337,7 +353,7 @@ def compare(state: State, current_run_id: str, before: datetime | None = None) -
     it (`previous`, `None` when no earlier run does; `shared`, how many). `drop` is how many fewer of those shared
     tasks passed now; a task added since can't move it. A regression is a mechanical task that passed each of its
     last 3 earlier runs and fails now (after its retry). The gate fails on a drop of 2 or more, or on any
-    regression.
+    regression. An infrastructure failure (`INFRA_REASONS`) is no result at all, in this run or an earlier one.
 
     A gate run whose verdict was `failed` is never an earlier run: the change it measured was reverted. With
     `before` (a gate's `started`), only runs that started before it count as earlier: a nightly run that landed
@@ -371,10 +387,18 @@ def gate_verdict(state: State, run_id: str, gate_started: datetime | None = None
     """What the run `run_id` says about the change a gate (started at `gate_started`) is measuring: `failed` or
     `passed` from `compare`, against runs that started before the gate only. With no earlier run it can be
     compared with (none shares `MIN_SHARED` mechanical tasks with it) it is `passed`, and this run becomes the
-    baseline: waiting wouldn't change that. `retry` when the run recorded no results at all."""
-    if run_id not in _runs(state).order:
+    baseline: waiting wouldn't change that. `retry` when the run recorded no results at all, or when an earlier run
+    would have been comparable but for this run's infrastructure failures: the next gate run may get through."""
+    runs = _runs(state)
+    if run_id not in runs.order:
         return "retry"
-    return "failed" if compare(state, run_id, before=gate_started)["gate_failed"] else "passed"
+    comparison = compare(state, run_id, before=gate_started)
+    if comparison["gate_failed"]:
+        return "failed"
+    if comparison["previous"] is None and any(len(set(runs.by_run[r]) & runs.mechanical[run_id]) >= MIN_SHARED
+                                              for r in runs.earlier(run_id, gate_started)):
+        return "retry"
+    return "passed"
 
 
 # -- run --
@@ -388,12 +412,35 @@ class _Attempt:
     item: str = ""
     started: float = 0.0  # when the turn was queued
     running: float | None = None  # when a poll first saw it out of `queued`
+    last_status: str | None = None  # what the last poll that knew of it said
+    waited: float = 0.0  # time spent `waiting` on a usage limit, up to `waiting_since`
+    waiting_since: float | None = None  # when a poll first saw the current wait
+
+    def saw(self, status: str | None, now: float) -> None:
+        """Note what a poll at `now` said (`None`: no news)."""
+        if status is None:
+            return
+        self.last_status = status
+        if status != _QUEUED and self.running is None:
+            self.running = now
+        if status == _WAITING:
+            if self.waiting_since is None:
+                self.waiting_since = now
+        elif self.waiting_since is not None:
+            self.waited += now - self.waiting_since
+            self.waiting_since = None
+
+    def never_left_the_queue(self) -> bool:
+        return self.running is None and self.last_status == _QUEUED
 
     def timed_out(self, now: float) -> bool:
+        """Past its time limit, from when it left the queue, or past the overall cap, from when it was queued.
+        Time spent `waiting` counts toward neither."""
         limit = self.task.time_limit_min * 60
-        if self.running is not None and now - self.running >= limit:
+        waited = self.waited + (now - self.waiting_since if self.waiting_since is not None else 0.0)
+        if self.running is not None and now - self.running - waited >= limit:
             return True
-        return now - self.started >= QUEUED_CAP_FACTOR * limit
+        return now - self.started - waited >= QUEUED_CAP_FACTOR * limit
 
 
 def _normalized(info: tarfile.TarInfo) -> tarfile.TarInfo:
@@ -563,13 +610,13 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None 
 
     def finish(attempt: _Attempt, passed: bool, reason: str) -> None:
         task = attempt.task
-        if not passed and task.mechanical and attempt.tries == 1 and reason != "folder exists":
+        if not passed and task.mechanical and attempt.tries == 1 and reason not in _NO_RETRY:
             pending.append((task, 2))
             return
         minutes = round((clock() - attempt.started) / 60, 1) if attempt.item else 0.0
         record = {"run": run_id, "ts": datetime.now(UTC).strftime(FMT), "sha": sha, "task": task.id,
                   "passed": passed, "minutes": minutes, "judged": not task.mechanical, "reason": reason,
-                  "tries": attempt.tries}
+                  "infra": reason in INFRA_REASONS, "tries": attempt.tries}
         if gate is not None:
             record["gate"] = gate
         final[task.id] = record
@@ -598,14 +645,13 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, gate: str | None 
             for attempt in list(in_flight):
                 entry = statuses.get(attempt.item)
                 status = entry.get("status") if isinstance(entry, dict) else None
-                if status is not None and status != _QUEUED and attempt.running is None:
-                    attempt.running = clock()
+                attempt.saw(status, clock())
                 if status in _FINISHED:
                     in_flight.remove(attempt)
                     finish(attempt, *_check(host, attempt, status))
                 elif attempt.timed_out(clock()):
                     in_flight.remove(attempt)  # left running in Jensen: never cancelled
-                    finish(attempt, False, "timeout")
+                    finish(attempt, False, "never left the queue" if attempt.never_left_the_queue() else "timeout")
     finally:
         report = _memory(host, ["--root", MEMORY_ROOT, "--since", str(since), "--marker", MARKER,
                                 "--existing-file", before])
