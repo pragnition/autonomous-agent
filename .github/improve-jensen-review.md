@@ -69,6 +69,8 @@ No provable defects: send nothing.
 - No issue fits: open one in the seeded issues' shape, labelled `jensen-watch` and its area.
 
 ## Rules
+- Your run ends when your turn ends: anything still running then is lost. Subagents and commands run in the foreground
+  (each Bash call at most 10 minutes); never end your turn to wait for one.
 - **This repo is public.** improve-jensen's issues, PRs, commits and workflow logs never hold:
   - secrets;
   - conversation text;

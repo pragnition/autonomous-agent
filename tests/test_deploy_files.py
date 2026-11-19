@@ -282,6 +282,11 @@ def test_ci_runs_tests_on_github_hosted_runners_only(ci):
         assert "self-hosted" not in _runs_on_labels(job), name
 
 
+def test_improve_jensen_waits_for_its_subagents(improve_jensen):
+    # A job ends when Claude's turn ends: a background subagent would die with nothing written.
+    assert improve_jensen["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
 def test_improve_jensen_triggers_and_jobs(improve_jensen):
     on = improve_jensen[True]
     assert on["schedule"] == [{"cron": "17 * * * *"}, {"cron": "13 */6 * * *"}, {"cron": "*/10 * * * *"}]
