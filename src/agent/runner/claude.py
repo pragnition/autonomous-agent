@@ -12,8 +12,9 @@ Each attempt's prompt, and every message that arrives while the run is going, is
 own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
 until each one has been: a result from before the prompt was read (a background task from an earlier turn finishing)
 doesn't answer this turn. It also reads on past a result while the session has background agents running: that turn
-end is interim, and each agent wakes the session again when it finishes. A Bash call that only waits is turned away
-(idle_wait), since nothing sent into the session is read until the call returns.
+end is interim, and each agent wakes the session again when it finishes. A stop then (a cancel, stop_all, a handoff
+off an account over its cap) ends the run at once, since no turn is running to send a result. A Bash call that only
+waits is turned away (idle_wait), since nothing sent into the session is read until the call returns.
 
 A run has no time or step limit of its own. A session that sends nothing for `idle_s` is stuck, and is stopped as
 stalled. A run with a time budget (`timeout_s`, which a scheduled run has) is stopped when it runs out, however busy
@@ -182,6 +183,7 @@ class ClaudeRunner:
         if active:
             client, state = active
             state["reason"] = state["reason"] or "external"
+            self._end_between_turns(state)
             await client.interrupt()
 
     def release(self, run_id: str) -> None:
@@ -223,14 +225,26 @@ class ClaudeRunner:
             status = usage.status_of(state["account"])
             if status in ACCOUNT_TROUBLE:
                 state["reason"], state["trouble"] = "watchdog", status
+                self._end_between_turns(state)
                 await client.interrupt()
                 return
             # Over the soft cap: hand off like a rejected account, but only when the fresh session would land on an
             # account under its cap and the run may still fork; otherwise keep going here rather than end the run
             if state["can_fork"] and usage.over_cap(state["account"]) and usage.handoff_target(state["account"]):
                 state["reason"], state["trouble"] = "watchdog", "over its 5-hour soft cap"
+                self._end_between_turns(state)
                 await client.interrupt()
                 return
+
+    @staticmethod
+    def _end_between_turns(state: dict) -> None:
+        """A stop ends the run at the result the CLI sends for the turn it interrupts. Between turns (the session
+        waiting on its background agents) there is no turn to interrupt and no result coming, so the attempt's window
+        closes now instead (see deadline in _attempt)."""
+        window = state.get("window")
+        if window is not None and not state["turn"]:
+            with contextlib.suppress(RuntimeError):  # the window has already closed: the attempt is ending anyway
+                window.reschedule(asyncio.get_running_loop().time())
 
     async def _account_status(self, state: dict) -> str | None:
         try:
@@ -253,6 +267,8 @@ class ClaudeRunner:
         loop = asyncio.get_running_loop()
 
         def deadline() -> float:  # the idle window from now, cut short by the run's time budget
+            if state["reason"] and not state["turn"]:  # stopped between turns: no result is coming (_end_between_turns)
+                return loop.time()
             idle = loop.time() + spec.idle_s
             return idle if end is None else min(idle, end)
 
@@ -262,9 +278,10 @@ class ClaudeRunner:
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
         # tasks: the background agents the session has running (id -> description); a result while any is running is
-        # an interim end of turn
+        # an interim end of turn. turn: a turn is under way (from its prompt or its first main-thread message to its
+        # result), so a stop gets a result to end at; between turns it doesn't (_end_between_turns)
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False, "can_fork": can_fork,
-                 "accepting": False, "pending": {prompt_uuid: None}, "tasks": {}}
+                 "accepting": False, "pending": {prompt_uuid: None}, "tasks": {}, "turn": True, "window": None}
         self._active[spec.run_id] = (client, state)
         read = self._read.setdefault(spec.run_id, [])
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -275,6 +292,7 @@ class ClaudeRunner:
         watchdog = asyncio.create_task(self._watch(client, state))
         try:
             async with asyncio.timeout_at(deadline()) as window:
+                state["window"] = window
                 await client.connect()
                 await client.query(_user_message(prompt_uuid, prompt))
                 state["accepting"] = True
@@ -291,11 +309,15 @@ class ClaudeRunner:
                         with contextlib.suppress(ProxyUnavailable):
                             state["account"] = await self.proxy.whoami(state["sid"])
                     if isinstance(msg, UserMessage) and msg.uuid in state["pending"]:
+                        state["turn"] = True  # the CLI read a message: a turn answers it
                         if (item_id := state["pending"].pop(msg.uuid)) is not None:
                             read.append(item_id)
+                    elif isinstance(msg, AssistantMessage) and msg.parent_tool_use_id is None:
+                        state["turn"] = True  # the main thread is working (a finished agent woke it, say)
                     if isinstance(msg, SystemMessage):
                         track_task(state["tasks"], msg)
                     if isinstance(msg, ResultMessage):
+                        state["turn"] = False
                         switching = msg.is_error and msg.api_error_status in FORK_STATUSES
                         # A result from before the prompt was read answers something else (a background task from
                         # an earlier turn finishing): it doesn't count, unless it moves the run to another account
@@ -313,8 +335,9 @@ class ClaudeRunner:
                             state["accepting"] = False
                             break
         except TimeoutError:
-            state["reason"] = "timeout" if end is not None and window.when() == end else "stalled"
-            await client.interrupt()
+            if state["reason"] is None:  # the idle window or the time budget ran out; a stop has its own reason
+                state["reason"] = "timeout" if end is not None and window.when() == end else "stalled"
+                await client.interrupt()
         finally:
             state["accepting"] = False
             watchdog.cancel()

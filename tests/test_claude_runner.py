@@ -696,3 +696,40 @@ async def test_an_agent_that_failed_or_was_stopped_no_longer_holds_the_run_open(
 def test_the_tasks_waited_on_are_the_sdks_own_sets():
     assert claude.WAITED_TASK_TYPES is DEFERRING_TASK_TYPES and claude.TASK_ENDED is TERMINAL_TASK_STATUSES
     assert "remote_agent" not in claude.WAITED_TASK_TYPES
+
+
+async def test_a_stop_while_agents_run_between_turns_ends_the_run_at_once(tmp_path):
+    # Between turns the CLI has no turn to interrupt, so no result comes: the run must not wait for one
+    runner, clients = make_runner(tmp_path, [[echo_prompt, task_started("a1"), result(text="lanes running"), 30.0]])
+    seen = []
+
+    async def on_message(record):
+        seen.append(record["type"])
+    task = asyncio.create_task(runner.run(spec(tmp_path, on_message=on_message)))
+    await wait_until(lambda: "ResultMessage" in seen)
+    await runner.interrupt("R1")
+    out = await asyncio.wait_for(task, 1)
+    assert (out.outcome, out.summary, clients[0].interrupted) == ("interrupted", "lanes running", True)
+
+
+async def test_a_soft_cap_handoff_while_agents_run_between_turns_moves_at_once(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, task_started("a1"), result(text="lanes"), 30.0],
+                                             [echo_prompt, result()]],
+                                  proxy=CapProxy({"maple": (2, 0.66), "oak": (1, 0.1)}), watchdog_s=0.05)
+    out = await asyncio.wait_for(runner.run(spec(tmp_path, handoff=lambda sid, transcript: "HANDOFF " + sid)), 1)
+    assert (out.outcome, out.forks, clients[0].interrupted) == ("done", 1, True)
+
+
+async def test_a_stop_while_a_woken_turn_runs_still_waits_for_its_result(tmp_path):
+    # an agent finished and woke the session: that turn is running, so the stop ends the run at its result
+    runner, _ = make_runner(tmp_path, [[echo_prompt, task_started("a1"), result(text="lanes running"), task_done("a1"),
+                                        assistant, WAIT_STOP, result(text="stopped here"), 30.0]])
+    seen = []
+
+    async def on_message(record):
+        seen.append(record["type"])
+    task = asyncio.create_task(runner.run(spec(tmp_path, on_message=on_message)))
+    await wait_until(lambda: "AssistantMessage" in seen)
+    await runner.interrupt("R1")
+    out = await asyncio.wait_for(task, 1)
+    assert (out.outcome, out.summary) == ("interrupted", "lanes running\n\nstopped here")
