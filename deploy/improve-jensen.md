@@ -213,10 +213,10 @@ From now on, deploy with `cd ~/autonomous-agent && just deploy`. Its exit codes:
 - 3: pending: Jensen is busy or another deploy holds the lock. The hourly watch retries it.
 
 `seed` creates the labels (`jensen-watch`, `ships`, `works`, `long-runs`, `people`, `fixing`, `needs-person`,
-`stuck`, `project`, `proposed`, `approved`, `rejected`, `jensen-assessment`) and files the starting issues that
-aren't open already. An install switched on before Slack approval existed runs the same `seed` line once more, from
-`~/autonomous-agent` and logged in to `gh` as in step 3 (log out afterwards): it adds the new labels (`proposed`,
-`approved`, `rejected`) and skips the issues that are open already.
+`stuck`, `project`, `proposed`, `approved`, `rejected`, `learned`, `jensen-assessment`) and files the starting issues
+that aren't open already. An install switched on before Slack approval or `learned` existed runs the same `seed` line
+once more, from `~/autonomous-agent` and logged in to `gh` as in step 3 (log out afterwards): it adds the new labels
+(`proposed`, `approved`, `rejected`, `learned`) and skips the issues that are open already.
 
 ## 9. Slack approval
 
@@ -227,8 +227,12 @@ want as one short numbered list in `#autonomous-agent`:
 *improve-jensen wants to change Jensen*
 1. <what will change in Jensen> (#31)
 2. <what will change in Jensen> (#40)
+3. Learned: <what Jensen will keep> (from <name>) (#52)
 Reply here: `approve` ships them all, `approve 1 3` ships some, `reject 2` drops one.
 ```
+
+A `Learned:` item comes from the assessment: something that worked that Jensen should keep, such as a way of driving
+it or a skill installed for one project, credited to whose session it came from. The credit is only in Slack.
 
 - The list goes out as Jensen's Slack bot (`SLACK_BOT_TOKEN` in `data/secrets/agent.env`), which already has the
   scopes it needs. The bot must be in the channel: it joins a public channel by itself; invite it to a private one

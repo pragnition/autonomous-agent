@@ -124,7 +124,8 @@ From about 320 messages from people:
 6. **The team can follow what improve-jensen saw, changed and why,** in issues and PRs, without being notified every
    hour.
 7. **Four times a day, improve-jensen assesses Jensen against the goal** and ranks what is holding it back, with
-   evidence, without anyone naming the areas. The top items become its proposals, including multi-day projects.
+   evidence, without anyone naming the areas. The top items become its proposals, including multi-day projects. It
+   also asks what worked that Jensen should keep, and proposes that too.
 8. **Jensen reports what gets in its way,** and improve-jensen replies and tells Jensen what changed.
 
 ## Non-goals
@@ -134,7 +135,8 @@ From about 320 messages from people:
   nothing measures it afterwards.
 - improve-jensen fixing product code itself. The products are Jensen's, and their defects are handed to Jensen.
 - Rubrics, checklists or build skills of our own. Quality comes from mechanical checks and maintained tools (see the
-  off-the-shelf toolkit design).
+  off-the-shelf toolkit design). The one exception is a short skill that writes down a way people drove Jensen that
+  worked, once a person approves it (§11).
 - A scheduled scan of upstream releases. Each fix run checks whether an existing Claude Code feature or maintained
   plugin already solves its problem.
 - Pruning Jensen's toolkit by usage. Skills like test-driven development and verification go unused because Jensen's
@@ -285,6 +287,8 @@ New signals are added only in a PR of their own (§7).
   - one line per tool call: the tool's name plus the first 300 characters of its input and output;
   - tool errors, up to 500 characters;
   - the turn's signals.
+- What Jensen added in each turn (installs, and the skills, memory, instructions and settings files it wrote), and
+  the skills it used in the window.
 - The window's totals for each signal.
 - The new Jensen PRs.
 - It stays under about 100k tokens by shortening tool lines first. People's messages and Jensen's replies are never
@@ -354,7 +358,8 @@ Then:
 ### 5. The record: GitHub issues
 
 - **One issue per problem.** Each is labelled `jensen-watch` and with its area (`ships`, `works`, `long-runs`,
-  `people`). The title states the problem in plain words.
+  `people`). The title states the problem in plain words. Something that worked and that Jensen should keep is
+  labelled `jensen-watch` and `learned` instead (§11).
 - **The description** says:
   - what goes wrong, in general terms;
   - why it matters;
@@ -514,7 +519,22 @@ The list stays at 10 items or fewer.
 - **Its proposals** in `assess-plan.json`: up to three of the top-ranked items, fix-scale or project, that aren't
   already proposed, approved, rejected, stuck or being fixed, each with one short line saying what will change in
   Jensen. A step after the run posts them in Slack (§12). A proposed item needs no other qualification: the
-  assessment's evidence is enough.
+  assessment's evidence is enough. Up to two learned items (below) go in the same list.
+
+**What worked.** Next to what holds Jensen back, the assessment asks "what worked that Jensen should keep?". It reads
+the digests' "What Jensen added" sections and conversations, the skills and `CLAUDE.md`/`AGENTS.md` files in Jensen's
+checkouts, its Claude home and its memory, and looks for:
+- ways people drove Jensen that worked (the outcome was accepted, with little back-and-forth) and that repeat, in two
+  sessions or from two people;
+- skills, plugins or tools installed or written for one project or one person that would help Jensen everywhere;
+- instructions people repeat across threads or projects.
+
+Each becomes a `learned` issue in general terms. In Slack, a learned item is marked as such and credits whose
+session it came from; the credit never reaches GitHub. A third-party skill or plugin is held to the same checks as
+any install (maintained, safe in a headless runner). Once approved, a fix run ships it: a skill or plugin is
+installed for every project in Jensen's Claude home, and a way of driving or a repeated instruction becomes a short
+skill in the core plugin, or one line in Jensen's prompt. Manual approval keeps the toolkit from bloating. The
+hourly watch proposes problems only.
 
 It skips the hour when nothing is new since the last assessment and no project is active. It posts nothing in Slack
 itself.
@@ -531,6 +551,7 @@ improve-jensen changes Jensen only once a person approves the change.
 *improve-jensen wants to change Jensen*
 1. <what will change in Jensen> (#31)
 2. <what will change in Jensen> (#40)
+3. Learned: <what Jensen will keep> (from <name>) (#52)
 Reply here: `approve` ships them all, `approve 1 3` ships some, `reject 2` drops one.
 ```
 
