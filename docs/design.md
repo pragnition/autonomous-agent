@@ -460,7 +460,7 @@ tier. Every reply is scrubbed of secrets.
 | Tier | Tools |
 |---|---|
 | read | `status`, `list_tasks`, `get_task`, `read_thread`, `slack_read`, `kpis`, `gh_prs`, `gh_checks`, `gh_ci_log`, `gh_issue`, `gh_file`, `linear_issue` |
-| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `spawn_agent`, `park`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
+| act | `post_update`, `ask`, `react`, `pin`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `spawn_agent`, `park`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
 | admin | `resume_all`, `az_login` (one `<cli>_login` per `[cli.<name>]` with a `login` command), `linear_install` |
 
 - `work_on`, `open_pr` and `post_files` do local work in the runner (checkout, checks and push, reading files) and
@@ -481,6 +481,9 @@ tier. Every reply is scrubbed of secrets.
   conversation can have at most 3 running at once and all conversations together 4 (a parked one counts). An agent
   whose turn is cancelled (`stop_all`) doesn't report back. `spawned_agents` in `agent.db` records each one
   (`core/spawned.py`).
+- `post_update` returns the posted message's ts. `pin(ts, channel, unpin)` pins a message to its channel (or
+  unpins it) with core's bot token (the `pins:write` scope); by default the message being answered, in the
+  conversation's channel.
 - `read_thread` reads the conversation's thread, or a DM chat's messages since it started.
 - `slack_read(method, params)` makes one read-only Slack Web API call with core's bot token. Allowed methods:
   `conversations.history`, `conversations.replies`, `conversations.list`, `conversations.info`, `users.info`,
