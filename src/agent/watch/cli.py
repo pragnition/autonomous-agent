@@ -48,9 +48,9 @@ from agent.watch.slack import Slack, SlackError, load_approvers, load_token
 from agent.watch.state import FMT, State
 
 # Labels every install needs regardless of what the seed file's own entries use, so a fresh repo always has
-# somewhere for the fix job and the record to put these states.
+# somewhere for the fix job and the record to put these states (and the assessment its "what worked" issues).
 _STATE_LABELS = ("fixing", "needs-person", "stuck", "project", "proposed", "approved", "rejected",
-                 "jensen-assessment")
+                 "jensen-assessment", "learned")
 
 
 def _bool_str(value: bool) -> str:

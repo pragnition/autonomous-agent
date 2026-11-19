@@ -159,6 +159,40 @@ def test_post_proposals_posts_one_numbered_message_and_labels_each_issue(tmp_pat
     assert [p.name for p in (tmp_path / "proposals").iterdir()] == ["1700000000.000200.json"]
 
 
+def test_post_proposals_marks_learned_items_and_credits_them_in_slack_only(tmp_path):
+    gh = FakeGh({31: set(), 40: {"learned"}, 52: {"learned"}})
+    slack = FakeSlack()
+    items = [{"issue": 31, "change": "Retry flaky tool calls"},
+             {"issue": 40, "change": "Make the <x> skill a default", "kind": "learned", "credit": "Some <Person> & co"},
+             {"issue": 52, "change": "Plan before a long build", "kind": "learned"}]
+
+    assert post_proposals(slack, gh, tmp_path, "C9", items, REPO, T0) == 3
+
+    assert slack.posts[0][1].splitlines()[1:4] == [
+        "1. Retry flaky tool calls (<https://github.com/acme/widgets/issues/31|#31>)",
+        "2. Learned: Make the &lt;x&gt; skill a default (from Some &lt;Person&gt; &amp; co) "
+        "(<https://github.com/acme/widgets/issues/40|#40>)",
+        "3. Learned: Plan before a long build (<https://github.com/acme/widgets/issues/52|#52>)",
+    ]
+    assert gh.comments == [(31, "Proposed in Slack: Retry flaky tool calls"),
+                           (40, "Proposed in Slack: Make the <x> skill a default"),
+                           (52, "Proposed in Slack: Plan before a long build")]
+    assert not any("Person" in " ".join(call) for call in gh.calls)
+    record = json.loads((tmp_path / "proposals" / "1700000000.000200.json").read_text())
+    assert record["items"] == [
+        {"n": 1, "issue": 31, "change": "Retry flaky tool calls"},
+        {"n": 2, "issue": 40, "change": "Make the <x> skill a default", "kind": "learned",
+         "credit": "Some <Person> & co"},
+        {"n": 3, "issue": 52, "change": "Plan before a long build", "kind": "learned"}]
+
+
+def test_a_credit_on_an_item_that_isnt_learned_is_not_shown(tmp_path):
+    slack = FakeSlack()
+    post_proposals(slack, FakeGh({31: set()}), tmp_path, "C9", [{"issue": 31, "change": "a", "credit": "Someone"}],
+                   REPO, T0)
+    assert slack.posts[0][1].splitlines()[1] == "1. a (<https://github.com/acme/widgets/issues/31|#31>)"
+
+
 @pytest.mark.parametrize("label", ["proposed", "approved", "rejected", "fixing", "stuck", "needs-person"])
 def test_post_proposals_drops_issues_already_in_the_flow(tmp_path, label):
     gh = FakeGh({31: {label}, 40: {"project"}})
