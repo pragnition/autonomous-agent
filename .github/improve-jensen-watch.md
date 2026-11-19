@@ -117,10 +117,11 @@ pending is left to the section above):
     revert.` and make the issue the plan's `fix`, whatever the rules below say, with no `Picked for a fix:` comment.
     With two such comments already, the revert has failed twice: add `needs-person`, @-mention the admins with what
     was tried, and send them the Slack DM.
-- A failed gate whose revert didn't finish: an open issue whose newest `Yardstick gate failed at <merge sha>: picked
-  to revert.` (or `Yardstick gate failed (host change): picked to revert.`) comment has no `Attempt failed:` comment
-  after it, while no job that deploys is running. Find them with `gh issue list --state open --search '"Yardstick
-  gate failed" in:comments' --json number,title,labels`. Skip one that has `needs-person`. Treat it like a failed
+- A failed gate whose revert didn't finish: an issue, open or closed (a respond run closes its issue before its
+  gate runs), whose newest `Yardstick gate failed at <merge sha>: picked to revert.` (or `Yardstick gate failed
+  (host change): picked to revert.`) comment has no `Attempt failed:` comment after it, while no job that deploys
+  is running. Find them with `gh issue list --state all --search '"Yardstick gate failed" in:comments
+  updated:>=<7 days ago>' --json number,title,labels`. Skip one that has `needs-person`. Treat it like a failed
   deploy: count its `Yardstick gate failed` comments since its last `Deployed` comment. With one (the workflow's;
   the `gate-revert` run died before the revert landed), comment the same line again and make the issue the plan's
   `fix`, whatever the rules below say, with no `Picked for a fix:` comment. With two, the revert has failed twice:
@@ -146,8 +147,10 @@ Write `plan.json` in the state folder on every run, even when it's empty:
 - `reviews`: each PR under "New PRs" in the digest, with the `conversation=` value from its line (`null` for
   `none`). Skip a PR whose URL is already in one of the state folder's `runs/*-reviews.json` files. At most 10,
   merged PRs first.
-- `fix`: at most one issue, and only when no open issue has `fixing` or `gating` and
-  `python scripts/jensen_watch.py gate status` shows no active gate, so the yardstick measures one change at a time.
+- `fix`: at most one issue, and only when no open issue has `fixing` or `gating`,
+  `python scripts/jensen_watch.py gate status` shows no active gate, and no `gate-revert` job is running or queued
+  (`gh run list --workflow improve-jensen.yml --status in_progress` and the same with `--status queued`, checked
+  the same way as above for a job not `completed`), so the yardstick measures one change at a time.
   An issue qualifies on any one of:
   - it was seen twice, in two conversations or in two PRs (a note from Jensen counts as one);
   - a person corrected Jensen about it or complained;

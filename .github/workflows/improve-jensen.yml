@@ -246,7 +246,8 @@ jobs:
           ${{ env.GATE == 'true' && '--gate' || '' }}
           --github-output "$GITHUB_OUTPUT"
       # `gate_result` is passed or failed once the gate was measured; retry (couldn't measure it this time) and none
-      # (no active gate) leave the gate as it is. `--started` ends only the gate this run measured.
+      # (no active gate, or no tasks installed -- the gate stays active and retries) leave the gate as it is.
+      # `--started` ends only the gate this run measured.
       - name: gate end
         id: gate-end
         if: steps.yardstick.outputs.gate_result == 'passed' || steps.yardstick.outputs.gate_result == 'failed'
@@ -297,6 +298,18 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
+      # A safety net: if the comment step in `yardstick` above didn't run or failed, this revert would otherwise
+      # leave the issue without its recovery marker. Idempotent: skip if the comment is already there.
+      - name: ensure the failed gate's comment is on its issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(python scripts/jensen_watch.py gate status --last)
+          issue=$(python -c 'import json, sys; print(json.loads(sys.argv[1])["issue"])' "$last")
+          body=$(python -c 'import json, sys; g = json.loads(sys.argv[1]); print("Yardstick gate failed " + (
+            "at " + g["handle"] if g["kind"] == "repo" else "(host change)") + ": picked to revert.")' "$last")
+          gh issue view "$issue" --json comments -R ${{ github.repository }} --jq '.comments[].body' |
+            grep -qF "$body" || gh issue comment "$issue" --body "$body" -R ${{ github.repository }}
       - name: claude
         uses: anthropics/claude-code-action@v1
         with:
