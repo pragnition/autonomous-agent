@@ -88,7 +88,13 @@ error just skips that beat. A `cancel: true` reply interrupts the session and en
 message is written into the live session with `claude.send(run_id, item_id, origin + MIDTURN_NOTE + text)`.
 A turn ends at a result only after the CLI has echoed the turn's own prompt and every message sent into it; a
 result that comes before the prompt's echo (a background task from an earlier turn finishing) neither ends the
-turn nor counts toward its answer.
+turn nor counts toward its answer. It also doesn't end while the session has background agents running (the task
+types the SDK waits on, `local_agent` and `local_workflow`, from `task_started` until a `task_notification` or a
+terminal `task_updated`): that result is an interim end of turn, the CLI and its agents stay up, messages delivered
+meanwhile are read at once, and the turn ends at the first result after the last agent finishes, with every
+result's text joined. A stop (`cancel: true`, or the watchdog moving the run off its account) between those turns
+ends the run at once, since no turn is running to send a result. A foreground Bash call that only waits (a sleep
+over 10 s, `tail -f /dev/null`, `read -t`) is denied by a PreToolUse hook (`runner/idle_wait.py`).
 
 This is the delivered → read → done lifecycle: a message handed to a running turn is `delivered`; once the CLI
 echoes it back, the runner's next heartbeat (or its final result) lists it under `read` and the control plane
@@ -143,7 +149,8 @@ so a message this turn answered inline is never requeued even if the on-beat boo
 same thing failed or never ran. The reply is always `{"ok": true}`.
 
 A turn has no time or step limit: it runs until the session finishes. `idle_s` is how long the session may go
-without sending a single message before the runner treats it as stuck, interrupts it and reports `stalled`.
+without sending a single message before the runner treats it as stuck, interrupts it and reports `stalled`; a
+running background agent's task frames count as messages.
 `timeout_s`, when it isn't null, is the whole run's time budget, across every session it moves through; the runner
 interrupts the run when it runs out, however busy it is, and reports `timeout`. Only a scheduled run has one.
 

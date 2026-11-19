@@ -280,6 +280,11 @@ losing an item revokes its session token, and the runner interrupts the session 
 claim of the same item runs afresh. A turn has no time or step limit: it runs until the session is done. A session
 that sends nothing for `[limits] idle_minutes` (default 30) is stuck, and the runner stops it as `stalled`. A
 scheduled run, which no one is watching, also has a time budget of `schedule_hours` (default 6) for the whole run.
+A turn whose session has background agents running (the Agent tool with `run_in_background`, or a workflow) stays
+open past its result until they finish: each one wakes the session, messages sent meanwhile are read at once, and
+the reply posts after the last one. Their progress counts against `idle_minutes`, and a stop then ends the turn at
+once. A foreground Bash call that only waits (a sleep over 10 s, `tail -f /dev/null`) is turned away by a hook
+(`runner/idle_wait.py`), since no message reaches the session while it runs.
 
 When the runner claims a turn, core refreshes its payload from the conversation as it is at that moment: the
 session to resume, the project, the checkout and the test keys. A turn queued behind another one therefore
