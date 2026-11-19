@@ -3,11 +3,14 @@ import base64
 import json
 from pathlib import Path
 
-from claude_agent_sdk import (AssistantMessage, CLIConnectionError, ResultMessage, TaskNotificationMessage,
-                              TaskStartedMessage, TaskUpdatedMessage, TextBlock, UserMessage, tool)
+from claude_agent_sdk import (TERMINAL_TASK_STATUSES, AssistantMessage, CLIConnectionError, ResultMessage, TextBlock,
+                              UserMessage, tool)
+from claude_agent_sdk._internal.message_parser import parse_message
+from claude_agent_sdk._internal.query import DEFERRING_TASK_TYPES
 
 from agent.proxy import PLACEHOLDER_TOKEN, AccountUsage, ProxyUnavailable, SoftCap, Usage
 from agent.runner.base import RunSpec
+from agent.runner import claude
 from agent.runner.claude import ClaudeRunner
 from agent.runner.idle_wait import block_idle_waits
 
@@ -603,26 +606,29 @@ async def test_a_forking_result_before_the_prompt_is_read_still_forks(tmp_path):
     assert (out.outcome, out.forks, out.read) == ("done", 1, [])
 
 
+def task_frame(subtype, task_id, **fields):
+    """A task lifecycle frame as the CLI sends it, parsed by the SDK's own parser into its typed message."""
+    def make(c):
+        return parse_message({"type": "system", "subtype": subtype, "task_id": task_id, "uuid": f"{subtype}-{task_id}",
+                              "session_id": c.options.session_id, **fields})
+    return make
+
+
 def task_started(task_id, task_type="local_agent"):
-    def make(c):
-        return TaskStartedMessage(subtype="task_started", data={}, task_id=task_id, description="lane",
-                                  uuid=f"u-{task_id}", session_id=c.options.session_id, task_type=task_type)
-    return make
+    return task_frame("task_started", task_id, description=f"lane {task_id}", task_type=task_type)
 
 
-def task_done(task_id):
-    def make(c):
-        return TaskNotificationMessage(subtype="task_notification", data={}, task_id=task_id, status="completed",
-                                       output_file="", summary="done", uuid=f"n-{task_id}",
-                                       session_id=c.options.session_id)
-    return make
+def task_done(task_id, status="completed"):
+    return task_frame("task_notification", task_id, status=status, output_file="", summary="done")
 
 
-def task_killed(task_id):
-    def make(c):
-        return TaskUpdatedMessage(subtype="task_updated", data={}, task_id=task_id, patch={"status": "killed"},
-                                  status="killed")
-    return make
+def task_killed(task_id):  # a stopped task can report its end only here, with no notification
+    return task_frame("task_updated", task_id, patch={"status": "killed"})
+
+
+def task_progress(task_id):
+    return task_frame("task_progress", task_id, description=f"lane {task_id}", last_tool_name="Bash",
+                      usage={"total_tokens": 10, "tool_uses": 1, "duration_ms": 5})
 
 
 async def test_the_bash_hook_turning_away_idle_waits_is_on_every_session(tmp_path):
@@ -663,3 +669,30 @@ async def test_a_background_shell_does_not_hold_the_run_open(tmp_path):
     runner, _ = make_runner(tmp_path, [[echo_prompt, task_started("b1", "local_bash"), result(), HANG]])
     out = await asyncio.wait_for(runner.run(spec(tmp_path)), 2)
     assert out.outcome == "done"
+
+
+async def test_a_workflow_holds_the_run_open_like_an_agent(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, task_started("w1", "local_workflow"), result(text="flow running"),
+                                        task_done("w1"), result(text="flow done"), HANG]])
+    out = await asyncio.wait_for(runner.run(spec(tmp_path)), 2)
+    assert out.summary == "flow running\n\nflow done"
+
+
+async def test_a_remote_agent_does_not_hold_the_run_open(tmp_path):
+    # the CLI doesn't wait on a remote agent (it can be a long-running monitor), so neither does the run
+    runner, _ = make_runner(tmp_path, [[echo_prompt, task_started("r1", "remote_agent"), result(), HANG]])
+    out = await asyncio.wait_for(runner.run(spec(tmp_path)), 2)
+    assert out.outcome == "done"
+
+
+async def test_an_agent_that_failed_or_was_stopped_no_longer_holds_the_run_open(tmp_path):
+    runner, _ = make_runner(tmp_path, [[echo_prompt, task_started("a1"), task_started("a2"), result(text="running"),
+                                        task_done("a1", "failed"), result(text="a1 failed"),
+                                        task_done("a2", "stopped"), result(text="a2 stopped"), HANG]])
+    out = await asyncio.wait_for(runner.run(spec(tmp_path)), 2)
+    assert out.summary == "running\n\na1 failed\n\na2 stopped"
+
+
+def test_the_tasks_waited_on_are_the_sdks_own_sets():
+    assert claude.WAITED_TASK_TYPES is DEFERRING_TASK_TYPES and claude.TASK_ENDED is TERMINAL_TASK_STATUSES
+    assert "remote_agent" not in claude.WAITED_TASK_TYPES

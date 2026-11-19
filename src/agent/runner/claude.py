@@ -33,9 +33,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage,
-                              TaskNotificationMessage, TaskStartedMessage, TaskUpdatedMessage, UserMessage,
-                              create_sdk_mcp_server)
+from claude_agent_sdk import (TERMINAL_TASK_STATUSES, AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
+                              HookMatcher, ResultMessage, SystemMessage, UserMessage, create_sdk_mcp_server)
+# The task types the SDK keeps the CLI's stdin open for past a result (it doesn't export the set)
+from claude_agent_sdk._internal.query import DEFERRING_TASK_TYPES
 
 from agent.proxy import PLACEHOLDER_TOKEN, ProxyClient, ProxyUnavailable
 from agent.runner.base import RunResult, RunSpec
@@ -49,14 +50,30 @@ PROXY_VARS = {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
 # The most the SDK reads of one message from the CLI. Its default, 1 MiB, ends the session on an image of ~750 KB
 # (a tool result carries it as base64, a third larger): a Slack screenshot or a full-page Playwright one.
 MAX_BUFFER_SIZE = 20 * 1024 * 1024
-# The terminal states of a background task, from a task_notification ("stopped") or a task_updated ("killed")
-TASK_DONE = {"completed", "failed", "stopped", "killed"}
+# The background tasks a run stays open for: the SDK's own sets. Delegated agent work (local agents and workflows),
+# which finishes by itself and wakes the session when it does; not background shells or monitors (a dev server runs
+# until it's stopped) and not remote agents, which can be long-running monitors the CLI won't wait on either. A task
+# has ended on a terminal status from a task_notification ("stopped") or a task_updated ("killed").
+WAITED_TASK_TYPES, TASK_ENDED = DEFERRING_TASK_TYPES, TERMINAL_TASK_STATUSES
 
 
-def _waits_for(task_type: str | None) -> bool:
-    """Whether the run stays open for a background task of this type: agents and workflows, which finish by
-    themselves and wake the session when they do. Not background shells (a dev server runs until it's stopped)."""
-    return bool(task_type) and ("agent" in task_type or task_type == "workflow")
+def track_task(tasks: dict[str, str], msg: SystemMessage) -> None:
+    """Keep tasks (task id -> description) to the agent tasks still running, from the CLI's task frames, read the way
+    the SDK's own ledger reads them: task_started adds one of WAITED_TASK_TYPES; any task_notification, or a
+    task_updated whose patch has a terminal status, ends it (not every task that ends sends a notification)."""
+    data = msg.data if isinstance(msg.data, dict) else {}
+    task_id = data.get("task_id")
+    if not task_id:
+        return
+    if msg.subtype == "task_started":
+        if data.get("task_type") in WAITED_TASK_TYPES:
+            tasks[task_id] = data.get("description") or task_id
+    elif msg.subtype == "task_notification":
+        tasks.pop(task_id, None)
+    elif msg.subtype == "task_updated":
+        patch = data.get("patch")
+        if isinstance(patch, dict) and patch.get("status") in TASK_ENDED:
+            tasks.pop(task_id, None)
 
 
 async def _user_message(message_uuid: str, text: str):
@@ -244,9 +261,10 @@ class ClaudeRunner:
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume))
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
-        # tasks: the background agents the session has running; a result while any is running is an interim end of turn
+        # tasks: the background agents the session has running (id -> description); a result while any is running is
+        # an interim end of turn
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False, "can_fork": can_fork,
-                 "accepting": False, "pending": {prompt_uuid: None}, "tasks": set()}
+                 "accepting": False, "pending": {prompt_uuid: None}, "tasks": {}}
         self._active[spec.run_id] = (client, state)
         read = self._read.setdefault(spec.run_id, [])
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -275,10 +293,8 @@ class ClaudeRunner:
                     if isinstance(msg, UserMessage) and msg.uuid in state["pending"]:
                         if (item_id := state["pending"].pop(msg.uuid)) is not None:
                             read.append(item_id)
-                    if isinstance(msg, TaskStartedMessage) and _waits_for(msg.task_type):
-                        state["tasks"].add(msg.task_id)
-                    elif isinstance(msg, (TaskNotificationMessage, TaskUpdatedMessage)) and msg.status in TASK_DONE:
-                        state["tasks"].discard(msg.task_id)
+                    if isinstance(msg, SystemMessage):
+                        track_task(state["tasks"], msg)
                     if isinstance(msg, ResultMessage):
                         switching = msg.is_error and msg.api_error_status in FORK_STATUSES
                         # A result from before the prompt was read answers something else (a background task from
