@@ -21,17 +21,21 @@ is logged in as (`host.run`), never through `host.jensen_gh` -- that call is rea
 from the outside, not acting as Jensen.
 
 `gate start`/`gate status`/`gate end` wrap `state.py`'s own gate (held while the yardstick measures one change at a
-time). `gate status` prints the active gate, or with `--last` the one that ended last (with its `result`), or
-`none`; with `--github-output` it only writes `active=true|false` there, so a workflow log never shows a gate's
-handle. `gate end --result passed|failed` archives the gate with its result. `yardstick run --gate` measures the
-active gate's change and says what it found in `gate_result`: `none` (no active gate: nothing measured), `retry`
-(it couldn't be measured this time -- the pool held, no tasks, an error, or too few tasks in common with an earlier
-run -- and the gate stays active for the next gate run), or `passed`/`failed`, compared only with runs that started
-before the gate did; it never ends the gate itself.
+time). `gate start` refuses while another gate is active or a deploy is pending. `gate status` prints the active
+gate, or with `--last` the one that ended last (with its `result`), or `none`; with `--github-output` it only writes
+`active=true|false` there, so a workflow log never shows a gate's handle. `gate end --result passed|failed
+--started ISO [--drop N --regressions M]` archives the gate a yardstick run measured with its result and counts,
+and refuses when the active gate started at another time. `yardstick run --gate` measures the active gate's change
+and says what it found in `gate_result`: `none` (no active gate, or no tasks installed: nothing to measure),
+`retry` (it couldn't be measured this time -- the pool held, an error, or infrastructure failures left too few
+tasks to compare -- and the gate stays active for the next gate run), or `passed`/`failed`, compared only with
+runs that started before the gate did and never with a gate run that failed; with no such run to compare with, it
+passes and becomes the baseline. It records its verdict, and never ends the gate itself.
 
 `assess-check`/`assess-plan`/`assess-commit` drive the assess job the same way `measure`/`plan`/`commit` drive the
-watch; `project-mark` is the deterministic record of which `project` issue, if any, is currently being worked
-(`$STATE/project-active.json`), read back by `assess-check`'s own "is anything waiting" check.
+watch (`assess-check` outputs when it `started`, and `assess-commit --at` records that time); `project-mark` is the
+deterministic record of which `project` issue, if any, is currently being worked (`$STATE/project-active.json`),
+read back by `assess-check`'s own "is anything waiting" check.
 """
 
 from __future__ import annotations
@@ -56,6 +60,10 @@ _STATE_LABELS = ("fixing", "fix-deployed", "needs-person", "stuck", "project", "
 
 def _bool_str(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(UTC).strftime(FMT)
 
 
 def _emit(lines: list[str], github_output: str | None) -> None:
@@ -132,16 +140,21 @@ def _pool_holding(host: Host, now: datetime) -> bool:
 
 def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | None, gate: bool,
                    github_output: str | None) -> int:
-    """Outputs `score`, `counted`, `skip_reason`, `run_id`, `gate_result` and `gate_failed` (`true` only when
-    `gate_result` is `failed`), then prints `score=<passed>/<counted>`. `gate_result` is always `none` without
-    `--gate` (a nightly run never judges a gate); with it, see the module docstring."""
+    """Outputs `score`, `counted`, `skip_reason`, `run_id`, `gate_result`, `gate_started` (the active gate's
+    `started` on a gate run, which `gate end --started` takes back; empty without one), `drop` and `regressions`
+    (counts only, never a task id: how many fewer shared tasks passed than in the run compared against, and how
+    many tasks regressed; `0` when nothing was compared), then prints `score=<passed>/<counted>`. `gate_result` is
+    always `none` without `--gate` (a nightly run never judges a gate); with it, see the module docstring."""
+    active = state.gate(now) if gate else None
+    gate_started = active["started"] if active else ""
 
-    def emit(passed: int, counted: int, skip_reason: str, run_id: str, gate_result: str) -> None:
+    def emit(passed: int, counted: int, skip_reason: str, run_id: str, gate_result: str, drop: int = 0,
+             regressions: int = 0) -> None:
         _emit([f"score={passed}", f"counted={counted}", f"skip_reason={skip_reason}", f"run_id={run_id}",
-               f"gate_result={gate_result}", f"gate_failed={_bool_str(gate_result == 'failed')}"], github_output)
+               f"gate_result={gate_result}", f"gate_started={gate_started}", f"drop={drop}",
+               f"regressions={regressions}"], github_output)
         print(f"score={passed}/{counted}")
 
-    active = state.gate(now) if gate else None
     if gate and active is None:
         emit(0, 0, "no_gate", "", "none")
         return 0
@@ -162,8 +175,8 @@ def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | Non
             return 2
         tasks = [task for task in tasks if task.id in wanted]
 
-    if not tasks:
-        emit(0, 0, "no_tasks", "", cannot_measure)
+    if not tasks:  # nothing to measure, and a retry wouldn't change that
+        emit(0, 0, "no_tasks", "", "none")
         return 0
     if _pool_holding(host, now):
         emit(0, 0, "pool_hold", "", cannot_measure)
@@ -171,16 +184,21 @@ def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | Non
 
     run_id = yardstick.new_run_id(now)
     try:
-        results = yardstick.run(host, state, tasks, run_id=run_id)
+        results = yardstick.run(host, state, tasks, run_id=run_id, gate=gate_started or None)
         # Only runs that started before the gate can be its baseline (`state.gate` has already parsed `started`).
-        gate_result = (yardstick.gate_verdict(state, run_id, datetime.strptime(active["started"], FMT)
-                                              .replace(tzinfo=UTC)) if active else "none")
+        before = datetime.strptime(gate_started, FMT).replace(tzinfo=UTC) if active else None
+        comparison = yardstick.compare(state, run_id, before=before)
+        gate_result = "none"
+        if active:
+            gate_result = yardstick.gate_verdict(state, run_id, before)
+            # On record, so a failed gate run is never anyone's baseline.
+            yardstick.record_gate_run(state, run_id, gate_started, gate_result)
     except Exception as exc:
         print(f"yardstick run failed ({type(exc).__name__})", file=sys.stderr)
         emit(0, 0, "error", run_id, cannot_measure)
         return 1
     passed, counted = yardstick.score(results)
-    emit(passed, counted, "", run_id, gate_result)
+    emit(passed, counted, "", run_id, gate_result, comparison["drop"], len(comparison["regressions"]))
     return 0
 
 
@@ -249,16 +267,6 @@ def _build_parser() -> argparse.ArgumentParser:
     changes_add_p = sub.add_parser("changes-add")
     changes_add_p.add_argument("text")
 
-    _add_gate_assess_parsers(sub)
-
-    return parser
-
-
-def _add_gate_assess_parsers(sub: argparse._SubParsersAction) -> None:
-    """Adds `gate start|status|end`, `assess-check`, `assess-plan`, `assess-commit` and `project-mark` to
-    `_build_parser`'s shared subparsers object. Kept in its own function -- with its own handler functions and
-    its own dispatch branches in `main` (see `_dispatch_gate_assess`) -- so a parallel edit to `cli.py` adding
-    other subcommands (the yardstick's, say) merges without conflict."""
     gate_p = sub.add_parser("gate")
     gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
     gate_start_p = gate_sub.add_parser("start")
@@ -271,6 +279,9 @@ def _add_gate_assess_parsers(sub: argparse._SubParsersAction) -> None:
     gate_end_p = gate_sub.add_parser("end")
     gate_end_p.add_argument("--result", choices=["passed", "failed"],
                             help="what the yardstick found; left out when a person ends a gate by hand")
+    gate_end_p.add_argument("--started", help="the measured gate's `started`: any other active gate is refused")
+    gate_end_p.add_argument("--drop", type=int)
+    gate_end_p.add_argument("--regressions", type=int)
 
     assess_check_p = sub.add_parser("assess-check")
     assess_check_p.add_argument("--github-output")
@@ -278,11 +289,14 @@ def _add_gate_assess_parsers(sub: argparse._SubParsersAction) -> None:
     assess_plan_p = sub.add_parser("assess-plan")
     assess_plan_p.add_argument("--github-output")
 
-    sub.add_parser("assess-commit")
+    assess_commit_p = sub.add_parser("assess-commit")
+    assess_commit_p.add_argument("--at", help="when the assessment's check started; now when not given")
 
     project_mark_p = sub.add_parser("project-mark")
     project_mark_p.add_argument("--issue", type=int, required=True)
     project_mark_p.add_argument("--status", choices=["active", "done"], required=True)
+
+    return parser
 
 
 # -- measure --
@@ -481,8 +495,14 @@ def _cmd_gate_status(state: State, now: datetime, last: bool, github_output: str
     return 0
 
 
-def _cmd_gate_end(state: State, result: str | None, now: datetime) -> int:
-    state.gate_end(result, now)
+def _cmd_gate_end(state: State, args: argparse.Namespace, now: datetime) -> int:
+    """With `--started`, ends only the gate that started then; any other refuses with exit 1, changing nothing.
+    Without it, ends whatever gate is active (a person ending one by hand)."""
+    try:
+        state.gate_end(args.result, now, started=args.started, drop=args.drop, regressions=args.regressions)
+    except RuntimeError as exc:
+        print(f"gate end: {exc}; nothing ended", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -490,7 +510,7 @@ def _cmd_gate_end(state: State, result: str | None, now: datetime) -> int:
 
 
 def _has_new_notes(host: Host, since: datetime, until: datetime) -> bool:
-    """Whether Jensen wrote a note in `(since, until]` (`feedback.collect`, Task 1). A failed read (the runner
+    """Whether Jensen wrote a note in `(since, until]` (`feedback.collect`). A failed read (the runner
     unreachable, anything else) counts as nothing new -- logged by exception type only, the same as every other
     optional source in this codebase, never its message."""
     try:
@@ -507,9 +527,11 @@ def _cmd_assess_check(host: Host, state: State, now: datetime, github_output: st
     the assessment has never run, or there's a new digest, a new note from Jensen, a new yardstick result or an
     active project since the last one; `skip_reason=quiet` when none of those are true. A pool that can't be read
     is not a hold: the check falls through to its other signals rather than holding the assessment hostage to
-    one failed probe."""
+    one failed probe. Always also `started=<now>`: `assess-commit --at` records that, so anything that arrives
+    while the assessment runs is still new to the next check."""
+    started = f"started={_iso(now)}"
     if pool_is_holding(host, now):
-        _emit(["has_work=false", "skip_reason=pool_hold"], github_output)
+        _emit(["has_work=false", "skip_reason=pool_hold", started], github_output)
         return 0
 
     last_assess = state.last_assess()
@@ -519,7 +541,8 @@ def _cmd_assess_check(host: Host, state: State, now: datetime, github_output: st
         has_work = (state.digest_newer_than(last_assess) or _has_new_notes(host, last_assess, now)
                     or state.yardstick_result_newer_than(last_assess) or state.project_active() is not None)
 
-    _emit([f"has_work={_bool_str(has_work)}", f"skip_reason={'' if has_work else 'quiet'}"], github_output)
+    _emit([f"has_work={_bool_str(has_work)}", f"skip_reason={'' if has_work else 'quiet'}", started],
+          github_output)
     return 0
 
 
@@ -532,8 +555,17 @@ def _cmd_assess_plan(state: State, github_output: str | None) -> int:
     return 0
 
 
-def _cmd_assess_commit(state: State, now: datetime) -> int:
-    state.set_last_assess(now)
+def _cmd_assess_commit(state: State, at: str | None, now: datetime) -> int:
+    """Records the assessment as done as of `at` (`assess-check`'s own `started`), or `now` without it."""
+    if at is None:
+        state.set_last_assess(now)
+        return 0
+    try:
+        when = datetime.strptime(at, FMT).replace(tzinfo=UTC)
+    except ValueError:
+        print(f"invalid --at value: {at!r}, want {FMT!r}", file=sys.stderr)
+        return 2
+    state.set_last_assess(when)
     return 0
 
 
@@ -543,33 +575,6 @@ def _cmd_assess_commit(state: State, now: datetime) -> int:
 def _cmd_project_mark(state: State, issue: int, status: str, now: datetime) -> int:
     state.project_mark(issue, status, now)
     return 0
-
-
-# -- gate / assess / project-mark dispatch --
-
-
-def _dispatch_gate_assess(args: argparse.Namespace, host: Host, state: State, now: datetime) -> int | None:
-    """Handles `gate`/`assess-*`/`project-mark`, dispatched from `main`. Returns `None` for every other command
-    so `main` falls through to its own dispatch chain unchanged -- kept separate, alongside its own parser
-    helper (`_add_gate_assess_parsers`) and handler functions above, so a parallel edit to `main` adding other
-    subcommands merges without conflict."""
-    if args.command == "gate":
-        if args.gate_command == "start":
-            return _cmd_gate_start(state, args.issue, args.kind, args.handle, now)
-        if args.gate_command == "status":
-            return _cmd_gate_status(state, now, args.last, args.github_output)
-        if args.gate_command == "end":
-            return _cmd_gate_end(state, args.result, now)
-        raise AssertionError(f"unhandled gate command: {args.gate_command!r}")  # pragma: no cover
-    if args.command == "assess-check":
-        return _cmd_assess_check(host, state, now, args.github_output)
-    if args.command == "assess-plan":
-        return _cmd_assess_plan(state, args.github_output)
-    if args.command == "assess-commit":
-        return _cmd_assess_commit(state, now)
-    if args.command == "project-mark":
-        return _cmd_project_mark(state, args.issue, args.status, now)
-    return None
 
 
 # -- gh passthrough --
@@ -598,10 +603,6 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
 
     args = _build_parser().parse_args(argv)
 
-    gate_assess_result = _dispatch_gate_assess(args, host, state, now)
-    if gate_assess_result is not None:
-        return gate_assess_result
-
     if args.command == "yardstick":
         return _cmd_yardstick(host, state, now, args)
     if args.command == "measure":
@@ -622,4 +623,18 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
         return _cmd_feedback_reply(host, args.name, args.status, now)
     if args.command == "changes-add":
         return _cmd_changes_add(host, args.text, now)
+    if args.command == "gate":
+        if args.gate_command == "start":
+            return _cmd_gate_start(state, args.issue, args.kind, args.handle, now)
+        if args.gate_command == "status":
+            return _cmd_gate_status(state, now, args.last, args.github_output)
+        return _cmd_gate_end(state, args, now)
+    if args.command == "assess-check":
+        return _cmd_assess_check(host, state, now, args.github_output)
+    if args.command == "assess-plan":
+        return _cmd_assess_plan(state, args.github_output)
+    if args.command == "assess-commit":
+        return _cmd_assess_commit(state, args.at, now)
+    if args.command == "project-mark":
+        return _cmd_project_mark(state, args.issue, args.status, now)
     raise AssertionError(f"unhandled command: {args.command!r}")  # pragma: no cover - argparse already validated

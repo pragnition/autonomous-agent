@@ -100,11 +100,11 @@ def test_gate_end_archives_the_gate_with_its_result(tmp_path):
     assert state.last_gate() is None
 
     state.gate_start(7, "repo", "abc123", T0)
-    state.gate_end("failed", T0 + timedelta(hours=2))
+    state.gate_end("failed", T0 + timedelta(hours=2), started="2026-11-19T10:00:00Z", drop=2, regressions=1)
 
     assert state.gate(T0) is None and not (tmp_path / "gate.json").exists()
     assert state.last_gate() == {"issue": 7, "kind": "repo", "handle": "abc123", "started": "2026-11-19T10:00:00Z",
-                                 "result": "failed", "ended": "2026-11-19T12:00:00Z"}
+                                 "result": "failed", "ended": "2026-11-19T12:00:00Z", "drop": 2, "regressions": 1}
     assert json.loads((tmp_path / "gate-last.json").read_text())["result"] == "failed"
 
     # Ending with no gate active changes nothing: the last ended gate stays on record.
@@ -146,10 +146,65 @@ def test_gate_cli_status_last_github_output_and_end_result(tmp_path, capsys):
     main(["gate", "status", "--last"], host=object(), state=state, now=T0 + timedelta(hours=1))
     assert json.loads(capsys.readouterr().out) == {"issue": 5, "kind": "host", "handle": "backup-7",
                                                    "started": "2026-11-19T10:00:00Z", "result": "passed",
-                                                   "ended": "2026-11-19T11:00:00Z"}
+                                                   "ended": "2026-11-19T11:00:00Z", "drop": None,
+                                                   "regressions": None}
 
     with pytest.raises(SystemExit):
         main(["gate", "end", "--result", "maybe"], host=object(), state=state, now=T0)
+
+
+def test_gate_end_with_started_ends_only_the_gate_it_measured(tmp_path, capsys):
+    state = State(tmp_path / "state")
+    state.gate_start(5, "repo", "abc123", T0)
+    later = T0 + timedelta(hours=1)
+
+    # A gate started at another time is a different gate (the measured one ended, and a new one began since).
+    assert main(["gate", "end", "--result", "failed", "--started", "2026-11-19T09:00:00Z", "--drop", "2",
+                 "--regressions", "0"], host=object(), state=state, now=later) == 1
+    assert "2026-11-19T10:00:00Z" in capsys.readouterr().err
+    assert state.gate(later) is not None and state.last_gate() is None
+
+    assert main(["gate", "end", "--result", "failed", "--started", "2026-11-19T10:00:00Z", "--drop", "2",
+                 "--regressions", "1"], host=object(), state=state, now=later) == 0
+    assert state.gate(later) is None
+    last = state.last_gate()
+    assert (last["issue"], last["result"], last["drop"], last["regressions"]) == (5, "failed", 2, 1)
+
+    # With nothing active, there is no gate that started then.
+    assert main(["gate", "end", "--result", "passed", "--started", "2026-11-19T10:00:00Z"], host=object(),
+                state=state, now=later) == 1
+    assert "no active gate" in capsys.readouterr().err
+    assert state.last_gate()["result"] == "failed"
+
+    with pytest.raises(SystemExit):
+        main(["gate", "end", "--result", "passed", "--drop", "two"], host=object(), state=state, now=later)
+
+
+def test_gate_end_with_started_still_ends_an_expired_gate(tmp_path):
+    # The gate run can finish after the 12 hours are up: it still records what it measured.
+    state = State(tmp_path / "state")
+    state.gate_start(5, "repo", "abc123", T0)
+    late = T0 + timedelta(hours=13)
+    assert main(["gate", "end", "--result", "passed", "--started", "2026-11-19T10:00:00Z"], host=object(),
+                state=state, now=late) == 0
+    assert state.last_gate()["result"] == "passed"
+
+
+def test_gate_start_refuses_while_a_deploy_is_pending(tmp_path, capsys):
+    # The pending change would land mid-gate, unmeasured, the moment the gate ends.
+    state = State(tmp_path / "state")
+    state.set_deploy_pending(True)
+
+    assert main(["gate", "start", "--issue", "5", "--kind", "repo", "--handle", "abc123"], host=object(),
+                state=state, now=T0) == 1
+    assert "a deploy is pending" in capsys.readouterr().err
+    assert state.gate(T0) is None
+    with pytest.raises(RuntimeError, match="a deploy is pending"):
+        state.gate_start(5, "repo", "abc123", T0)
+
+    state.set_deploy_pending(False)
+    assert main(["gate", "start", "--issue", "5", "--kind", "repo", "--handle", "abc123"], host=object(),
+                state=state, now=T0) == 0
 
 
 def test_gate_start_rejects_bad_kind(tmp_path):
@@ -194,6 +249,7 @@ def test_assess_check_first_time_and_nothing_new(tmp_path, capsys):
     kv = _kv(capsys.readouterr().out)
     assert kv["has_work"] == "true"
     assert kv["skip_reason"] == ""
+    assert kv["started"] == "2026-11-19T10:00:00Z"  # what assess-commit --at records once the run is done
 
     # Mark it assessed; nothing has happened since -- quiet.
     state.set_last_assess(T0)
@@ -202,6 +258,7 @@ def test_assess_check_first_time_and_nothing_new(tmp_path, capsys):
     kv2 = _kv(capsys.readouterr().out)
     assert kv2["has_work"] == "false"
     assert kv2["skip_reason"] == "quiet"
+    assert kv2["started"] == "2026-11-19T11:00:00Z"
 
 
 def test_assess_check_new_feedback_or_yardstick_result(tmp_path, capsys):
@@ -285,6 +342,7 @@ def test_assess_check_pool_hold(tmp_path, capsys):
     kv = _kv(capsys.readouterr().out)
     assert kv["has_work"] == "false"
     assert kv["skip_reason"] == "pool_hold"
+    assert kv["started"] == "2026-11-19T10:00:00Z"
 
     host_empty = _AssessHost(pool="empty")
     rc2 = main(["assess-check"], host=host_empty, state=state, now=T0)
@@ -334,6 +392,7 @@ def test_assess_check_writes_to_github_output(tmp_path):
     kv = _kv(output_file.read_text())
     assert kv["has_work"] == "true"
     assert kv["skip_reason"] == ""
+    assert kv["started"] == "2026-11-19T10:00:00Z"
 
 
 def test_assess_check_reads_the_pool_through_the_shared_helper(tmp_path, monkeypatch, capsys):
@@ -449,6 +508,18 @@ def test_assess_commit_sets_last_assess(tmp_path):
 
     assert rc == 0
     assert state.last_assess() == T0
+
+
+def test_assess_commit_at_records_when_the_check_started(tmp_path, capsys):
+    # Anything that arrives while the assessment runs is after `--at`: the next check still sees it as new.
+    state = State(tmp_path / "state")
+
+    assert main(["assess-commit", "--at", "2026-11-19T09:13:00Z"], host=object(), state=state, now=T0) == 0
+    assert state.last_assess() == _dt(2026, 11, 19, 9, 13, 0)
+
+    assert main(["assess-commit", "--at", "yesterday"], host=object(), state=state, now=T0) == 2
+    assert "--at" in capsys.readouterr().err
+    assert state.last_assess() == _dt(2026, 11, 19, 9, 13, 0)
 
 
 # -- project-mark / State.project_active --

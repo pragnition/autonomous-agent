@@ -4,8 +4,9 @@ Everything the hourly watch remembers between runs lives under one root director
 `~/.local/state/improve-jensen`, overridden by env `IMPROVE_JENSEN_STATE`), as a handful of small files:
 `state.json` (the window boundary, known clones, and Jensen's notes' own, separate cursor --
 `notes_committed_end`/`notes_pending_end`, two-phase exactly like the main window but never held back by it or
-holding it back: see `hold_window`'s own warning about why), `metrics.jsonl` (one line per turn, midturn or PR, stamped
-with when it happened and read back by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's
+holding it back: see `hold_window`'s own warning about why -- and whether the last notes read failed),
+`metrics.jsonl` (one line per turn, midturn or PR, stamped with when it happened and read back by `count`),
+`pending-metrics.jsonl`/`pending-clones.json` (this window's
 not-yet-final measurement, written by `stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line
 per `log_deploy`), `deploy-pending` (present means a deploy is pending -- its own file, not a `state.json` key,
 since `deploy.py` runs as a separate process from the hourly watch and a shared read-modify-write could race
@@ -52,7 +53,7 @@ _GATE_FILE = "gate.json"
 # The gate that ended last, with its `result` and `ended` time: what the workflow reads after it ends a gate.
 _GATE_LAST_FILE = "gate-last.json"
 _GATE_RESULTS = ("passed", "failed")
-# A gate.json older than this counts as expired (Review Focus 5): the yardstick job that was meant to call
+# A gate.json older than this counts as expired: the yardstick job that was meant to call
 # gate_end() can die, and an unending gate must never block deploys or the watch's own fix picks forever.
 _GATE_MAX_AGE = timedelta(hours=12)
 _ASSESS_PLAN_FILE = "assess-plan.json"
@@ -291,6 +292,17 @@ class State:
         data["notes_pending_end"] = _iso(end)
         self._write_state(data)
 
+    def notes_failing(self) -> bool:
+        """Whether the notes read failed in the last committed window, so a failure now is no longer news."""
+        return self._read_state().get("notes_failing") is True
+
+    def stage_notes_failing(self, failing: bool) -> None:
+        """Record whether this window's notes read failed, staged until the next `commit()` the same way the notes
+        cursor is: a window measured again before it is committed still sees the streak as it stood before it."""
+        data = self._read_state()
+        data["notes_failing_pending"] = failing
+        self._write_state(data)
+
     def commit(self) -> None:
         """Make the last window's end the new starting point (`committed_end = pending_end`), and fold whatever
         is staged for it into the permanent record: staged metrics are appended to `metrics.jsonl`, staged
@@ -302,12 +314,15 @@ class State:
         = notes_pending_end` when a `stage_notes_end` call landed one (a successful notes read happened at some
         point since the last commit), then `notes_pending_end` is cleared either way -- so a run whose notes kept
         failing right up to this commit leaves `notes_committed_end` exactly where it was, lagging behind the
-        main window until notes finally succeed."""
+        main window until notes finally succeed. Whether this window's notes read failed (`stage_notes_failing`)
+        becomes `notes_failing()` the same way."""
         data = self._read_state()
         data["committed_end"] = data.get("pending_end")
         if data.get("notes_pending_end"):
             data["notes_committed_end"] = data["notes_pending_end"]
         data.pop("notes_pending_end", None)
+        if "notes_failing_pending" in data:
+            data["notes_failing"] = data.pop("notes_failing_pending") is True
         self._write_state(data)
 
         staged_metrics = self._read_pending_metrics()
@@ -567,16 +582,20 @@ class State:
     def gate_start(self, issue: int, kind: str, handle: str, now: datetime) -> None:
         """Writes `gate.json`: `{issue, kind, handle, started}`. Raises `RuntimeError` if a gate is already
         active -- checked with `gate(now)`, the same call `deploy.py` and the watch use, so an *expired* gate
-        (older than 12 hours) never blocks a fresh `gate_start` either."""
+        (older than 12 hours) never blocks a fresh `gate_start` either -- or while a deploy is pending: that
+        change would land, unmeasured, the moment this gate ended."""
         active = self.gate(now)
         if active is not None:
             raise RuntimeError(f"a gate is already active for issue {active.get('issue')}")
+        if self.deploy_pending():
+            raise RuntimeError("a deploy is pending: it lands before a gate can start")
         _atomic_write(self.root / _GATE_FILE,
                       json.dumps({"issue": issue, "kind": kind, "handle": handle, "started": _iso(now)}))
 
     def gate(self, now: datetime) -> dict | None:
         """The active gate (`gate.json`), or `None` if there isn't one, it can't be read, or it's older than 12
-        hours -- an expired gate counts as no gate at all (Review Focus 5)."""
+        hours -- an expired gate counts as no gate at all, so a gate whose yardstick job died never blocks deploys
+        and fixes for good."""
         data = self._read_json_object(_GATE_FILE)
         if data is None:
             return None
@@ -591,17 +610,29 @@ class State:
             return None
         return data
 
-    def gate_end(self, result: str | None = None, now: datetime | None = None) -> None:
+    def gate_end(self, result: str | None = None, now: datetime | None = None, *, started: str | None = None,
+                 drop: int | None = None, regressions: int | None = None) -> None:
         """End the gate: `gate.json` (expired or not) is archived to `gate-last.json` with `result` (`passed`,
-        `failed`, or `None` for a gate a person ended by hand) and `ended` added, replacing the gate archived
-        before it, then removed. With no `gate.json` there is nothing to end, and the last archived gate stays as
-        it was. Any other `result` raises `ValueError`."""
+        `failed`, or `None` for a gate a person ended by hand), `ended`, and the yardstick's `drop` and
+        `regressions` (counts, or `None`) added, replacing the gate archived before it, then removed. With no
+        `gate.json` there is nothing to end, and the last archived gate stays as it was. Any other `result` raises
+        `ValueError`.
+
+        With `started` (the gate a yardstick run measured), only that gate is ended: when the active one started
+        at another time, or there is none, this raises `RuntimeError` and changes nothing -- the gate measured
+        already ended, and the one there now is another change's."""
         if result is not None and result not in _GATE_RESULTS:
             raise ValueError(f"bad gate result: {result!r}")
         data = self._read_json_object(_GATE_FILE)
+        if started is not None:
+            if data is None:
+                raise RuntimeError("there is no active gate to end")
+            if data.get("started") != started:
+                raise RuntimeError(f"the active gate started at {data.get('started')}, not {started}")
         if data is not None:
             ended = _iso(now if now is not None else datetime.now(UTC))
-            _atomic_write(self.root / _GATE_LAST_FILE, json.dumps({**data, "result": result, "ended": ended}))
+            _atomic_write(self.root / _GATE_LAST_FILE, json.dumps({**data, "result": result, "ended": ended,
+                                                                   "drop": drop, "regressions": regressions}))
         (self.root / _GATE_FILE).unlink(missing_ok=True)
 
     def last_gate(self) -> dict | None:
