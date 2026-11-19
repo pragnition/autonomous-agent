@@ -227,6 +227,14 @@ class Conversations:
                 await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.working, actor="human"))
         return self._row(convo["id"])
 
+    def _unpark(self, convo_id: str, by: str | None) -> None:
+        """End the conversation's open park (core/parking.py) early: a person's message resumes it now."""
+        cur = self.conn.execute("UPDATE parks SET ended_at = ?, ended_how = 'replied' WHERE conversation_id = ? AND "
+                                "ended_at IS NULL", (db.utcnow(), convo_id))
+        if cur.rowcount:
+            events.append(self.conn, "park_ended", task_id=None, actor=by,
+                          data={"conversation_id": convo_id, "how": "replied"})
+
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, source: str,
                       requester: str | None, follows: str | None = None, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0,
@@ -277,6 +285,7 @@ class Conversations:
         origin = await self._in_order(channel, self._slack_origin(person.key, event, is_dm))
         convo = await self._route(channel, thread_ts, is_dm)
         record_message(self.conn, channel, event["ts"], convo["id"])
+        self._unpark(convo["id"], person.key)  # their message carries the conversation on now
         if _FABLE.search(text):
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
@@ -479,3 +488,17 @@ class Conversations:
         self.conn.execute("UPDATE limit_waits SET resumed_at = ?, resumed_as = ? WHERE work_item_id = ?",
                           (db.utcnow(), new_id, work_item_id))
         return new_id
+
+    def resume_parked(self, conversation_id: str, work_item_id: str, note: str) -> str | None:
+        """Carry on a conversation the agent parked (core/parking.py): a new turn in it, as whoever the parking turn
+        was for, with `note` as its text. Like any next turn, the runner resumes the session when the proxy keeps it
+        on its account, else starts a fresh one with a digest. The parking turn's own message was already answered,
+        so this turn neither reacts to it nor counts as a continuation. None when the conversation is gone."""
+        convo, item = self._row(conversation_id), self.queue.get(work_item_id)
+        if convo is None:
+            return None
+        p = item.payload if item is not None else {}
+        return self._enqueue_turn(convo, note, p.get("actor"), origin=p.get("origin") or "",
+                                  source=p.get("source") or "slack", requester=p.get("requester"),
+                                  follows=work_item_id, unattended=bool(p.get("unattended")),
+                                  reply_thread_ts=p.get("reply_thread_ts"), report_to=p.get("report_to"))

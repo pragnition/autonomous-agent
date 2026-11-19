@@ -79,6 +79,8 @@ class AgentToolRouter:
         self.turn_payload = turn_payload or (lambda convo_id, text, actor, unattended:
                                              {"text": text, "actor": actor, "unattended": unattended})
         self._tools: dict[str, tuple[ToolSpec, Handler]] = {}
+        # more lines for the status tool, each from a module with its own state (core/parking.py: the account's use)
+        self.status_lines: list[Callable[[ToolContext], Awaitable[list[str]]]] = []
         self._register_builtins()
 
     # registry
@@ -196,7 +198,8 @@ class AgentToolRouter:
                                    "split one request into parallel tasks.",
                      s({"project": "string", "title": "string", "kind": "string", "brief": "string"}), "act"),
             self._start_task)
-        reg(ToolSpec("status", "What is running and queued, and whether the agent is paused.", s(), "read"),
+        reg(ToolSpec("status", "What is running and queued, whether the agent is paused, and how much of its 5-hour "
+                               "window this session's account has used.", s(), "read"),
             self._status)
         reg(ToolSpec("list_tasks", "List tasks, optionally by status or project.",
                      s(optional={"status": "string", "project": "string"}), "read"), self._list_tasks)
@@ -321,6 +324,11 @@ class AgentToolRouter:
         lines = [f"paused: {'yes' if paused else 'no'}",
                  f"running: {len(running)}" + (f" ({', '.join(_running(*r) for r in running)})" if running else ""),
                  f"queued: {queued}", f"open tasks: {open_tasks}"]
+        for more in self.status_lines:
+            try:
+                lines += await more(ctx)
+            except Exception:  # an extra line never costs the agent the rest of its status
+                log.exception("a status line failed")
         return ToolReply("\n".join(lines))
 
     async def _list_tasks(self, ctx, args) -> ToolReply:

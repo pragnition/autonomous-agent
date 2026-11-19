@@ -274,7 +274,7 @@ async def test_on_files_without_a_thread_is_recorded_not_posted(app):
 
 async def test_members_get_the_work_tools_and_admins_the_logins(app):
     member = manifest_names(app, tier="act")
-    assert {"post_update", "track_task", "finish_task"} <= member and not {"open_pr", "work_on"} & member
+    assert {"post_update", "track_task", "finish_task", "park"} <= member and not {"open_pr", "work_on"} & member
     assert "az_login" not in member
     assert "az_login" in manifest_names(app, tier="admin")
 
