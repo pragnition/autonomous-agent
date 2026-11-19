@@ -5,13 +5,14 @@ happens in `measure.py` before a `ConvoView` is built, and again over the whole 
 written. The one thing `render` shrinks on its own is the tool/error lines pulled from each turn's `TurnFacts`:
 the first attempt leaves them exactly as `turn_facts` built them (up to 300 characters of a tool call's input
 *and* up to 300 of its output, up to 500 for an error); later attempts cut each line down further -- to 120,
-then 40, then 0 (omitted entirely) -- until the whole text fits `budget`. `asked` and `replied` are never
-touched, since a person's message and Jensen's reply are the point of the digest, even on a day with nothing
-else to show for it.
+then 40, then 0 (omitted entirely) -- until the whole text fits `budget`. The "What Jensen added" lines (each
+turn's `added`) are cut the same way. `asked` and `replied` are never touched, since a person's message and
+Jensen's reply are the point of the digest, even on a day with nothing else to show for it.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -32,8 +33,9 @@ SIGNAL_KEYS = ("context_first", "context_peak", "big_start_small_ask", "no_deleg
 @dataclass
 class ConvoView:
     """One conversation's turns, as the digest shows them. Each turn is a plain dict with `id`, `source`,
-    `status`, `outcome`, `minutes`, `asked`, `replied`, `facts` (a `TurnFacts`) and `signals` (a dict), and
-    optionally `own` (true for improve-jensen's own traffic, which the totals leave out)."""
+    `status`, `outcome`, `minutes`, `asked`, `replied`, `facts` (a `TurnFacts`), `signals` (a dict) and `added`
+    (the turn's `TurnFacts.added`, scrubbed), and optionally `own` (true for improve-jensen's own traffic, which
+    the totals and "What Jensen added" leave out)."""
 
     id: str
     project: str | None
@@ -79,6 +81,21 @@ def _render_turn(turn: dict, cap: int | None) -> list[str]:
     return lines
 
 
+def _render_added(convos: list[ConvoView], cap: int | None) -> list[str]:
+    """The "What Jensen added" lines: each of Jensen's own turns' `added` lines (cut like tool lines), then the
+    skills its turns used this hour, most used first."""
+    turns = [(convo.id, turn) for convo in convos for turn in convo.turns if not turn.get("own")]
+    lines = [f"- {convo_id} {turn.get('id')}: {line}"
+             for convo_id, turn in turns for line in _capped(turn.get("added") or [], cap)]
+    if not any(turn.get("added") for _, turn in turns):
+        lines.append("- none")
+    skills = Counter(skill for _, turn in turns for skill in getattr(turn.get("facts"), "skills", []) or [])
+    if skills:
+        lines.append("- skills used this hour: " +
+                     ", ".join(f"{name} ({count})" for name, count in skills.most_common()))
+    return lines
+
+
 def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
                notes: list[dict], cap: int | None, alerts: list[str]) -> str:
     start, end = window
@@ -115,6 +132,9 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
     else:
         out.append("- none")
 
+    out += ["", "## What Jensen added"]
+    out.extend(_render_added(convos, cap))
+
     out += ["", "## Conversations"]
     if convos:
         for convo in convos:
@@ -134,9 +154,11 @@ def render(window: tuple[datetime, datetime], convos: list[ConvoView], totals: d
     landed) go first, under "Needs attention". `notes` (already-scrubbed Jensen reports, each `{name, text,
     modified}`) get their own "## Jensen reports" section, one `###` subsection per note, each line of its text
     quoted with `> ` (so a note's own text can't impersonate a digest heading) and shown in full -- never cut by
-    the tool-line budget below, the same as `asked`/`replied`. Tries the tool-line cap at each step in `_CAPS`, returning the first rendering that fits
-    `budget`; if none fit (the people's own messages alone are already over budget), returns the last
-    (narrowest) one anyway."""
+    the tool-line budget below, the same as `asked`/`replied`. "## What Jensen added" follows: each of Jensen's
+    own turns' `added` lines as `- <conversation> <turn>: <line>` (`- none` when there are none), then the skills
+    its turns used this hour. Tries the tool-line cap (which cuts the `added` lines too) at each step in `_CAPS`,
+    returning the first rendering that fits `budget`; if none fit (the people's own messages alone are already
+    over budget), returns the last (narrowest) one anyway."""
     text = ""
     for cap in _CAPS:
         text = _render_at(window, convos, totals, prs, list(notes or []), cap, list(alerts or []))

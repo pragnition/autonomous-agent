@@ -909,6 +909,111 @@ def test_digest_shrinks_tool_lines_not_messages():
     assert "error:" not in text
 
 
+# -- what Jensen added --
+
+
+def _added_turn(item_id, *, added=(), skills=(), own=False) -> dict:
+    turn = {"id": item_id, "source": None, "status": "done", "outcome": "done", "minutes": 1.0, "asked": "",
+            "replied": "", "facts": TurnFacts(skills=list(skills), added=list(added)), "added": list(added),
+            "signals": {}}
+    return {**turn, "own": True} if own else turn
+
+
+def _section(text: str, heading: str) -> list[str]:
+    lines = text.splitlines()
+    start = lines.index(heading) + 1
+    end = next((i for i in range(start, len(lines)) if lines[i].startswith("## ")), len(lines))
+    return [line for line in lines[start:end] if line]
+
+
+def test_what_jensen_added_sits_between_reports_and_conversations_and_says_none_when_empty():
+    text = render((T0, T0 + timedelta(hours=1)), [], {}, [])
+
+    headings = [line for line in text.splitlines() if line.startswith("## ")]
+    assert headings[headings.index("## Jensen reports") + 1] == "## What Jensen added"
+    assert headings[headings.index("## What Jensen added") + 1] == "## Conversations"
+    assert _section(text, "## What Jensen added") == ["- none"]
+
+
+def test_what_jensen_added_lists_each_turns_lines_and_the_skills_used_leaving_out_improve_jensens_own():
+    convos = [
+        ConvoView(id="C-a", project="sample", turns=[
+            _added_turn("W-a", added=["install: pipx install some-tool", "skill: /work/r/.claude/skills/x/SKILL.md"],
+                        skills=["superpowers:writing-plans", "deploy"]),
+            _added_turn("W-own", added=["install: npm i -g own-tool"], skills=["deploy"] * 5, own=True),
+        ]),
+        ConvoView(id="C-b", project=None, turns=[
+            _added_turn("W-b", added=["memory: /var/agent/memory/people.md"],
+                        skills=["deploy", "deploy", "superpowers:writing-plans", "review"]),
+        ]),
+    ]
+
+    text = render((T0, T0 + timedelta(hours=1)), convos, {}, [])
+
+    assert _section(text, "## What Jensen added") == [
+        "- C-a W-a: install: pipx install some-tool",
+        "- C-a W-a: skill: /work/r/.claude/skills/x/SKILL.md",
+        "- C-b W-b: memory: /var/agent/memory/people.md",
+        "- skills used this hour: deploy (3), superpowers:writing-plans (2), review (1)",
+    ]
+
+
+def test_what_jensen_added_says_none_but_still_lists_the_skills_used():
+    convos = [ConvoView(id="C-a", project=None, turns=[_added_turn("W-a", skills=["review"])]),
+              ConvoView(id="C-own", project=None, turns=[_added_turn("W-own", added=["install: pipx install x"],
+                                                                     own=True)])]
+
+    text = render((T0, T0 + timedelta(hours=1)), convos, {}, [])
+
+    assert _section(text, "## What Jensen added") == ["- none", "- skills used this hour: review (1)"]
+
+
+def test_what_jensen_added_lines_shrink_with_the_tool_lines():
+    added = "install: " + "x" * 1000
+    convos = [ConvoView(id="C-a", project=None, turns=[_added_turn("W-a", added=[added], skills=["review"])])]
+    window = (T0, T0 + timedelta(hours=1))
+    full = render(window, convos, {}, [])
+    assert f"- C-a W-a: {added}" in full
+
+    cut = render(window, convos, {}, [], budget=len(full) - 1)
+    assert f"- C-a W-a: {added[:120]}" in cut and added[:121] not in cut
+
+    narrower = render(window, convos, {}, [], budget=len(cut) - 1)
+    assert f"- C-a W-a: {added[:40]}" in narrower and added[:41] not in narrower
+
+    omitted = render(window, convos, {}, [], budget=len(narrower) - 1)
+    assert "W-a: install" not in omitted
+    assert "- skills used this hour: review (1)" in omitted
+
+
+def test_measure_digest_lists_what_jensen_added_scrubbed_and_not_improve_jensens_own(tmp_path):
+    state = State(tmp_path)
+    secret = "supersecretvalue"
+    person = [
+        _assistant([{"id": "t1", "name": "Bash",
+                     "input": {"command": f"pipx install some-tool --index-url https://{secret}@example.com"}}]),
+        _result_line("t1", "installed"),
+        _assistant([{"id": "t2", "name": "Write",
+                     "input": {"file_path": "/var/agent/claude/skills/x/SKILL.md", "content": "x"}}]),
+        _assistant([{"id": "t3", "name": "Skill", "input": {"skill": "review"}}]),
+    ]
+    review = [_assistant([{"id": "t1", "name": "Bash", "input": {"command": "npm i -g own-tool"}}]),
+              _assistant([{"id": "t2", "name": "Skill", "input": {"skill": "own-skill"}}])]
+    items = [_item("W-p", conversation_id="C-p", payload={"source": "slack"}),
+             _item("W-r", conversation_id="C-p", payload={"source": "improve-jensen"})]
+    host = FakeHost(collect={**_EMPTY, "items": items}, transcripts={"W-p": person, "W-r": review},
+                    secrets=[secret], **_NO_PRS)
+
+    text = measure(state, host, T0).digest.read_text()
+
+    assert _section(text, "## What Jensen added") == [
+        "- C-p W-p: install: pipx install some-tool --index-url https://[redacted]@example.com",
+        "- C-p W-p: skill: /var/agent/claude/skills/x/SKILL.md",
+        "- skills used this hour: review (1)",
+    ]
+    assert secret not in text
+
+
 # -- a failed deploy or a down core never wedges the watch (C1) --
 
 
