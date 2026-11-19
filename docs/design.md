@@ -592,8 +592,10 @@ Nobody tells it what to improve: it works that out from the evidence. The workfl
 - `yardstick`, nightly and after each change that alters how the agent behaves: runs the agent through a small set of
   real tasks in throwaway folders inside `agent-runner` (`V-yardstick-` conversations, at most four at once) and
   scores only the tasks with a mechanical check. Five synthetic seeds ship in `deploy/yardstick/`; tasks drawn from
-  real failures stay on the host. As a gate it measures one change at a time: other behaviour changes wait, and the
-  change is reverted on a drop of two or more or a regression.
+  real failures stay on the host. As a gate it measures one change at a time: the job that ships a change starts its
+  gate, each job that can ship one reports as it ends whether a gate is active, and the yardstick job then runs the
+  gate. Other behaviour changes wait, a gate it couldn't measure yet is retried after the next job, and the change is
+  reverted on a drop of two or more or a regression.
 - `project`, one at a time: builds a project-scale improvement over runs of up to six hours, with a design note on its
   issue, a progress file on its `improve-jensen/project-<n>` branch and the same bar as a fix, gate included
   (`.github/improve-jensen-project.md`).

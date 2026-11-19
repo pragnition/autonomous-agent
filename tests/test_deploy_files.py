@@ -434,17 +434,78 @@ def test_project_concurrency(improve_jensen):
     assert checkout["with"]["persist-credentials"] is False
 
 
-def test_yardstick_gate_end_always(improve_jensen):
-    steps = improve_jensen["jobs"]["yardstick"]["steps"]
-    gate_end_step = next(s for s in steps if "jensen_watch.py gate end" in str(s.get("run", "")))
-    assert "always()" in str(gate_end_step["if"])
-    assert "target == 'gate'" in str(gate_end_step["if"])
+_GATE_REPORTERS = ("watch", "fix", "project", "respond")
 
+
+def test_jobs_that_can_start_a_gate_report_it_as_they_end(improve_jensen):
+    """No `gh workflow run` for a gate (the job token can't dispatch): each job that can run `gate start` ends with an
+    always() `gate status` step and exposes its `active` as the job output `gate`, which the yardstick job reads."""
+    jobs = improve_jensen["jobs"]
+    for name in _GATE_REPORTERS:
+        job = jobs[name]
+        last = job["steps"][-1]
+        assert last["if"] == "always()", name
+        assert last["run"] == 'python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"', name
+        assert job["outputs"]["gate"] == f"${{{{ steps.{last['id']}.outputs.active }}}}", name
+
+
+def test_yardstick_runs_after_the_jobs_that_can_start_a_gate(improve_jensen):
+    yardstick = improve_jensen["jobs"]["yardstick"]
+    assert yardstick["needs"] == list(_GATE_REPORTERS)
+    assert yardstick["concurrency"] == {"group": "improve-jensen-yardstick", "cancel-in-progress": False}
+    job_if = " ".join(str(yardstick["if"]).split())
+    # The whole condition sits under `!cancelled()`: without a status function a skipped `needs` job (every one of
+    # them on the nightly cron and a manual run) would skip this job too, and a cancelled run must still cancel it.
+    assert job_if.startswith("!cancelled() && (") and job_if.endswith(")"), job_if
+    assert "github.event.schedule == '7 19 * * *'" in job_if
+    assert "inputs.mode == 'yardstick'" in job_if
+    for name in _GATE_REPORTERS:
+        assert f"needs.{name}.outputs.gate == 'true'" in job_if, name
+        assert f"needs.{name}.outputs.gate == 'true'" in yardstick["env"]["GATE"], name
+    assert "inputs.target" not in job_if
+
+
+def test_yardstick_gate_run_steps(improve_jensen):
+    steps = improve_jensen["jobs"]["yardstick"]["steps"]
     run_step = next(s for s in steps if "jensen_watch.py yardstick run" in str(s.get("run", "")))
     assert "--github-output" in run_step["run"]
+    assert "env.GATE == 'true' && '--gate'" in run_step["run"]
 
-    revert_step = next(s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@"))
-    assert "gate_failed" in str(revert_step["if"])
+    # Only a measured gate ends: retry (couldn't measure it this time) and none leave it active.
+    gate_end = next(s for s in steps if "jensen_watch.py gate end" in str(s.get("run", "")))
+    assert gate_end["if"] == ("steps.yardstick.outputs.gate_result == 'passed' || "
+                              "steps.yardstick.outputs.gate_result == 'failed'")
+    assert gate_end["run"] == 'python scripts/jensen_watch.py gate end --result "$GATE_RESULT"'
+    assert gate_end["env"]["GATE_RESULT"] == "${{ steps.yardstick.outputs.gate_result }}"
+    assert "always()" not in gate_end["if"]
+
+    label = next(s for s in steps if "--remove-label gating" in str(s.get("run", "")))
+    assert label["if"] == f"steps.{gate_end['id']}.outcome == 'success'"
+    assert "jensen_watch.py gate status --last" in label["run"]
+    assert steps.index(gate_end) < steps.index(label)
+
+    revert = next(s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@"))
+    assert steps.index(label) < steps.index(revert)
+    revert_if = str(revert["if"])
+    assert revert_if.startswith("!cancelled()")  # a failed label removal never skips the revert
+    assert f"steps.{gate_end['id']}.outcome == 'success'" in revert_if
+    assert "steps.yardstick.outputs.gate_result == 'failed'" in revert_if
+    assert "gate status --last" in revert["with"]["prompt"]
+
+
+def test_no_job_dispatches_a_gate(improve_jensen):
+    text = (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
+    assert "gh workflow run" not in text
+    assert "target == 'gate'" not in text
+
+
+def test_respond_ignores_labels_other_than_its_own(improve_jensen):
+    """Adding `gating`, `stuck`, `priority` or any other label to an `improve-jensen` issue fires `issues: labeled`
+    too; only the `improve-jensen` label itself may start a respond run that way."""
+    respond_if = " ".join(str(improve_jensen["jobs"]["respond"]["if"]).split())
+    assert ("github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen') && "
+            "(github.event.action != 'labeled' || github.event.label.name == 'improve-jensen')") in respond_if
+    assert "labeled" in improve_jensen[True]["issues"]["types"]
 
 
 def test_dispatch_modes_include_new_modes(improve_jensen):
