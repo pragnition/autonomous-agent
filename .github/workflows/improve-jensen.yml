@@ -12,11 +12,13 @@
 #   assess    - four times a day: decides whether there's anything new to assess, lets Claude write an assessment
 #               and update the pinned assessment issue, then posts the changes it proposes to Slack.
 #   approvals - every 10 minutes, no Claude: reads the replies and reactions on the Slack proposals, labels each
-#               issue `approved` or `rejected`, answers in the thread, and names the next approved fix and project.
+#               issue `approved` or `rejected`, answers in the thread, and names the next approved fix and project
+#               (none while core's usage watch holds the pool).
 #   fix       - the one approved issue the approvals job named (or a manual dispatch's target), serialised so only
-#               one fix runs at a time. Ends by telling the proposal's Slack thread whether it shipped.
+#               one fix runs at a time. Starts by checking the issue is still approved; ends by telling the
+#               proposal's Slack thread whether it shipped.
 #   project   - the one approved improvement project the approvals job named (or a manual dispatch's target),
-#               serialised so only one project runs at a time. Ends the same way.
+#               serialised so only one project runs at a time. Starts and ends the same way.
 #   respond   - answers issues labelled `improve-jensen` and comments that mention @improve-jensen, and opens PRs.
 #               A person's own request, so it needs no approval in Slack. Its charter is .github/improve-jensen.md.
 name: improve-jensen
@@ -203,6 +205,8 @@ jobs:
       # re-interpolating `${{ inputs.target }}` directly into a `run:` script, which would hand a workflow-
       # dispatch user's raw input straight to the shell.
       TARGET: ${{ inputs.mode == 'project' && inputs.target || needs.approvals.outputs.project }}
+      # A person's own dispatch with a target always goes; the approvals job's pick is checked first (`ready`).
+      MANUAL: ${{ inputs.mode == 'project' && inputs.target != '' }}
     steps:
       # No job token left in the git config, for the same reason as in `fix`.
       - uses: actions/checkout@v4
@@ -213,7 +217,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
+      # As in `fix`: go only while the project is still open and approved, with nobody needed.
+      - name: ready
+        id: ready
+        if: env.MANUAL != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/jensen_watch.py ready --issue "$TARGET" --kind project --github-output "$GITHUB_OUTPUT"
       - name: claude
+        id: claude
+        if: steps.ready.outputs.go == 'true' || env.MANUAL == 'true'
         timeout-minutes: 350
         uses: anthropics/claude-code-action@v1
         with:
@@ -227,12 +240,13 @@ jobs:
             --append-system-prompt-file .github/improve-jensen-project.md
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
       # A finished project is closed by now; one that needs a person says so in its Slack thread, once. An
-      # unfinished one says nothing: the next approvals run starts its next run.
+      # unfinished one says nothing: the next approvals run starts its next run. Two runs in a row that didn't
+      # succeed mark it `stuck`, so a failing project doesn't run again and again.
       - name: tell the Slack thread
-        if: always()
+        if: always() && (steps.ready.outputs.go == 'true' || env.MANUAL == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/jensen_watch.py fired --issue "$TARGET" --kind project
+        run: python scripts/jensen_watch.py fired --issue "$TARGET" --kind project --outcome "${{ steps.claude.outcome }}"
 
   review:
     needs: watch
@@ -284,6 +298,8 @@ jobs:
       # re-interpolating `${{ inputs.target }}` directly into a `run:` script, which would hand a workflow-
       # dispatch user's raw input straight to the shell.
       TARGET: ${{ inputs.mode == 'fix' && inputs.target || needs.approvals.outputs.fix }}
+      # A person's own dispatch with a target always goes; the approvals job's pick is checked first (`ready`).
+      MANUAL: ${{ inputs.mode == 'fix' && inputs.target != '' }}
     steps:
       # No job token left in the git config: Claude's pushes must go out as the Claude app, since a push made with
       # this job's GITHUB_TOKEN never triggers `ci` and `gh pr checks --watch` would wait for checks that never come.
@@ -295,13 +311,24 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
+      # The approvals run that named the issue can be minutes old: go only while it's still open and approved,
+      # with no `stuck` or `needs-person`.
+      - name: ready
+        id: ready
+        if: env.MANUAL != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/jensen_watch.py ready --issue "$TARGET" --kind fix --github-output "$GITHUB_OUTPUT"
       - name: add the fixing label
+        if: steps.ready.outputs.go == 'true' || env.MANUAL == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh label create fixing --force -R ${{ github.repository }}
           gh issue edit "$TARGET" --add-label fixing -R ${{ github.repository }}
       - name: claude
+        id: claude
+        if: steps.ready.outputs.go == 'true' || env.MANUAL == 'true'
         timeout-minutes: 110   # leaves the always() steps below room inside the job's 120-minute budget
         uses: anthropics/claude-code-action@v1
         with:
@@ -314,17 +341,17 @@ jobs:
             --append-system-prompt-file .github/improve-jensen.md
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
       - name: remove the fixing label
-        if: always()
+        if: always() && (steps.ready.outputs.go == 'true' || env.MANUAL == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh issue edit "$TARGET" --remove-label fixing -R ${{ github.repository }}
       # A merged fix closed its issue: the thread hears it shipped. One still open didn't ship, and is marked
       # `stuck` for a person.
       - name: tell the Slack thread
-        if: always()
+        if: always() && (steps.ready.outputs.go == 'true' || env.MANUAL == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/jensen_watch.py fired --issue "$TARGET" --kind fix
+        run: python scripts/jensen_watch.py fired --issue "$TARGET" --kind fix --outcome "${{ steps.claude.outcome }}"
 
   respond:
     if: >

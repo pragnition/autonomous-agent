@@ -525,21 +525,48 @@ def test_fix_and_project_fire_only_from_approvals_or_a_manual_dispatch(improve_j
         assert "needs.watch" not in str(job) and "needs.assess" not in str(job), name
 
 
+# A fix or project run goes ahead when its `ready` check says so, or always on a person's own dispatch.
+_GO = "steps.ready.outputs.go == 'true' || env.MANUAL == 'true'"
+
+
+def test_fix_and_project_check_the_issue_is_still_approved_first(improve_jensen):
+    """The approvals run that named the issue can be minutes old: the first step after the install checks that the
+    issue is still open and approved (`ready`), and nothing else in the run happens without its `go`. A manual
+    dispatch with a target skips the check and always goes."""
+    for name in ("fix", "project"):
+        job = improve_jensen["jobs"][name]
+        steps = job["steps"]
+        assert job["env"]["MANUAL"] == f"${{{{ inputs.mode == '{name}' && inputs.target != '' }}}}", name
+        install = next(s for s in steps if "pip install" in str(s.get("run", "")))
+        ready = steps[steps.index(install) + 1]
+        assert ready["id"] == "ready", name
+        assert ready["if"] == "env.MANUAL != 'true'", name
+        assert ready["run"] == (f'python scripts/jensen_watch.py ready --issue "$TARGET" --kind {name} '
+                                f'--github-output "$GITHUB_OUTPUT"'), name
+        assert ready["env"] == {"GH_TOKEN": "${{ github.token }}"}, name
+        claude = next(s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@"))
+        assert claude["id"] == "claude", name
+        assert claude["if"] == _GO, name
+    fix = improve_jensen["jobs"]["fix"]
+    assert _step_running(fix, "--add-label fixing")["if"] == _GO
+    assert _step_running(fix, "--remove-label fixing")["if"] == f"always() && ({_GO})"
+
+
 def test_fix_and_project_tell_the_slack_thread_as_they_end(improve_jensen):
-    """The last step of a fix or project run always replies in its proposal's thread (`fired`), after the Claude
-    step and, for a fix, after the `fixing` label is gone."""
+    """The last step of a run that went ahead always replies in its proposal's thread (`fired`), with how the
+    Claude step ended, after the Claude step and, for a fix, after the `fixing` label is gone."""
     for name in ("fix", "project"):
         job = improve_jensen["jobs"][name]
         steps = job["steps"]
         last = steps[-1]
-        assert last["if"] == "always()", name
-        assert last["run"] == f'python scripts/jensen_watch.py fired --issue "$TARGET" --kind {name}', name
+        assert last["if"] == f"always() && ({_GO})", name
+        assert last["run"] == (f'python scripts/jensen_watch.py fired --issue "$TARGET" --kind {name} '
+                               '--outcome "${{ steps.claude.outcome }}"'), name
         assert last["env"] == {"GH_TOKEN": "${{ github.token }}"}, name
         claude = next(s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@"))
         assert steps.index(claude) < steps.index(last), name
     fix_steps = improve_jensen["jobs"]["fix"]["steps"]
     remove_label = _step_running(improve_jensen["jobs"]["fix"], "--remove-label fixing")
-    assert remove_label["if"] == "always()"
     assert fix_steps.index(remove_label) == len(fix_steps) - 2
 
 
