@@ -139,8 +139,8 @@ class AgentToolRouter:
         if ctx.conversation_id:
             for ts in posted:
                 record_message(self.conn, ctx.channel, ts, ctx.conversation_id)
-        # the ts lets the agent pin (or later find) what it posted
-        return ToolReply(f"posted (ts {posted[0]})" if posted else "posted")
+        # the ts lets the agent pin (or later find) what it posted; long text is split over several messages
+        return ToolReply(f"posted (ts {', '.join(posted)})" if posted else "posted")
 
     def _tasks_today(self) -> int:
         today = db.utcnow()[:10]

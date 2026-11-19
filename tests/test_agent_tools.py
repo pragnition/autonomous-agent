@@ -132,6 +132,16 @@ async def test_pin_defaults_to_the_message_being_answered(router):
     assert router.slack.pins == [("add", {"channel": "C1", "timestamp": "5.0"})]
 
 
+async def test_pin_falls_back_to_the_thread(router, ctx_member):
+    assert (await router.call(ctx_member, "pin", {})).text == "pinned 1.0 in C1"
+
+
+async def test_pin_without_a_channel(router):
+    ctx = ctx_for(router, actor="bob", channel=None)
+    assert "channel" in (await router.call(ctx, "pin", {"ts": "7.0"})).text
+    assert router.slack.pins == []
+
+
 async def test_pin_and_unpin_a_given_message(router, ctx_member):
     await router.call(ctx_member, "pin", {"ts": "7.0", "channel": "C9"})
     await router.call(ctx_member, "pin", {"ts": "7.0", "channel": "C9", "unpin": True})

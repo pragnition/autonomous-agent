@@ -481,7 +481,7 @@ tier. Every reply is scrubbed of secrets.
   conversation can have at most 3 running at once and all conversations together 4 (a parked one counts). An agent
   whose turn is cancelled (`stop_all`) doesn't report back. `spawned_agents` in `agent.db` records each one
   (`core/spawned.py`).
-- `post_update` returns the posted message's ts. `pin(ts, channel, unpin)` pins a message to its channel (or
+- `post_update` returns the posted message's ts (each one's, when long text was split). `pin(ts, channel, unpin)` pins a message to its channel (or
   unpins it) with core's bot token (the `pins:write` scope); by default the message being answered, in the
   conversation's channel.
 - `read_thread` reads the conversation's thread, or a DM chat's messages since it started.
