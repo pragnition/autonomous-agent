@@ -4,6 +4,9 @@ core writes the runner token to a file the container mounts. Every few seconds t
 starts the runner when a token appears, restarts it when the token changes (core replaced a revoked or expiring
 one), and stops it when the file is empty or gone. A runner that exits on its own (its token stopped working)
 stays down until core writes a new token, so nobody has to touch the laptop.
+
+Alongside it, from the moment the process starts and whether or not there is a token yet, the process keeps the
+agent's own services running (services.py). On SIGTERM it stops those services cleanly before it exits.
 """
 
 from __future__ import annotations
@@ -12,7 +15,8 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Callable
+import signal
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +63,27 @@ class RunnerKeeper:
             self.task = asyncio.create_task(self.make_runner(token).run_forever())
 
 
+async def serve(keeper: RunnerKeeper, read_token: Callable[[], str], check_s: float, services: Coroutine,
+                stopping: asyncio.Event) -> None:
+    """The runner loop and the agent's services side by side, until `stopping` is set. The services start whether or
+    not there is a token yet, and nothing they do can stop the runner loop."""
+    task = asyncio.create_task(services, name="services")
+    task.add_done_callback(_services_ended)
+    try:
+        while not stopping.is_set():
+            await keeper.reconcile(read_token())
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stopping.wait(), check_s)
+    finally:
+        task.cancel()
+        await asyncio.wait([task])  # the services stop before the process exits
+
+
+def _services_ended(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        log.error("the services supervisor stopped", exc_info=task.exception())
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -66,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     from agent.proxy import ProxyClient
     from agent.runner.claude import ClaudeRunner
     from agent.runner.link import CoreLink
+    from agent.runner.services import supervise
     from agent.runner.worker import Runner
 
     parser = argparse.ArgumentParser(prog="agent runner", description="Run the agent container's runner")
@@ -91,10 +117,11 @@ def main(argv: list[str] | None = None) -> int:
                       env_files=[shared / "linear.env"], memory_dir=root / "memory")
 
     async def run() -> None:
-        keeper = RunnerKeeper(make_runner)
-        while True:
-            await keeper.reconcile(read_runner_token(token_file))
-            await asyncio.sleep(args.check_s)
+        stopping = asyncio.Event()  # SIGTERM (docker stop, a redeploy): stop the services, then exit
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stopping.set)
+        await serve(RunnerKeeper(make_runner), lambda: read_runner_token(token_file), args.check_s,
+                    supervise(root / "services.toml", root / "run"), stopping)
 
     asyncio.run(run())
     return 0
