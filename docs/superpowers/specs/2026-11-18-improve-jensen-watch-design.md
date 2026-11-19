@@ -216,7 +216,7 @@ checkout. That user has Docker and passwordless sudo, so the runners have full a
 - One runner is labelled `watch`, so the hourly watch never queues behind a long fix.
 - One is labelled `work`, for reviews, fixes, assessments, approvals, projects and the runs that answer issues; they
   take turns. Most of the host belongs to Jensen, so improve-jensen runs at most one job besides the watch, and both
-  runners run at low CPU and disk priority (systemd `CPUWeight=20`, `IOWeight=20`, `Nice=10`).
+  runners run below Jensen on CPU and disk (systemd `CPUWeight=20`, `IOWeight=20`, `Nice=10`).
 - The runners' work folders stay outside `~/autonomous-agent`.
 - `gh` is installed on the host.
 

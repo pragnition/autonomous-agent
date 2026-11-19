@@ -101,7 +101,7 @@ for name in watch work-1; do
 done
 ```
 
-Give both runners low CPU and disk priority, so their jobs only take what Jensen leaves idle:
+Put both runners below Jensen on CPU and disk, so their jobs only take what Jensen leaves idle:
 
 ```sh
 for name in watch work-1; do
