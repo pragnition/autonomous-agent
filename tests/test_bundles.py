@@ -82,7 +82,7 @@ def test_core_skills_present():
 
 def test_ui_audit_skill_measures_before_and_after_and_reuses_the_audit_plugin():
     text = (SKILL_DIRS[0] / "ui-audit" / "SKILL.md").read_text()
-    for phrase in ("impeccable", "subagents", "playwright-cli", "before-<page>.png", "after-<page>.png",
+    for phrase in ("impeccable", "web-design-guidelines", "no frontend-design", "subagents", "playwright-cli", "before-<page>.png", "after-<page>.png",
                    "Measure again", "tokens"):
         assert phrase in text
     assert "jensen" not in text.lower()

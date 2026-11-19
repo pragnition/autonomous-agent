@@ -1,6 +1,6 @@
 ---
 name: ui-audit
-description: Use when asked to polish, clean up, tidy or make consistent a product's UI or UX, when someone says it looks amateur, inconsistent or unpolished, or for a design or UI audit of an existing app.
+description: Use when asked to polish, clean up, tidy or make consistent the look of an existing app's UI, when someone says it looks amateur, inconsistent or unpolished, or for a visual design or UI audit. Not for changing flows, copy or features.
 ---
 
 # A measured UI audit
@@ -10,7 +10,7 @@ description: Use when asked to polish, clean up, tidy or make consistent a produ
 ## Before you start
 
 - Read the repo's CLAUDE.md, its design doc and its design tokens (colour, type, spacing, radius), and any repo skill about its UI. If the repo already has an audit skill or scripts, use those and improve them rather than starting again.
-- For what to check and how to judge it, use the impeccable plugin's `audit`, `critique` and `polish` (check `claude plugin list`). Without it, use frontend-design and the web-design-guidelines skill. Don't redo their checklists here: this skill adds the measuring and the loop.
+- For what to check and how to judge it, use the impeccable plugin's `audit`, `critique` and `polish` if `claude plugin list` shows it, and the web-design-guidelines skill. Their checklists say what to look for; this skill adds the measuring and the loop. The app's current design is the design system: don't restyle it (no frontend-design) unless someone asked for a redesign.
 - Run the app with realistic data and sign in as a real role would (playwright-cli). Keep your scripts in your conversation folder under `scripts/`, so you can run them again after the fix.
 
 ## 1. Measure
