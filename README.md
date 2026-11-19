@@ -21,9 +21,7 @@ sessions across the team's Claude accounts and reports their usage. Put it at
 
 1. **Create the Slack app** from `deploy/slack-app-manifest.yaml` (api.slack.com/apps, Create New App, From an app
    manifest), with the name set to your agent's name. Install it in the workspace, keep its bot token (`xoxb-…`)
-   and create an app-level token with `connections:write` (`xapp-…`) for Socket Mode. When the manifest gains a
-   scope later (`pins:write`, say), update the installed app from it (the app's App Manifest page) and reinstall
-   it in the workspace. If the reinstall shows a new bot token, put it in the secrets file and restart core.
+   and create an app-level token with `connections:write` (`xapp-…`) for Socket Mode.
 
 2. **Write the config and the secrets files.**
 

@@ -139,8 +139,7 @@ class AgentToolRouter:
         if ctx.conversation_id:
             for ts in posted:
                 record_message(self.conn, ctx.channel, ts, ctx.conversation_id)
-        # the ts lets the agent pin (or later find) what it posted; long text is split over several messages
-        return ToolReply(f"posted (ts {', '.join(posted)})" if posted else "posted")
+        return ToolReply("posted")
 
     def _tasks_today(self) -> int:
         today = db.utcnow()[:10]
@@ -188,11 +187,6 @@ class AgentToolRouter:
             self._ask)
         reg(ToolSpec("react", "Add an emoji reaction to the message you are answering.", s({"emoji": "string"}),
                      "act"), self._react)
-        reg(ToolSpec("pin", "Pin a Slack message to its channel (a live dashboard or status message, say), or unpin "
-                            "it with unpin: true. ts: the message's ts (post_update returns it; slack_read finds "
-                            "others); by default the message you are answering. channel: by default this "
-                            "conversation's.",
-                     s(optional={"ts": "string", "channel": "string", "unpin": "boolean"}), "act"), self._pin)
         reg(ToolSpec("post_files", "Post files from your session folder (screenshots, videos, reports) "
                                    "to this conversation's Slack thread, with one line of text.",
                      s({"paths": "array", "text": "string"}), "act"), self._post_files)
@@ -263,20 +257,6 @@ class AgentToolRouter:
         ts = self._payload(ctx).get("message_ts") or ctx.thread_ts
         await self.slack.reactions_add(channel=ctx.channel, timestamp=ts, name=args.get("emoji", "").strip(":"))
         return ToolReply("reacted")
-
-    async def _pin(self, ctx, args) -> ToolReply:
-        channel = str(args.get("channel") or "").strip() or ctx.channel
-        if not channel:
-            return ToolReply("this conversation has no Slack channel; give the channel")
-        ts = str(args.get("ts") or "").strip() or (self._payload(ctx).get("message_ts") or ctx.thread_ts
-                                                   if channel == ctx.channel else None)
-        if not ts:
-            return ToolReply("pin needs the message's ts")
-        if args.get("unpin"):
-            await self.slack.pins_remove(channel=channel, timestamp=ts)
-            return ToolReply(f"unpinned {ts} in {channel}")
-        await self.slack.pins_add(channel=channel, timestamp=ts)
-        return ToolReply(f"pinned {ts} in {channel}")
 
     async def _track_task(self, ctx, args) -> ToolReply:
         if ctx.task_id:

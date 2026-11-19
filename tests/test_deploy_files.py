@@ -135,7 +135,7 @@ def test_slack_manifest_scopes_and_events():
     m = yaml.safe_load((ROOT / "deploy" / "slack-app-manifest.yaml").read_text())
     assert m["settings"]["socket_mode_enabled"] is True
     assert {"app_mentions:read", "channels:history", "groups:history", "im:history", "chat:write",
-            "reactions:write", "pins:write", "files:write", "users:read", "im:write"} <= set(m["oauth_config"]["scopes"]["bot"])
+            "reactions:write", "files:write", "users:read", "im:write"} <= set(m["oauth_config"]["scopes"]["bot"])
     assert "interactivity" not in m["settings"]
     assert {"app_mention", "message.channels", "message.groups", "message.im"} <= \
         set(m["settings"]["event_subscriptions"]["bot_events"])

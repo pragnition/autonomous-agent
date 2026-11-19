@@ -122,44 +122,6 @@ async def test_post_update_records_its_message(router, ctx_member, conn):
     assert [tuple(r) for r in rows] == [("C1", "101.0", ctx_member.conversation_id)]
 
 
-async def test_post_update_returns_its_ts(router, ctx_member):
-    assert (await router.call(ctx_member, "post_update", {"text": "status"})).text == "posted (ts 101.0)"
-
-
-async def test_pin_defaults_to_the_message_being_answered(router):
-    ctx = router.context_for(add_item(router.queue, add_conversation(router.conn), actor="bob", message_ts="5.0"))
-    assert (await router.call(ctx, "pin", {})).text == "pinned 5.0 in C1"
-    assert router.slack.pins == [("add", {"channel": "C1", "timestamp": "5.0"})]
-
-
-async def test_pin_falls_back_to_the_thread(router, ctx_member):
-    assert (await router.call(ctx_member, "pin", {})).text == "pinned 1.0 in C1"
-
-
-async def test_pin_without_a_channel(router):
-    ctx = ctx_for(router, actor="bob", channel=None)
-    assert "channel" in (await router.call(ctx, "pin", {"ts": "7.0"})).text
-    assert router.slack.pins == []
-
-
-async def test_pin_and_unpin_a_given_message(router, ctx_member):
-    await router.call(ctx_member, "pin", {"ts": "7.0", "channel": "C9"})
-    await router.call(ctx_member, "pin", {"ts": "7.0", "channel": "C9", "unpin": True})
-    assert router.slack.pins == [("add", {"channel": "C9", "timestamp": "7.0"}),
-                                 ("remove", {"channel": "C9", "timestamp": "7.0"})]
-
-
-async def test_pin_in_another_channel_needs_a_ts(router, ctx_member):
-    assert "ts" in (await router.call(ctx_member, "pin", {"channel": "C9"})).text
-    assert router.slack.pins == []
-
-
-async def test_pin_is_not_offered_at_read_tier(router):
-    ctx = ctx_for(router, actor="stranger")
-    assert "pin" not in {t["name"] for t in router.manifest(ctx)}
-    assert (await router.call(ctx, "pin", {"ts": "7.0"})).text == "not available here"
-
-
 async def test_post_update_is_scrubbed(router, ctx_member):
     await router.call(ctx_member, "post_update", {"text": "token SUPERSECRETVALUE here"})
     assert "SUPERSECRETVALUE" not in router.slack.posts[-1]["text"]
