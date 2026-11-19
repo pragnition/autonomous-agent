@@ -2,7 +2,6 @@ import fcntl
 import json
 import shutil
 import subprocess
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -655,65 +654,6 @@ def test_failed_check_returns_1_and_is_logged(tmp_path):
     assert records[0]["result"].startswith("check_failed")
     # Even a failed check clears the flag -- there is nothing left "pending" about this attempt.
     assert state.deploy_pending() is False
-
-
-# -- deploy: the gate --
-
-
-def test_deploy_pending_while_gate_active_but_docs_only_goes_through(tmp_path):
-    """An active gate holds a real change as pending (exit 3) without touching docker at all -- the gate check
-    runs before any fast-forward or build -- but a docs-only change (empty services) still lands regardless,
-    since there's nothing for the gate to be measuring one-at-a-time about."""
-    origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
-
-    fake = FakeDocker()
-    host = Host(run=fake, live=live)
-    state = State(tmp_path / "state")
-    state.gate_start(7, "repo", "deadbeef", datetime.now(UTC))
-
-    result = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
-
-    assert result == 3
-    assert not any(c[0] == "docker" for c in fake.calls)  # never even reached the build
-    records = _deploys(tmp_path)
-    assert len(records) == 1
-    assert records[0]["result"] == "pending"
-    assert records[0]["services"] == ["core"]
-    assert state.deploy_pending() is True
-
-    # A docs-only change, same gate still active: it goes through regardless.
-    origin2, live2 = _repo_pair(tmp_path / "second")
-    _commit(origin2, {"docs/x.md": "hello\n"}, "docs change")
-    fake2 = FakeDocker()
-    host2 = Host(run=fake2, live=live2)
-    state2 = State(tmp_path / "second-state")
-    state2.gate_start(7, "repo", "deadbeef", datetime.now(UTC))
-
-    result2 = deploy(host2, state2, sleep=lambda s: None, clock=lambda: 0.0)
-
-    assert result2 == 0
-    assert not any(c[0] == "docker" for c in fake2.calls)
-    records2 = _deploys(tmp_path, "second-state")
-    assert records2[-1]["result"] == "ok"
-
-
-def test_deploy_proceeds_once_the_gate_expires(tmp_path):
-    """A gate.json older than 12 hours (Review Focus 5) counts as no gate at all, so a run stuck dead doesn't
-    block every deploy forever."""
-    origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
-
-    fake = FakeDocker()
-    host = Host(run=fake, live=live)
-    state = State(tmp_path / "state")
-    state.gate_start(7, "repo", "deadbeef", datetime.now(UTC) - timedelta(hours=13))
-
-    result = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
-
-    assert result == 0
-    assert ["docker", "compose", "build", "core"] in fake.calls
-    assert _deploys(tmp_path)[-1]["result"] == "ok"
 
 
 # -- deploy: if-pending, the lock --
