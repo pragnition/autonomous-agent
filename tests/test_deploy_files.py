@@ -270,19 +270,20 @@ def test_ci_runs_tests_on_github_hosted_runners_only(ci):
 
 def test_improve_jensen_triggers_and_jobs(improve_jensen):
     on = improve_jensen[True]
-    assert on["schedule"] == [{"cron": "17 * * * *"}]
+    assert on["schedule"] == [{"cron": "17 * * * *"}, {"cron": "13 */6 * * *"}, {"cron": "7 19 * * *"}]
     dispatch_inputs = on["workflow_dispatch"]["inputs"]
     assert dispatch_inputs["mode"]["default"] == "watch"
-    assert set(dispatch_inputs["mode"]["options"]) == {"watch", "review", "fix"}
+    assert set(dispatch_inputs["mode"]["options"]) == {"watch", "review", "fix", "assess", "yardstick", "project"}
     assert dispatch_inputs["target"]["type"] == "string"
     for trigger in ("issues", "issue_comment", "pull_request_review_comment", "pull_request_review"):
         assert trigger in on
-    assert set(improve_jensen["jobs"]) == {"watch", "review", "fix", "respond"}
+    assert set(improve_jensen["jobs"]) == {"watch", "review", "fix", "respond", "assess", "project", "yardstick"}
 
 
 def test_jobs_run_on_the_right_runners(improve_jensen):
     jobs = improve_jensen["jobs"]
-    for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"), ("respond", "work")):
+    for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"), ("respond", "work"),
+                             ("assess", "work"), ("project", "work"), ("yardstick", "work")):
         labels = _runs_on_labels(jobs[name])
         assert labels == {"self-hosted", "improve-jensen", want_label}, name
 
@@ -295,7 +296,7 @@ def test_fix_is_serialised(improve_jensen):
 
 def test_every_claude_step_uses_opus_and_an_instructions_file_that_exists(improve_jensen):
     claude_steps = _claude_steps(improve_jensen)
-    assert len(claude_steps) == 4
+    assert len(claude_steps) == 7
     for job_name, step in claude_steps:
         claude_args = step["with"]["claude_args"]
         assert "--model claude-opus-5-5" in claude_args, job_name
@@ -387,3 +388,65 @@ def test_instructions_carry_the_key_rules():
 
 def test_charter_drops_the_old_rules():
     assert "Don't merge your own PRs" not in (ROOT / ".github" / "improve-jensen.md").read_text()
+
+
+# -- assess / yardstick / project jobs --
+
+
+_SCHEDULE_CRONS = {"watch": "17 * * * *", "assess": "13 */6 * * *", "yardstick": "7 19 * * *"}
+
+
+def test_each_schedule_runs_only_its_job(improve_jensen):
+    """Three jobs each wake on their own cron. A job's `if` must name its own cron string and never another
+    scheduled job's, or the wrong job would run on the wrong hour (Review Focus 4)."""
+    jobs = improve_jensen["jobs"]
+    for name, own_cron in _SCHEDULE_CRONS.items():
+        job_if = str(jobs[name]["if"])
+        assert own_cron in job_if, (name, job_if)
+        for other_name, other_cron in _SCHEDULE_CRONS.items():
+            if other_name != name:
+                assert other_cron not in job_if, (name, other_name, job_if)
+
+
+def test_new_jobs_runners_timeouts_and_files(improve_jensen):
+    jobs = improve_jensen["jobs"]
+    assert _runs_on_labels(jobs["assess"]) == {"self-hosted", "improve-jensen", "work"}
+    assert jobs["assess"]["timeout-minutes"] == 90
+    assert _runs_on_labels(jobs["project"]) == {"self-hosted", "improve-jensen", "work"}
+    assert jobs["project"]["timeout-minutes"] == 360
+    assert _runs_on_labels(jobs["yardstick"]) == {"self-hosted", "improve-jensen", "work"}
+    assert jobs["yardstick"]["timeout-minutes"] == 240
+    assert (ROOT / ".github" / "improve-jensen-assess.md").is_file()
+    assert (ROOT / ".github" / "improve-jensen-project.md").is_file()
+
+
+def test_project_concurrency(improve_jensen):
+    project = improve_jensen["jobs"]["project"]
+    concurrency = project["concurrency"]
+    assert concurrency["group"] == "improve-jensen-project"
+    assert concurrency["cancel-in-progress"] is False
+    assert project["needs"] == "assess"
+    job_if = str(project["if"])
+    assert "!cancelled()" in job_if
+    assert "needs.assess.outputs.has_project" in job_if
+    assert "inputs.mode == 'project'" in job_if and "inputs.target != ''" in job_if
+    checkout = next(s for s in project["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] is False
+
+
+def test_yardstick_gate_end_always(improve_jensen):
+    steps = improve_jensen["jobs"]["yardstick"]["steps"]
+    gate_end_step = next(s for s in steps if "jensen_watch.py gate end" in str(s.get("run", "")))
+    assert "always()" in str(gate_end_step["if"])
+    assert "target == 'gate'" in str(gate_end_step["if"])
+
+    run_step = next(s for s in steps if "jensen_watch.py yardstick run" in str(s.get("run", "")))
+    assert "--github-output" in run_step["run"]
+
+    revert_step = next(s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@"))
+    assert "gate_failed" in str(revert_step["if"])
+
+
+def test_dispatch_modes_include_new_modes(improve_jensen):
+    dispatch_inputs = improve_jensen[True]["workflow_dispatch"]["inputs"]
+    assert {"assess", "yardstick", "project"} <= set(dispatch_inputs["mode"]["options"])

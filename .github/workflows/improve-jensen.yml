@@ -12,21 +12,30 @@
 #             only one runs at a time.
 #   respond - answers issues labelled `improve-jensen` and comments that mention @improve-jensen, and opens PRs.
 #             Its charter is .github/improve-jensen.md.
+#   assess  - four times a day: decides whether there's anything new to assess, lets Claude write an assessment
+#             and update the pinned assessment issue, then records which project (if any) to run next.
+#   project - the one active improvement project, from the assess job's plan (or a manual dispatch's target),
+#             serialised so only one project runs at a time.
+#   yardstick - nightly, and after a behaviour-changing deploy (a manual dispatch with target=gate): runs the
+#             yardstick tasks, ends an active gate, and reverts the change if the gate failed.
 name: improve-jensen
 
 on:
   schedule:
     - cron: "17 * * * *"
+    - cron: "13 */6 * * *"
+    - cron: "7 19 * * *"
   workflow_dispatch:
     inputs:
       mode:
         type: choice
         description: Which job to run
-        options: [watch, review, fix]
+        options: [watch, review, fix, assess, yardstick, project]
         default: watch
       target:
         type: string
-        description: PR URL (review) or issue number (fix); ignored for watch
+        description: PR URL (review); issue number (fix, project); 'gate' for a yardstick gate run; ignored for
+          watch and assess
   issues:
     types: [opened, labeled, assigned]
   issue_comment:
@@ -49,7 +58,7 @@ env:
 
 jobs:
   watch:
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'watch')
+    if: github.event.schedule == '17 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'watch')
     runs-on: [self-hosted, improve-jensen, watch]
     timeout-minutes: 60
     outputs:
@@ -94,6 +103,133 @@ jobs:
       - name: commit
         if: steps.measure.outputs.skip_reason != 'pool_hold' && (steps.claude.outcome == 'success' || steps.claude.outcome == 'skipped')
         run: python scripts/jensen_watch.py commit
+
+  assess:
+    if: github.event.schedule == '13 */6 * * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'assess')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 90
+    outputs:
+      project: ${{ steps.assess-plan.outputs.project }}
+      has_project: ${{ steps.assess-plan.outputs.has_project }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: assess-check
+        id: assess-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/jensen_watch.py assess-check --github-output "$GITHUB_OUTPUT"
+      - name: claude
+        id: claude
+        if: steps.assess-check.outputs.has_work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Run the assessment. Use the state folder ($IMPROVE_JENSEN_STATE, default
+            ~/.local/state/improve-jensen). Write assessment.md, update the pinned assessment issue, and write
+            assess-plan.json. Follow .github/improve-jensen-assess.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 200
+            --append-system-prompt-file .github/improve-jensen-assess.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: assess-plan
+        id: assess-plan
+        run: python scripts/jensen_watch.py assess-plan --github-output "$GITHUB_OUTPUT"
+      - name: assess-commit
+        if: steps.claude.outcome == 'success'
+        run: python scripts/jensen_watch.py assess-commit
+
+  project:
+    needs: assess
+    if: >
+      !cancelled() &&
+      (needs.assess.outputs.has_project == 'true' || (inputs.mode == 'project' && inputs.target != ''))
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 360
+    concurrency:
+      group: improve-jensen-project
+      cancel-in-progress: false
+    env:
+      # Resolved once, here, so every step below reads the same value through `$TARGET`/`env.TARGET` -- never by
+      # re-interpolating `${{ inputs.target }}` directly into a `run:` script, which would hand a workflow-
+      # dispatch user's raw input straight to the shell.
+      TARGET: ${{ inputs.mode == 'project' && inputs.target || needs.assess.outputs.project }}
+    steps:
+      # No job token left in the git config, for the same reason as in `fix`.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: add the project-active label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create project-active --force -R ${{ github.repository }}
+          gh issue edit "$TARGET" --add-label project-active -R ${{ github.repository }}
+      - name: claude
+        timeout-minutes: 350
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Work on improvement project #${{ env.TARGET }}; if its branch and progress file exist, continue from
+            them. Follow .github/improve-jensen-project.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 500
+            --append-system-prompt-file .github/improve-jensen-project.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: remove the project-active label
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "$TARGET" --remove-label project-active -R ${{ github.repository }}
+
+  yardstick:
+    if: github.event.schedule == '7 19 * * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'yardstick')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: yardstick run
+        id: yardstick
+        run: >-
+          python scripts/jensen_watch.py yardstick run
+          ${{ inputs.mode == 'yardstick' && inputs.target == 'gate' && '--gate' || '' }}
+          --github-output "$GITHUB_OUTPUT"
+      - name: gate end
+        if: always() && inputs.mode == 'yardstick' && inputs.target == 'gate'
+        run: python scripts/jensen_watch.py gate end
+      - name: claude
+        if: steps.yardstick.outputs.gate_failed == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            The yardstick gate failed for the change recorded in the gate record. Revert it through its handle
+            and record the failed attempt. Follow .github/improve-jensen.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 200
+            --append-system-prompt-file .github/improve-jensen.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
 
   review:
     needs: watch
