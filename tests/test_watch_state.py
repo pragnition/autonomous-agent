@@ -343,6 +343,33 @@ def test_validate_proposals():
     assert validate_proposals([{"issue": 1, "change": "x", "extra": "ignored"}]) == [{"issue": 1, "change": "x"}]
 
 
+def test_validate_proposals_keeps_a_learned_kind_and_a_credit():
+    assert validate_proposals([{"issue": 1, "change": "x", "kind": "learned", "credit": "  Some   Person \n"}]) == [
+        {"issue": 1, "change": "x", "kind": "learned", "credit": "Some Person"}]
+
+    # `kind` survives only when it's exactly "learned"; the key is left out otherwise.
+    for kind in ("problem", "Learned", "learned ", "", None, 1, ["learned"]):
+        assert validate_proposals([{"issue": 1, "change": "x", "kind": kind}]) == [{"issue": 1, "change": "x"}]
+
+    # `credit` survives only as a non-empty string once whitespace is collapsed, kind or no kind.
+    for credit in ("", "   \n", None, 7, ["Some Person"]):
+        assert validate_proposals([{"issue": 1, "change": "x", "kind": "learned", "credit": credit}]) == [
+            {"issue": 1, "change": "x", "kind": "learned"}]
+    assert validate_proposals([{"issue": 1, "change": "x", "credit": "Some Person"}]) == [
+        {"issue": 1, "change": "x", "credit": "Some Person"}]
+
+    # `credit` is cut to 60 characters, ending in an ellipsis when it had to be.
+    [entry] = validate_proposals([{"issue": 1, "change": "x", "credit": "y" * 61}])
+    assert entry["credit"] == "y" * 59 + "…"
+    [entry] = validate_proposals([{"issue": 1, "change": "x", "credit": "y" * 60}])
+    assert entry["credit"] == "y" * 60
+
+    # A bad kind or credit never costs the entry itself, nor its place among the first five.
+    many = [{"issue": i, "change": f"change {i}", "kind": "learned" if i % 2 else 3, "credit": 5} for i in range(1, 8)]
+    assert validate_proposals(many) == [{"issue": i, "change": f"change {i}", **({"kind": "learned"} if i % 2 else {})}
+                                        for i in range(1, 6)]
+
+
 def test_assess_plan_validation_and_clear(tmp_path):
     state = State(tmp_path)
 
