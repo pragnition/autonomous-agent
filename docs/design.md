@@ -276,15 +276,17 @@ retries (below) instead, and the gate holds them until there is capacity.
 
 A session can also park itself (`core/parking.py`) instead of keeping its turn alive to wait. The agent's `park`
 tool takes an optional `until` (HH:MM in the team's timezone, or an ISO date-time) and a `note`. Without `until`,
-the park lasts until the soft cap on the conversation's account lifts, or until the account's reset when it has no
-capacity. Core records the park in `parks` (event `parked`) and posts "Parked until 14:30 +08; reply here to resume
-earlier." in the thread. The agent then ends its turn. Every minute core carries on each park that is due, as a new
-turn in the same conversation with the agent's note (event `park_resumed`). That turn goes through the same-account
-check as any next turn, and it neither reacts to the parking turn's message nor counts as a continuation. A
-person's message in the thread ends the park at once (`ended_how = replied`, event `park_ended`) and is the next turn
-itself. Background agents and shells still end with the parking turn. The `status` tool shows the conversation's
-account: how much of its 5-hour window is used, its effective cap, when the window resets and when the cap lifts,
-and how many accounts are under their cap.
+the park waits out the whole account pool, since the turn that carries it on runs on whichever account the proxy
+gives it: it refuses while any account the proxy ranks is under its cap, and otherwise lasts until the first one
+has room again (the earliest soft-cap lift, or the reset of an account with no capacity). Core records the park in
+`parks` (event `parked`) and tells the agent when it carries on; it posts nothing in the thread itself. The agent
+then ends its turn. Every minute core carries on each park that is due, as a new turn in the same conversation with
+the agent's note (event `park_resumed`); one that fails stays open for the next minute without holding up the
+others. That turn goes through the same-account check as any next turn, and it neither reacts to the parking turn's
+message nor counts as a continuation. A person's message in the thread ends the park at once (`ended_how =
+replied`, event `park_ended`) and is the next turn itself. The `status` tool shows the conversation's account: how
+much of its 5-hour window is used, its effective cap, when the window resets and when the cap lifts, and how many
+accounts are under their cap.
 
 A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
 whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or
@@ -420,7 +422,7 @@ tier. Every reply is scrubbed of secrets.
 | Tier | Tools |
 |---|---|
 | read | `status`, `list_tasks`, `get_task`, `read_thread`, `slack_read`, `kpis`, `gh_prs`, `gh_checks`, `gh_ci_log`, `gh_issue`, `gh_file`, `linear_issue` |
-| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
+| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `park`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
 | admin | `resume_all`, `az_login` (one `<cli>_login` per `[cli.<name>]` with a `login` command), `linear_install` |
 
 - `work_on`, `open_pr` and `post_files` do local work in the runner (checkout, checks and push, reading files) and
