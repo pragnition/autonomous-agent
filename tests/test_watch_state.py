@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.watch.state import State, summarize
+from agent.watch.state import State, summarize, validate_proposals
 
 
 def _dt(*args) -> datetime:
@@ -270,42 +270,102 @@ def test_plan_validation(tmp_path):
     state = State(tmp_path)
 
     # No plan.json at all.
-    assert state.plan() == {"reviews": [], "fix": None}
+    assert state.plan() == {"reviews": [], "propose": []}
 
     # Malformed JSON.
     (tmp_path / "plan.json").write_text("{not valid json")
-    assert state.plan() == {"reviews": [], "fix": None}
+    assert state.plan() == {"reviews": [], "propose": []}
 
-    # Reviews without a string url are dropped; more than 10 are cut to 10; fix is kept when valid; each review's
-    # own conversation is kept only when it's a string -- there is no plan-level conversation field.
+    # Reviews without a string url are dropped; more than 10 are cut to 10; `propose` runs through
+    # `validate_proposals`; each review's own conversation is kept only when it's a string -- there is no
+    # plan-level conversation field.
     reviews = [{"url": f"https://github.com/x/y/pull/{i}", "conversation": f"C{i}"} for i in range(12)]
     reviews.append({"notes": "no url here"})
     reviews.append({"url": 123})
     reviews.append({"url": "https://github.com/x/y/pull/bad-conversation", "conversation": 5})
-    (tmp_path / "plan.json").write_text(json.dumps({"reviews": reviews, "fix": 42}))
+    (tmp_path / "plan.json").write_text(json.dumps(
+        {"reviews": reviews, "propose": [{"issue": 42, "change": "stop doing the thing"}]}))
     result = state.plan()
     assert len(result["reviews"]) == 10
     assert all(set(r) == {"url", "conversation"} for r in result["reviews"])
     assert result["reviews"][0] == {"url": "https://github.com/x/y/pull/0", "conversation": "C0"}
-    assert result["fix"] == 42
+    assert result["propose"] == [{"issue": 42, "change": "stop doing the thing"}]
     assert "conversation" not in result
 
     # A review missing `conversation` entirely falls back to None per-review, not an error.
     (tmp_path / "plan.json").write_text(json.dumps(
-        {"reviews": [{"url": "https://github.com/x/y/pull/9"}], "fix": 1}))
+        {"reviews": [{"url": "https://github.com/x/y/pull/9"}], "propose": []}))
     assert state.plan()["reviews"] == [{"url": "https://github.com/x/y/pull/9", "conversation": None}]
 
-    # fix that isn't a positive int falls back to None.
-    (tmp_path / "plan.json").write_text(json.dumps({"reviews": [], "fix": -1}))
-    assert state.plan()["fix"] is None
-
-    # A bool is an int subclass in Python but doesn't count as a positive int here.
-    (tmp_path / "plan.json").write_text(json.dumps({"reviews": [], "fix": True}))
-    assert state.plan()["fix"] is None
+    # No `propose` at all falls back to an empty list, not an error.
+    (tmp_path / "plan.json").write_text(json.dumps({"reviews": []}))
+    assert state.plan()["propose"] == []
 
     # A JSON value that parses but isn't an object.
     (tmp_path / "plan.json").write_text(json.dumps([1, 2, 3]))
-    assert state.plan() == {"reviews": [], "fix": None}
+    assert state.plan() == {"reviews": [], "propose": []}
+
+
+def test_validate_proposals():
+    # Not a list at all.
+    assert validate_proposals(None) == []
+    assert validate_proposals({"issue": 1, "change": "x"}) == []
+
+    # issue must be a positive int; a bool doesn't count even though bool is an int subclass.
+    assert validate_proposals([{"issue": 0, "change": "x"}, {"issue": -1, "change": "x"},
+                               {"issue": True, "change": "x"}, {"issue": "1", "change": "x"}]) == []
+
+    # change must be a non-empty string once whitespace is collapsed; entries missing either field are dropped.
+    assert validate_proposals([{"issue": 1, "change": "   "}, {"issue": 2, "change": 5}, {"issue": 3},
+                               {"change": "no issue"}]) == []
+
+    # Internal whitespace runs are collapsed to single spaces, and the result is stripped.
+    assert validate_proposals([{"issue": 1, "change": "  stop  doing \n the thing  "}]) == [
+        {"issue": 1, "change": "stop doing the thing"}]
+
+    # change is cut to 140 characters, ending in an ellipsis when it had to be.
+    long_change = "x" * 200
+    [entry] = validate_proposals([{"issue": 1, "change": long_change}])
+    assert len(entry["change"]) == 140 and entry["change"].endswith("…")
+    assert entry["change"][:-1] == long_change[:139]
+
+    # The first entry for a given issue wins; a later one for the same issue is dropped outright, not merged.
+    assert validate_proposals([{"issue": 1, "change": "first"}, {"issue": 1, "change": "second"}]) == [
+        {"issue": 1, "change": "first"}]
+
+    # At most 5 survive, counting only valid entries -- an invalid one in between doesn't take a slot.
+    many = [{"issue": i, "change": f"change {i}"} for i in range(1, 8)]
+    many.insert(2, {"issue": 99, "change": ""})  # invalid: dropped, not counted
+    result = validate_proposals(many)
+    assert [entry["issue"] for entry in result] == [1, 2, 3, 4, 5]
+
+    # Extra keys on a valid entry are dropped: only issue and change survive.
+    assert validate_proposals([{"issue": 1, "change": "x", "extra": "ignored"}]) == [{"issue": 1, "change": "x"}]
+
+
+def test_assess_plan_validation_and_clear(tmp_path):
+    state = State(tmp_path)
+
+    # No assess-plan.json at all.
+    assert state.assess_plan() == {"propose": []}
+
+    # Malformed JSON, and a JSON value that parses but isn't an object.
+    (tmp_path / "assess-plan.json").write_text("{not valid json")
+    assert state.assess_plan() == {"propose": []}
+    (tmp_path / "assess-plan.json").write_text(json.dumps([1, 2, 3]))
+    assert state.assess_plan() == {"propose": []}
+
+    # `propose` runs through the same `validate_proposals` as `plan()`'s own.
+    (tmp_path / "assess-plan.json").write_text(json.dumps(
+        {"propose": [{"issue": 7, "change": "stop doing the thing"}, {"issue": -1, "change": "x"}]}))
+    assert state.assess_plan() == {"propose": [{"issue": 7, "change": "stop doing the thing"}]}
+
+    state.clear_assess_plan()
+    assert not (tmp_path / "assess-plan.json").exists()
+    assert state.assess_plan() == {"propose": []}
+
+    # Clearing when there's nothing to clear is not an error.
+    state.clear_assess_plan()
 
 
 def test_run_reviews_round_trip_and_out_of_range(tmp_path):
