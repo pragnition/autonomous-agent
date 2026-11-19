@@ -297,7 +297,7 @@ class ClaudeRunner:
                 await client.query(_user_message(prompt_uuid, prompt))
                 state["accepting"] = True
                 async for msg in client.receive_messages():
-                    window.reschedule(deadline())  # any message is progress
+                    window.reschedule(deadline())  # any message is progress: a background agent's task frames too
                     record = self._append(transcript, msg)
                     if spec.on_message is not None:
                         with contextlib.suppress(Exception):

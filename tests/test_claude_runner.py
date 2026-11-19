@@ -733,3 +733,19 @@ async def test_a_stop_while_a_woken_turn_runs_still_waits_for_its_result(tmp_pat
     await runner.interrupt("R1")
     out = await asyncio.wait_for(task, 1)
     assert (out.outcome, out.summary) == ("interrupted", "lanes running\n\nstopped here")
+
+
+async def test_progress_from_running_agents_keeps_a_waiting_session_from_stalling(tmp_path):
+    # The turn ended with an agent running; the session then sends only the agent's frames, for longer than the
+    # idle window in all, never longer than it between two: that's progress, not a stuck session
+    runner, clients = make_runner(tmp_path, [[echo_prompt, task_started("a1"), result(text="lane running"),
+                                              0.12, task_progress("a1"), 0.12, task_progress("a1"), 0.12,
+                                              task_done("a1"), 0.12, result(text="lane done"), HANG]])
+    out = await runner.run(spec(tmp_path, idle_s=0.2))
+    assert (out.outcome, out.summary, clients[0].interrupted) == ("done", "lane running\n\nlane done", False)
+
+
+async def test_a_session_waiting_on_agents_that_hears_nothing_is_stalled(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, task_started("a1"), result(text="lane running"), HANG]])
+    out = await asyncio.wait_for(runner.run(spec(tmp_path, idle_s=0.1)), 2)
+    assert (out.outcome, out.error, clients[0].interrupted) == ("stalled", "no progress for 0.1 s", True)
