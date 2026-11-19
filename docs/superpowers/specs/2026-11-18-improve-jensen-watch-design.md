@@ -540,7 +540,9 @@ posted when none are left.
 approves every item, `approve 1 3` or `approve 1-3` some, and `reject 2` (or `no`, `skip`, `drop`) drops one. A
 reaction on the message itself answers for every item: `:white_check_mark:` or `:+1:` approves, `:x:` or `:-1:`
 rejects. Reactions are read first, then the replies in order, each overriding earlier answers. An approved item is
-final; a rejected one can still be approved later in the same thread.
+final; a rejected one can still be approved later in the same thread. A proposal nobody answers within 14 days
+is released: its undecided items lose `proposed` and its thread is no longer read, so a later watch can propose
+them again.
 
 **Who can approve:** the people in `agent.toml`, by the `slack` id of each `[people.*]` entry. Anyone else's reply or
 reaction is ignored, and if the list can't be read, nothing is approved.

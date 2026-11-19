@@ -1,12 +1,12 @@
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from agent.watch import approvals, cli
-from agent.watch.approvals import _validate_proposals, fired, parse_decision, poll, post_proposals
+from agent.watch.approvals import fired, parse_decision, poll, post_proposals
 from agent.watch.slack import SlackError
 from agent.watch.state import State
 
@@ -126,43 +126,6 @@ def _reply(text, user=APPROVER, ts="1700000001.000000", **extra):
     return {"type": "message", "user": user, "text": text, "ts": ts, **extra}
 
 
-# -- _validate_proposals --
-
-
-def test_validate_proposals_keeps_good_entries_and_cuts_long_changes():
-    long = "word " * 60
-    value = [
-        {"issue": 31, "change": "  Retry   flaky\n tool calls  "},
-        {"issue": True, "change": "a bool is not an issue"},
-        {"issue": 0, "change": "zero"},
-        {"issue": "40", "change": "a string is not an issue"},
-        {"issue": 41, "change": "   "},
-        {"issue": 42, "change": 7},
-        "not a dict",
-        {"issue": 31, "change": "a second entry for 31 loses"},
-        {"issue": 43, "change": long},
-        {"issue": 44, "change": "four"},
-        {"issue": 45, "change": "five"},
-        {"issue": 46, "change": "six"},
-        {"issue": 47, "change": "seven: past the limit"},
-    ]
-    out = _validate_proposals(value)
-    assert [p["issue"] for p in out] == [31, 43, 44, 45, 46]
-    assert out[0] == {"issue": 31, "change": "Retry flaky tool calls"}
-    assert len(out[1]["change"]) == 140 and out[1]["change"].endswith("…")
-    assert out[1]["change"][:-1] == " ".join(long.split())[:139]
-
-
-@pytest.mark.parametrize("value", [None, {}, "31", 31, {"issue": 31, "change": "x"}])
-def test_validate_proposals_anything_but_a_list_is_empty(value):
-    assert _validate_proposals(value) == []
-
-
-def test_validate_proposals_exactly_140_is_not_cut():
-    change = "x" * 140
-    assert _validate_proposals([{"issue": 1, "change": change}]) == [{"issue": 1, "change": change}]
-
-
 # -- post_proposals --
 
 
@@ -278,6 +241,29 @@ def test_poll_an_approvers_approve_ships_every_item(tmp_path):
     assert gh.comments == [(31, "Approved in Slack."), (40, "Approved in Slack.")]
     assert slack.thread_posts() == ["Approved 1, 2: queued to ship."]
     assert out == {"fix": 31, "project": None}
+
+
+def test_poll_releases_a_proposal_nobody_decided_within_14_days(tmp_path):
+    _record(tmp_path, [(31, "Retry flaky tool calls"), (40, "Shorter replies"), (41, "Fewer clones")])
+    gh = FakeGh({31: {"proposed"}, 40: {"rejected"}, 41: {"approved"}})
+    slack = FakeSlack(threads={PARENT: [_reply("approve")]})
+
+    out = poll(slack, gh, tmp_path, {APPROVER}, REPO, T0 + timedelta(days=14, hours=2))
+
+    assert slack.reads == [] and slack.posts == []  # an old thread is never read again
+    assert gh.labels == {31: set(), 40: {"rejected"}, 41: {"approved"}}
+    assert gh.comments == [(31, "No decision in Slack within 14 days; the watch can propose it again.")]
+    assert out == {"fix": 41, "project": None}
+
+
+def test_poll_still_reads_a_proposal_just_under_14_days_old(tmp_path):
+    _record(tmp_path, [(31, "Retry flaky tool calls")])
+    gh = FakeGh({31: {"proposed"}})
+    slack = FakeSlack(threads={PARENT: [_reply("approve")]})
+
+    poll(slack, gh, tmp_path, {APPROVER}, REPO, T0 + timedelta(days=13, hours=23))
+
+    assert gh.labels == {31: {"approved"}}
 
 
 def test_poll_ignores_non_approvers_bots_and_system_messages(tmp_path):

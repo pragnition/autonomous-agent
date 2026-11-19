@@ -232,6 +232,7 @@ Reply here: `approve` ships them all, `approve 1 3` ships some, `reject 2` drops
   or `approve 1-3` ships some, `reject 2` (or `no`, `skip`, `drop`) drops one. Or react on the list itself:
   `:white_check_mark:` or `:+1:` approves them all, `:x:` or `:-1:` rejects them all. A later reply overrides an
   earlier one, and a dropped item can still be approved later in the same thread; an approved one is final.
+  Items nobody answers within 14 days are released, and a later watch can propose them again.
 - Every 10 minutes the `approvals` job reads the threads, labels each issue `approved` or `rejected`, says in the
   thread what it took, and starts the next approved fix and the next approved project, one of each at a time. When
   a fix or project ends, its thread hears whether it shipped or needs a person (the issue then has `stuck`).

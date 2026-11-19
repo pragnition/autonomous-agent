@@ -22,7 +22,7 @@ import json
 import os
 import re
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -38,8 +38,7 @@ _NEEDS_PERSON = frozenset({"stuck", "needs-person"})
 
 _PROPOSALS_DIR = "proposals"
 _WORKFLOW = "improve-jensen.yml"
-_MAX_PROPOSALS = 5
-_MAX_CHANGE = 140
+_DECIDE_DAYS = 14  # a proposal nobody decided on by then is released
 
 _APPROVE_REACTIONS = frozenset({"white_check_mark", "heavy_check_mark", "+1", "ballot_box_with_check"})
 _REJECT_REACTIONS = frozenset({"x", "-1", "no_entry", "negative_squared_cross_mark"})
@@ -68,33 +67,6 @@ def _atomic_write(path: Path, text: str) -> None:
 def _escape(text: str) -> str:
     """`text` as literal Slack text: `&`, `<` and `>` would otherwise make links, mentions or `<!channel>`."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _validate_proposals(value) -> list[dict]:
-    """`value` as a list of `{"issue": int, "change": str}`: entries whose `issue` is a positive int (a bool
-    doesn't count) and whose `change` is a non-empty string once its whitespace is collapsed, `change` cut to 140
-    characters (ending in `…` when cut), the first entry per issue kept, at most 5. Anything that isn't a list is
-    `[]`."""
-    if not isinstance(value, list):
-        return []
-    out: list[dict] = []
-    seen: set[int] = set()
-    for entry in value:
-        if not isinstance(entry, dict):
-            continue
-        issue, change = entry.get("issue"), entry.get("change")
-        if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0 or issue in seen:
-            continue
-        change = " ".join(change.split()) if isinstance(change, str) else ""
-        if not change:
-            continue
-        if len(change) > _MAX_CHANGE:
-            change = change[:_MAX_CHANGE - 1] + "…"
-        seen.add(issue)
-        out.append({"issue": issue, "change": change})
-        if len(out) == _MAX_PROPOSALS:
-            break
-    return out
 
 
 # -- GitHub --
@@ -303,6 +275,35 @@ def _apply(gh: Gh, issue: int, labels: set[str], verdict: str) -> bool:
     return True
 
 
+def _expired(record: dict, now: datetime) -> bool:
+    """Whether `record` was posted more than `_DECIDE_DAYS` ago. One whose `posted` can't be read never expires."""
+    try:
+        posted = datetime.strptime(str(record.get("posted")), FMT).replace(tzinfo=UTC)
+    except ValueError:
+        return False
+    return now - posted > timedelta(days=_DECIDE_DAYS)
+
+
+def _release(gh: Gh, record: dict, labels: dict[int, set[str]]) -> None:
+    """Take `proposed` off the items of an expired record nobody decided on, so a later watch can propose them
+    again; its thread is never read again. Rejected and approved items keep their labels."""
+    for item in record["items"]:
+        current = labels.get(item["issue"])
+        if current is None or PROPOSED not in current or current & {APPROVED, REJECTED}:
+            continue
+        try:
+            gh(["issue", "edit", str(item["issue"]), "--remove-label", PROPOSED])
+        except Exception as exc:
+            _warn(f"releasing #{item['issue']}", exc)
+            continue
+        current.discard(PROPOSED)
+        try:
+            gh(["issue", "comment", str(item["issue"]), "--body",
+                f"No decision in Slack within {_DECIDE_DAYS} days; the watch can propose it again."])
+        except Exception as exc:
+            _warn(f"commenting on #{item['issue']}", exc)
+
+
 def _summary(approved: list[int], dropped: list[int]) -> str:
     parts = []
     if approved:
@@ -357,7 +358,8 @@ def _pick(gh: Gh, labels: dict[int, set[str]]) -> dict:
 
 def poll(slack, gh: Gh, state_root: Path, approvers: set[str], repo: str, now: datetime) -> dict:
     """Apply every new decision in the proposals' threads, then pick what to fire: `{"fix": int | None,
-    "project": int | None}`.
+    "project": int | None}`. A proposal older than `_DECIDE_DAYS` is no longer read: its undecided items are
+    released instead (`_release`).
 
     Only records with an item still undecided (its issue open and `proposed` or `rejected`) are read. Approved is
     final: an issue already `approved`, or closed, never changes; a rejected one can still be approved. Each
@@ -366,6 +368,9 @@ def poll(slack, gh: Gh, state_root: Path, approvers: set[str], repo: str, now: d
     labels = _open_issues(gh)
     for record in _read_records(state_root):
         if not any(_undecided(labels.get(item["issue"])) for item in record["items"]):
+            continue
+        if _expired(record, now):
+            _release(gh, record, labels)
             continue
         try:
             decided = _decisions(slack, record, approvers)

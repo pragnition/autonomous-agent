@@ -24,6 +24,11 @@ output a public Actions log would show) looks the URL and conversation back up. 
 outputs when it `started`, and `assess-commit --at` records that time); `project-mark` is the deterministic record
 of which `project` issue, if any, is currently being worked (`$STATE/project-active.json`), read back by
 `assess-check`'s own "is anything waiting" check.
+
+`propose --from watch|assess` posts a plan's proposed changes to Slack as one numbered message, `approvals` reads
+the decisions people made in those threads and names the next approved fix and project to fire, and `fired` tells a
+proposal's thread how its run ended (`approvals.py`). All three go through the job's own plain `gh`, and post as
+Jensen's bot with the token read from the live install, never printed.
 """
 
 from __future__ import annotations
@@ -35,10 +40,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.watch import feedback
+from agent.watch import approvals, feedback
 from agent.watch.host import Host, pool_is_holding
 from agent.watch.measure import measure
-from agent.watch import approvals
 from agent.watch.slack import Slack, SlackError, load_approvers, load_token
 from agent.watch.state import FMT, State
 
@@ -359,10 +363,9 @@ def _plain_gh(host: Host, repo: str):
 
 
 def _proposals(state: State, source: str) -> list[dict]:
-    """The validated `propose` list of the watch's `plan.json` or the assessment's `assess-plan.json`; none when
-    the plan has no such list."""
-    plan = state.plan() if source == "watch" else state.assess_plan()
-    return approvals._validate_proposals(plan.get("propose", []))
+    """The `propose` list of the watch's `plan.json` or the assessment's `assess-plan.json`, already validated by
+    `state.validate_proposals`."""
+    return (state.plan() if source == "watch" else state.assess_plan())["propose"]
 
 
 def _failure(command: str, exc: Exception) -> str:
