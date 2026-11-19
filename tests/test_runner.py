@@ -608,3 +608,33 @@ async def test_unset_variable_drops_the_server(tmp_path, caplog):
         item(mcp=LINEAR_MCP), "tok", [])
     assert claude.specs[0].mcp_servers == {}
     assert "LINEAR_APP_TOKEN" in caplog.text
+
+
+async def test_a_spawned_agent_runs_in_the_directory_it_was_given(tmp_path):
+    claude = FakeClaude()
+    given = tmp_path / "scratch" / "V-parent" / "repo"
+    given.mkdir(parents=True)
+    runner = make_runner(tmp_path, FakeLink(), claude)
+    await runner.handle(item("V-child", cwd=str(given)), "tok", [])
+    await runner.handle(item("V-gone", cwd=str(tmp_path / "nowhere")), "tok", [])
+    assert [s.cwd for s in claude.specs] == [given, tmp_path / "scratch" / "V-gone"]
+
+
+SPAWN_MANIFEST = [{"name": "spawn_agent", "description": "d", "input_schema": {"type": "object", "properties": {}}}]
+
+
+async def test_spawn_agent_makes_its_cwd_absolute_from_the_session_folder(session):
+    link = FakeLink()
+    (session / "repo").mkdir()
+    tools = remote_sdk_tools(SPAWN_MANIFEST, link, "tok", session_dir=session)
+    await call(tools, "spawn_agent", {"prompt": "p", "cwd": "repo"})
+    await call(tools, "spawn_agent", {"prompt": "q"})
+    assert link.tool_calls == [("spawn_agent", {"prompt": "p", "cwd": str((session / "repo").resolve())}),
+                               ("spawn_agent", {"prompt": "q"})]
+
+
+async def test_spawn_agent_refuses_a_missing_cwd(session):
+    link = FakeLink()
+    tools = remote_sdk_tools(SPAWN_MANIFEST, link, "tok", session_dir=session)
+    assert "no such directory" in await call(tools, "spawn_agent", {"prompt": "p", "cwd": "nope"})
+    assert link.tool_calls == []

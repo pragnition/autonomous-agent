@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable, Iterable
 
 from agent import db, events, tasks
 from agent.connectors.linear import issue_link
+from agent.core import spawned
 from agent.core.sessions import WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
 from agent.scrub import scrub
@@ -101,11 +102,12 @@ def record_message(conn: sqlite3.Connection, channel: str, ts: str, conversation
 
 
 def create_conversation(conn: sqlite3.Connection, *, channel: str | None, thread_ts: str | None,
-                        project: str | None, task_id: str | None = None, is_primary: int = 1) -> str:
+                        project: str | None, task_id: str | None = None, is_primary: int = 1,
+                        cwd: str | None = None) -> str:
     convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
-    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, created_at, "
-                 "last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                 (convo_id, channel, thread_ts, project, task_id, is_primary, now, now))
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, cwd, created_at, "
+                 "last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (convo_id, channel, thread_ts, project, task_id, is_primary, cwd, now, now))
     return convo_id
 
 
@@ -451,6 +453,8 @@ class Conversations:
                               "VALUES (?, ?, ?, ?)", (item.id, convo["id"], result.get("error"), db.utcnow()))
             events.append(self.conn, "usage_limit_cut", task_id=convo["task_id"], actor=None,
                           data={"work_item": item.id, "conversation_id": convo["id"], "error": result.get("error")})
+        if not continuing and not waiting:  # a spawned agent's last turn reports to the session that spawned it
+            self._report_to_spawner(convo, item, outcome, failed, text)
         if failed and not convo["channel"] and item.payload.get("report_to"):
             await self._report_scheduled_failure(convo, item.payload["report_to"], text)
         elif text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
@@ -464,6 +468,29 @@ class Conversations:
         if failed and task is not None and task.status == Status.working:
             await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.failed, actor="agent",
                                                               data={"outcome": outcome}))
+
+    def _report_to_spawner(self, convo: sqlite3.Row, item: WorkItem, outcome: str, failed: bool,
+                           text: str) -> str | None:
+        """Queue a finished spawned agent's report as a message in the conversation that spawned it, with the
+        spawning turn's actor and origin, so the next turn there (or the running one, mid-turn) acts on it and
+        answers in its Slack thread. Returns the new item's id, or None when the conversation isn't a running
+        spawned agent's."""
+        row = spawned.running_for_child(self.conn, convo["id"])
+        status = "failed" if failed else "done"
+        if row is None or not spawned.finish(self.conn, row["id"], status, outcome, text):
+            return None
+        parent = self._row(row["parent_conversation_id"])
+        if parent is None:
+            return None
+        origin = (row["origin"] or origin_line("no Slack thread", who=row["actor"])) + \
+            f" (report from agent {row['id']})"
+        new_id = self._enqueue_turn(parent, spawned.report_text(row, status, outcome, text), row["actor"],
+                                    origin=origin, source=row["source"] or "slack", requester=row["requester"],
+                                    follows=item.id, unattended=bool(row["unattended"]))
+        events.append(self.conn, "agent_reported", task_id=parent["task_id"], actor=row["actor"],
+                      data={"agent": row["id"], "parent": parent["id"], "status": status, "outcome": outcome,
+                            "work_item": new_id})
+        return new_id
 
     def resume_after_limit(self, work_item_id: str) -> str | None:
         """Carry on a turn a usage limit cut off, once: a new turn in its conversation. Like any next turn, the
