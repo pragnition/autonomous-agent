@@ -153,9 +153,10 @@ Write `plan.json` in the state folder on every run, even when it's empty:
   - a person corrected Jensen about it or complained;
   - it did visible harm: shipped a security hole, lost work, posted in the wrong place, approved over failing CI, or
     crashed a turn. A note from Jensen about visible harm qualifies on its own, like a person's complaint;
-  - it has `priority`: the assessment ranked it in its top three, and its evidence is enough.
+  - it has `priority`: the assessment ranked it in its top three, and it qualifies on the assessment's evidence
+    alone.
 - Never pick an issue labelled `project`, `stuck`, `needs-person` or `fix-deployed`.
-- Priority: a qualifying `priority` issue first. Then shipped harm and lost work, then how Jensen works (`works`,
+- Priority: a `priority` issue first. Then shipped harm and lost work, then how Jensen works (`works`,
   `long-runs`), then `people`. Within a tier, the most occurrences.
 - On the issue you pick by these rules, comment `Picked for a fix: <why it qualifies>`.
 
