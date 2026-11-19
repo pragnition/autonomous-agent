@@ -272,26 +272,6 @@ async def test_on_files_without_a_thread_is_recorded_not_posted(app):
 
 
 
-async def test_session_token_ttl_follows_task_minutes(tmp_path):
-    config = tmp_path / "config"
-    shutil.copytree(EXAMPLES, config)
-    toml = (config / "agent.toml").read_text().replace("task_minutes = 90", "task_minutes = 200")
-    (config / "agent.toml").write_text(toml)
-    app = CoreApp(config_dir=config, data_dir=tmp_path / "data", secrets={}, slack=FakeSlack(), proxy=Proxy())
-    client = TestClient(TestServer(app.agent_app))
-    await client.start_server()
-    try:
-        app.queue.enqueue("V-1", "turn", {})
-        tok = mint_token(app.conn, "runner", ttl_s=60)
-        body = await (await client.post("/agent/pull", headers=bearer(tok))).json()
-        expires = app.conn.execute("SELECT expires_at FROM tokens WHERE work_item_id = ?",
-                                   (body["work_item"]["id"],)).fetchone()[0]
-        from datetime import UTC, datetime, timedelta
-        assert expires > (datetime.now(UTC) + timedelta(minutes=200)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    finally:
-        await client.close()
-
-
 async def test_members_get_the_work_tools_and_admins_the_logins(app):
     member = manifest_names(app, tier="act")
     assert {"post_update", "track_task", "finish_task"} <= member and not {"open_pr", "work_on"} & member

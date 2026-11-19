@@ -12,6 +12,10 @@ Each attempt's prompt, and every message that arrives while the run is going, is
 own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
 until each one has been: a result from before the prompt was read (a background task from an earlier turn finishing)
 doesn't answer this turn.
+
+A run has no time or step limit of its own. A session that sends nothing for `idle_s` is stuck, and is stopped as
+stalled. A run with a time budget (`timeout_s`, which a scheduled run has) is stopped when it runs out, however busy
+it is; the budget covers the whole run, every session it moves through.
 """
 
 from __future__ import annotations
@@ -79,7 +83,7 @@ class ClaudeRunner:
         tools = [*spec.sdk_tools]
         servers = {**spec.mcp_servers, **({"agent": create_sdk_mcp_server("agent", tools=tools)} if tools else {})}
         return ClaudeAgentOptions(
-            model=spec.model, max_turns=spec.max_turns, cwd=str(spec.cwd),
+            model=spec.model, cwd=str(spec.cwd),
             system_prompt=spec.system_prompt, env=self._env(spec),
             # "user" is the agent's own Claude home (CLAUDE_CONFIG_DIR): the skills, plugins and MCP servers it adds
             setting_sources=["user", "project"], plugins=[{"type": "local", "path": str(p)} for p in spec.plugins],
@@ -158,9 +162,11 @@ class ClaudeRunner:
         if spec.run_id in self._stopped:  # cancelled before (or between) its sessions: don't start another
             return RunResult(run_id=spec.run_id, session_id=resume, outcome="interrupted", error="interrupted")
         self._read[spec.run_id] = []
+        end = asyncio.get_running_loop().time() + spec.timeout_s if spec.timeout_s else None
         try:
             while True:
-                attempt = await self._attempt(spec, resume=resume, prompt=prompt, can_fork=forks < self.max_forks)
+                attempt = await self._attempt(spec, resume=resume, prompt=prompt, can_fork=forks < self.max_forks,
+                                              end=end)
                 if attempt.switch_wanted and forks < self.max_forks and spec.run_id not in self._stopped:
                     # Never resume (or fork) the session onto another account: start a fresh one, which the proxy
                     # pins to a working account, and tell it which session to pick up from
@@ -210,7 +216,15 @@ class ClaudeRunner:
             f.write(json.dumps(record, default=str) + "\n")
         return record
 
-    async def _attempt(self, spec: RunSpec, *, resume: str | None, prompt: str, can_fork: bool = True) -> _Attempt:
+    async def _attempt(self, spec: RunSpec, *, resume: str | None, prompt: str, can_fork: bool = True,
+                       end: float | None = None) -> _Attempt:
+        """One session of the run. `end` is the loop time the run's time budget runs out at, None when it has none."""
+        loop = asyncio.get_running_loop()
+
+        def deadline() -> float:  # the idle window from now, cut short by the run's time budget
+            idle = loop.time() + spec.idle_s
+            return idle if end is None else min(idle, end)
+
         session_id = None if resume else self.uuid_factory()
         prompt_uuid = self.uuid_factory()
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume))
@@ -227,11 +241,12 @@ class ClaudeRunner:
         results: list[ResultMessage] = []
         watchdog = asyncio.create_task(self._watch(client, state))
         try:
-            async with asyncio.timeout(spec.timeout_s):
+            async with asyncio.timeout_at(deadline()) as window:
                 await client.connect()
                 await client.query(_user_message(prompt_uuid, prompt))
                 state["accepting"] = True
                 async for msg in client.receive_messages():
+                    window.reschedule(deadline())  # any message is progress
                     record = self._append(transcript, msg)
                     if spec.on_message is not None:
                         with contextlib.suppress(Exception):
@@ -260,7 +275,7 @@ class ClaudeRunner:
                             state["accepting"] = False
                             break
         except TimeoutError:
-            state["reason"] = "timeout"
+            state["reason"] = "timeout" if end is not None and window.when() == end else "stalled"
             await client.interrupt()
         finally:
             state["accepting"] = False
@@ -283,6 +298,8 @@ class ClaudeRunner:
             result.summary = "\n\n".join(r.result for r in results if r.result)
         if state["reason"] == "timeout":
             result.outcome, result.error = "timeout", f"no result within {spec.timeout_s} s"
+        elif state["reason"] == "stalled":
+            result.outcome, result.error = "stalled", f"no progress for {spec.idle_s} s"
         elif state["reason"] == "external":
             result.outcome, result.error = "interrupted", "interrupted"
         elif state["reason"] == "watchdog":

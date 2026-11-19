@@ -7,7 +7,7 @@ from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-RunOutcome = Literal["done", "error", "max_turns", "interrupted", "timeout"]
+RunOutcome = Literal["done", "error", "interrupted", "timeout", "stalled"]
 
 
 @dataclass
@@ -17,8 +17,8 @@ class RunSpec:
     cwd: Path
     model: str
     system_prompt: str
-    max_turns: int
-    timeout_s: int
+    idle_s: float  # a session that sends nothing for this long is stuck: it's stopped as stalled
+    timeout_s: float | None = None  # the whole run's time budget (a scheduled run has one); None means no limit
     env: dict[str, str] = field(default_factory=dict)
     mcp_servers: dict[str, Any] = field(default_factory=dict)
     plugins: list[Path] = field(default_factory=list)

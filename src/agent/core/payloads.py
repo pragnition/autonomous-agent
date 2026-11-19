@@ -53,7 +53,6 @@ class Payloads:
     def turn(self, convo, text: str, actor: str | None, *, unattended: bool = False) -> dict:
         payload = {"text": text, "actor": actor, "unattended": unattended,
                    "model": convo["model"] or self.config.models.default,
-                   "max_turns": self.config.limits.max_turns, "timeout_s": self.config.limits.task_minutes * 60,
                    # ${VAR} stays unexpanded: the runner fills it from the session's environment at session start
                    "mcp": {name: {"type": m.type, "url": m.url, "headers": dict(m.headers)}
                            for name, m in self.config.mcp.items()},
@@ -61,12 +60,16 @@ class Payloads:
         return self.refresh_turn(convo, payload)
 
     def refresh_turn(self, convo, payload: dict) -> dict:
-        """The turn with its conversation's state as it is now: the session to resume, the project, the test keys
-        and the system prompt (the active projects listed as they are right now). Done again when a runner claims
-        the turn, because a turn queued while the one before it ran must resume the session that turn ended with,
-        and must see the projects as they are when it actually starts, not when it was queued. The text stays as
-        it was when the turn was queued."""
+        """The turn with its conversation's state as it is now: the session to resume, the project, the test keys,
+        the system prompt (the active projects listed as they are right now) and the run's limits. Done again when a
+        runner claims the turn, because a turn queued while the one before it ran must resume the session that turn
+        ended with, and must see the projects as they are when it actually starts, not when it was queued. The text
+        stays as it was when the turn was queued."""
         # the account the session last ran on: the runner resumes it only if it would stay there
         return {**payload, "resume_session_id": convo["session_id"], "resume_account": convo["session_account"],
                 "project": convo["project"],
-                "test_secrets": self.test_secrets(), "system_prompt": self._full_prompt()}
+                "test_secrets": self.test_secrets(), "system_prompt": self._full_prompt(),
+                "idle_s": self.config.limits.idle_minutes * 60,
+                # a scheduled run has no one watching it, so it has a time budget; any other turn runs until it's done
+                "timeout_s": (self.config.limits.schedule_hours * 3600 or None)
+                if payload.get("source") == "schedule" else None}

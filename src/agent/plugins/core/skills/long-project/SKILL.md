@@ -5,7 +5,7 @@ description: Use when someone hands you a spec or asks for a whole product, app 
 
 # Building a project from a spec
 
-You build the whole thing yourself, over as many hours or days as it takes, with nobody driving. Your turn carries on by itself when it hits a time or step limit and after a restart, so keep working until the last milestone is merged and verified. Stop early only when you need something only a person can give (a secret, access, a decision about what they want), and say exactly what.
+You build the whole thing yourself, over as many hours or days as it takes, with nobody driving. Your turn has no time or step limit and carries on by itself after a restart, so keep working until the last milestone is merged and verified. Stop early only when you need something only a person can give (a secret, access, a decision about what they want), and say exactly what.
 
 ## Start
 

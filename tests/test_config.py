@@ -63,18 +63,22 @@ def problems_of(fn):
 
 def test_defaults(tmp_path):
     cfg = load_agent_config(write_agent(tmp_path, ""))
-    assert cfg.limits.max_concurrent_sessions == 10 and cfg.limits.task_minutes == 90
-    assert cfg.limits.max_tasks_per_day == 20 and cfg.limits.max_turns == 400
+    assert cfg.limits.max_concurrent_sessions == 10 and cfg.limits.max_tasks_per_day == 20
+    assert cfg.limits.idle_minutes == 30 and cfg.limits.schedule_hours == 6
     assert cfg.models.default == "claude-opus-5-5" and cfg.models.hard == "claude-fable-5-1"
     assert cfg.agent.uid == 1001
     assert cfg.cli == {}
 
 
-def test_continuations_default_to_one_hundred_and_three_for_schedules(tmp_path):
-    cfg = load_agent_config(write_agent(tmp_path, ""))
-    assert cfg.limits.continuations == 100 and cfg.limits.schedule_continuations == 3
-    cfg = load_agent_config(write_agent(tmp_path, "[limits]\nschedule_continuations = 0\n"))
-    assert cfg.limits.schedule_continuations == 0
+def test_a_turn_has_no_time_or_step_limit_and_old_ones_in_the_file_are_ignored(tmp_path):
+    cfg = load_agent_config(write_agent(tmp_path, "[limits]\ntask_minutes = 90\nmax_turns = 400\n"
+                                                  "continuations = 100\nschedule_continuations = 3\n"))
+    assert not {"task_minutes", "max_turns", "continuations", "schedule_continuations"} & set(vars(cfg.limits))
+
+
+def test_idle_minutes_must_be_at_least_one(tmp_path):
+    problems = problems_of(lambda: load_agent_config(write_agent(tmp_path, "[limits]\nidle_minutes = 0\n")))
+    assert any("'idle_minutes' must be at least 1" in p for p in problems)
 
 
 def test_github_login_defaults_to_name(tmp_path):

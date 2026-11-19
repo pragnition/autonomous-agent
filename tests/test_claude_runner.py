@@ -124,7 +124,7 @@ def make_runner(tmp_path, attempts, proxy=None, watchdog_s=60):
 
 def spec(tmp_path, **kw):
     args = dict(run_id="R1", prompt="build it", cwd=tmp_path, model="claude-opus-5-5",
-                system_prompt="sys", max_turns=10, timeout_s=5, env={"TZ": "Asia/Singapore"})
+                system_prompt="sys", idle_s=5, env={"TZ": "Asia/Singapore"})
     args.update(kw)
     return RunSpec(**args)
 
@@ -143,7 +143,7 @@ async def test_options_env_and_settings(tmp_path, monkeypatch):
     assert "HARMLESS_SETTING" not in o.env
     assert o.setting_sources == ["user", "project"]
     assert o.env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
-    assert (o.model, o.max_turns) == ("claude-opus-5-5", 10)
+    assert (o.model, o.max_turns) == ("claude-opus-5-5", None)  # no step limit: a turn runs until it's done
     assert o.plugins == [{"type": "local", "path": "/plugins/core"}]
     assert o.session_id == "00000000-0000-4000-8000-000000000001" and o.resume is None
 
@@ -176,11 +176,6 @@ async def test_result_mapping_success(tmp_path):
     runner, _ = make_runner(tmp_path, [[echo_prompt, result()]])
     r = await runner.run(spec(tmp_path))
     assert (r.outcome, r.summary) == ("done", "final text")
-
-
-async def test_result_mapping_max_turns(tmp_path):
-    runner, _ = make_runner(tmp_path, [[echo_prompt, result("error_max_turns")]])
-    assert (await runner.run(spec(tmp_path))).outcome == "max_turns"
 
 
 async def test_tokens_and_cost_copied(tmp_path):
@@ -358,10 +353,30 @@ async def test_soft_cap_lifted_keeps_the_session_where_it_is(tmp_path):
     assert clients[0].interrupted is False and (r.outcome, r.forks) == ("done", 0)
 
 
-async def test_timeout_interrupts(tmp_path):
-    runner, clients = make_runner(tmp_path, [[HANG]])
-    r = await runner.run(spec(tmp_path, timeout_s=0.05))
-    assert (r.outcome, clients[0].interrupted) == ("timeout", True)
+async def test_a_session_that_goes_quiet_is_stopped_as_stalled(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, HANG]])
+    r = await runner.run(spec(tmp_path, idle_s=0.05))
+    assert (r.outcome, r.error, clients[0].interrupted) == ("stalled", "no progress for 0.05 s", True)
+
+
+async def test_a_session_that_keeps_working_runs_on_past_its_idle_window(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, *[0.1, assistant] * 4, result()]])
+    r = await runner.run(spec(tmp_path, idle_s=0.2))
+    assert (r.outcome, clients[0].interrupted) == ("done", False)
+
+
+async def test_a_run_with_a_time_budget_stops_at_it_however_busy(tmp_path):
+    runner, clients = make_runner(tmp_path, [[echo_prompt, *[0.02, assistant] * 50, result()]])
+    r = await runner.run(spec(tmp_path, timeout_s=0.1))
+    assert (r.outcome, r.error, clients[0].interrupted) == ("timeout", "no result within 0.1 s", True)
+
+
+async def test_a_time_budget_spans_the_whole_run_not_each_session(tmp_path):
+    forbidden = result("error_during_execution", api_error_status=403, errors=["account disabled: maple"])
+    runner, clients = make_runner(tmp_path, [[echo_prompt, 0.16, forbidden],
+                                             [echo_prompt, *[0.06, assistant] * 3, result()]])
+    r = await runner.run(spec(tmp_path, timeout_s=0.24))
+    assert (r.outcome, r.forks, clients[1].interrupted) == ("timeout", 1, True)
 
 
 async def test_external_interrupt(tmp_path):
@@ -529,7 +544,7 @@ async def test_a_cancelled_turn_stops_at_its_result_and_leaves_a_sent_message_un
 
 async def test_a_message_that_cannot_be_written_is_not_waited_for(tmp_path):
     runner, clients = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, result(), HANG]])
-    task = asyncio.create_task(runner.run(spec(tmp_path, timeout_s=2)))
+    task = asyncio.create_task(runner.run(spec(tmp_path, idle_s=2)))
     await wait_until(lambda: runner.accepting("R1"))
 
     async def broken(prompt):
@@ -559,12 +574,12 @@ async def test_a_two_result_turn_keeps_both_answers_sums_turns_and_tokens_and_ta
 
 async def test_a_two_result_turn_skips_an_empty_answer_and_takes_its_outcome_from_the_last_result(tmp_path):
     runner, _ = make_runner(tmp_path, [[echo_prompt, assistant, WAIT_SENT, result(text=""), replay,
-                                        result("error_max_turns", text="Ran out of turns.")]])
+                                        result("error_during_execution", text="Ran into an error.")]])
     task = asyncio.create_task(runner.run(spec(tmp_path)))
     await wait_until(lambda: runner.accepting("R1"))
     await runner.send("R1", "W-2", "how's it going?")
     out = await task
-    assert (out.summary, out.outcome) == ("Ran out of turns.", "max_turns")
+    assert (out.summary, out.outcome) == ("Ran into an error.", "error")
 
 
 async def test_a_result_before_the_prompt_is_read_does_not_end_the_turn(tmp_path):

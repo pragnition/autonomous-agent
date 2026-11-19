@@ -26,11 +26,12 @@ from agent.tasks import Status
 
 log = logging.getLogger(__name__)
 NOT_AUTHORISED = "Sorry, I only work with people on this team's list."
-FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
-LIMIT_OUTCOMES = {"timeout", "max_turns"}  # a turn that ran out of time or steps carries on in a new one
-# A long project's build also carries on after a turn that ended in an error (an API error, a lost session), so one
-# bad turn doesn't end days of work; after this many failures in a row it stops like any other turn
-RETRY_OUTCOMES, BUILD_RETRIES = {"error"}, 3  # not "interrupted": a real stop never posts a result
+FAILED_OUTCOMES = {"error", "timeout", "stalled", "interrupted"}
+# A long project's build carries on after a turn that ended in an error (an API error, a lost session) or got stuck
+# (no progress for [limits] idle_minutes), so one bad turn doesn't end days of work; after this many failures in a
+# row it stops like any other turn. Not "interrupted": a real stop never posts a result. Not "timeout": that is a
+# scheduled run's time budget running out, which ends the run.
+RETRY_OUTCOMES, BUILD_RETRIES = {"error", "stalled"}, 3
 # A turn a usage limit cut off: the API's 429, or the runner giving up on an account the proxy reports rejected or
 # disabled. It waits for capacity (limit_waits) and is carried on once, by the usage watch (core/usage_watch.py).
 _LIMIT_ERROR = re.compile(r"^429\b|\baccount \S+ is (rejected|disabled)\b|rate.?limit", re.I)
@@ -59,10 +60,6 @@ def origin_line(where: str, *, who: str | None = None, link: str | None = None) 
     return "[" + " · ".join(p for p in (f"from {who}" if who else None, where, link) if p) + "]"
 
 
-def limit_name(outcome: str, limits) -> str:
-    return f"{limits.task_minutes}-minute limit" if outcome == "timeout" else f"{limits.max_turns}-step limit"
-
-
 def cut_by_limit(outcome: str, error: str | None) -> bool:
     return outcome == "error" and bool(error) and bool(_LIMIT_ERROR.search(error))
 
@@ -76,8 +73,8 @@ def failure_reply(outcome: str, error: str | None) -> str:
     """What the thread is told when a turn fails: what happened, with the runner's own error text."""
     if outcome == "timeout":
         return "I ran out of time before finishing that" + (f" ({error})." if error else ".")
-    if outcome == "max_turns":
-        return "I hit my step limit before finishing that."
+    if outcome == "stalled":
+        return "I got stuck before finishing that" + (f" ({error})." if error else ".")
     if outcome == "interrupted":
         return "That was stopped before I finished it."
     if not error:
@@ -402,21 +399,16 @@ class Conversations:
         if convo is None:
             return
         outcome, step = result.get("outcome", "done"), int(item.payload.get("continuation") or 0)
-        cap = self.config.limits.schedule_continuations if item.payload.get("source") == "schedule" \
-            else self.config.limits.continuations
         failures = int(item.payload.get("failures") or 0)
-        retrying = outcome in RETRY_OUTCOMES and step < cap and failures < BUILD_RETRIES and self._builds(convo["id"])
-        continuing = (outcome in LIMIT_OUTCOMES and step < cap) or retrying
+        retrying = outcome in RETRY_OUTCOMES and failures < BUILD_RETRIES and self._builds(convo["id"])
         # cut off by a usage limit: waits for capacity and is carried on once (see resume_after_limit)
-        waiting = not continuing and not item.payload.get("limit_resume") and \
+        waiting = not retrying and not item.payload.get("limit_resume") and \
             cut_by_limit(outcome, result.get("error"))
-        failed = outcome in FAILED_OUTCOMES and not continuing and not waiting
+        failed = outcome in FAILED_OUTCOMES and not retrying and not waiting
         if waiting:
             text = limit_wait_reply(result.get("error"))  # the ⏳ stays
         elif retrying:
             text = failure_reply(outcome, result.get("error"))  # the thread sees the real error; the ⏳ stays
-        elif continuing:
-            text = ""  # nothing to post: the thread's ⏳ stays, and the next turn carries on silently
         elif failed:
             text = failure_reply(outcome, result.get("error"))
         else:
@@ -434,20 +426,17 @@ class Conversations:
                                                convo["id"]))
         else:
             self.conn.execute("UPDATE conversations SET last_active_at = ? WHERE id = ?", (db.utcnow(), convo["id"]))
-        if continuing:  # resumes the session this turn ended with (a fresh one after an error), like any next turn
+        if retrying:  # resumes the session this turn ended with (a fresh one after an error), like any next turn
             p = item.payload
-            if retrying:
-                note = (f"(Your last turn ended with an error: {result.get('error') or outcome}. Carry on from where "
-                        "you stopped. If you don't remember the work, read your project's memory note and the thread "
-                        "(read_thread) first.)")
-            else:
-                note = (f"(Your last turn hit its {limit_name(outcome, self.config.limits)} before you finished. "
-                        "Carry on from where you stopped.)")
+            what = "got stuck" if outcome == "stalled" else "ended with an error"
+            note = (f"(Your last turn {what}: {result.get('error') or outcome}. Carry on from where you stopped. If "
+                    "you don't remember the work, read your project's memory note and the thread (read_thread) "
+                    "first.)")
             self._enqueue_turn(self._row(convo["id"]), note, p.get("actor"), origin=p.get("origin") or "",
                                source=p.get("source") or "slack", requester=p.get("requester"), follows=item.id,
                                unattended=bool(p.get("unattended")), message_ts=p.get("message_ts"),
                                reply_thread_ts=p.get("reply_thread_ts"), continuation=step + 1,
-                               report_to=p.get("report_to"), failures=failures + 1 if retrying else 0)
+                               report_to=p.get("report_to"), failures=failures + 1)
         if waiting:
             self.conn.execute("INSERT OR IGNORE INTO limit_waits(work_item_id, conversation_id, error, created_at) "
                               "VALUES (?, ?, ?, ?)", (item.id, convo["id"], result.get("error"), db.utcnow()))
@@ -459,7 +448,7 @@ class Conversations:
             reply_to = item.payload.get("reply_thread_ts") or convo["thread_ts"]
             for ts in await post_markdown(self.slack, channel=convo["channel"], thread_ts=reply_to, text=text):
                 record_message(self.conn, convo["channel"], ts, convo["id"])
-        if not continuing and not waiting and convo["channel"] and item.payload.get("message_ts"):
+        if not retrying and not waiting and convo["channel"] and item.payload.get("message_ts"):
             await self._react(convo["channel"], item.payload["message_ts"], FAILED if failed else DONE,
                               replaces=WORKING)
         task = tasks.get_task(self.conn, convo["task_id"]) if convo["task_id"] else None

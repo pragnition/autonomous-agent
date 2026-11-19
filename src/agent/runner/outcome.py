@@ -12,8 +12,6 @@ def map_result(msg: ResultMessage) -> tuple[str, str | None]:
     """(outcome, error) for a finished session."""
     if msg.subtype == "success":
         return "done", None
-    if msg.subtype == "error_max_turns":
-        return "max_turns", None
     return "error", f"{msg.api_error_status} {msg.errors}"
 
 
