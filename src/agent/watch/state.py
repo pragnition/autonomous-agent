@@ -66,6 +66,9 @@ _MAX_PLAN_REVIEWS = 10
 # characters (ending in `…` when it is).
 _MAX_PROPOSALS = 5
 _PROPOSAL_CHANGE_MAX = 140
+# A proposal's optional `credit` (whose session a learned change came from, for Slack only) is cut to this many.
+_PROPOSAL_CREDIT_MAX = 60
+_LEARNED = "learned"
 
 # improve-jensen's own traffic: the turns it queues into Jensen (`core_ask.py` marks them with this source) and
 # anything in the fresh `V-review-*` conversations it opens. Kept in the metrics and shown in the digest, but
@@ -154,14 +157,29 @@ def is_improve_jensens_own(record: dict) -> bool:
             or str(record.get("conversation") or "").startswith(_REVIEW_CONVERSATION_PREFIX))
 
 
+def _collapsed(value: object, limit: int) -> str | None:
+    """`value` with its whitespace collapsed (runs folded to single spaces, then stripped) and cut to `limit`
+    characters, ending in `…` when it had to be; `None` when it isn't a string or nothing is left."""
+    if not isinstance(value, str):
+        return None
+    value = " ".join(value.split())
+    if not value:
+        return None
+    if len(value) > limit:
+        value = value[:limit - 1].rstrip() + "…"
+    return value
+
+
 def validate_proposals(value: object) -> list[dict]:
     """A raw `propose` value (from `plan.json` or `assess-plan.json`) validated into `[{"issue": int, "change":
-    str}, ...]`: anything that isn't a list falls back to `[]`. An entry survives only when its `issue` is a
-    positive int (a bool doesn't count, even though `bool` is an `int` subclass) and its `change` is a non-empty
-    string once its whitespace is collapsed (runs of whitespace folded to single spaces, then stripped); `change`
-    is then cut to `_PROPOSAL_CHANGE_MAX` characters, ending in `…` when it had to be. The first entry for a given
-    `issue` wins over any later one for the same issue, and the result is cut to the first `_MAX_PROPOSALS` that
-    remain."""
+    str, "kind"?: "learned", "credit"?: str}, ...]`: anything that isn't a list falls back to `[]`. An entry
+    survives only when its `issue` is a positive int (a bool doesn't count, even though `bool` is an `int`
+    subclass) and its `change` is a non-empty string once its whitespace is collapsed (runs of whitespace folded
+    to single spaces, then stripped); `change` is then cut to `_PROPOSAL_CHANGE_MAX` characters, ending in `…`
+    when it had to be. `kind` is kept only when it's exactly `"learned"`, and `credit` only when it's a non-empty
+    string the same way, cut to `_PROPOSAL_CREDIT_MAX`; either key is left out otherwise, never costing the entry.
+    The first entry for a given `issue` wins over any later one for the same issue, and the result is cut to the
+    first `_MAX_PROPOSALS` that remain."""
     if not isinstance(value, list):
         return []
     seen: set[int] = set()
@@ -174,16 +192,17 @@ def validate_proposals(value: object) -> list[dict]:
         issue = entry.get("issue")
         if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0 or issue in seen:
             continue
-        change = entry.get("change")
-        if not isinstance(change, str):
+        change = _collapsed(entry.get("change"), _PROPOSAL_CHANGE_MAX)
+        if change is None:
             continue
-        change = " ".join(change.split())
-        if not change:
-            continue
-        if len(change) > _PROPOSAL_CHANGE_MAX:
-            change = change[:_PROPOSAL_CHANGE_MAX - 1].rstrip() + "…"
         seen.add(issue)
-        out.append({"issue": issue, "change": change})
+        proposal = {"issue": issue, "change": change}
+        if entry.get("kind") == _LEARNED:
+            proposal["kind"] = _LEARNED
+        credit = _collapsed(entry.get("credit"), _PROPOSAL_CREDIT_MAX)
+        if credit is not None:
+            proposal["credit"] = credit
+        out.append(proposal)
     return out
 
 

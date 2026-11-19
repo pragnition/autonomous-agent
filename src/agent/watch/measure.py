@@ -381,7 +381,7 @@ def _turn_record_and_view(item: dict, facts: TurnFacts, known_clones: set[str],
         "minutes": round((updated - created).total_seconds() / 60, 1),
         "asked": scrub(payload.get("text") or "", secrets), "replied": scrub(result.get("text") or "", secrets),
         "facts": scrubbed_facts, "signals": {key: record[key] for key in SIGNAL_KEYS},
-        "own": is_improve_jensens_own(record),
+        "added": [scrub(line, secrets) for line in facts.added], "own": is_improve_jensens_own(record),
     }
     return record, view
 

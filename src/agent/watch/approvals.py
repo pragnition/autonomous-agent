@@ -9,9 +9,11 @@ last step) says in the thread whether it shipped.
 
 Each posted message is remembered in `<state root>/proposals/<ts>.json`
 (`{"channel", "ts", "posted", "items": [{"n", "issue", "change"}], "notified"}`, plus `"released": true` once
-it has expired), written atomically. An issue belongs to the newest record that names it. GitHub's labels stay the
-record of where each issue is: a poll decides everything again from the thread and the labels, never from what an
-earlier poll saw, so a poll that dies halfway is simply finished by the next one.
+it has expired), written atomically; an item from the assessment's "what worked" carries `"kind": "learned"`
+and maybe `"credit"` (whose session it came from), which go into Slack and this record but never into GitHub. An
+issue belongs to the newest record that names it. GitHub's labels stay the record of where each issue is: a poll
+decides everything again from the thread and the labels, never from what an earlier poll saw, so a poll that dies
+halfway is simply finished by the next one.
 
 GitHub goes through a `gh` callable (`args -> stdout`, raising on a non-zero exit) and Slack through a `Slack`,
 both passed in so tests can use fakes. Only the people in `approvers` count, and only their replies and
@@ -173,24 +175,36 @@ def _find(root: Path, issue: int) -> tuple[dict, dict] | None:
 # -- propose --
 
 
+def _slack_change(item: dict) -> str:
+    """An item's change as its Slack line shows it: a learned one marked so and crediting whose session it came
+    from, when that's known."""
+    change = _escape(item["change"])
+    if item.get("kind") != "learned":
+        return change
+    credit = f" (from {_escape(item['credit'])})" if item.get("credit") else ""
+    return f"Learned: {change}{credit}"
+
+
 def post_proposals(slack, gh: Gh, state_root: Path, channel: str, items: list[dict], repo: str,
                    now: datetime) -> int:
     """Post `items` (validated proposals) to `channel` as one numbered message, leaving out any whose issue is
     closed or already in the flow (`proposed`, `approved`, `rejected`, `fixing`, `stuck`, `needs-person`); then
-    record the message and label each issue `proposed` with a `Proposed in Slack: <change>` comment. Returns how
-    many were posted -- 0, posting nothing, when none are left. A `SlackError` posting propagates before any
-    issue is labelled."""
+    record the message and label each issue `proposed` with a `Proposed in Slack: <change>` comment. A learned
+    item's line reads `Learned: <change> (from <credit>)`; its credit stays out of GitHub. Returns how many were
+    posted -- 0, posting nothing, when none are left. A `SlackError` posting propagates before any issue is
+    labelled."""
     labels = _open_issues(gh)
     kept: list[dict] = []
     for item in items:
         issue = item["issue"]
         if issue in labels and not labels[issue] & _IN_FLOW and all(k["issue"] != issue for k in kept):
-            kept.append({"n": len(kept) + 1, "issue": issue, "change": item["change"]})
+            kept.append({"n": len(kept) + 1, "issue": issue, "change": item["change"],
+                         **{key: item[key] for key in ("kind", "credit") if key in item}})
     if not kept:
         return 0
 
     lines = ["*improve-jensen wants to change Jensen*"]
-    lines += [f"{item['n']}. {_escape(item['change'])} "
+    lines += [f"{item['n']}. {_slack_change(item)} "
               f"(<https://github.com/{repo}/issues/{item['issue']}|#{item['issue']}>)" for item in kept]
     lines.append("Reply here: `approve` ships them all, `approve 1 3` ships some, `reject 2` drops one.")
     ts = slack.post(channel, "\n".join(lines))

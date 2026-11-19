@@ -396,7 +396,7 @@ def test_seed_skips_existing_titles_and_creates_labels(tmp_path):
     created_labels = {c[3] for c in label_calls}
     assert created_labels == {"jensen-watch", "works", "people", "needs-person",
                               "fixing", "stuck", "project",
-                              "proposed", "approved", "rejected", "jensen-assessment"}
+                              "proposed", "approved", "rejected", "jensen-assessment", "learned"}
     for c in label_calls:
         assert c[4] == "--force"
         assert c[5:7] == ["-R", "acme/widgets"]

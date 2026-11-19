@@ -647,8 +647,9 @@ Nobody tells it what to improve: it works that out from the evidence, and a pers
 before it ships. The workflow has seven jobs:
 
 - `watch`, hourly: `scripts/jensen_watch.py measure` turns the hour's turns, transcripts and the agent's PRs into
-  signals and a digest. Claude records each problem in a `jensen-watch` issue and plans the reviews and up to five
-  changes to propose, which a step after it posts in Slack with `jensen_watch.py propose`
+  signals and a digest, which also lists what the agent added (installs, and the skills, memory, instructions and
+  settings it wrote) and the skills it used. Claude records each problem in a `jensen-watch` issue and plans the
+  reviews and up to five changes to propose, which a step after it posts in Slack with `jensen_watch.py propose`
   (`.github/improve-jensen-watch.md`).
 - `review`, one per new PR of the agent's, in any repo: reads its CI, reviews the diff for defects it can prove,
   hands them to the agent in the conversation that made the PR (`scripts/ask_jensen.py`) and records the gap in the
@@ -656,7 +657,10 @@ before it ships. The workflow has seven jobs:
 - `assess`, four times a day: ranks at most ten things that hold the agent back, against the goal (enterprise-grade
   products, little human help, long runs) and only on evidence from the agent's own work. It writes `assessment.md`
   on the host and the pinned `jensen-assessment` issue in general terms, files issues and proposes up to three of
-  the top items, projects included, the same way (`.github/improve-jensen-assess.md`).
+  the top items, projects included, the same way (`.github/improve-jensen-assess.md`). It also asks what worked
+  that the agent should keep (ways people drove it that worked, skills or plugins installed for one project,
+  instructions people repeat), files those as `learned` issues and proposes up to two, credited in Slack only to
+  whose session they came from. Once approved, a fix makes them part of the agent's setup in every project.
 - `approvals`, every 10 minutes, with no Claude: reads the Slack threads, labels each issue `approved` or `rejected`,
   answers in the thread, and names the next approved fix and the next approved project (none while core's usage
   watch holds the pool). Each fix or project run first checks that its issue is still approved.

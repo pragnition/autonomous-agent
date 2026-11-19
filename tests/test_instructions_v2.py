@@ -113,3 +113,21 @@ def test_a_fix_ships_what_was_approved_and_closes_its_issue():
     assert "nothing wider" in charter
     assert "A fix's PR body says `Closes #N`" in charter
     assert "reopen it (`gh issue reopen <N>`)" in charter
+
+
+def test_the_assessment_asks_what_worked_and_credits_only_in_slack():
+    """Next to what holds Jensen back, the assessment asks what worked. Its learned proposals carry a credit (a
+    person's name) that only the Slack list shows; the hourly watch leaves learned issues to it."""
+    assess = _flat(ASSESS)
+    assert "what worked that Jensen should keep?" in assess
+    assert "labelled `jensen-watch` and `learned`" in assess
+    assert "Then at most 2 `learned` issues" in assess
+    assert '"kind": "learned", "credit":' in assess
+    assert "never put it in an issue, a comment or your final message" in assess
+    watch = _flat(WATCH)
+    assert "`learned` issues are the assessment's to propose" in watch
+    assert "Never close one labelled `project`, `proposed`, `approved` or `learned` this way." in watch
+    charter = _flat(CHARTER)
+    assert "src/agent/plugins/core/skills/<name>/SKILL.md" in charter
+    assert "never in the issue, a PR or a commit" in charter
+    assert "`rejected`, `learned`, `jensen-assessment`" in _flat(DEPLOY)

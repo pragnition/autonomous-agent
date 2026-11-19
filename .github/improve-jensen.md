@@ -6,7 +6,8 @@ improvements to Jensen end to end: change, PR, CI, review, merge, deploy, check,
 
 Two kinds of runs follow this file, and improvement projects follow it through `.github/improve-jensen-project.md`:
 - **fix:** your prompt names an issue a person approved in Slack. Its `Proposed in Slack: <change>` comment says what
-  was approved: find the cause and make that change, nothing wider.
+  was approved: find the cause and make that change, nothing wider. An issue labelled `learned` is something that
+  worked and that Jensen should keep, with no cause to find: see Learned changes.
 - **respond:** an issue labelled `improve-jensen` or a comment that mentions `@improve-jensen`. It is a person's own
   request and needs no approval in Slack. Work that request. If it needs no change, answer in the issue.
 
@@ -47,6 +48,21 @@ If your prompt says the engine is not switched on, open the PR and stop there: a
 
 The admins are the `github` handles (for @-mentions) and `slack` ids (for DMs) of the `[people.*]` entries with
 `role = "admin"` in `~/autonomous-agent/data/config/agent.toml`.
+
+## Learned changes
+A `learned` issue makes something that worked part of Jensen's setup in every project:
+- **A third-party skill or plugin:** install it at user scope in Jensen's Claude home, as any Claude-home change
+  (a dated backup first, its hooks and MCP servers checked as above), the way `deploy/agent-toolkit.sh` installs the
+  toolkit, through `docker exec agent-runner`. It's in place when `docker exec agent-runner claude plugin list` or
+  `docker exec agent-runner ls /var/agent/claude/skills` shows it and `just smoke` in `~/autonomous-agent` prints
+  `smoke ok`.
+- **A tool** (a CLI or package): the `agent` stage of this repo's `Dockerfile`, so every rebuild has it.
+- **A way of driving Jensen, or an instruction people repeat:** a short skill in this repo's core plugin,
+  `src/agent/plugins/core/skills/<name>/SKILL.md`, whose `description` says when it applies; or one line in
+  `src/agent/defaults/system.md` when it's one sentence. Write the steps that worked in general terms, not one
+  session's words, and keep it short.
+- The credit (whose session it came from) belongs to Slack only: never in the issue, a PR or a commit.
+- Tell Jensen with `changes-add`, as for any change.
 
 ## Rules
 - One improvement per PR. A fix's PR body says `Closes #N`: its issue closes on the merge, and nothing follows it up
