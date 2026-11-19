@@ -15,6 +15,18 @@ improve-jensen finds what holds Jensen back and ships the improvement itself, en
 and revert if the check fails. Continuous checking is the core. An improvement counts only when the evidence that
 prompted it goes away in Jensen's real work.
 
+**Nobody tells improve-jensen what to improve.** It is given the goal and the evidence, and it works out for itself
+what Jensen needs, the way a sharp engineer would:
+- reading Jensen's transcripts;
+- auditing the code Jensen shipped;
+- hearing what Jensen and people report;
+- reading current research and practice;
+- measuring Jensen on real tasks.
+
+Several times a day it decides what matters most and works on that, from one-line fixes to multi-day changes to
+Jensen's architecture. It and Jensen talk to each other: Jensen reports what gets in its way, and improve-jensen tells
+Jensen what it changed.
+
 improve-jensen runs outside Jensen's containers, on the host's self-hosted runner. A bad deploy can break Jensen, but
 it can't break the agent that has to undo it.
 
@@ -112,10 +124,16 @@ From about 320 messages from people:
    It is tried again when the evidence doesn't go away.
 6. **The team can follow what improve-jensen saw, changed and why,** in issues and PRs, without being notified every
    hour.
+7. **Four times a day, improve-jensen assesses Jensen against the goal** and ranks what is holding it back, with
+   evidence, without anyone naming the areas. The top items become its work, including multi-day projects.
+8. **A yardstick of real tasks shows whether Jensen as a whole is getting better.** A change that makes the score drop
+   is reverted.
+9. **Jensen reports what gets in its way,** and improve-jensen replies and tells Jensen what changed.
 
 ## Non-goals
 
-- Benchmarks, eval suites, replay harnesses, scoring dashboards or trend reports. Jensen's real work is the test.
+- Public benchmarks, large eval suites, replay harnesses or scoring dashboards. The yardstick (§12) is small and built
+  from Jensen's own work, and Jensen's real work stays the main test.
 - improve-jensen fixing product code itself. The products are Jensen's, and their defects are handed to Jensen.
 - Rubrics, checklists or build skills of our own. Quality comes from mechanical checks and maintained tools (see the
   off-the-shelf toolkit design).
@@ -175,12 +193,19 @@ A was chosen. It reuses improve-jensen and its runner, the issues are a record t
 improvement is judged by evidence that a script measures. C's lever, editing Jensen's memory and skills, is one of A's
 fix targets.
 
-**Two of the known problems are built as projects of their own,** not by the engine:
+**Project-scale problems go to improvement projects (§13), not fix jobs.** Two known ones are:
 - background work that outlives the turn;
 - a fresh context at milestone boundaries.
 
-Both are runner rewrites. They need a design and live checks of long builds, and an unattended agent's first jobs
-shouldn't be its riskiest ones. The engine records both with the `project` label and never dispatches a fix for them.
+Both are runner rewrites. They need a design and live checks of long builds, so they carry the `project` label. The
+assessment (§11) decides when to take them on, and a project run (§13) builds them. A fix job never picks them up.
+
+**The assessment, yardstick and projects extend approach A.** Making improve-jensen a separate always-on agent instead
+was considered and rejected:
+- it would need its own memory, process supervision and restarts;
+- it would duplicate what the runners and the record already give.
+
+Each run reads the record and the state folder, so it picks up where the last one stopped.
 
 ## Design
 
@@ -207,6 +232,9 @@ checkout. That user has Docker and passwordless sudo, so the runners have full a
 | `review` | `work` | `needs: watch`, one matrix entry per new Jensen PR; `workflow_dispatch mode=review` | reviews one PR, hands defects to Jensen, records process gaps |
 | `fix` | `work` | `needs: watch` when it picked an issue; `workflow_dispatch mode=fix` | ships one improvement: change, PR, CI, review, merge, deploy, check, revert |
 | `respond` | `work` | today's issue and comment triggers | answers people's and Jensen's `improve-jensen` issues under the fix rules |
+| `assess` | `work` | `schedule` four times a day (every 6 hours), `workflow_dispatch mode=assess` | the assessment (§11): ranks what holds Jensen back, files or updates the issues, and starts at most one project |
+| `yardstick` | `work` | nightly `schedule`, `workflow_dispatch mode=yardstick` (the fix and project runs dispatch it after a deploy that changes how Jensen behaves) | runs the yardstick (§12), records the score and reverts a change that made it drop |
+| `project` | `work` | `needs: assess` when it started one; `workflow_dispatch mode=project` | one improvement project (§13), which can carry on over several runs |
 
 - Only people with write access can trigger a run, which is the action's default. That matters because every run has
   the host.
@@ -215,6 +243,8 @@ checkout. That user has Docker and passwordless sudo, so the runners have full a
 - The watch picks a new issue only when no open issue has the `fixing` label. The fix job adds the label when it
   starts and always removes it when it ends.
 - Deploys from any job are serialised by a host lock (§8).
+- At most one `project` run at a time, in its own concurrency group. A project and a fix can run side by side, and
+  their deploys queue on the host lock.
 
 ### 2. Measuring the hour: `scripts/jensen_watch.py`
 
@@ -335,7 +365,9 @@ Then:
   - `fix-deployed`: the improvement is live; a comment gives the commit and deploy time.
   - `needs-person`: only a person can make the change.
   - `stuck`: two attempts failed.
-  - `project`: built as a project of its own, never by a fix job.
+  - `project`: built as an improvement project (§13), never by a fix job.
+- **One pinned issue, labelled `jensen-assessment`, holds the current ranked assessment** (§11) in general terms.
+  Each assessment rewrites its description rather than commenting.
 - **Comments** go out only on state changes: picked, deployed, failed, fixed, stuck.
 - **Seeding.** `deploy/improve-jensen-seed.json` holds the problems listed under "Where things stand", in general
   terms. `jensen_watch.py seed` files them at switch-on if they aren't open already.
@@ -348,7 +380,11 @@ Any one of these is enough:
 - It did visible harm: shipped a security hole, lost work, posted in the wrong place, approved over failing CI, or
   crashed a turn.
 
-Issues labelled `project`, `stuck` or `needs-person` never qualify.
+A note Jensen writes about the problem (§14) counts as one occurrence. A note about visible harm qualifies on its
+own, like a person's complaint.
+
+Issues labelled `stuck` or `needs-person` never qualify. `project` issues go to the assessment (§11) and run as
+improvement projects (§13).
 
 ### 7. The fix job
 
@@ -435,8 +471,140 @@ After a deploy the issue stays open with `fix-deployed`, and the watch keeps rea
 ### 10. Cost and the account pool
 
 - An hour with nothing new makes no Claude call.
-- While core's usage watch holds scheduled runs, no watch, review or fix job starts Claude.
+- While core's usage watch holds scheduled runs, no watch, review, fix, assess, yardstick or project job starts
+  Claude.
+- An assessment with nothing new since the last one, and no project waiting, makes no Claude call.
+- The yardstick runs at most 4 of Jensen's turns at once, so people's requests still get sessions. Its nightly run is
+  at a quiet hour (03:00 Singapore time).
 - The proxy's usage page shows improve-jensen's share separately, because its origin isn't in `agent_origins`.
+
+### 11. The assessment: what Jensen needs
+
+The `assess` job runs four times a day. It is where improve-jensen works out what to improve, without anyone naming
+the areas.
+
+**It reads:**
+- the digests and metrics since the last assessment;
+- the open and recently closed `jensen-watch` issues and their counts;
+- the yardstick's latest results and trend (§12);
+- Jensen's own reports and improve-jensen's replies to them (§14);
+- the review findings on Jensen's PRs since the last assessment;
+- its previous assessment;
+- current research and practice. It may read lab engineering blogs, papers, and Claude Code and plugin release notes,
+  but only to understand or solve a problem it already has evidence for.
+
+**It judges everything against the goal:** Jensen ships enterprise-grade products, with little human help, over long
+runs. Rank order:
+1. harm in what Jensen ships;
+2. what stops long runs finishing;
+3. what makes people step in;
+4. everything else.
+
+**Every item needs evidence from Jensen's own work:** a count, a yardstick result, a review finding, a Jensen report or
+a person's correction. Research can suggest a fix or a better way, but it never puts an item on the list by itself.
+The list stays at 10 items or fewer.
+
+**It writes:**
+- **`assessment.md` in the state folder** (private). For each item:
+  - the problem, and its evidence with references;
+  - why it matters for the goal;
+  - what would probably help, and whether that's a fix or a project.
+
+  Earlier versions are kept with their dates.
+- **The pinned `jensen-assessment` issue:** the same ranked list in general terms (the public-repo rule applies).
+- **New `jensen-watch` issues** for items it has no issue for, labelled `project` when they're project-scale.
+- **New yardstick tasks** for failures the yardstick doesn't cover yet (§12).
+- **At most one project start** when no project is running: it writes the issue number to `assess-plan.json`, and the
+  `project` job takes it. An unfinished project is picked up again before any new one starts.
+
+It skips the hour when nothing is new since the last assessment and no project is waiting. It posts nothing in Slack.
+
+### 12. The yardstick
+
+A small set of real tasks that improve-jensen runs Jensen through, so it can tell whether Jensen as a whole got better
+or worse after a change.
+
+**Tasks.** Each task is a folder:
+- `task.toml`: the request to Jensen, a time limit, and an optional judging rubric;
+- `fixture/`: the code or files Jensen works on. It's a plain folder with a local git repo inside, with no remote;
+- `check`: a script that runs in the fixture after Jensen finishes and exits 0 on a pass.
+
+A mechanical `check` is required wherever one is possible. A rubric is only for what no script can check, and those
+results are marked "judged".
+
+- **Five seed tasks ship in this repo (`deploy/yardstick/`),** built on synthetic code:
+  - answering questions about its own setup;
+  - fixing a bug in a small API with a planted authorisation hole that hidden tests catch;
+  - adding a small feature whose hidden acceptance tests are checked, along with whether Jensen's own tests can fail;
+  - a build step whose result only arrives from background work;
+  - a two-part change that should be split and checked.
+- **Tasks drawn from Jensen's real failures are written by the assessment** and live only on the host
+  (`$STATE/yardstick/tasks/`), because they come from real products.
+- **improve-jensen may add tasks, but never edits or deletes one, or its check.** `yardstick add` refuses to overwrite.
+  Only a person retires a task, by moving it to `retired/`.
+
+**Running.** `jensen_watch.py yardstick run`:
+- copies each task's fixture into `agent-runner` under `/var/agent/yardstick/<run>/<task>/`;
+- queues the request as a silent turn in its own `V-yardstick-<run>-<task>` conversation, running up to 4 at once;
+- waits for each turn, then runs its `check` inside `agent-runner`;
+- records `{run, ts, deployed sha, task, passed, minutes, judged}` in `yardstick.jsonl`.
+
+Each request tells Jensen to work only in that folder, push nowhere and message no one. A failed task is run once more
+before it counts as failed. Yardstick turns are improve-jensen's own traffic and stay out of Jensen's evidence counts.
+
+**The score** is the number of tasks passed out of those run. A **regression** is a task that passed on each of its
+last 3 runs and now fails both tries.
+
+**As a gate.** After a deploy that changes how Jensen behaves (a change to core, the runner, the prompt, skills or
+Jensen's Claude home), the fix or project run dispatches the yardstick. The change is reverted the same way as a failed
+deploy check (§8), and the issue gets a failed attempt, when either:
+- the score drops by 2 or more against the previous run on the same tasks; or
+- a regression appears.
+
+**Nightly**, the full set runs at 03:00 Singapore time to track the trend.
+
+### 13. Improvement projects
+
+A project is a `project` issue the assessment chose. The `project` job runs improve-jensen with
+`.github/improve-jensen-project.md`.
+
+**The flow:**
+1. A short design note, posted as a comment on the issue before building. It's visible to people, but nothing waits
+   for them.
+2. A plan and a progress file on the branch `improve-jensen/project-<n>`. The file names the steps, what's done, the
+   decisions and what's next, in general terms.
+3. Building with subagents, tests first, in small reviewed steps.
+4. A PR, CI, a fresh-context review, merge, `just deploy`, and the deploy check (§8). For a change to how turns run,
+   add the live behaviour test.
+5. The yardstick gate (§12), then the same "did it work" tracking as a fix (§9).
+
+**Carrying on.** A `project` run lasts up to 6 hours. When it ends unfinished, the progress file on the branch carries
+it, and the next assessment dispatches it again. After 5 days the assessment must decide whether to continue, split or
+drop the project, and it says which on the issue.
+
+Only one project runs at a time. Projects follow every fix rule in §7 and §8.
+
+### 14. Jensen and improve-jensen talk to each other
+
+**Jensen reports.**
+- When something in its own setup gets in its way, Jensen writes a short note to `/var/agent/feedback/` in its
+  container: `YYYY-MM-DD-<slug>.md`. Examples: a missing tool or access, a limit it hit, background work it lost, an
+  instruction or skill that didn't fit, something it had to work around.
+- The note says what it was doing, what got in the way and what would have helped.
+- One line in Jensen's prompt (`src/agent/defaults/system.md`) asks for this. Jensen carries on working and doesn't wait
+  for an answer.
+
+**improve-jensen reads them.** `measure` collects notes written or changed in the window into the digest's "Jensen
+reports" section. They are evidence like any other (§6), and the assessment reads them all.
+
+**improve-jensen answers.**
+- It appends a `Status:` line to the note: the issue it went into, the fix that shipped, or why nothing will change.
+- After each deploy that changes how Jensen behaves, it adds a dated line in plain words to
+  `/var/agent/feedback/CHANGES.md`, newest first, keeping the last 30. Jensen's prompt line says to read that file when
+  something about its setup seems different from what it remembers.
+- Review findings keep going to Jensen through `ask_jensen.py` (§4).
+
+The notes stay on the host. Public issues describe them in general terms only.
 
 ## Switch-on
 
@@ -448,6 +616,8 @@ The build ships nothing to the live install. When Jensen is idle and a person is
 4. Run the live core-rebuild check (§8).
 5. `just deploy` once by hand, then `jensen_watch.py seed`.
 6. Start the first watch with `workflow_dispatch mode=watch` and read its digest and plan.
+7. `jensen_watch.py yardstick install deploy/yardstick`, then one yardstick run by hand to set the baseline.
+8. Start the first assessment with `workflow_dispatch mode=assess` and read `assessment.md`.
 
 `deploy/improve-jensen.md` holds the exact commands.
 
@@ -463,6 +633,12 @@ The build ships nothing to the live install. When Jensen is idle and a person is
 - `deploy/improve-jensen-seed.json` (new).
 - `deploy/improve-jensen.md`: the runners, `gh`, tokens, state folder and switch-on steps.
 - `docs/design.md`: an improve-jensen section.
+- `.github/improve-jensen-assess.md` and `.github/improve-jensen-project.md` (new): the assessment and project
+  instructions.
+- The `assess`, `yardstick` and `project` jobs in the workflow.
+- `src/agent/watch/yardstick.py` and `src/agent/watch/feedback.py` (new), with CLI subcommands and tests.
+- `deploy/yardstick/` (new): the five seed tasks.
+- `src/agent/defaults/system.md`: one line asking Jensen to report what gets in its way, and to read `CHANGES.md`.
 
 If the Claude GitHub App's token can't change files under `.github/workflows/`, changes to workflow files come from a
 person.
