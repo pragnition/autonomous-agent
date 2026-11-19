@@ -151,9 +151,12 @@ jobs:
       - name: assess-plan
         id: assess-plan
         run: python scripts/jensen_watch.py assess-plan --github-output "$GITHUB_OUTPUT"
+      # The next assessment reads everything since this one started, so nothing written while it ran is missed.
       - name: assess-commit
         if: steps.claude.outcome == 'success'
-        run: python scripts/jensen_watch.py assess-commit
+        env:
+          STARTED: ${{ steps.assess-check.outputs.started }}
+        run: python scripts/jensen_watch.py assess-commit --at "$STARTED"
 
   project:
     needs: assess

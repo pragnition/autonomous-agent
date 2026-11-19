@@ -575,6 +575,13 @@ def test_project_job_sets_no_labels_of_its_own(improve_jensen):
     assert "project-active" not in (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
 
 
+def test_assess_commit_records_when_the_assessment_started(improve_jensen):
+    commit = next(s for s in improve_jensen["jobs"]["assess"]["steps"]
+                  if "jensen_watch.py assess-commit" in str(s.get("run", "")))
+    assert commit["run"] == 'python scripts/jensen_watch.py assess-commit --at "$STARTED"'
+    assert commit["env"]["STARTED"] == "${{ steps.assess-check.outputs.started }}"
+
+
 def test_no_job_dispatches_a_gate(improve_jensen):
     text = (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
     assert "gh workflow run" not in text
