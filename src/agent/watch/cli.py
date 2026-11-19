@@ -26,7 +26,8 @@ time). `gate status` prints the active gate, or with `--last` the one that ended
 handle. `gate end --result passed|failed` archives the gate with its result. `yardstick run --gate` measures the
 active gate's change and says what it found in `gate_result`: `none` (no active gate: nothing measured), `retry`
 (it couldn't be measured this time -- the pool held, no tasks, an error, or too few tasks in common with an earlier
-run -- and the gate stays active for the next gate run), or `passed`/`failed`; it never ends the gate itself.
+run -- and the gate stays active for the next gate run), or `passed`/`failed`, compared only with runs that started
+before the gate did; it never ends the gate itself.
 
 `assess-check`/`assess-plan`/`assess-commit` drive the assess job the same way `measure`/`plan`/`commit` drive the
 watch; `project-mark` is the deterministic record of which `project` issue, if any, is currently being worked
@@ -140,7 +141,8 @@ def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | Non
                f"gate_result={gate_result}", f"gate_failed={_bool_str(gate_result == 'failed')}"], github_output)
         print(f"score={passed}/{counted}")
 
-    if gate and state.gate(now) is None:
+    active = state.gate(now) if gate else None
+    if gate and active is None:
         emit(0, 0, "no_gate", "", "none")
         return 0
     cannot_measure = "retry" if gate else "none"
@@ -170,7 +172,9 @@ def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | Non
     run_id = yardstick.new_run_id(now)
     try:
         results = yardstick.run(host, state, tasks, run_id=run_id)
-        gate_result = yardstick.gate_verdict(state, run_id) if gate else "none"
+        # Only runs that started before the gate can be its baseline (`state.gate` has already parsed `started`).
+        gate_result = (yardstick.gate_verdict(state, run_id, datetime.strptime(active["started"], FMT)
+                                              .replace(tzinfo=UTC)) if active else "none")
     except Exception as exc:
         print(f"yardstick run failed ({type(exc).__name__})", file=sys.stderr)
         emit(0, 0, "error", run_id, cannot_measure)

@@ -74,6 +74,8 @@ _EXEC_TIMEOUT_S = 120  # each `core_python`/`runner_python` call: queue, poll, m
 PRUNE_DAYS = 7
 # A run is compared with an earlier one only when they share at least this many mechanical tasks.
 MIN_SHARED = 2
+# A run id starts with when the run started, in this format.
+_RUN_ID_FMT = "%Y%m%dT%H%M%SZ"
 _FINISHED = ("done", "failed", "cancelled")
 _QUEUED = "queued"
 # Exit codes of `timeout` when it stopped the command: 124 after SIGTERM, 137 when it had to SIGKILL it too.
@@ -244,10 +246,45 @@ def score(results: list[dict]) -> tuple[int, int]:
     return sum(1 for r in counted if r.get("passed") is True), len(counted)
 
 
-def _runs(state: State) -> tuple[list[str], dict[str, dict[str, bool]]]:
-    """Run ids in the order they first appear in the results file, and each run's mechanical results by task."""
+def _parse_ts(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, FMT).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _run_started(run_id: str, first_ts: datetime | None) -> datetime | None:
+    """When a run started: the time in its id (`new_run_id`), else its earliest result's `ts` -- which is no
+    earlier than its start, so a run judged to have started before a time really did."""
+    match = re.match(r"(\d{8}T\d{6}Z)-", run_id)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), _RUN_ID_FMT).replace(tzinfo=UTC)
+        except ValueError:
+            pass
+    return first_ts
+
+
+@dataclass
+class _Runs:
+    order: list[str]  # run ids in the order they first appear in the results file
+    by_run: dict[str, dict[str, bool]]  # each run's mechanical results by task
+    started: dict[str, datetime | None]  # each run's start (`_run_started`)
+
+    def earlier(self, run_id: str, before: datetime | None) -> list[str]:
+        """The runs before `run_id` in the file; with `before`, only those that started before that time."""
+        runs = self.order[:self.order.index(run_id)]
+        if before is None:
+            return runs
+        return [r for r in runs if self.started[r] is not None and self.started[r] < before]
+
+
+def _runs(state: State) -> _Runs:
     order: list[str] = []
     by_run: dict[str, dict[str, bool]] = {}
+    first_ts: dict[str, datetime] = {}
     for record in read_results(state):
         run_id = str(record["run"])
         if run_id not in by_run:
@@ -255,21 +292,29 @@ def _runs(state: State) -> tuple[list[str], dict[str, dict[str, bool]]]:
             by_run[run_id] = {}
         if not record.get("judged"):
             by_run[run_id][str(record["task"])] = record.get("passed") is True
-    return order, by_run
+        ts = _parse_ts(record.get("ts"))
+        if ts is not None and (run_id not in first_ts or ts < first_ts[run_id]):
+            first_ts[run_id] = ts
+    return _Runs(order, by_run, {run_id: _run_started(run_id, first_ts.get(run_id)) for run_id in order})
 
 
-def compare(state: State, current_run_id: str) -> dict:
+def compare(state: State, current_run_id: str, before: datetime | None = None) -> dict:
     """The current run against the most recent earlier run that shares at least `MIN_SHARED` mechanical tasks with
     it (`previous`, `None` when no earlier run does; `shared`, how many). `drop` is how many fewer of those shared
     tasks passed now; a task added since can't move it. A regression is a mechanical task that passed each of its
     last 3 earlier runs and fails now (after its retry). The gate fails on a drop of 2 or more, or on any
-    regression."""
-    order, by_run = _runs(state)
+    regression.
+
+    With `before` (a gate's `started`), only runs that started before it count as earlier: a nightly run that
+    landed between the change's deploy and the gate run already includes the change, so it can be neither the
+    baseline nor part of a task's streak."""
+    runs = _runs(state)
+    by_run = runs.by_run
     out = {"previous": None, "shared": 0, "drop": 0, "regressions": [], "gate_failed": False}
     current = by_run.get(current_run_id)
     if not current:
         return out
-    earlier = order[:order.index(current_run_id)]
+    earlier = runs.earlier(current_run_id, before)
     previous = next((run_id for run_id in reversed(earlier)
                      if len(set(by_run[run_id]) & set(current)) >= MIN_SHARED), None)
     if previous is not None:
@@ -287,16 +332,17 @@ def compare(state: State, current_run_id: str) -> dict:
     return out
 
 
-def gate_verdict(state: State, run_id: str) -> str:
-    """What the run `run_id` says about the change a gate is measuring: `passed` or `failed` from `compare`;
-    `passed` too for the first run there has ever been, which becomes the baseline; `retry` when it can't say --
-    the run recorded no results, or it shares fewer than `MIN_SHARED` mechanical tasks with every earlier run."""
-    order, _ = _runs(state)
-    if run_id not in order:
+def gate_verdict(state: State, run_id: str, gate_started: datetime | None = None) -> str:
+    """What the run `run_id` says about the change a gate (started at `gate_started`) is measuring: `passed` or
+    `failed` from `compare`, against runs that started before the gate only; `passed` too when no run started
+    before it, so this one becomes the baseline; `retry` when it can't say -- the run recorded no results, or it
+    shares fewer than `MIN_SHARED` mechanical tasks with every earlier run."""
+    runs = _runs(state)
+    if run_id not in runs.order:
         return "retry"
-    if order.index(run_id) == 0:
+    if not runs.earlier(run_id, gate_started):
         return "passed"
-    comparison = compare(state, run_id)
+    comparison = compare(state, run_id, before=gate_started)
     if comparison["previous"] is None:
         return "retry"
     return "failed" if comparison["gate_failed"] else "passed"
@@ -543,4 +589,4 @@ def run(host, state: State, tasks: list[Task], *, run_id: str, concurrency: int 
 
 
 def new_run_id(now: datetime) -> str:
-    return f"{now.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:4]}"
+    return f"{now.astimezone(UTC).strftime(_RUN_ID_FMT)}-{uuid.uuid4().hex[:4]}"

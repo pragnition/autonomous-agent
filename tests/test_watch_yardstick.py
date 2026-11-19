@@ -816,6 +816,64 @@ def test_gate_verdict(tmp_path):
     assert yardstick.gate_verdict(state, "never-ran") == "retry"
 
 
+def test_a_gate_compares_against_the_last_run_started_before_the_gate(tmp_path):
+    # A nightly run landing between the deploy and the gate run already includes the change: it must not be the
+    # baseline the gate measures the change against.
+    state = State(tmp_path / "state")
+    baseline, nightly, gate_run = "20261118T190700Z-0000", "20261119T120500Z-1111", "20261119T130000Z-2222"
+    gate_started = datetime(2026, 11, 19, 12, 0, 0, tzinfo=UTC)
+    _record(state, baseline, {"a": True, "b": True, "c": True})
+    _record(state, nightly, {"a": False, "b": False, "c": True})
+    _record(state, gate_run, {"a": False, "b": False, "c": True})
+
+    assert yardstick.compare(state, gate_run, before=gate_started) == {
+        "previous": baseline, "shared": 3, "drop": 2, "regressions": [], "gate_failed": True}
+    assert yardstick.gate_verdict(state, gate_run, gate_started) == "failed"
+    # Without a gate, compare is unchanged: the nightly is the previous run.
+    assert yardstick.compare(state, gate_run)["previous"] == nightly
+    assert yardstick.gate_verdict(state, gate_run) == "passed"
+
+    # The streak behind a regression only counts runs from before the gate, too.
+    streak = State(tmp_path / "streak")
+    for n in range(3):
+        _record(streak, f"2026111{n}T000000Z-000{n}", {"a": True, "b": True})
+    _record(streak, nightly, {"a": False, "b": True})
+    _record(streak, gate_run, {"a": False, "b": True})
+    assert yardstick.compare(streak, gate_run, before=gate_started)["regressions"] == ["a"]
+    assert yardstick.compare(streak, gate_run)["regressions"] == []
+
+    # No run started before the gate at all: the gate run is the first baseline there can be.
+    fresh = State(tmp_path / "fresh")
+    _record(fresh, nightly, {"a": True, "b": True})
+    _record(fresh, gate_run, {"a": False, "b": False})
+    assert yardstick.gate_verdict(fresh, gate_run, gate_started) == "passed"
+
+    # A run id that doesn't carry its start time falls back to its earliest result's ts.
+    loose = State(tmp_path / "loose")
+    path = yardstick.results_path(loose)
+    path.parent.mkdir(parents=True)
+    rows = [("early", "2026-11-19T11:00:00Z", True), ("late", "2026-11-19T12:30:00Z", False),
+            (gate_run, "2026-11-19T13:30:00Z", False)]
+    path.write_text("".join(json.dumps({"run": run, "ts": ts, "task": task, "passed": passed, "judged": False})
+                            + "\n" for run, ts, passed in rows for task in ("a", "b")))
+    assert yardstick.compare(loose, gate_run, before=gate_started)["previous"] == "early"
+
+
+def test_cli_gate_run_ignores_a_nightly_run_after_the_gate_started(tmp_path, monkeypatch):
+    state = State(tmp_path / "state")
+    for task_id in ("a", "b", "c"):
+        _write_task(state.root / "yardstick" / "tasks", task_id)
+    _record(state, "20261118T190700Z-0000", {"a": True, "b": True, "c": True})
+    state.gate_start(12, "repo", "abc123", datetime(2026, 11, 19, 17, 0, 0, tzinfo=UTC))
+    _record(state, "20261119T180000Z-1111", {"a": False, "b": False, "c": True})  # nightly, after the deploy
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+    host = FakeHost(tmp_path, check_rc=lambda folder: 0 if folder.rsplit("/", 1)[1].startswith("c") else 1)
+
+    rc, kv = _gate_run(state, host, tmp_path / "out.txt")
+
+    assert rc == 0 and kv["gate_result"] == "failed" and kv["gate_failed"] == "true"
+
+
 # -- memory cleanup --
 
 
