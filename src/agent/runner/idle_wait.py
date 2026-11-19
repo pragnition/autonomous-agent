@@ -26,7 +26,7 @@ IDLE_WAIT_REASON = (
 
 _UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 # timeout with its options, their values and its duration, before the command it runs (timeout -s KILL 5m sleep 299)
-_TIMEOUT = r"timeout(?:\s+(?:-\S+|\d[\d.]*[smhd]?|(?:SIG)?[A-Z]+))+"
+_TIMEOUT = r"timeout(?:\s+(?:-\S+|\d[\d.]*[smhd]?|[A-Z]+))+"
 # Where a command starts: the start of the text or of a line, after a control operator or an opening bracket, or
 # after a word that runs the next one
 _SEP = r"(?:^|[\n;&|(){}`!]|\$\(|\b(?:then|do|else|nohup|exec|command|env|time|" + _TIMEOUT + r")\s)"
