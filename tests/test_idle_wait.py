@@ -21,9 +21,15 @@ from agent.runner.idle_wait import IDLE_WAIT_REASON, block_idle_waits, idle_wait
     "read -t 300",
     "read -r -t 120 line",
     "python -c 'import time; time.sleep(200)'",
-    "wait",
-    "echo hi; wait",
-    "true && wait",
+    # a wait hidden in a shell's -c script, behind timeout's own options, or on a line of its own
+    "bash -c 'sleep 300'",
+    'sh -c "cd /tmp && sleep 300"',
+    "timeout 300 bash -c 'sleep 299'",
+    "timeout -s KILL 300 sleep 299",
+    "timeout -k 5 --preserve-status 5m sleep 299",
+    "cd repo\nsleep 300",
+    "docker exec core sh -c 'sleep 400'",
+    'x="$(sleep 99)"',  # a command substitution runs even inside double quotes
 ])
 def test_idle_waits_are_caught(command):
     assert idle_wait(command)
@@ -41,6 +47,18 @@ def test_idle_waits_are_caught(command):
     "grep -n 'sleep(' src/app.py",
     "pytest -q",
     "git log --oneline -5",
+    # a sleep that is only text: in a quoted argument, a commit message or a heredoc's body
+    "grep -rn 'sleep(30)' src/",
+    "sed -i 's/sleep(30)/sleep(1)/' app.py",
+    "node -e 'await sleep(15000)'",
+    'git commit -m "fix: drop the retry loop; sleep 15 was never enough"',
+    "git commit -F - <<'EOF'\nfix: drop the retry loop; sleep 15 was never enough\nEOF",
+    "cat > poll.py <<'EOF'\nimport time\nwhile True:\n    time.sleep(30)\nEOF\npython -m py_compile poll.py",
+    "cat > wait.sh <<EOF\n#!/bin/sh\nsleep 300\nEOF",
+    # a bare wait returns at once: each Bash call is a fresh shell with no jobs of its own
+    "wait",
+    "echo a >&2; wait",
+    "true && wait",
 ])
 def test_real_work_passes(command):
     assert not idle_wait(command)
