@@ -55,6 +55,9 @@ permissions:
 env:
   ANTHROPIC_BASE_URL: http://127.0.0.1:18092   # the proxy's improve-jensen origin
   IMPROVE_JENSEN_SLACK_CHANNEL: ${{ vars.IMPROVE_JENSEN_SLACK_CHANNEL || 'autonomous-agent' }}
+  # A job ends when Claude's turn ends, so a subagent or command left in the background would die with nothing
+  # written: Claude waits for each one instead.
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
 
 jobs:
   watch:

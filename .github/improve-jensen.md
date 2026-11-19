@@ -65,6 +65,8 @@ A `learned` issue makes something that worked part of Jensen's setup in every pr
 - Tell Jensen with `changes-add`, as for any change.
 
 ## Rules
+- Your run ends when your turn ends: anything still running then is lost. Subagents and commands run in the foreground
+  (each Bash call at most 10 minutes); never end your turn to wait for one.
 - One improvement per PR. A fix's PR body says `Closes #N`: its issue closes on the merge, and nothing follows it up
   afterwards. A respond run's PR, and a project's, says `Refs #N`.
 - Prompt and memory stay small: `src/agent/defaults/system.md` under 12 KB and Jensen's MEMORY.md under 150 lines. An
@@ -106,13 +108,12 @@ A `learned` issue makes something that worked part of Jensen's setup in every pr
 
 ## Deploy and check
 Deploy from the live checkout, waiting at most 10 minutes for an idle runner; a 3 (pending) is fine, the hourly watch
-retries it. A deploy can outlast one Bash call, and Claude Code moves a bare `sleep` to the background, so start it
-with Bash's background option:
+retries it. A deploy can outlast one Bash call (at most 10 minutes), so start it detached from the shell:
 
 ```sh
 rm -f "$RUNNER_TEMP/deploy.exit"
-cd ~/autonomous-agent && just deploy --wait-idle-s 600 > "$RUNNER_TEMP/deploy.log" 2>&1
-echo $? > "$RUNNER_TEMP/deploy.exit"
+nohup sh -c 'cd ~/autonomous-agent && just deploy --wait-idle-s 600 > "$RUNNER_TEMP/deploy.log" 2>&1;
+  echo $? > "$RUNNER_TEMP/deploy.exit"' > /dev/null 2>&1 < /dev/null &
 ```
 
 Then poll until `$RUNNER_TEMP/deploy.exit` exists, waiting 30 seconds between checks with
