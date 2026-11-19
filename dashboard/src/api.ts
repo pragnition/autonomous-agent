@@ -155,15 +155,26 @@ export type TaskRecord = {
   finished: boolean | null; outcome: string | null; links: string[]; steps: TaskStep[]
 }
 
+// Tokens summed over runs (src/agent/core/kpis.py Usage): no Claude cost, which reads as spend
+export type Usage = { runs: number; input_tokens: number; output_tokens: number; cache_read_tokens: number
+  cache_write_tokens: number }
+// The apps' metered model calls: `runs` counts calls, cost_usd is what the provider bills
+export type AppUsage = Usage & { cost_usd: number }
+export type UsageWindow = { since: string; by_project: Record<string, Usage>; total: Usage
+  apps_by_upstream: Record<string, AppUsage> }
+export type UsageWindowName = "today" | "7d" | "month"
+
 export type KpiView = {
   kpis: {
     since: string; until: string
     tasks: number; by_source: Record<TaskSource, number>; by_project: Record<string, number>; time: Stat
     finished: number; finished_rate: number | null
     merged: number; issues_closed: number
+    tokens_by_project: Record<string, Usage>
   }
   daily: { date: string; slack: number; linear: number; schedule: number }[]
   tasks: TaskRecord[]
+  usage: Record<UsageWindowName, UsageWindow>
 }
 
 export type EventSource = "slack" | "linear" | "dashboard" | "command line" | "agent" | "other"

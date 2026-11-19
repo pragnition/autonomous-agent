@@ -93,8 +93,8 @@ async def test_dm_turn_end_to_end(app, api):
                    headers=bearer(session))
     assert app.slack.posts[-1] == {"channel": "D1", "thread_ts": "5.1", "text": "Nothing else is running.",
                                    "blocks": [{"type": "markdown", "text": "Nothing else is running."}]}
-    run = app.conn.execute("SELECT kind, turns, outcome FROM runs WHERE id = ?", (item["id"],)).fetchone()
-    assert tuple(run) == ("turn", 2, "done")
+    run = app.conn.execute("SELECT kind, turns, outcome, project FROM runs WHERE id = ?", (item["id"],)).fetchone()
+    assert tuple(run) == ("turn", 2, "done", None)   # a DM is on no project: its tokens count to general
 
 
 async def test_dm_turn_names_the_sender_and_links_the_message(app):
@@ -542,3 +542,18 @@ async def test_digest_names_the_agent(app):
 def test_the_labeler_knows_the_configured_projects(app):
     assert set(app.labeler.projects) == set(app.packs) and app.labeler.projects
     assert all(p.repo for p in app.labeler.projects.values())
+
+
+def test_a_run_counts_to_its_conversations_project_else_its_tasks(app):
+    from agent.core.sessions import WorkItem
+    from agent_fixtures import add_conversation
+
+    app.conn.execute("INSERT INTO tasks(id, project, title, kind, source, status, created_at, updated_at) "
+                     "VALUES ('T1', 'sample', 't', 'code', 'slack', 'open', 'x', 'x')")
+    on_project, on_task = add_conversation(app.conn, project="sample"), add_conversation(app.conn, project=None,
+                                                                                          task_id="T1")
+    for wid, cid in (("W1", on_project), ("W2", on_task), ("W3", None)):
+        item = WorkItem(id=wid, conversation_id=cid, kind="turn", payload={}, status="claimed", attempts=1)
+        app._record_run(item, {"input_tokens": 5})
+    got = dict(app.conn.execute("SELECT id, project FROM runs").fetchall())
+    assert got == {"W1": "sample", "W2": "sample", "W3": None}

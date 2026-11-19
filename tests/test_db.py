@@ -90,3 +90,25 @@ def test_the_task_record_tables_from_before_projects_gain_their_new_columns(tmp_
     assert {"project", "version"} <= columns(conn, "request_labels")
     assert "project" in columns(conn, "task_records")
     assert tuple(conn.execute("SELECT project, version FROM request_labels").fetchone()) == (None, 1)
+
+
+def test_runs_gain_their_project_from_their_conversation_or_task(tmp_path):
+    """A live install's runs predate runs.project: each is filled from its conversation's project, else that
+    conversation's task's, else the run's own task's; a run on none stays NULL (general)."""
+    conn = db.connect(tmp_path / "agent.db")
+    db.create_schema(conn)
+    conn.execute("ALTER TABLE runs DROP COLUMN project")
+    for tid, project in (("T1", "beta"), ("T2", "gamma")):
+        conn.execute("INSERT INTO tasks(id, project, title, kind, source, status, created_at, updated_at) "
+                     "VALUES (?, ?, 't', 'code', 'slack', 'open', 'x', 'x')", (tid, project))
+    for cid, project, task in (("V-1", "alpha", None), ("V-2", None, "T1"), ("V-3", None, None)):
+        conn.execute("INSERT INTO conversations(id, project, task_id, created_at, last_active_at) "
+                     "VALUES (?, ?, ?, 'x', 'x')", (cid, project, task))
+    for wid, cid in (("W1", "V-1"), ("W2", "V-2"), ("W3", "V-3"), ("W4", None), ("W5", None)):
+        conn.execute("INSERT INTO work_items(id, conversation_id, kind, payload, created_at, updated_at) "
+                     "VALUES (?, ?, 'turn', '{}', 'x', 'x')", (wid, cid))
+        conn.execute("INSERT INTO runs(id, task_id, kind, started_at) VALUES (?, ?, 'turn', 'x')",
+                     (wid, "T2" if wid == "W5" else None))
+    db.create_schema(conn)
+    got = dict(conn.execute("SELECT id, project FROM runs").fetchall())
+    assert got == {"W1": "alpha", "W2": "beta", "W3": None, "W4": None, "W5": "gamma"}

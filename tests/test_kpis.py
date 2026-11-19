@@ -71,7 +71,8 @@ def test_format_kpis_exact(seeded):
         "Tasks: 3 (chilliclaw 2 · general 1)\n"
         "Time per task: median 10m · p90 30m\n"
         "Finished: 67% (2 of 3)\n"
-        "Shipped: 1 PR merged · 1 Linear issue closed")
+        "Shipped: 1 PR merged · 1 Linear issue closed\n"
+        "Tokens: 0 in · 0 out · 0 cache read · 0 cache write")
 
 
 def test_format_kpis_empty(conn):
@@ -131,3 +132,51 @@ def test_projects_come_first_by_count_and_general_last(conn):
     k = compute_kpis(conn, since=SINCE, until=UNTIL)
     assert list(k.by_project.items()) == [("alpha", 2), ("beta", 1), ("general", 2)]
     assert "Tasks: 5 (alpha 2 · beta 1 · general 2)" in format_kpis(k)
+
+
+def run(conn, rid, project, started, tokens=(100, 10, 1000, 50), day=13):
+    conn.execute("INSERT INTO runs(id, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+                 "cost_usd_est, started_at, ended_at, project) VALUES (?, 'turn', ?, ?, ?, ?, 9.99, ?, ?, ?)",
+                 (rid, *tokens, at(started, day), at(started, day), project))
+
+
+def test_a_days_projects_add_up_to_its_run_tokens(conn):
+    from agent.core.kpis import Usage, tokens_by_project, total
+
+    run(conn, "R1", "alpha", "10:00", (100, 10, 1000, 50))
+    run(conn, "R2", "alpha", "11:00", (1, 2, 3, 4))
+    run(conn, "R3", "beta", "12:00", (5, 500, 0, 0))
+    run(conn, "R4", None, "13:00", (7, 7, 7, 7))
+    run(conn, "R5", "alpha", "13:00", (9, 9, 9, 9), day=12)          # the day before: outside the window
+    usage = tokens_by_project(conn, since=SINCE, until=UNTIL)
+    assert list(usage) == ["beta", "alpha", "general"]               # most output first, general last
+    assert usage["alpha"] == Usage(2, 101, 12, 1003, 54)
+    day = conn.execute("SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), "
+                       "SUM(cache_write_tokens) FROM runs WHERE started_at >= ? AND started_at < ?",
+                       (at("00:00"), at("00:00", 14))).fetchone()
+    assert total(usage) == Usage(*day)
+
+
+def test_format_kpis_shows_tokens_by_project_and_no_cost(conn):
+    run(conn, "R1", "alpha", "10:00", (1500, 20, 2_000_000, 0))
+    run(conn, "R2", None, "11:00", (5, 5, 5, 5))
+    text = format_kpis(compute_kpis(conn, since=SINCE, until=UNTIL))
+    assert text.endswith("Tokens: 1.5k in · 25 out · 2M cache read · 5 cache write\n"
+                         "  alpha: 1.5k in · 20 out · 2M cache read · 0 cache write\n"
+                         "  general: 5 in · 5 out · 5 cache read · 5 cache write")
+    assert "$" not in text and "cost" not in text.lower()
+
+
+def test_usage_windows_today_7d_month_and_the_apps_meter(conn):
+    from agent.core.kpis import AppUsage, Usage, usage_windows
+
+    run(conn, "R1", "alpha", "02:00", day=13)     # 10:00 on the 13th in Singapore: today
+    run(conn, "R2", "alpha", "02:00", day=10)     # this week
+    run(conn, "R3", None, "02:00", day=2)         # this month, not this week
+    conn.execute("INSERT INTO llm_usage(at, upstream, model, status, input_tokens, cached_tokens, output_tokens, "
+                 "cost_usd) VALUES (?, 'alpha-foundry', 'm', 200, 10, 2, 3, 0.25)", (at("03:00"),))
+    w = usage_windows(conn, datetime(2026, 11, 13, 4, 0, tzinfo=UTC), "Asia/Singapore")
+    assert w["today"]["since"] == "2026-11-12T16:00:00Z" and w["month"]["since"] == "2026-10-31T16:00:00Z"
+    assert {k: v["total"].runs for k, v in w.items()} == {"today": 1, "7d": 2, "month": 3}
+    assert w["month"]["by_project"]["general"] == Usage(1, 100, 10, 1000, 50)
+    assert w["today"]["apps_by_upstream"] == {"alpha-foundry": AppUsage(1, 10, 3, 2, 0, 0.25)}

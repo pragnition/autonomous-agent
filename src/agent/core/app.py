@@ -290,19 +290,23 @@ class CoreApp:
     # results from the runner
 
     def _record_run(self, item: WorkItem, result: dict) -> None:
-        convo = self.conn.execute("SELECT task_id FROM conversations WHERE id = ?",
-                                  (item.conversation_id,)).fetchone() if item.conversation_id else None
+        # The run's tokens count to its conversation's project, else its task's; a run on neither is general (NULL)
+        convo = self.conn.execute(
+            "SELECT c.task_id, COALESCE(c.project, t.project) AS project FROM conversations c "
+            "LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",
+            (item.conversation_id,)).fetchone() if item.conversation_id else None
         now = db.utcnow()
         self.conn.execute(
             "INSERT OR REPLACE INTO runs(id, task_id, kind, status, session_id, account_code, forks, outcome, "
             "turns, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_est, transcript_path, "
-            "error, started_at, ended_at) VALUES (?, ?, ?, 'finished', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "error, started_at, ended_at, project) "
+            "VALUES (?, ?, ?, 'finished', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (item.id, convo["task_id"] if convo else None, item.kind,
              result.get("session_id"), result.get("account_code"), int(result.get("forks") or 0), result.get("outcome"),
              int(result.get("turns") or 0), int(result.get("input_tokens") or 0), int(result.get("output_tokens") or 0),
              int(result.get("cache_read_tokens") or 0), int(result.get("cache_write_tokens") or 0),
              float(result.get("cost_usd_est") or 0), str(self.data_dir / "runs" / f"{item.id}.jsonl"),
-             result.get("error"), now, now))
+             result.get("error"), now, now, convo["project"] if convo else None))
 
     async def on_result(self, item: WorkItem | None, result: dict) -> None:
         if item is None:

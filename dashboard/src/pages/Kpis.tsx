@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { Fragment, type KeyboardEvent, useState } from "react"
 import { Link } from "react-router"
-import { type TaskRecord, useKpis, useMe } from "@/api"
+import { type AppUsage, type TaskRecord, type Usage, type UsageWindow, type UsageWindowName, useKpis, useMe } from "@/api"
 import { StackedColumns } from "@/components/charts"
 import { Page } from "@/components/Page"
 import { QueryState } from "@/components/QueryState"
@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { fmtDateTime, fmtDuration, fmtPct } from "@/lib/format"
+import { fmtDateTime, fmtDuration, fmtPct, fmtTokens, fmtUsd } from "@/lib/format"
 import { filterOrAll, GENERAL, projectOptions, tasksIn } from "@/lib/tasks"
 
 const RANGES = [7, 30, 90]
@@ -167,6 +167,84 @@ function TasksDialog({ tasks, days, count, sub }: { tasks: TaskRecord[]; days: n
   )
 }
 
+const WINDOWS: { key: UsageWindowName; label: string }[] =
+  [{ key: "today", label: "Today" }, { key: "7d", label: "Last 7 days" }, { key: "month", label: "This month" }]
+
+function UsageTable({ rows, name, totals }:
+  { rows: Record<string, Usage | AppUsage>; name: string; totals?: Usage }) {
+  const entries = Object.entries(rows)
+  const billed = !totals   // the apps' calls: what the provider bills; the agent's own runs show no cost
+  const cols = billed ? 7 : 6
+  const cells = (u: Usage | AppUsage) => (
+    <>
+      <TableCell className="tabular text-right">{u.runs}</TableCell>
+      <TableCell className="tabular text-right">{fmtTokens(u.input_tokens)}</TableCell>
+      <TableCell className="tabular text-right">{fmtTokens(u.output_tokens)}</TableCell>
+      <TableCell className="tabular text-right">{fmtTokens(u.cache_read_tokens)}</TableCell>
+      <TableCell className="tabular text-right">{fmtTokens(u.cache_write_tokens)}</TableCell>
+      {billed && <TableCell className="tabular text-right">{fmtUsd("cost_usd" in u ? u.cost_usd : null)}</TableCell>}
+    </>
+  )
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{name}</TableHead>
+          <TableHead className="text-right">{totals ? "Runs" : "Calls"}</TableHead>
+          <TableHead className="text-right">Input</TableHead>
+          <TableHead className="text-right">Output</TableHead>
+          <TableHead className="text-right">Cache read</TableHead>
+          <TableHead className="text-right">Cache write</TableHead>
+          {billed && <TableHead className="text-right">Billed</TableHead>}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {entries.length === 0 && (
+          <TableRow>
+            <TableCell colSpan={cols} className="py-6 text-center text-muted-foreground">Nothing in this window.</TableCell>
+          </TableRow>
+        )}
+        {entries.map(([key, u]) => <TableRow key={key}><TableCell>{key}</TableCell>{cells(u)}</TableRow>)}
+        {totals && entries.length > 1 && (
+          <TableRow className="font-medium"><TableCell>Total</TableCell>{cells(totals)}</TableRow>
+        )}
+      </TableBody>
+    </Table>
+  )
+}
+
+function TokenUsage({ usage }: { usage: Record<UsageWindowName, UsageWindow> }) {
+  const [chosen, setChosen] = useState<UsageWindowName>("today")
+  const w = usage[chosen]
+  return (
+    <Card className="mt-6 shadow-none">
+      <CardHeader className="flex flex-row items-start justify-between gap-2">
+        <div className="space-y-1.5">
+          <CardTitle className="text-sm font-medium">Tokens by project</CardTitle>
+          <CardDescription className="text-xs">
+            Every run, counted to its conversation's project; general is work on none.
+          </CardDescription>
+        </div>
+        <Select value={chosen} onValueChange={(v) => setChosen(v as UsageWindowName)}>
+          <SelectTrigger size="sm" className="w-36" aria-label="Usage window"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {WINDOWS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <UsageTable rows={w.by_project} name="Project" totals={w.total} />
+        {Object.keys(w.apps_by_upstream).length > 0 && (
+          <div>
+            <div className="mb-1 text-xs text-muted-foreground">The apps' own model calls, through the meter</div>
+            <UsageTable rows={w.apps_by_upstream} name="Upstream" />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function Kpis() {
   const [days, setDays] = useState(7)
   const kpis = useKpis(days)
@@ -183,7 +261,7 @@ export function Kpis() {
         </Select>
       }>
       <QueryState query={kpis} rows={6}>
-        {({ kpis: k, daily, tasks }) => (
+        {({ kpis: k, daily, tasks, usage }) => (
           <>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <TasksDialog tasks={tasks} days={days} count={k.tasks}
@@ -208,6 +286,8 @@ export function Kpis() {
                            { key: "schedule", label: "Schedules", color: "var(--series-3)" }]} />
               </CardContent>
             </Card>
+
+            <TokenUsage usage={usage} />
           </>
         )}
       </QueryState>
