@@ -1,0 +1,8 @@
+prompt = """
+Add a function reserve(item, qty) to inventory.py in this repo, with tests. Rules:
+
+- reserving lowers the item's available stock by qty;
+- stock must never go below zero;
+- an unknown item is rejected.
+"""
+time_limit_min = 20

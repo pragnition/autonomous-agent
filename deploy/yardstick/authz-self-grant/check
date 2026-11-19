@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Pass when roles.py refuses a self-grant regardless of case, keeps normal grants working, still
+rejects unknown roles, and Jensen's own regression test for the bug passes too."""
+from __future__ import annotations
+
+import importlib.util
+import io
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_tests(paths: list[Path], unique: str) -> tuple[int, bool, str]:
+    suite = unittest.TestSuite()
+    total = 0
+    errors = []
+    for i, path in enumerate(paths):
+        try:
+            module = load_module(path, f"_yardstick_{unique}_{i}_{path.stem}")
+        except Exception as exc:  # a test file that fails to even import counts as a failure
+            errors.append(f"{path.name}: {exc!r}")
+            continue
+        loaded = unittest.defaultTestLoader.loadTestsFromModule(module)
+        total += loaded.countTestCases()
+        suite.addTests(loaded)
+    stream = io.StringIO()
+    result = unittest.TextTestRunner(stream=stream, verbosity=2).run(suite)
+    ok = result.wasSuccessful() and not errors
+    out = stream.getvalue() + ("\n" + "\n".join(errors) if errors else "")
+    return total, ok, out
+
+
+def main() -> int:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+    hidden = ROOT / "hidden" / "test_roles_hidden.py"
+    if not hidden.exists():
+        print("check error: missing hidden test file")
+        return 1
+
+    _, hidden_ok, hidden_out = run_tests([hidden], "hidden")
+    if not hidden_ok:
+        print("hidden regression tests failed:")
+        print(hidden_out)
+        return 1
+
+    own_tests = sorted(p for p in ROOT.glob("test_*.py"))
+    if not own_tests:
+        print("no regression test found at the top level (expected a test_*.py file)")
+        return 1
+
+    own_count, own_ok, own_out = run_tests(own_tests, "own")
+    if own_count == 0:
+        print("the regression test file has no test cases in it")
+        return 1
+    if not own_ok:
+        print("Jensen's own tests failed:")
+        print(own_out)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
