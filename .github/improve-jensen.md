@@ -67,6 +67,10 @@ The admins are the `github` handles (for @-mentions) and `slack` ids (for DMs) o
   in a PR of its own, with an issue of its own.
 - The same goes for improve-jensen's own instructions (`.github/improve-jensen*.md`) and its seed
   (`deploy/improve-jensen-seed.json`): a PR of its own, with an issue of its own, never inside a fix.
+- improve-jensen never merges a change to its own yardstick or gate: `src/agent/watch/yardstick.py`, the gate code
+  in `src/agent/watch/state.py` and `src/agent/watch/deploy.py`, `src/agent/watch/core_items.py`, or
+  `deploy/yardstick/`. Open the PR as usual, add `needs-person` to its issue and @-mention the admins to review and
+  merge it. A person merges it.
 - While a yardstick gate is active (`python scripts/jensen_watch.py gate status` shows one), make no host-config or
   Claude-home change: the gate would measure it as part of another change. Say so (in the issue, for a respond run)
   and stop; the watch picks a fix issue again once the gate ends.
@@ -99,7 +103,8 @@ The admins are the `github` handles (for @-mentions) and `slack` ids (for DMs) o
   plugin isn't installed (`claude plugin list` lacks it), the subagent does a plain code review with the same brief,
   and the PR says so. Never skip the review.
 - Fix every finding it can prove, push, and wait for the checks again.
-- Then merge: `gh pr merge <PR> --merge --delete-branch`.
+- Then merge: `gh pr merge <PR> --merge --delete-branch`, unless the PR changes the yardstick or the gate
+  (see Rules): a person merges that one.
 
 ## Deploy and check
 Deploy from the live checkout, waiting at most 10 minutes for an idle runner; a 3 (pending) is fine, the hourly watch

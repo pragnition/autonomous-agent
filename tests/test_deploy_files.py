@@ -379,7 +379,8 @@ def test_instructions_carry_the_key_rules():
         ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit", "/status"),
         ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #",
                                       ".github/workflows/", ".github/improve-jensen*.md",
-                                      "deploy/improve-jensen-seed.json"),
+                                      "deploy/improve-jensen-seed.json",
+                                      "improve-jensen never merges a change to its own yardstick or gate"),
         "deploy/improve-jensen.md": ("Never approve a fork run on this repo", "debug logging",
                                      "persist-credentials: false", "claude[bot]", "gh run list"),
     }
