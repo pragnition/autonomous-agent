@@ -2,8 +2,8 @@
 
 A session that launches background agents and then holds its turn open with a blocking wait (`timeout 290 tail -f
 /dev/null`, `sleep 300`, ...) can't read anything: messages sent into it are only delivered between tool calls, so the
-person waits minutes for an answer. Background agents and tasks already wake the session when they finish, and the
-runner keeps the session open while they run (claude.py), so ending the turn is safe. Short sleeps, such as giving a
+person waits minutes for an answer. Background agents already wake the session when they finish, and the runner
+keeps the session open while they run (claude.py), so ending the turn is safe. Short sleeps, such as giving a
 server a few seconds to come up, and anything run in the background still pass.
 
 Only what the shell runs counts. Quoted strings (a grep pattern, a commit message, a `node -e` script) and heredoc
@@ -20,8 +20,8 @@ MAX_SLEEP_S = 10
 
 IDLE_WAIT_REASON = (
     "Blocked: this command only waits, and while a Bash call is running, no message from the people you work with can "
-    "reach you. Background agents and tasks notify you when they finish, and the session stays open while they run, "
-    "so end your turn now (say in a line what's still running) and let the notification wake you. To wait for a "
+    "reach you. Background agents notify you when they finish, and your session stays open while they run, so end "
+    "your turn now (say in a line what's still running) and let the notification wake you. To wait for a "
     "condition (a file, a port, a CI run), use the Monitor tool instead of a sleep or a polling loop.")
 
 _UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}

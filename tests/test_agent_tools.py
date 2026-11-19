@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 
 import pytest
 
@@ -476,3 +477,9 @@ async def test_spawn_agent_works_in_its_own_folder_unless_told_and_sharing_a_che
                                (child.conversation_id,)).fetchone()[0] is None
     description = next(t["description"] for t in router.manifest(ctx_member) if t["name"] == "spawn_agent")
     assert "its own new folder" in description and "shares that checkout with you" in description
+
+
+async def test_the_spawn_agent_description_says_background_agents_keep_the_session_open(router, ctx_member):
+    description = next(t["description"] for t in router.manifest(ctx_member) if t["name"] == "spawn_agent")
+    assert "Background agents (the Agent tool with run_in_background) keep your session open" in description
+    assert not re.search(r"(stopped|die|end|killed)\b[^.]*when your turn ends", description)

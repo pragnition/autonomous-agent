@@ -22,10 +22,10 @@ MAX_RUNNING_ALL = 4     # spawned agents running at once across every conversati
 REPORT_CHARS = 20_000   # the longest report passed back; the rest is cut with a note
 BRIEF_CHARS = 300       # how much of the brief the report repeats, so the spawning session knows which one it is
 
-CHILD_NOTE = ("(You are agent {id}, a background agent another session spawned. You have no Slack thread and nobody "
-              "watches you work. When you're done, your final message is delivered to the session that spawned you, "
-              "so make it a complete, self-contained report of what you found or did. Don't ask questions: decide, "
-              "say what you assumed and finish.)\n\n")
+CHILD_NOTE = ("(You are agent {id}, an agent another session spawned with spawn_agent. You have no Slack thread and "
+              "nobody watches you work. When you're done, your final message is delivered to the session that spawned "
+              "you, so make it a complete, self-contained report of what you found or did. Don't ask questions: "
+              "decide, say what you assumed and finish.)\n\n")
 
 
 def new_id() -> str:
@@ -41,7 +41,8 @@ _MORE_TO_COME = ("EXISTS (SELECT 1 FROM work_items w WHERE w.conversation_id = {
 
 
 def more_to_come(conn: sqlite3.Connection, conversation_id: str) -> bool:
-    """Whether anything is still to run in the conversation, so a spawned agent's turn that just ended isn't its last."""
+    """Whether anything is still to run in the conversation: then a spawned agent's turn that just ended isn't its
+    last."""
     return conn.execute("SELECT " + _MORE_TO_COME.format(c="?"),
                         (conversation_id,) * 3).fetchone()[0] == 1
 

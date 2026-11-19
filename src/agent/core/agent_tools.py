@@ -199,16 +199,18 @@ class AgentToolRouter:
                                    "split one request into parallel tasks.",
                      s({"project": "string", "title": "string", "kind": "string", "brief": "string"}), "act"),
             self._start_task)
-        reg(ToolSpec("spawn_agent", "Start a background agent: a separate session with its own brief that keeps "
-                                    "running after your turn ends. Returns its id at once. When it finishes, its "
-                                    "final message arrives in this conversation as an <agent-notification> and "
-                                    "starts a new turn here if you've ended yours, so don't wait for it. Use it for "
-                                    "work that should outlive your turn; the Agent tool's run_in_background agents "
-                                    "are stopped when your turn ends. The brief must be self-contained: the agent "
-                                    "doesn't see this conversation. cwd: the directory it works in (relative to your "
-                                    "folder, or absolute); by default its own new folder. A cwd in your folder (a "
-                                    "clone of yours) shares that checkout with you: only do that when you want it to "
-                                    "work on your checkout, and don't change the same files meanwhile.",
+        reg(ToolSpec("spawn_agent", "Start a spawned agent: a separate session that works on its own after your "
+                                    "turn and reports back later in a new turn here. Returns its id at once. When it "
+                                    "finishes, its final message arrives in this conversation as an "
+                                    "<agent-notification> and starts a new turn here if you've ended yours, so don't "
+                                    "wait for it. Background agents (the Agent tool with run_in_background) keep your "
+                                    "session open instead, and your reply posts when they finish. The brief must be "
+                                    "self-contained: the agent doesn't see this conversation. At most 3 per "
+                                    "conversation and 4 overall run at once, and one that fails isn't retried. cwd: "
+                                    "the directory it works in (relative to your folder, or absolute); by default its "
+                                    "own new folder. A cwd in your folder (a clone of yours) shares that checkout "
+                                    "with you: only do that when you want it to work on your checkout, and don't "
+                                    "change the same files meanwhile.",
                      s({"prompt": "string"}, {"cwd": "string"}), "act"), self._spawn_agent)
         reg(ToolSpec("status", "What is running and queued, whether the agent is paused, and how much of its 5-hour "
                                "window this session's account has used.", s(), "read"),
