@@ -605,46 +605,45 @@ improve-jensen is the agent that owns this repository and keeps making the agent
 better engineer. It runs outside the stack, as a Claude Code GitHub Action (`.github/workflows/improve-jensen.yml`)
 on five self-hosted runners on the host (one for the hourly watch, four for everything else), and reaches Claude
 through the proxy's `improve-jensen` origin. A bad deploy can break the agent, but not the agent that has to undo it.
-Nobody tells it what to improve: it works that out from the evidence. The workflow has eight jobs:
+Nobody tells it what to improve: it works that out from the evidence, and a person approves each change in Slack
+before it ships. The workflow has seven jobs:
 
 - `watch`, hourly: `scripts/jensen_watch.py measure` turns the hour's turns, transcripts and the agent's PRs into
-  signals and a digest. Claude records each problem in a `jensen-watch` issue, follows the deployed improvements and
-  plans the reviews and at most one fix (`.github/improve-jensen-watch.md`).
+  signals and a digest. Claude records each problem in a `jensen-watch` issue and plans the reviews and up to five
+  changes to propose, which a step after it posts in Slack with `jensen_watch.py propose`
+  (`.github/improve-jensen-watch.md`).
 - `review`, one per new PR of the agent's, in any repo: reads its CI, reviews the diff for defects it can prove,
   hands them to the agent in the conversation that made the PR (`scripts/ask_jensen.py`) and records the gap in the
   agent's process (`.github/improve-jensen-review.md`).
-- `fix`, one at a time: ships one improvement for an issue that qualifies, through a PR, CI, a fresh review, the
-  merge, `just deploy`, the live check and a revert if the check fails (`.github/improve-jensen.md`).
-- `respond`: answers `improve-jensen` issues and `@improve-jensen` mentions under the same rules.
 - `assess`, four times a day: ranks at most ten things that hold the agent back, against the goal (enterprise-grade
   products, little human help, long runs) and only on evidence from the agent's own work. It writes `assessment.md`
-  on the host and the pinned `jensen-assessment` issue in general terms, files issues, marks up to three `priority`
-  (the watch fixes those first), adds yardstick tasks and starts at most one project
-  (`.github/improve-jensen-assess.md`).
-- `yardstick`, nightly and after each change that alters how the agent behaves: runs the agent through a small set of
-  real tasks in throwaway folders inside `agent-runner` (`V-yardstick-` conversations, at most four at once) and
-  scores only the tasks with a mechanical check. Five synthetic seeds ship in `deploy/yardstick/`; tasks drawn from
-  real failures stay on the host. As a gate it measures one change at a time: the job that ships a change starts its
-  gate as soon as `just deploy` returns 0, each job that can ship one reports as it ends whether a gate is active, and
-  the yardstick job then runs the gate. Other behaviour changes wait, and a gate it couldn't measure yet is retried
-  after the next job. On a drop of two or more or a regression, the yardstick job comments `Yardstick gate failed
-  ...: picked to revert.` on the change's issue and `gate-revert` reverts the change; if that job dies first, the
-  watch picks the issue again. A change to the yardstick or the gate itself is merged by a person, never by
-  improve-jensen.
-- `project`, one at a time: builds a project-scale improvement over runs of up to six hours, with a design note on its
-  issue, a progress file on its `improve-jensen/project-<n>` branch and the same bar as a fix, gate included
-  (`.github/improve-jensen-project.md`).
+  on the host and the pinned `jensen-assessment` issue in general terms, files issues and proposes up to three of
+  the top items, projects included, the same way (`.github/improve-jensen-assess.md`).
+- `approvals`, every 10 minutes, with no Claude: reads the Slack threads, labels each issue `approved` or `rejected`,
+  answers in the thread, and names the next approved fix and the next approved project.
+- `fix`, one at a time: ships one approved change through a PR that closes its issue, CI, a fresh review, the merge,
+  `just deploy`, its health check and a revert if the check fails (`.github/improve-jensen.md`).
+- `project`, one at a time: builds an approved project-scale improvement over runs of up to six hours, with a design
+  note on its issue, a progress file on its `improve-jensen/project-<n>` branch and the same bar as a fix, stage by
+  stage (`.github/improve-jensen-project.md`).
+- `respond`: answers `improve-jensen` issues and `@improve-jensen` mentions under the same rules. A person's own
+  request needs no approval in Slack.
+
+Proposals go to `#autonomous-agent` (or the channel the repo variable `IMPROVE_JENSEN_SLACK_CHANNEL` names) through
+the agent's Slack bot, as one short numbered list of what will change, and each issue gets `proposed`. A person in
+`[people]` answers in the thread (`approve`, `approve 1 3`, `reject 2`) or with a reaction on the list. When a fix or
+project ends, `jensen_watch.py fired` tells the thread whether it shipped; a fix that didn't ship is marked `stuck`
+for a person. Nothing measures a change after it ships beyond the deploy's health check.
 
 The agent and improve-jensen talk through `/var/agent/feedback/` in `agent-runner`. The agent writes a short note
 there when something in its setup gets in its way. The watch reads new notes as evidence, records them on issues in
 general terms and answers in the note with a `Status:` line. After each deploy that changes how the agent behaves,
 improve-jensen adds a plain-words line to `CHANGES.md` there, which the agent reads when its setup seems different.
 
-An improvement counts only when its evidence goes away: the issue keeps `fix-deployed` until `jensen_watch.py count`
-shows the signal fixed for three days. improve-jensen's state stays on the host, in `~/.local/state/improve-jensen/`
-(windows, metrics, evidence, deploys, the plan, the digests, the assessments, the yardstick's tasks and results,
-and the gate record; metrics and digests are kept 30 days). Conversations, people and products never go into this
-public repo. Host setup and switch-on: `deploy/improve-jensen.md`.
+improve-jensen's state stays on the host, in `~/.local/state/improve-jensen/` (windows, metrics, evidence, deploys,
+the plan, the digests, the assessments and the Slack proposals; metrics and digests are kept 30 days).
+Conversations, people and products never go into this public repo. Host setup and switch-on:
+`deploy/improve-jensen.md`.
 
 ## Operations
 
