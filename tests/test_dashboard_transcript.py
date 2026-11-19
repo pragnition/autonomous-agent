@@ -207,3 +207,22 @@ def test_transcript_cache_missing_file(tmp_path):
     stats, recent = TranscriptCache().follow(tmp_path / "nope.jsonl")
     assert stats.session_id is None and recent == []
     assert stats.tokens == {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
+
+
+RUN_USAGE = {"type": "RunUsage", "usage": {"input_tokens": 7, "output_tokens": 300, "cache_read_input_tokens": 900000,
+                                           "cache_creation_input_tokens": 4000}}
+
+
+def test_run_usage_is_no_timeline_entry():
+    assert parse(RUN_USAGE) == []
+
+
+def test_a_running_session_shows_the_runners_count_of_every_call(tmp_path):
+    """The stream misses background agents and the result covers the main thread only; the runner's count from the
+    CLI's own logs has every call, so the latest one stands for the session's tokens."""
+    from agent.dashboard.transcript import TranscriptCache
+    f = tmp_path / "W-1.jsonl"
+    write_lines(f, [INIT, assistant([{"text": "step"}], "m1"), RUN_USAGE, RESULT])
+    stats, recent = TranscriptCache().follow(f)
+    assert stats.tokens == {"in": 7, "out": 300, "cache_read": 900000, "cache_write": 4000}
+    assert stats.turns == 5 and [e["kind"] for e in recent] == ["text", "result"]
