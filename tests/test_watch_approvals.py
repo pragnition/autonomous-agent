@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent.watch import approvals, cli
-from agent.watch.approvals import fired, parse_decision, poll, post_proposals
+from agent.watch.approvals import fired, parse_decision, poll, post_proposals, ready
 from agent.watch.slack import SlackError
 from agent.watch.state import State
 
@@ -60,8 +60,9 @@ class FakeGh:
             return json.dumps({"state": "CLOSED" if n in self.closed else "OPEN",
                                "labels": [{"name": name} for name in sorted(self.labels.get(n, ()))]})
         if args[:2] == ["run", "list"]:
-            assert args[2:] == ["--workflow", "improve-jensen.yml", "--json", "databaseId,status", "--limit", "30"]
-            return json.dumps(self.runs)
+            assert args[2:5] == ["--workflow", "improve-jensen.yml", "--status"]
+            assert args[6:] == ["--json", "databaseId,status", "--limit", "100"]
+            return json.dumps([run for run in self.runs if run["status"] == args[5]])
         if args[:2] == ["run", "view"]:
             assert args[3:] == ["--json", "jobs"]
             return json.dumps({"jobs": self.jobs[int(args[2])]})
@@ -75,11 +76,12 @@ class FakeSlack:
     """Slack with canned threads (`threads[ts]` replies, `reacts[ts]` reactions); posts are recorded and get
     increasing timestamps. Reading a thread in `broken` raises `SlackError("ratelimited")`."""
 
-    def __init__(self, threads=None, reacts=None, broken=(), post_error=None):
+    def __init__(self, threads=None, reacts=None, broken=(), post_error=None, post_errors=()):
         self.threads = threads or {}
         self.reacts = reacts or {}
         self.broken = set(broken)
         self.post_error = post_error
+        self.post_errors = list(post_errors)   # raised by the next posts, one each, before `post_error`
         self.posts: list[tuple[str, str, str | None]] = []
         self.reads: list[str] = []
         self.channels: list[tuple[str, Path | None]] = []
@@ -90,6 +92,8 @@ class FakeSlack:
         return "C9"
 
     def post(self, channel, text, thread_ts=None):
+        if self.post_errors:
+            raise SlackError(self.post_errors.pop(0))
         if self.post_error:
             raise SlackError(self.post_error)
         self.posts.append((channel, text, thread_ts))
@@ -111,14 +115,15 @@ class FakeSlack:
         return [text for _, text, thread in self.posts if thread == ts]
 
 
-def _record(root: Path, items: list[tuple[int, str]], ts=PARENT, notified=()) -> Path:
+def _record(root: Path, items: list[tuple[int, str]], ts=PARENT, notified=(), posted="2026-11-19T09:00:00Z",
+            **extra) -> Path:
     folder = root / "proposals"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{ts}.json"
-    path.write_text(json.dumps({"channel": "C9", "ts": ts, "posted": "2026-11-19T09:00:00Z",
+    path.write_text(json.dumps({"channel": "C9", "ts": ts, "posted": posted,
                                 "items": [{"n": i, "issue": issue, "change": change}
                                           for i, (issue, change) in enumerate(items, 1)],
-                                "notified": list(notified)}))
+                                "notified": list(notified), **extra}))
     return path
 
 
@@ -197,16 +202,35 @@ def test_post_proposals_slack_failure_labels_nothing(tmp_path):
     ("<@U00000002|bot>, ok 2", ("approve", {2})),
     ("okay", ("approve", None)),
     ("lgtm all", ("approve", None)),
+    ("approve all.", ("approve", None)),
     ("ship it", ("approve", None)),
-    ("Ship it! 1", ("approve", {1})),
-    ("go ahead with 1 and 3", ("approve", {1, 3})),
+    ("Ship it!", ("approve", None)),
+    ("yes.", ("approve", None)),
     ("go", ("approve", None)),
+    ("approve 1 and 3", ("approve", {1, 3})),
+    ("approve 1 & 3", ("approve", {1, 3})),
+    ("approve 1 &amp; 3", ("approve", {1, 3})),   # how Slack sends `&`
+    ("approve #1, #3.", ("approve", {1, 3})),
+    ("approve 1,3", ("approve", {1, 3})),
+    ("approve 1–3", ("approve", {1, 2, 3})),
+    ("approve 1 — 3", ("approve", {1, 2, 3})),
+    ("approve 1 to 3!", ("approve", {1, 2, 3})),
+    ("ok, 2", ("approve", {2})),
     ("reject 2", ("reject", {2})),
     ("no", ("reject", None)),
-    ("nope, not now", ("reject", None)),
     ("skip 3", ("reject", {3})),
     ("drop 1, 2", ("reject", {1, 2})),
-    ("don't ship 2", ("reject", {2})),
+    ("approve 1, 3; reject 2", None),
+    ("ok, I will check #2 tomorrow", None),
+    ("ship it after 2pm", None),
+    ("Ship it! 1", None),
+    ("go ahead with 1 and 3", None),
+    ("nope, not now", None),
+    ("don't ship 2", None),
+    ("approve: 1", None),
+    ("approve 1 and all", None),
+    ("approve :tada:", None),
+    ("approve 1 3 please", None),
     ("don’t", ("reject", None)),
     ("dont", ("reject", None)),
     ("rejected 3-1", ("reject", {1, 2, 3})),
@@ -254,6 +278,74 @@ def test_poll_releases_a_proposal_nobody_decided_within_14_days(tmp_path):
     assert gh.labels == {31: set(), 40: {"rejected"}, 41: {"approved"}}
     assert gh.comments == [(31, "No decision in Slack within 14 days; the watch can propose it again.")]
     assert out == {"fix": 41, "project": None}
+    assert json.loads((tmp_path / "proposals" / f"{PARENT}.json").read_text())["released"] is True
+
+
+def test_poll_a_released_proposal_is_never_released_again(tmp_path):
+    path = _record(tmp_path, [(31, "Retry flaky tool calls")])
+    gh = FakeGh({31: {"proposed"}})
+    later = T0 + timedelta(days=15)
+    poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, later)
+    assert gh.labels == {31: set()} and json.loads(path.read_text())["released"] is True
+
+    # The watch proposes it again: the old proposal stays out of it.
+    _record(tmp_path, [(31, "Retry flaky tool calls")], ts="1701000000.000100", posted="2026-12-04T09:00:00Z")
+    gh.labels[31].add("proposed")
+    edits = len(gh.edits())
+    poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, later)
+    assert gh.labels == {31: {"proposed"}} and len(gh.edits()) == edits
+
+
+def test_poll_an_expired_proposal_never_touches_a_newer_proposal_of_the_same_issue(tmp_path):
+    old = _record(tmp_path, [(31, "old wording"), (40, "b")], ts="1600000000.000100", posted="2026-10-01T09:00:00Z")
+    _record(tmp_path, [(31, "new wording")])
+    gh = FakeGh({31: {"proposed"}, 40: {"proposed"}})
+    slack = FakeSlack(threads={PARENT: [_reply("approve")]})
+
+    poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
+
+    assert gh.labels == {31: {"approved"}, 40: set()}
+    assert ["issue", "edit", "31", "--remove-label", "proposed"] not in gh.edits()
+    assert json.loads(old.read_text())["released"] is True
+    assert slack.reads == [PARENT]
+
+
+def test_poll_skips_a_released_proposal(tmp_path):
+    _record(tmp_path, [(31, "a")], released=True)
+    _record(tmp_path, [(31, "a again")], ts="1700000500.000100")
+    gh = FakeGh({31: {"proposed"}})
+    slack = FakeSlack(threads={PARENT: [_reply("approve")]})
+    poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
+    assert slack.reads == ["1700000500.000100"]
+    assert gh.labels == {31: {"proposed"}}
+
+
+def test_poll_retries_a_release_that_failed(tmp_path):
+    path = _record(tmp_path, [(31, "a")], posted="2026-10-01T09:00:00Z")
+    gh = FakeGh({31: {"proposed"}}, fail=["issue edit"])
+    poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0)
+    assert "released" not in json.loads(path.read_text())
+
+    gh.fail = set()
+    poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0)
+    assert gh.labels == {31: set()}
+    assert json.loads(path.read_text())["released"] is True
+
+
+def test_poll_releases_a_proposed_issue_no_live_proposal_names(tmp_path):
+    # The state folder lost its record, the file is broken, or only a released proposal names it: nothing could
+    # ever decide the issue.
+    (tmp_path / "proposals").mkdir()
+    (tmp_path / "proposals" / "1700000300.000100.json").write_text("{not json")
+    _record(tmp_path, [(40, "b")])
+    _record(tmp_path, [(52, "c")], ts="1600000000.000100", released=True)
+    gh = FakeGh({31: {"proposed", "jensen-assessment"}, 40: {"proposed"}, 52: {"proposed"}, 60: {"rejected"}})
+
+    poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0)
+
+    assert gh.labels == {31: {"jensen-assessment"}, 40: {"proposed"}, 52: set(), 60: {"rejected"}}
+    assert gh.comments == [(31, "No decision in Slack within 14 days; the watch can propose it again."),
+                           (52, "No decision in Slack within 14 days; the watch can propose it again.")]
 
 
 def test_poll_still_reads_a_proposal_just_under_14_days_old(tmp_path):
@@ -298,14 +390,50 @@ def test_poll_with_no_approvers_approves_nothing(tmp_path):
     assert gh.labels == {31: {"proposed"}}
 
 
-@pytest.mark.parametrize("name", ["white_check_mark", "heavy_check_mark", "+1", "ballot_box_with_check",
-                                  "+1::skin-tone-3"])
+@pytest.mark.parametrize("name", ["white_check_mark", "ballot_box_with_check"])
 def test_poll_an_approvers_check_reaction_approves_all(tmp_path, name):
     _record(tmp_path, [(31, "a"), (40, "b")])
     gh = FakeGh({31: {"proposed"}, 40: {"proposed"}})
     slack = FakeSlack(reacts={PARENT: [{"name": name, "users": [OTHER, APPROVER]}]})
     poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
     assert gh.labels == {31: {"approved"}, 40: {"approved"}}
+
+
+@pytest.mark.parametrize("name", ["+1", "+1::skin-tone-3", "heavy_check_mark", "eyes"])
+def test_poll_a_thumbs_up_or_other_reaction_approves_nothing(tmp_path, name):
+    # A thumbs-up often just means "seen".
+    _record(tmp_path, [(31, "a")])
+    gh = FakeGh({31: {"proposed"}})
+    poll(FakeSlack(reacts={PARENT: [{"name": name, "users": [APPROVER]}]}), gh, tmp_path, {APPROVER}, REPO, T0)
+    assert gh.labels == {31: {"proposed"}}
+
+
+def test_poll_a_check_reaction_never_flips_a_rejected_item(tmp_path):
+    _record(tmp_path, [(31, "a"), (40, "b")])
+    gh = FakeGh({31: {"proposed"}, 40: {"rejected"}})
+    slack = FakeSlack(reacts={PARENT: [{"name": "white_check_mark", "users": [APPROVER]}]})
+    poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
+    assert gh.labels == {31: {"approved"}, 40: {"rejected"}}
+    assert slack.thread_posts() == ["Approved 1: queued to ship."]
+
+
+def test_poll_a_bare_approve_never_flips_a_rejected_item(tmp_path):
+    _record(tmp_path, [(31, "a"), (40, "b")])
+    gh = FakeGh({31: {"proposed"}, 40: {"rejected"}})
+    poll(FakeSlack(threads={PARENT: [_reply("approve all")]}), gh, tmp_path, {APPROVER}, REPO, T0)
+    assert gh.labels == {31: {"approved"}, 40: {"rejected"}}
+
+
+def test_poll_a_bare_decision_only_touches_items_still_proposed(tmp_path):
+    # In the thread's own order: once an item is decided by number, a bare word no longer reaches it.
+    _record(tmp_path, [(31, "a"), (40, "b"), (52, "c")])
+    gh = FakeGh({31: {"proposed"}, 40: {"proposed"}, 52: {"proposed"}})
+    slack = FakeSlack(threads={PARENT: [_reply("reject 2", ts="1700000001.000000"),
+                                        _reply("approve 3", ts="1700000002.000000"),
+                                        _reply("approve", ts="1700000003.000000"),
+                                        _reply("no", ts="1700000004.000000")]})
+    poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
+    assert gh.labels == {31: {"approved"}, 40: {"rejected"}, 52: {"approved"}}
 
 
 @pytest.mark.parametrize("name", ["x", "-1", "no_entry", "negative_squared_cross_mark"])
@@ -351,7 +479,7 @@ def test_poll_replies_apply_in_ts_order(tmp_path):
 def test_poll_approved_is_final(tmp_path):
     _record(tmp_path, [(31, "a"), (40, "b"), (52, "c")])
     gh = FakeGh({31: {"approved"}, 40: {"proposed"}, 52: {"proposed"}}, closed={52})
-    slack = FakeSlack(threads={PARENT: [_reply("approve"), _reply("reject", ts="1700000002.000000")]})
+    slack = FakeSlack(threads={PARENT: [_reply("approve 1"), _reply("reject 1-3", ts="1700000002.000000")]})
 
     poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
 
@@ -508,6 +636,22 @@ def test_poll_fires_nothing_when_the_running_check_fails(tmp_path, monkeypatch, 
     assert poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0) == {"fix": None, "project": None}
 
 
+def test_poll_finds_unfinished_runs_by_status_however_old(tmp_path, monkeypatch):
+    # A six-hour project run is long out of the newest 30 runs while it's still going.
+    monkeypatch.setenv("GITHUB_RUN_ID", "500")
+    runs = [{"databaseId": 900 - i, "status": "completed"} for i in range(60)]
+    runs += [{"databaseId": 10, "status": "in_progress"}, {"databaseId": 11, "status": "waiting"},
+             {"databaseId": 500, "status": "in_progress"}]
+    gh = FakeGh({25: {"approved"}, 26: {"approved", "project"}}, runs=runs,
+                jobs={10: [{"name": "project", "status": "in_progress"}],
+                      11: [{"name": "fix", "status": "waiting"}]})
+
+    assert poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0) == {"fix": None, "project": None}
+    assert [c[5] for c in gh.calls if c[:2] == ["run", "list"]] == [
+        "in_progress", "queued", "waiting", "pending", "requested"]
+    assert [c[2] for c in gh.calls if c[:2] == ["run", "view"]] == ["10", "11"]
+
+
 def test_poll_with_nothing_approved_never_asks_about_runs(tmp_path):
     gh = FakeGh({25: {"proposed"}})
     assert poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0) == {"fix": None, "project": None}
@@ -587,6 +731,54 @@ def test_fired_open_project_needing_a_person_says_so_once(tmp_path, label):
     assert sorted(p.name for p in path.parent.iterdir()) == [path.name]
 
 
+def test_fired_a_project_failing_twice_in_a_row_needs_a_person(tmp_path):
+    path = _record(tmp_path, [(31, "a"), (33, "project-sized")])
+    gh = FakeGh({33: {"approved", "project"}})
+    slack = FakeSlack()
+
+    fired(slack, gh, tmp_path, 33, "project", REPO, T0, outcome="failure")
+    assert gh.edits() == [] and gh.comments == [] and slack.posts == []
+
+    fired(slack, gh, tmp_path, 33, "project", REPO, T0, outcome="cancelled")
+    assert gh.labels[33] == {"project", "stuck"}
+    assert gh.edits() == [["issue", "edit", "33", "--remove-label", "approved", "--add-label", "stuck"]]
+    assert gh.comments == [(33, "The approved project's last 2 runs failed; a person needs to look.")]
+    assert slack.posts == [("C9", "2 needs a person (#33).", PARENT)]
+    assert json.loads(path.read_text())["notified"] == [33]
+
+    # Once a person puts it back, it counts from nothing again.
+    gh.labels[33] = {"approved", "project"}
+    fired(slack, gh, tmp_path, 33, "project", REPO, T0, outcome="failure")
+    assert gh.labels[33] == {"approved", "project"}
+
+
+def test_fired_a_successful_project_run_resets_the_count(tmp_path):
+    gh = FakeGh({33: {"approved", "project"}})
+    for outcome in ("failure", "success", "failure"):
+        fired(FakeSlack(), gh, tmp_path, 33, "project", REPO, T0, outcome=outcome)
+    assert gh.labels[33] == {"approved", "project"} and gh.edits() == []
+
+
+def test_fired_counts_failures_per_project(tmp_path):
+    gh = FakeGh({33: {"approved", "project"}, 34: {"approved", "project"}})
+    fired(FakeSlack(), gh, tmp_path, 33, "project", REPO, T0, outcome="failure")
+    fired(FakeSlack(), gh, tmp_path, 34, "project", REPO, T0, outcome="failure")
+    assert gh.edits() == []
+
+
+def test_fired_without_an_outcome_counts_nothing(tmp_path):
+    gh = FakeGh({33: {"approved", "project"}})
+    for _ in range(3):
+        fired(FakeSlack(), gh, tmp_path, 33, "project", REPO, T0)
+    assert gh.edits() == []
+
+
+def test_fired_a_fix_ignores_the_outcome(tmp_path):
+    gh = FakeGh({40: {"approved"}}, closed={40})
+    fired(FakeSlack(), gh, tmp_path, 40, "fix", REPO, T0, outcome="failure")
+    assert gh.edits() == [] and not (tmp_path / "project-failures.json").exists()
+
+
 def test_fired_closed_project_reports_shipped(tmp_path):
     _record(tmp_path, [(33, "project-sized")])
     slack = FakeSlack()
@@ -609,16 +801,42 @@ def test_fired_uses_the_newest_proposal_for_the_issue(tmp_path):
     assert slack.posts == [("C9", "Shipped 2: new wording.", PARENT)]
 
 
+# -- ready --
+
+
+@pytest.mark.parametrize("labels, closed, kind, go", [
+    ({"approved"}, False, "fix", True),
+    ({"approved", "jensen-assessment"}, False, "fix", True),
+    ({"approved"}, True, "fix", False),
+    ({"proposed"}, False, "fix", False),
+    ({"approved", "stuck"}, False, "fix", False),
+    ({"approved", "needs-person"}, False, "fix", False),
+    ({"approved", "project"}, False, "fix", False),
+    ({"approved", "project"}, False, "project", True),
+    ({"approved", "project", "stuck"}, False, "project", False),
+    (set(), False, "project", False),
+])
+def test_ready_only_for_an_open_approved_issue_nobody_has_to_look_at(labels, closed, kind, go):
+    gh = FakeGh({40: labels}, closed={40} if closed else ())
+    assert ready(gh, 40, kind) is go
+
+
 # -- CLI --
 
 
 class _CliHost:
     """A host whose `run` answers `gh` from a `FakeGh`, checking each call carries `-R <repo>` last."""
 
-    def __init__(self, live: Path, gh: FakeGh):
+    def __init__(self, live: Path, gh: FakeGh, pool="normal"):
         self.live = live
         self.gh = gh
+        self.pool = pool   # core's usage-watch pool; `None` makes reading it fail
         self.kwargs: list[dict] = []
+
+    def core_python(self, module_file, args, **kwargs):
+        if self.pool is None:
+            raise RuntimeError("docker exec returned 1")
+        return json.dumps({"pool": self.pool})
 
     def run(self, args, **kwargs):
         assert args[0] == "gh" and args[-2:] == ["-R", REPO]
@@ -826,3 +1044,91 @@ def test_cli_without_a_repository_is_a_usage_error(tmp_path, fake_slack, monkeyp
     assert cli.main(["approvals", "--github-output", str(output)], host=host, state=state, now=T0) == 2
     assert _kv(output.read_text()) == {"fix": "", "has_fix": "false", "project": "", "has_project": "false"}
     assert "GITHUB_REPOSITORY" in capsys.readouterr().err
+
+
+def test_cli_propose_resolves_the_channel_again_when_it_went_stale(tmp_path, fake_slack, capsys):
+    fake_slack.post_errors = ["channel_not_found"]
+    state = _PlanState(tmp_path / "state", plan={"propose": [{"issue": 31, "change": "a"}]})
+    (state.root / "slack-channel.json").write_text(json.dumps({"name": "autonomous-agent", "id": "C1"}))
+    gh = FakeGh({31: set()})
+
+    assert cli.main(["propose", "--from", "watch"], host=_CliHost(_live(tmp_path), gh), state=state, now=T0) == 0
+
+    assert capsys.readouterr().out == "proposed=1\n"
+    assert len(fake_slack.channels) == 2
+    assert not (state.root / "slack-channel.json").exists()   # dropped; this fake resolves without caching
+    assert gh.labels[31] == {"proposed"}
+
+
+@pytest.mark.parametrize("code", ["is_archived", "not_in_channel"])
+def test_cli_propose_retries_a_stale_channel_once_only(tmp_path, fake_slack, capsys, code):
+    fake_slack.post_errors = [code, code]
+    state = _PlanState(tmp_path / "state", plan={"propose": [{"issue": 31, "change": "a"}]})
+    rc = cli.main(["propose", "--from", "watch"], host=_CliHost(_live(tmp_path), FakeGh({31: set()})), state=state,
+                  now=T0)
+    assert rc == 1
+    assert len(fake_slack.channels) == 2
+    assert code in capsys.readouterr().err
+
+
+def test_cli_propose_does_not_retry_other_slack_errors(tmp_path, fake_slack):
+    fake_slack.post_errors = ["ratelimited"]
+    state = _PlanState(tmp_path / "state", plan={"propose": [{"issue": 31, "change": "a"}]})
+    rc = cli.main(["propose", "--from", "watch"], host=_CliHost(_live(tmp_path), FakeGh({31: set()})), state=state,
+                  now=T0)
+    assert rc == 1
+    assert len(fake_slack.channels) == 1
+
+
+def test_cli_approvals_while_the_pool_holds_decides_but_fires_nothing(tmp_path, fake_slack, capsys):
+    state = State(tmp_path / "state")
+    _record(state.root, [(25, "a")])
+    fake_slack.threads[PARENT] = [_reply("approve")]
+    gh = FakeGh({25: {"proposed"}, 30: {"approved"}})
+    host = _CliHost(_live(tmp_path), gh, pool="hold_scheduled")
+
+    assert cli.main(["approvals"], host=host, state=state, now=T0) == 0
+
+    assert gh.labels[25] == {"approved"}
+    assert fake_slack.thread_posts() == ["Approved 1: queued to ship."]
+    assert _kv(capsys.readouterr().out) == {"fix": "", "has_fix": "false", "project": "", "has_project": "false"}
+    assert [c for c in gh.calls if c[0] == "run"] == []
+
+
+def test_cli_approvals_fires_when_the_pool_cannot_be_read(tmp_path, fake_slack, capsys):
+    gh = FakeGh({25: {"approved"}})
+    host = _CliHost(_live(tmp_path), gh, pool=None)
+    assert cli.main(["approvals"], host=host, state=State(tmp_path / "state"), now=T0) == 0
+    assert _kv(capsys.readouterr().out)["fix"] == "25"
+
+
+def test_cli_ready_writes_go(tmp_path, fake_slack):
+    output = tmp_path / "out.txt"
+    host = _CliHost(_live(tmp_path), FakeGh({40: {"approved"}, 33: {"approved", "project", "stuck"}}))
+    assert cli.main(["ready", "--issue", "40", "--kind", "fix", "--github-output", str(output)], host=host,
+                    state=State(tmp_path / "state"), now=T0) == 0
+    assert cli.main(["ready", "--issue", "33", "--kind", "project", "--github-output", str(output)], host=host,
+                    state=State(tmp_path / "state"), now=T0) == 0
+    assert output.read_text() == "go=true\ngo=false\n"
+
+
+def test_cli_ready_gh_failure_is_no_go(tmp_path, fake_slack, capsys):
+    output = tmp_path / "out.txt"
+    host = _CliHost(_live(tmp_path), FakeGh({40: {"approved"}}, fail=["issue view"]))
+    assert cli.main(["ready", "--issue", "40", "--kind", "fix", "--github-output", str(output)], host=host,
+                    state=State(tmp_path / "state"), now=T0) == 0
+    assert output.read_text() == "go=false\n"
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1 and "Bad credentials" not in err
+
+
+def test_cli_fired_passes_the_claude_steps_outcome_on(tmp_path, fake_slack):
+    state = State(tmp_path / "state")
+    _record(state.root, [(33, "project-sized")])
+    gh = FakeGh({33: {"approved", "project"}})
+    host = _CliHost(_live(tmp_path), gh)
+    for _ in range(2):
+        assert cli.main(["fired", "--issue", "33", "--kind", "project", "--outcome", "failure"], host=host,
+                        state=state, now=T0) == 0
+    assert gh.labels[33] == {"project", "stuck"}
+    assert fake_slack.posts == [("C9", "1 needs a person (#33).", PARENT)]

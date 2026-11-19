@@ -4,12 +4,14 @@ them in that message's thread, and the approved ones are handed to the `fix` and
 `post_proposals` posts the watch's or the assessment's proposals as numbered bullets and labels each issue
 `proposed`; `poll` (the `approvals` job, every ten minutes) reads each open proposal's thread, moves issues
 `proposed` -> `approved` or `rejected`, says what changed in the thread, and picks the next approved fix and
-project to fire; `fired` (the last step of a fix or project run) says in the thread whether it shipped.
+project to fire; `ready` (the first step of a fix or project run) checks the issue is still approved; `fired` (the
+last step) says in the thread whether it shipped.
 
 Each posted message is remembered in `<state root>/proposals/<ts>.json`
-(`{"channel", "ts", "posted", "items": [{"n", "issue", "change"}], "notified"}`), written atomically. GitHub's
-labels stay the record of where each issue is: a poll decides everything again from the thread and the labels,
-never from what an earlier poll saw, so a poll that dies halfway is simply finished by the next one.
+(`{"channel", "ts", "posted", "items": [{"n", "issue", "change"}], "notified"}`, plus `"released": true` once
+it has expired), written atomically. An issue belongs to the newest record that names it. GitHub's labels stay the
+record of where each issue is: a poll decides everything again from the thread and the labels, never from what an
+earlier poll saw, so a poll that dies halfway is simply finished by the next one.
 
 GitHub goes through a `gh` callable (`args -> stdout`, raising on a non-zero exit) and Slack through a `Slack`,
 both passed in so tests can use fakes. Only the people in `approvers` count, and only their replies and
@@ -39,8 +41,15 @@ _NEEDS_PERSON = frozenset({"stuck", "needs-person"})
 _PROPOSALS_DIR = "proposals"
 _WORKFLOW = "improve-jensen.yml"
 _DECIDE_DAYS = 14  # a proposal nobody decided on by then is released
+_RELEASED = f"No decision in Slack within {_DECIDE_DAYS} days; the watch can propose it again."
+# A run that isn't finished has one of these statuses; `gh run list --status` asks for each.
+_UNFINISHED = ("in_progress", "queued", "waiting", "pending", "requested")
+# Consecutive project runs that didn't succeed, per issue, and how many of them make a project `stuck`.
+_FAILURES_FILE = "project-failures.json"
+_FAILURES_BEFORE_STUCK = 2
 
-_APPROVE_REACTIONS = frozenset({"white_check_mark", "heavy_check_mark", "+1", "ballot_box_with_check"})
+# A thumbs-up often only means "seen", so it approves nothing.
+_APPROVE_REACTIONS = frozenset({"white_check_mark", "ballot_box_with_check"})
 _REJECT_REACTIONS = frozenset({"x", "-1", "no_entry", "negative_squared_cross_mark"})
 
 _APPROVE_WORDS = ("approve", "approved", "yes", "ok", "okay", "lgtm", "ship", "ship it", "go", "go ahead")
@@ -49,9 +58,9 @@ _REJECT_WORDS = ("reject", "rejected", "no", "nope", "skip", "drop", "don't", "d
 _DECISION = re.compile("(" + "|".join(re.escape(word) for word in sorted(_APPROVE_WORDS + _REJECT_WORDS,
                                                                          key=len, reverse=True)) + r")(?![\w'])")
 _MENTION = re.compile(r"<@[^>]*>")
-_NUMBERS = re.compile(r"(\d+)(?:\s*(?:-|–|—|to)\s*(\d+))?")
-# `approve all but 2` must not approve 2: an approval that hedges is left for the person to say again plainly.
-_HEDGE = re.compile(r"\b(?:but|except|not|without)\b")
+# What may follow the word, one token at a time; anything else (`bad`) means the reply isn't a plain decision.
+_TOKEN = re.compile(r"\s*(?:(?P<num>#?\d+)|(?P<range>[-–—]|to\b)|(?P<sep>[,&]|and\b)|(?P<all>all\b)"
+                    r"|(?P<bad>\S+))")
 
 
 def _iso(value: datetime) -> str:
@@ -81,6 +90,16 @@ def _open_issues(gh: Gh) -> dict[int, set[str]]:
     return {issue["number"]: {label["name"] for label in issue.get("labels") or []
                               if isinstance(label, dict) and isinstance(label.get("name"), str)}
             for issue in data if isinstance(issue, dict) and isinstance(issue.get("number"), int)}
+
+
+def _issue(gh: Gh, issue: int) -> tuple[bool, set[str]]:
+    """Whether `issue` is open, and its labels (`gh issue view`). Raises when `gh` fails."""
+    data = json.loads(gh(["issue", "view", str(issue), "--json", "state,labels"]))
+    if not isinstance(data, dict):
+        raise ValueError("gh issue view did not return an object")
+    labels = {label["name"] for label in data.get("labels") or []
+              if isinstance(label, dict) and isinstance(label.get("name"), str)}
+    return str(data.get("state", "")).upper() != "CLOSED", labels
 
 
 def _warn(what: str, exc: BaseException) -> None:
@@ -190,28 +209,58 @@ def post_proposals(slack, gh: Gh, state_root: Path, channel: str, items: list[di
 
 
 def parse_decision(text: str) -> tuple[str, set[int] | None] | None:
-    """What a thread reply decides: `("approve" | "reject", items)`, where `items` are the item numbers named
-    after the word (`1 3`, `1, 3`, `1-3`) or `None` for all of them (also `all`). `None` -- no decision -- unless
-    the reply starts (mentions, whitespace and case aside) with an approve word (`approve`, `yes`, `ok`, `lgtm`,
-    `ship it`, `go ahead`, ...) or a reject word (`reject`, `no`, `nope`, `skip`, `drop`, `don't`, ...). A reply
-    with a `?` asks rather than decides, and an approval that hedges (`but`, `except`, `not`, `without`) is
-    ambiguous: both are `None`, so nothing is approved by accident."""
+    """What a thread reply decides: `("approve" | "reject", items)`, where `items` are the item numbers it names,
+    or `None` when it names none (a bare word, or `all`).
+
+    Strict, so chatter never decides anything: once mentions are stripped, the whole reply must be an approve word
+    (`approve`, `yes`, `ok`, `lgtm`, `ship it`, `go ahead`, ...) or a reject word (`reject`, `no`, `nope`, `skip`,
+    `drop`, `don't`, ...) followed by nothing but a plain item list -- numbers or `#N`, separated by spaces,
+    commas, `and` or `&`, ranges (`1-3`, with an en or em dash too, or `1 to 3`), or `all` on its own -- and a
+    trailing `.` or `!`. Anything else is `None`: `approve 1, 3; reject 2`, `ok, I will check #2 tomorrow`."""
     if not isinstance(text, str):
         return None
-    text = _MENTION.sub(" ", text).replace("’", "'").lower().lstrip(" \t\r\n,:;")
-    if "?" in text:
-        return None
+    text = _MENTION.sub(" ", text)
+    text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").replace("’", "'")
+    text = text.lower().strip().lstrip(",:").rstrip(".! \t\r\n").strip()
     match = _DECISION.match(text)
     if match is None:
         return None
     verdict = "approve" if match.group(1) in _APPROVE_WORDS else "reject"
-    rest = text[match.end():]
-    if verdict == "approve" and _HEDGE.search(rest):
-        return None
+
+    rest = text[match.end():].strip()
+    tokens: list[tuple[str, str]] = []
+    pos = 0
+    while pos < len(rest):
+        token = _TOKEN.match(rest, pos)
+        kind = token.lastgroup
+        if kind == "bad":
+            return None
+        tokens.append((kind, token.group(kind)))
+        pos = token.end()
+
     items: set[int] = set()
-    for low, high in _NUMBERS.findall(rest):
-        low, high = sorted((int(low), int(high or low)))
-        items.update(range(low, min(high, low + 99) + 1))
+    every = False
+    i = 0
+    while i < len(tokens):
+        kind, value = tokens[i]
+        if kind == "sep":
+            i += 1
+        elif kind == "all":
+            every = True
+            i += 1
+        elif kind == "num":
+            low = high = int(value.lstrip("#"))
+            if i + 2 < len(tokens) and tokens[i + 1][0] == "range" and tokens[i + 2][0] == "num":
+                high = int(tokens[i + 2][1].lstrip("#"))
+                i += 3
+            else:
+                i += 1
+            low, high = sorted((low, high))
+            items.update(range(low, min(high, low + 99) + 1))
+        else:   # a range with no number on one side
+            return None
+    if every and items:
+        return None
     return verdict, items or None
 
 
@@ -220,42 +269,47 @@ def _undecided(labels: set[str] | None) -> bool:
     return labels is not None and APPROVED not in labels and bool(labels & {PROPOSED, REJECTED})
 
 
-def _decisions(slack, record: dict, approvers: set[str]) -> dict[int, str]:
-    """Each item number's latest decision in `record`'s thread: approvers' reactions on the message first (a
-    reject reaction beats an approve one), then their replies in time order, each overriding what came before for
-    the items it names. Replies from anyone else, from a bot, or of any subtype but a reply also sent to the
-    channel don't count. Reactions that can't be read (the bot without `reactions:read`, say) are logged and
-    left out: they only decide items no reply names, so without them those items just wait."""
-    numbers = [item["n"] for item in record["items"]]
-    decided: dict[int, str] = {}
+def _decisions(slack, record: dict, approvers: set[str]) -> list[tuple[str, set[int] | None]]:
+    """The decisions in `record`'s thread, in the order they apply: approvers' reactions on the message first (a
+    reject reaction before an approve one), then their replies in time order (`parse_decision`). Replies from
+    anyone else, from a bot, or of any subtype but a reply also sent to the channel don't count. Reactions that
+    can't be read (the bot without `reactions:read`, say) are logged and left out: they only decide items no reply
+    names, so without them those items just wait."""
+    decisions: list[tuple[str, set[int] | None]] = []
     try:
         reactions = slack.reactions(record["channel"], record["ts"])
     except SlackError as exc:
         _warn(f"reading the reactions on proposal {record['ts']}", exc)
         reactions = []
     reacted = {reaction["name"].split("::")[0] for reaction in reactions if approvers & set(reaction["users"])}
-    if reacted & _APPROVE_REACTIONS:
-        decided = dict.fromkeys(numbers, "approve")
     if reacted & _REJECT_REACTIONS:
-        decided = dict.fromkeys(numbers, "reject")
+        decisions.append(("reject", None))
+    if reacted & _APPROVE_REACTIONS:
+        decisions.append(("approve", None))
     for reply in sorted(slack.replies(record["channel"], record["ts"]), key=lambda m: _ts_key(m.get("ts"))):
         if (reply.get("user") not in approvers or reply.get("bot_id")
                 or reply.get("subtype") not in (None, "thread_broadcast")):
             continue
         decision = parse_decision(reply.get("text") or "")
-        if decision is None:
-            continue
-        verdict, which = decision
-        for n in numbers:
-            if which is None or n in which:
-                decided[n] = verdict
-    return decided
+        if decision is not None:
+            decisions.append(decision)
+    return decisions
 
 
-def _apply(gh: Gh, issue: int, labels: set[str], verdict: str) -> bool:
-    """Label `issue` approved or rejected (removing only labels it has, so `gh` never fails on one it lacks)
-    and comment why; `labels` is updated to match. False, with a warning, when the label change failed."""
-    target = APPROVED if verdict == "approve" else REJECTED
+def _settle(state: str, n: int, decisions: list[tuple[str, set[int] | None]]) -> str:
+    """Item `n`'s state (`proposed` or `rejected` to start with) after `decisions` in order. A decision that names
+    `n` sets it either way; one that names no numbers moves it only while it's still `proposed`, so re-approving
+    a rejected item takes its number."""
+    for verdict, which in decisions:
+        target = APPROVED if verdict == "approve" else REJECTED
+        if (which is None and state == PROPOSED) or (which is not None and n in which):
+            state = target
+    return state
+
+
+def _apply(gh: Gh, issue: int, labels: set[str], target: str) -> bool:
+    """Label `issue` `target` (approved or rejected; removing only labels it has, so `gh` never fails on one it
+    lacks) and comment why; `labels` is updated to match. False, with a warning, when the label change failed."""
     remove = [label for label in ((PROPOSED, REJECTED) if target == APPROVED else (PROPOSED,)) if label in labels]
     args = ["issue", "edit", str(issue), "--add-label", target]
     for label in remove:
@@ -284,24 +338,22 @@ def _expired(record: dict, now: datetime) -> bool:
     return now - posted > timedelta(days=_DECIDE_DAYS)
 
 
-def _release(gh: Gh, record: dict, labels: dict[int, set[str]]) -> None:
-    """Take `proposed` off the items of an expired record nobody decided on, so a later watch can propose them
-    again; its thread is never read again. Rejected and approved items keep their labels."""
-    for item in record["items"]:
-        current = labels.get(item["issue"])
-        if current is None or PROPOSED not in current or current & {APPROVED, REJECTED}:
-            continue
-        try:
-            gh(["issue", "edit", str(item["issue"]), "--remove-label", PROPOSED])
-        except Exception as exc:
-            _warn(f"releasing #{item['issue']}", exc)
-            continue
-        current.discard(PROPOSED)
-        try:
-            gh(["issue", "comment", str(item["issue"]), "--body",
-                f"No decision in Slack within {_DECIDE_DAYS} days; the watch can propose it again."])
-        except Exception as exc:
-            _warn(f"commenting on #{item['issue']}", exc)
+def _unpropose(gh: Gh, issue: int, labels: set[str]) -> bool:
+    """Take `proposed` off an undecided `issue`, with a comment, so a later watch can propose it again. True when
+    there was nothing to take off or it came off; False, with a warning, when `gh` failed."""
+    if PROPOSED not in labels or labels & {APPROVED, REJECTED}:
+        return True
+    try:
+        gh(["issue", "edit", str(issue), "--remove-label", PROPOSED])
+    except Exception as exc:
+        _warn(f"releasing #{issue}", exc)
+        return False
+    labels.discard(PROPOSED)
+    try:
+        gh(["issue", "comment", str(issue), "--body", _RELEASED])
+    except Exception as exc:
+        _warn(f"commenting on #{issue}", exc)
+    return True
 
 
 def _summary(approved: list[int], dropped: list[int]) -> str:
@@ -314,21 +366,24 @@ def _summary(approved: list[int], dropped: list[int]) -> str:
 
 
 def _busy_jobs(gh: Gh) -> set[str]:
-    """Which of `fix` and `project` is queued or running in another run of the workflow (any run but
-    `$GITHUB_RUN_ID`, this one). Raises when `gh` fails or answers with something unexpected."""
+    """Which of `fix` and `project` is queued or running in another run of the workflow (any unfinished run but
+    `$GITHUB_RUN_ID`, this one), however long ago it started: unfinished runs are asked for by status, never
+    read off the newest few. Raises when `gh` fails or answers with something unexpected."""
     own = os.environ.get("GITHUB_RUN_ID", "")
-    runs = json.loads(gh(["run", "list", "--workflow", _WORKFLOW, "--json", "databaseId,status", "--limit", "30"]))
-    if not isinstance(runs, list):
-        raise ValueError("gh run list did not return a list")
+    run_ids: list[int] = []
+    for status in _UNFINISHED:
+        runs = json.loads(gh(["run", "list", "--workflow", _WORKFLOW, "--status", status,
+                              "--json", "databaseId,status", "--limit", "100"]))
+        if not isinstance(runs, list):
+            raise ValueError("gh run list did not return a list")
+        for run in runs:
+            run_id = run.get("databaseId") if isinstance(run, dict) else None
+            if isinstance(run_id, bool) or not isinstance(run_id, int):
+                raise ValueError("gh run list returned a run without an id")
+            if str(run_id) != own and run_id not in run_ids:
+                run_ids.append(run_id)
     busy: set[str] = set()
-    for run in runs:
-        if not isinstance(run, dict) or run.get("status") == "completed":
-            continue
-        run_id = run.get("databaseId")
-        if isinstance(run_id, bool) or not isinstance(run_id, int):
-            raise ValueError("gh run list returned a run without an id")
-        if str(run_id) == own:
-            continue
+    for run_id in run_ids:
         data = json.loads(gh(["run", "view", str(run_id), "--json", "jobs"]))
         jobs = data.get("jobs") if isinstance(data, dict) else None
         if not isinstance(jobs, list):
@@ -356,65 +411,115 @@ def _pick(gh: Gh, labels: dict[int, set[str]]) -> dict:
     return {"fix": None if "fix" in busy else fix, "project": None if "project" in busy else project}
 
 
-def poll(slack, gh: Gh, state_root: Path, approvers: set[str], repo: str, now: datetime) -> dict:
+def poll(slack, gh: Gh, state_root: Path, approvers: set[str], repo: str, now: datetime, *,
+         fire: bool = True) -> dict:
     """Apply every new decision in the proposals' threads, then pick what to fire: `{"fix": int | None,
-    "project": int | None}`. A proposal older than `_DECIDE_DAYS` is no longer read: its undecided items are
-    released instead (`_release`).
+    "project": int | None}` (both `None` without `fire`, which still applies the decisions).
 
-    Only records with an item still undecided (its issue open and `proposed` or `rejected`) are read. Approved is
-    final: an issue already `approved`, or closed, never changes; a rejected one can still be approved. Each
-    record whose items changed gets one thread reply saying how. A Slack error on one record is logged (its code
-    only) and the others go on; a failing `gh issue list` raises."""
+    Each issue belongs to the newest record naming it, and only that record decides or releases it. A record older
+    than `_DECIDE_DAYS` is no longer read: its undecided items lose `proposed` (with a comment) and the record is
+    marked `released`, after which it's skipped. A `proposed` issue no live record owns (the state folder lost it,
+    or its file is broken) is released the same way, since nothing could ever decide it.
+
+    Of the rest, only records with an item still undecided (its issue open and `proposed` or `rejected`) are read.
+    Approved is final: an issue already `approved`, or closed, never changes. Each record whose items changed gets
+    one thread reply saying how. A Slack error on one record is logged (its code only) and the others go on; a
+    failing `gh issue list` raises."""
     labels = _open_issues(gh)
-    for record in _read_records(state_root):
-        if not any(_undecided(labels.get(item["issue"])) for item in record["items"]):
+    # Read after the labels: `post_proposals` writes a record before it labels anything, so every `proposed` issue
+    # just listed already has its record.
+    records = _read_records(state_root)
+    owner = {item["issue"]: record for record in records for item in record["items"]}
+    for issue in sorted(labels):
+        record = owner.get(issue)
+        if record is None or record.get("released"):
+            _unpropose(gh, issue, labels[issue])
+
+    for record in records:
+        if record.get("released"):
             continue
+        mine = [item for item in record["items"] if owner[item["issue"]] is record]
         if _expired(record, now):
-            _release(gh, record, labels)
+            released = [_unpropose(gh, item["issue"], labels[item["issue"]]) for item in mine
+                        if item["issue"] in labels]
+            if all(released):
+                _write_record(state_root, {**record, "released": True})
+            continue
+        if not any(_undecided(labels.get(item["issue"])) for item in mine):
             continue
         try:
-            decided = _decisions(slack, record, approvers)
+            decisions = _decisions(slack, record, approvers)
         except SlackError as exc:
             _warn(f"reading proposal {record['ts']} from Slack", exc)
             continue
         approved, dropped = [], []
-        for item in record["items"]:
+        for item in mine:
             current = labels.get(item["issue"])
-            verdict = decided.get(item["n"])
-            if not _undecided(current) or verdict is None or (verdict == "reject" and REJECTED in current):
+            if not _undecided(current):
                 continue
-            if _apply(gh, item["issue"], current, verdict):
-                (approved if verdict == "approve" else dropped).append(item["n"])
+            start = PROPOSED if PROPOSED in current else REJECTED
+            end = _settle(start, item["n"], decisions)
+            if end != start and _apply(gh, item["issue"], current, end):
+                (approved if end == APPROVED else dropped).append(item["n"])
         summary = _summary(approved, dropped)
         if summary:
             try:
                 slack.post(record["channel"], summary, thread_ts=record["ts"])
             except SlackError as exc:
                 _warn(f"replying in proposal {record['ts']}", exc)
-    return _pick(gh, labels)
+    return _pick(gh, labels) if fire else {"fix": None, "project": None}
+
+
+# -- ready --
+
+
+def ready(gh: Gh, issue: int, kind: str) -> bool:
+    """Whether a `fix` or `project` run should go ahead on `issue` now: it's open and `approved`, with no `stuck`
+    or `needs-person` (and, for a fix, not a `project`). The approvals run that named it can be minutes old."""
+    is_open, labels = _issue(gh, issue)
+    return (is_open and APPROVED in labels and not labels & _NEEDS_PERSON
+            and (kind == "project" or "project" not in labels))
 
 
 # -- fired --
 
 
-def fired(slack, gh: Gh, state_root: Path, issue: int, kind: str, repo: str, now: datetime) -> None:
+def _read_failures(root: Path) -> dict[str, int]:
+    try:
+        data = json.loads((Path(root) / _FAILURES_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, int)} if isinstance(data, dict) else {}
+
+
+def _set_failures(root: Path, issue: int, count: int) -> None:
+    """Record `count` consecutive failed runs for project `issue` (0 forgets it)."""
+    failures = _read_failures(root)
+    if count == failures.get(str(issue), 0):
+        return
+    failures.pop(str(issue), None)
+    if count:
+        failures[str(issue)] = count
+    _atomic_write(Path(root) / _FAILURES_FILE, json.dumps(failures))
+
+
+def fired(slack, gh: Gh, state_root: Path, issue: int, kind: str, repo: str, now: datetime, *,
+          outcome: str | None = None) -> None:
     """Close the loop after a `fix` or `project` run on `issue`, in its proposal's thread when it has one:
 
     - closed (shipped): `Shipped <n>: <change>.`
     - still open after a fix: labelled `stuck` instead of `approved`, with a comment, and
       `Couldn't ship <n>: <change>. It needs a person (#N).`
-    - still open after a project run: nothing while it's going; once it's `stuck` or `needs-person`,
-      `<n> needs a person (#N).`, said once (the record's `notified`).
+    - still open after a project run: nothing while it's going. `outcome` is how the run's Claude step ended; a
+      project whose last 2 runs didn't succeed is labelled `stuck` instead of `approved`, with a comment (a
+      success starts the count again). Once it's `stuck` or `needs-person`, `<n> needs a person (#N).`, said once
+      (the record's `notified`).
 
     GitHub is updated before Slack, and with `slack` `None` (no token) only GitHub is. A `SlackError` replying
     propagates, as does a failing `gh`."""
     if kind not in ("fix", "project"):
         raise ValueError(f"bad kind: {kind!r}")
-    data = json.loads(gh(["issue", "view", str(issue), "--json", "state,labels"]))
-    if not isinstance(data, dict):
-        raise ValueError("gh issue view did not return an object")
-    labels = {label["name"] for label in data.get("labels") or []
-              if isinstance(label, dict) and isinstance(label.get("name"), str)}
+    is_open, labels = _issue(gh, issue)
     found = _find(state_root, issue)
 
     def say(text: str) -> None:
@@ -423,7 +528,9 @@ def fired(slack, gh: Gh, state_root: Path, issue: int, kind: str, repo: str, now
 
     change = _escape(found[1]["change"].rstrip(".")) if found else ""
     n = found[1]["n"] if found else 0
-    if str(data.get("state", "")).upper() == "CLOSED":
+    if not is_open:
+        if kind == "project":
+            _set_failures(state_root, issue, 0)
         say(f"Shipped {n}: {change}.")
         return
     if kind == "fix":
@@ -434,6 +541,22 @@ def fired(slack, gh: Gh, state_root: Path, issue: int, kind: str, repo: str, now
         gh(["issue", "comment", str(issue), "--body", "The approved change didn't ship; a person needs to look."])
         say(f"Couldn't ship {n}: {change}. It needs a person (#{issue}).")
         return
+
+    if outcome == "success":
+        _set_failures(state_root, issue, 0)
+    elif outcome is not None and not labels & _NEEDS_PERSON:
+        failures = _read_failures(state_root).get(str(issue), 0) + 1
+        if failures < _FAILURES_BEFORE_STUCK:
+            _set_failures(state_root, issue, failures)
+        else:
+            args = ["issue", "edit", str(issue)]
+            if APPROVED in labels:
+                args += ["--remove-label", APPROVED]
+            gh(args + ["--add-label", "stuck"])
+            gh(["issue", "comment", str(issue), "--body",
+                f"The approved project's last {failures} runs failed; a person needs to look."])
+            labels = (labels - {APPROVED}) | {"stuck"}
+            _set_failures(state_root, issue, 0)
     if labels & _NEEDS_PERSON and found is not None and slack is not None and issue not in found[0]["notified"]:
         say(f"{n} needs a person (#{issue}).")
         record = found[0]
