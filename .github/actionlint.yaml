@@ -1,0 +1,7 @@
+# actionlint doesn't know about this repo's custom self-hosted runner labels; declare them so
+# `runs-on: [self-hosted, improve-jensen, ...]` doesn't trip the "unknown label" check.
+self-hosted-runner:
+  labels:
+    - improve-jensen
+    - watch
+    - work

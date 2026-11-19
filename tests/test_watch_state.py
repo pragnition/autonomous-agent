@@ -1,0 +1,410 @@
+import json
+import os
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from agent.watch.state import State, summarize
+
+
+def _dt(*args) -> datetime:
+    return datetime(*args, tzinfo=UTC)
+
+
+def test_first_window_is_last_hour_then_resumes_from_commit(tmp_path):
+    state = State(tmp_path)
+
+    now1 = _dt(2026, 11, 19, 1, 0, 0)
+    start1, end1 = state.window(now1)
+    assert start1 == now1 - timedelta(hours=1)
+    assert end1 == now1
+    # window() writes pending_end, ready for a later commit().
+    raw = json.loads((tmp_path / "state.json").read_text())
+    assert raw["pending_end"] == "2026-11-19T01:00:00Z"
+
+    state.commit()
+
+    now2 = _dt(2026, 11, 19, 2, 0, 0)
+    start2, end2 = state.window(now2)
+    assert start2 == now1
+    assert end2 == now2
+
+    # Without a commit, the next window still starts at the same place.
+    now3 = _dt(2026, 11, 19, 3, 0, 0)
+    start3, end3 = state.window(now3)
+    assert start3 == now1
+    assert end3 == now3
+
+
+def test_stage_is_visible_to_read_metrics_but_not_known_clones_until_commit(tmp_path):
+    state = State(tmp_path)
+    since = _dt(2026, 11, 19, 0, 0, 0)
+
+    state.stage([{"ts": "2026-11-19T00:10:00Z", "kind": "turn", "id": "t1", "reclone": 0}], ["org/repo"])
+
+    # Staged metrics show up right away...
+    assert [r["id"] for r in state.read_metrics(since)] == ["t1"]
+    # ...but staged clones never show up in known_clones() until commit() folds them in.
+    assert state.known_clones() == set()
+
+    # A re-measure of the same window stages again: this overwrites, it never appends a second copy.
+    state.stage([{"ts": "2026-11-19T00:10:00Z", "kind": "turn", "id": "t1", "reclone": 0}], ["org/repo"])
+    assert [r["id"] for r in state.read_metrics(since)] == ["t1"]
+
+    state.commit()
+    # Now permanent: committed, not duplicated, and known_clones() finally sees it.
+    assert [r["id"] for r in state.read_metrics(since)] == ["t1"]
+    assert state.known_clones() == {"org/repo"}
+
+    # commit() cleared the staging files: a later stage()+commit() for a new window doesn't re-merge the old one.
+    state.stage([{"ts": "2026-11-19T01:10:00Z", "kind": "turn", "id": "t2", "reclone": 0}], ["org/repo2"])
+    assert {r["id"] for r in state.read_metrics(since)} == {"t1", "t2"}
+    assert state.known_clones() == {"org/repo"}  # t2's clone isn't merged in yet
+    state.commit()
+    assert state.known_clones() == {"org/repo", "org/repo2"}
+    assert {r["id"] for r in state.read_metrics(since)} == {"t1", "t2"}
+
+
+def test_commit_without_a_prior_stage_only_moves_the_window(tmp_path):
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+    state.window(now)
+
+    state.commit()  # no stage() call ever happened for this window
+
+    assert state.known_clones() == set()
+    assert state.read_metrics(_dt(2000, 1, 1, 0, 0, 0)) == []
+
+
+def test_notes_cursor_is_two_phase_and_independent_of_the_main_window(tmp_path):
+    state = State(tmp_path)
+    assert state.notes_committed_end() is None  # never read successfully yet
+
+    end1 = _dt(2026, 11, 19, 1, 0, 0)
+    state.window(end1)
+    state.stage_notes_end(end1)  # a successful notes read this window
+    assert state.notes_committed_end() is None  # staged, not committed yet
+
+    state.commit()
+    assert state.notes_committed_end() == end1
+
+    # A window whose notes failed must never call stage_notes_end -- the cursor stays exactly where it was,
+    # even though the main window still advances normally on its own commit().
+    end2 = _dt(2026, 11, 19, 2, 0, 0)
+    start2, _ = state.window(end2)
+    assert start2 == end1
+    state.commit()
+    assert state.notes_committed_end() == end1
+    start3, _ = state.window(_dt(2026, 11, 19, 3, 0, 0))
+    assert start3 == end2  # the main window moved on regardless
+
+    # A later successful read stages a new end, promoted on its own commit().
+    end4 = _dt(2026, 11, 19, 4, 0, 0)
+    state.window(end4)
+    state.stage_notes_end(end4)
+    state.commit()
+    assert state.notes_committed_end() == end4
+
+
+def test_count_numeric_and_counted_and_pr(tmp_path):
+    state = State(tmp_path)
+    since = _dt(2026, 11, 19, 0, 0, 0)
+
+    turn_records = [
+        {"ts": "2026-11-19T00:10:00Z", "kind": "turn", "id": "t1", "conversation": "c1", "source": "person",
+         "context_first": 50000, "context_peak": 100000, "big_start_small_ask": 0, "no_delegation": 0,
+         "inline_code_chars": 500, "lost_background": 0, "still_running": 0, "turn_failed": 0,
+         "reclone": 0, "tool_errors": [], "missing_tools": []},
+        {"ts": "2026-11-19T00:20:00Z", "kind": "turn", "id": "t2", "conversation": "c1", "source": "person",
+         "context_first": 60000, "context_peak": 200000, "big_start_small_ask": 1, "no_delegation": 1,
+         "inline_code_chars": 1000, "lost_background": 1, "still_running": 0, "turn_failed": 1,
+         "reclone": 2, "tool_errors": ["e1", "e2"], "missing_tools": []},
+        {"ts": "2026-11-19T00:30:00Z", "kind": "turn", "id": "t3", "conversation": "c1", "source": "schedule",
+         "context_first": 70000, "context_peak": 800000, "big_start_small_ask": 0, "no_delegation": 0,
+         "inline_code_chars": 1500, "lost_background": 0, "still_running": 1, "turn_failed": 0,
+         "reclone": 0, "tool_errors": [], "missing_tools": ["ss"]},
+    ]
+    midturn_records = [
+        {"ts": "2026-11-19T00:15:00Z", "kind": "midturn", "id": "m1", "midturn_wait_s": 120},
+        {"ts": "2026-11-19T00:25:00Z", "kind": "midturn", "id": "m2", "midturn_wait_s": 270},
+    ]
+    pr_records = [
+        {"ts": "2026-11-19T00:05:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/1", "repo": "x/y",
+         "lines": 40, "open_to_merge_s": 600, "ci": "passed", "coauthor_trailers": 0, "conversation": "c1"},
+        {"ts": "2026-11-19T00:35:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/2", "repo": "x/y",
+         "lines": 80, "open_to_merge_s": 300, "ci": "failed", "coauthor_trailers": 1, "conversation": None},
+    ]
+    state.append_metrics(turn_records + midturn_records + pr_records)
+
+    assert state.count("context_peak", since) == \
+        "context_peak since 2026-11-19T00:00:00Z: n=3 median=200000 p90=800000 max=800000"
+    assert state.count("context_first", since) == \
+        "context_first since 2026-11-19T00:00:00Z: n=3 median=60000 p90=70000 max=70000"
+    assert state.count("inline_code_chars", since) == \
+        "inline_code_chars since 2026-11-19T00:00:00Z: n=3 median=1000 p90=1500 max=1500"
+    assert state.count("midturn_wait_s", since) == \
+        "midturn_wait_s since 2026-11-19T00:00:00Z: n=2 median=120 p90=270 max=270"
+
+    assert state.count("lost_background", since) == \
+        "lost_background since 2026-11-19T00:00:00Z: total=1 turns=1"
+    assert state.count("still_running", since) == \
+        "still_running since 2026-11-19T00:00:00Z: total=1 turns=1"
+    assert state.count("turn_failed", since) == \
+        "turn_failed since 2026-11-19T00:00:00Z: total=1 turns=1"
+    assert state.count("no_delegation", since) == \
+        "no_delegation since 2026-11-19T00:00:00Z: total=1 turns=1"
+    assert state.count("big_start_small_ask", since) == \
+        "big_start_small_ask since 2026-11-19T00:00:00Z: total=1 turns=1"
+    assert state.count("reclone", since) == \
+        "reclone since 2026-11-19T00:00:00Z: total=2 turns=1"
+    assert state.count("tool_errors", since) == \
+        "tool_errors since 2026-11-19T00:00:00Z: total=2 turns=1"
+    assert state.count("missing_tools", since) == \
+        "missing_tools since 2026-11-19T00:00:00Z: total=1 turns=1"
+
+    assert state.count("pr", since) == \
+        ("pr since 2026-11-19T00:00:00Z: prs=2 merged_without_passing_ci=1 ci_unknown=0 "
+         "median_lines=40 median_open_to_merge_s=300 coauthor_trailers=1")
+
+
+def test_count_pr_sums_coauthor_trailers_and_defaults_missing_to_zero(tmp_path):
+    state = State(tmp_path)
+    since = _dt(2026, 11, 19, 0, 0, 0)
+    state.append_metrics([
+        {"ts": "2026-11-19T00:05:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/3", "repo": "x/y",
+         "lines": 10, "open_to_merge_s": 60, "ci": "passed", "coauthor_trailers": 2, "conversation": None},
+        # No `coauthor_trailers` key at all -- missing must count as 0, not crash `_count_pr`.
+        {"ts": "2026-11-19T00:10:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/4", "repo": "x/y",
+         "lines": 20, "open_to_merge_s": 90, "ci": "passed", "conversation": None},
+    ])
+
+    assert state.count("pr", since).endswith("coauthor_trailers=2")
+
+
+def test_count_pr_counts_each_pr_once_and_never_reads_unknown_ci_as_a_failure(tmp_path):
+    # One PR is recorded in every window it's updated in; `count pr` must read only its newest record.
+    state = State(tmp_path)
+    since = _dt(2026, 11, 19, 0, 0, 0)
+    pr1 = {"kind": "pr", "url": "https://github.com/x/y/pull/1", "repo": "x/y", "coauthor_trailers": 3,
+           "conversation": None}
+    state.append_metrics([
+        {**pr1, "ts": "2026-11-19T00:05:00Z", "lines": 10, "open_to_merge_s": None, "ci": "failed"},
+        {**pr1, "ts": "2026-11-19T00:05:00Z", "lines": 30, "open_to_merge_s": None, "ci": "failed"},
+    ])
+    state.stage([
+        {**pr1, "ts": "2026-11-19T02:00:00Z", "lines": 30, "open_to_merge_s": 600, "ci": "passed"},
+        # Merged, but its CI couldn't be read: not a failure, and reported on its own.
+        {"ts": "2026-11-19T02:10:00Z", "kind": "pr", "url": "https://github.com/x/y/pull/2", "repo": "x/y",
+         "lines": 50, "open_to_merge_s": 60, "ci": "unknown", "coauthor_trailers": 0, "conversation": None},
+    ], [])
+
+    assert state.count("pr", since) == \
+        ("pr since 2026-11-19T00:00:00Z: prs=2 merged_without_passing_ci=0 ci_unknown=1 "
+         "median_lines=30 median_open_to_merge_s=60 coauthor_trailers=3")
+
+
+def test_summarize_leaves_out_improve_jensens_own_traffic():
+    records = [
+        {"kind": "turn", "id": "t1", "source": "slack", "conversation": "C-1", "no_delegation": 1},
+        {"kind": "turn", "id": "t2", "source": "improve-jensen", "conversation": "C-1", "no_delegation": 1},
+        {"kind": "turn", "id": "t3", "source": None, "conversation": "V-review-0a1b2c3d", "no_delegation": 1},
+        {"kind": "midturn", "id": "m1", "source": "slack", "conversation": "C-1", "midturn_wait_s": 50},
+        {"kind": "midturn", "id": "m2", "source": "improve-jensen", "conversation": "C-1", "midturn_wait_s": 900},
+    ]
+
+    assert summarize(records, "no_delegation", "x") == "no_delegation since x: total=1 turns=1"
+    assert summarize(records, "midturn_wait_s", "x") == "midturn_wait_s since x: n=1 median=50 p90=50 max=50"
+
+
+def test_count_unknown_signal_raises(tmp_path):
+    state = State(tmp_path)
+    with pytest.raises(ValueError):
+        state.count("not_a_real_signal", _dt(2026, 11, 19, 0, 0, 0))
+
+
+def test_note_returns_running_total_per_issue(tmp_path):
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+
+    assert state.note(7, "digest-20261119T0000Z", "lost background 3x", now) == 1
+    assert state.note(7, "digest-20261119T0100Z", "lost background 1x", now) == 2
+    assert state.note(7, "digest-20261119T0200Z", "lost background 2x", now) == 3
+    assert state.note(8, "digest-20261119T0200Z", "no delegation", now) == 1
+
+
+def test_note_total_counts_each_ref_once(tmp_path):
+    # A re-measured window, or a review and the watch both noting the same turn, is still one occurrence.
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+
+    assert state.note(7, "W-a", "lost background", now) == 1
+    assert state.note(7, "W-a", "lost background, noted again", now) == 1
+    assert state.note(7, "https://github.com/x/y/pull/1", "merged over failing CI", now) == 2
+    assert state.note(8, "W-a", "another issue, same turn", now) == 1
+
+
+def test_prune_drops_old_digests_and_metrics(tmp_path):
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+
+    old_end = now - timedelta(days=31)
+    recent_end = now - timedelta(days=1)
+    old_digest = state.write_digest(old_end, "old digest")
+    recent_digest = state.write_digest(recent_end, "recent digest")
+
+    state.append_metrics([
+        {"ts": "2026-10-01T00:00:00Z", "kind": "turn", "id": "old"},
+        {"ts": "2026-11-18T00:00:00Z", "kind": "turn", "id": "recent"},
+    ])
+
+    state.prune(now, days=30)
+
+    assert not old_digest.exists()
+    assert recent_digest.exists()
+    remaining = state.read_metrics(_dt(2000, 1, 1, 0, 0, 0))
+    assert {r["id"] for r in remaining} == {"recent"}
+
+
+def test_plan_validation(tmp_path):
+    state = State(tmp_path)
+
+    # No plan.json at all.
+    assert state.plan() == {"reviews": [], "fix": None}
+
+    # Malformed JSON.
+    (tmp_path / "plan.json").write_text("{not valid json")
+    assert state.plan() == {"reviews": [], "fix": None}
+
+    # Reviews without a string url are dropped; more than 10 are cut to 10; fix is kept when valid; each review's
+    # own conversation is kept only when it's a string -- there is no plan-level conversation field.
+    reviews = [{"url": f"https://github.com/x/y/pull/{i}", "conversation": f"C{i}"} for i in range(12)]
+    reviews.append({"notes": "no url here"})
+    reviews.append({"url": 123})
+    reviews.append({"url": "https://github.com/x/y/pull/bad-conversation", "conversation": 5})
+    (tmp_path / "plan.json").write_text(json.dumps({"reviews": reviews, "fix": 42}))
+    result = state.plan()
+    assert len(result["reviews"]) == 10
+    assert all(set(r) == {"url", "conversation"} for r in result["reviews"])
+    assert result["reviews"][0] == {"url": "https://github.com/x/y/pull/0", "conversation": "C0"}
+    assert result["fix"] == 42
+    assert "conversation" not in result
+
+    # A review missing `conversation` entirely falls back to None per-review, not an error.
+    (tmp_path / "plan.json").write_text(json.dumps(
+        {"reviews": [{"url": "https://github.com/x/y/pull/9"}], "fix": 1}))
+    assert state.plan()["reviews"] == [{"url": "https://github.com/x/y/pull/9", "conversation": None}]
+
+    # fix that isn't a positive int falls back to None.
+    (tmp_path / "plan.json").write_text(json.dumps({"reviews": [], "fix": -1}))
+    assert state.plan()["fix"] is None
+
+    # A bool is an int subclass in Python but doesn't count as a positive int here.
+    (tmp_path / "plan.json").write_text(json.dumps({"reviews": [], "fix": True}))
+    assert state.plan()["fix"] is None
+
+    # A JSON value that parses but isn't an object.
+    (tmp_path / "plan.json").write_text(json.dumps([1, 2, 3]))
+    assert state.plan() == {"reviews": [], "fix": None}
+
+
+def test_run_reviews_round_trip_and_out_of_range(tmp_path):
+    state = State(tmp_path)
+    reviews = [{"url": "https://github.com/x/y/pull/1", "conversation": "C1"},
+              {"url": "https://github.com/x/y/pull/2", "conversation": None}]
+
+    path = state.write_run_reviews("123", reviews)
+
+    assert path == tmp_path / "runs" / "123-reviews.json"
+    assert state.read_run_review("123", 0) == reviews[0]
+    assert state.read_run_review("123", 1) == reviews[1]
+    assert state.read_run_review("123", 2) is None    # out of range
+    assert state.read_run_review("123", -1) is None    # negative index never matches
+    assert state.read_run_review("no-such-run", 0) is None
+
+
+def test_prune_drops_old_run_reviews(tmp_path):
+    state = State(tmp_path)
+    now = _dt(2026, 11, 19, 0, 0, 0)
+
+    old_path = state.write_run_reviews("old-run", [{"url": "https://github.com/x/y/pull/1", "conversation": None}])
+    recent_path = state.write_run_reviews("recent-run",
+                                          [{"url": "https://github.com/x/y/pull/2", "conversation": None}])
+    old_mtime = (now - timedelta(days=31)).timestamp()
+    os.utime(old_path, (old_mtime, old_mtime))
+
+    state.prune(now, days=30)
+
+    assert not old_path.exists()
+    assert recent_path.exists()
+
+
+def test_known_clones_round_trip(tmp_path):
+    state = State(tmp_path)
+
+    assert state.known_clones() == set()
+
+    state.add_clones(["org/repo1", "org/repo2"])
+    assert state.known_clones() == {"org/repo1", "org/repo2"}
+
+    state.add_clones(["org/repo2", "org/repo3"])
+    assert state.known_clones() == {"org/repo1", "org/repo2", "org/repo3"}
+
+
+def test_deploy_pending_round_trip(tmp_path):
+    state = State(tmp_path)
+
+    assert state.deploy_pending() is False
+
+    state.set_deploy_pending(True)
+    assert state.deploy_pending() is True
+    assert (tmp_path / "deploy-pending").exists()  # its own file, not a state.json key
+
+    state.set_deploy_pending(False)
+    assert state.deploy_pending() is False
+    assert not (tmp_path / "deploy-pending").exists()
+
+
+def test_deploy_pending_survives_a_concurrent_commit(tmp_path):
+    """The pending flag lives in its own file precisely so the hourly watch's own `commit()` -- a read-modify-
+    write of `state.json` from what may be a separate process -- can never race with it and drop the flag."""
+    state = State(tmp_path)
+    state.set_deploy_pending(True)
+
+    state.window(_dt(2026, 11, 19, 10, 0, 0))
+    state.commit()
+
+    assert state.deploy_pending() is True
+
+
+def test_write_digest_filename(tmp_path):
+    state = State(tmp_path)
+    end = _dt(2026, 11, 19, 1, 30, 0)
+    path = state.write_digest(end, "hello")
+    assert path.name == "digest-20261119T0130Z.md"
+    assert path.read_text() == "hello"
+
+
+def test_log_deploy_appends_jsonl(tmp_path):
+    state = State(tmp_path)
+    state.log_deploy({"ts": "2026-11-19T00:00:00Z", "from": "aaa", "to": "bbb", "services": ["core"],
+                      "result": "ok"})
+    state.log_deploy({"ts": "2026-11-19T01:00:00Z", "from": "bbb", "to": "ccc", "services": ["agent"],
+                      "result": "failed"})
+    lines = (tmp_path / "deploys.jsonl").read_text().splitlines()
+    assert [json.loads(line)["to"] for line in lines] == ["bbb", "ccc"]
+
+
+def test_default_uses_env_or_fallback(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    monkeypatch.delenv("IMPROVE_JENSEN_STATE", raising=False)
+    state = State.default()
+    assert state.root == fake_home / ".local" / "state" / "improve-jensen"
+    assert state.root.exists()
+
+    monkeypatch.setenv("IMPROVE_JENSEN_STATE", str(tmp_path / "custom"))
+    state = State.default()
+    assert state.root == tmp_path / "custom"
+    assert state.root.exists()

@@ -1010,3 +1010,115 @@ async def test_a_runner_that_cannot_take_messages_gets_none(convos, queue, slack
     assert (await convos.on_beat(first, {"accepts_messages": False}))["messages"] == []
     assert len(slack.reactions) == reactions
     assert (await convos.on_beat(first, {"accepts_messages": True}))["messages"] != []
+
+
+def spawn(conn, queue, parent_cid, agent_id="A-1"):
+    """A spawned agent of parent_cid, with its first turn queued."""
+    from agent.core import spawned
+    from agent.core.conversations import create_conversation
+    child = create_conversation(conn, channel=None, thread_ts=None, project="sample", is_primary=0)
+    spawned.record(conn, agent_id=agent_id, parent_conversation_id=parent_cid, child_conversation_id=child,
+                   spawned_by="W-x", prompt="compare A and B", cwd=None,
+                   parent={"actor": "ann", "origin": "[from ann · DM]", "source": "slack", "requester": "ann"})
+    queue.enqueue(child, "turn", {"text": "compare A and B", "actor": "ann"})
+    return child
+
+
+async def test_a_finished_spawned_agent_starts_a_turn_in_its_parents_thread(convos, conn, queue, slack):
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    child = spawn(conn, queue, parent)
+    await finish_turn(convos, queue, "B is 12% faster")
+    assert slack.posts == []  # the agent has no thread of its own; nothing is posted for it
+    turn = last_item(queue)
+    assert turn.conversation_id == parent and turn.status == "queued"
+    assert "<agent-notification>" in turn.payload["text"] and "B is 12% faster" in turn.payload["text"]
+    assert "A-1" in turn.payload["text"] and "finished" in turn.payload["text"]
+    assert turn.payload["origin"] == "[from ann · DM] (report from agent A-1)"
+    assert (turn.payload["actor"], turn.payload["source"], turn.payload["requester"]) == ("ann", "slack", "ann")
+    row = conn.execute("SELECT status, result FROM spawned_agents WHERE child_conversation_id = ?", (child,)).fetchone()
+    assert (row["status"], row["result"]) == ("done", "B is 12% faster")
+    # the parent's turn answers in the parent's thread
+    await finish_turn(convos, queue, "Done: B wins")
+    assert [(p["channel"], p["thread_ts"], p["text"]) for p in slack.posts] == [("C-SAMPLE", "7.0", "Done: B wins")]
+
+
+async def test_a_spawned_agent_reports_once_after_it_is_carried_on(convos, conn, queue):
+    # A turn has no time limit to carry on from any more (#24); a usage limit still cuts one off and carries it on
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    spawn(conn, queue, parent)
+    item = queue.claim()
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"outcome": "error", "text": "", "error": "429 rate limit"})
+    assert conn.execute("SELECT COUNT(*) FROM work_items WHERE conversation_id = ?", (parent,)).fetchone()[0] == 0
+    carry_on = queue.get(convos.resume_after_limit(item.id))
+    assert carry_on.conversation_id != parent
+    await finish_turn(convos, queue, "done now")
+    reports = conn.execute("SELECT payload FROM work_items WHERE conversation_id = ?", (parent,)).fetchall()
+    assert len(reports) == 1 and "done now" in reports[0]["payload"]
+
+
+async def test_a_failed_spawned_agent_reports_the_failure(convos, conn, queue):
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    spawn(conn, queue, parent)
+    item = queue.claim()
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"outcome": "error", "text": "", "error": "boom"})
+    turn = last_item(queue)
+    assert turn.conversation_id == parent and "failed (error)" in turn.payload["text"] and "boom" in turn.payload["text"]
+
+
+async def test_a_report_reaches_a_running_parent_mid_turn(convos, conn, queue):
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    queue.enqueue(parent, "turn", {"text": "spawn some agents", "actor": "ann"})
+    running = queue.claim()
+    spawn(conn, queue, parent)
+    await finish_turn(convos, queue, "found it")
+    got = await convos.on_beat(running, {"accepts_messages": True})
+    assert len(got["messages"]) == 1 and "found it" in got["messages"][0]["payload"]["text"]
+
+
+def reports_to(conn, parent):
+    return [r["payload"] for r in conn.execute("SELECT payload FROM work_items WHERE conversation_id = ? "
+                                               "ORDER BY rowid", (parent,))]
+
+
+async def test_a_spawned_agent_that_parked_reports_only_once_the_park_is_carried_on_and_done(convos, conn, queue):
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    child = spawn(conn, queue, parent)
+    item = queue.claim()
+    conn.execute("INSERT INTO parks(conversation_id, work_item_id, until_at, note, created_at) VALUES (?, ?, ?, ?, ?)",
+                 (child, item.id, "2099-01-01T00:00:00Z", "rerun the B side", db.utcnow()))
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"outcome": "done", "text": "Parked until the cap lifts."})
+    assert reports_to(conn, parent) == []
+    # the park is due: core carries the agent on, and its turn ends with nothing more to come
+    convos.resume_parked(child, item.id, "(It's time: carry on.)")
+    conn.execute("UPDATE parks SET ended_at = ?, ended_how = 'resumed' WHERE conversation_id = ?", (db.utcnow(), child))
+    await finish_turn(convos, queue, "B is 12% faster")
+    (report,) = reports_to(conn, parent)
+    assert "B is 12% faster" in report and "Parked until" not in report
+
+
+async def test_a_spawned_agent_with_another_turn_queued_reports_after_that_one(convos, conn, queue):
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    child = spawn(conn, queue, parent)
+    queue.enqueue(child, "turn", {"text": "and the C side too", "actor": "ann"})
+    await finish_turn(convos, queue, "A and B done")
+    assert reports_to(conn, parent) == []
+    await finish_turn(convos, queue, "A, B and C done")
+    (report,) = reports_to(conn, parent)
+    assert "A, B and C done" in report
+
+
+async def test_a_failed_spawned_agent_is_not_retried_the_parent_decides(convos, conn, queue):
+    # even when the agent's conversation became a long project's build, whose failed turns otherwise retry
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    child = spawn(conn, queue, parent)
+    projects.start(conn, name="ab", repo="acme/ab", conversation_id=child, thread_link=None, started_by="ann")
+    item = queue.claim()
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"outcome": "error", "text": "", "error": "boom"})
+    assert conn.execute("SELECT COUNT(*) FROM work_items WHERE conversation_id = ? AND status = 'queued'",
+                        (child,)).fetchone()[0] == 0
+    (report,) = reports_to(conn, parent)
+    assert "failed (error)" in report and "won't be retried" in report

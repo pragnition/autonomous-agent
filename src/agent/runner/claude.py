@@ -11,7 +11,10 @@ from the one it ran on: not here, and not on a later turn (can_resume).
 Each attempt's prompt, and every message that arrives while the run is going, is written into the live session with its
 own uuid. The CLI echoes every message it reads, so a run knows which ones were read, and it reads on past a result
 until each one has been: a result from before the prompt was read (a background task from an earlier turn finishing)
-doesn't answer this turn.
+doesn't answer this turn. It also reads on past a result while the session has background agents running: that turn
+end is interim, and each agent wakes the session again when it finishes. A stop then (a cancel, stop_all, a handoff
+off an account over its cap) ends the run at once, since no turn is running to send a result. A Bash call that only
+waits is turned away (idle_wait), since nothing sent into the session is read until the call returns.
 
 A run has no time or step limit of its own. A session that sends nothing for `idle_s` is stuck, and is stopped as
 stalled. A run with a time budget (`timeout_s`, which a scheduled run has) is stopped when it runs out, however busy
@@ -31,12 +34,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, UserMessage,
-                              create_sdk_mcp_server)
+from claude_agent_sdk import (TERMINAL_TASK_STATUSES, AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
+                              HookMatcher, ResultMessage, SystemMessage, UserMessage, create_sdk_mcp_server)
+# The task types the SDK keeps the CLI's stdin open for past a result (it doesn't export the set)
+from claude_agent_sdk._internal.query import DEFERRING_TASK_TYPES
 
 from agent.proxy import PLACEHOLDER_TOKEN, ProxyClient, ProxyUnavailable
 from agent.runner.base import RunResult, RunSpec
 from agent.runner.handoff import handoff_note
+from agent.runner.idle_wait import block_idle_waits
 from agent.runner.outcome import ACCOUNT_TROUBLE, FORK_STATUSES, map_result, usage_tokens
 
 # The SDK hands the parent's whole environment to the CLI, so anything secret-looking is overridden with "".
@@ -45,6 +51,30 @@ PROXY_VARS = {"ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
 # The most the SDK reads of one message from the CLI. Its default, 1 MiB, ends the session on an image of ~750 KB
 # (a tool result carries it as base64, a third larger): a Slack screenshot or a full-page Playwright one.
 MAX_BUFFER_SIZE = 20 * 1024 * 1024
+# The background tasks a run stays open for: the SDK's own sets. Delegated agent work (local agents and workflows),
+# which finishes by itself and wakes the session when it does; not background shells or monitors (a dev server runs
+# until it's stopped) and not remote agents, which can be long-running monitors the CLI won't wait on either. A task
+# has ended on a terminal status from a task_notification ("stopped") or a task_updated ("killed").
+WAITED_TASK_TYPES, TASK_ENDED = DEFERRING_TASK_TYPES, TERMINAL_TASK_STATUSES
+
+
+def track_task(tasks: dict[str, str], msg: SystemMessage) -> None:
+    """Keep tasks (task id -> description) to the agent tasks still running, from the CLI's task frames, read the way
+    the SDK's own ledger reads them: task_started adds one of WAITED_TASK_TYPES; any task_notification, or a
+    task_updated whose patch has a terminal status, ends it (not every task that ends sends a notification)."""
+    data = msg.data if isinstance(msg.data, dict) else {}
+    task_id = data.get("task_id")
+    if not task_id:
+        return
+    if msg.subtype == "task_started":
+        if data.get("task_type") in WAITED_TASK_TYPES:
+            tasks[task_id] = data.get("description") or task_id
+    elif msg.subtype == "task_notification":
+        tasks.pop(task_id, None)
+    elif msg.subtype == "task_updated":
+        patch = data.get("patch")
+        if isinstance(patch, dict) and patch.get("status") in TASK_ENDED:
+            tasks.pop(task_id, None)
 
 
 async def _user_message(message_uuid: str, text: str):
@@ -90,6 +120,8 @@ class ClaudeRunner:
             mcp_servers=servers, can_use_tool=None, permission_mode="bypassPermissions",
             session_id=session_id, resume=resume,
             settings=json.dumps(spec.settings) if spec.settings else None, max_buffer_size=MAX_BUFFER_SIZE,
+            # a foreground Bash call that only waits holds the turn, and no message reaches the session meanwhile
+            hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[block_idle_waits])]},
             # the CLI echoes each user message it reads, with the uuid it was sent with
             extra_args={"replay-user-messages": None})
 
@@ -151,7 +183,8 @@ class ClaudeRunner:
         if active:
             client, state = active
             state["reason"] = state["reason"] or "external"
-            await client.interrupt()
+            if not self._end_between_turns(state):
+                await client.interrupt()
 
     def release(self, run_id: str) -> None:
         """Forget a stop once the claim it came with is over: core may hand the same item to this runner again."""
@@ -192,14 +225,29 @@ class ClaudeRunner:
             status = usage.status_of(state["account"])
             if status in ACCOUNT_TROUBLE:
                 state["reason"], state["trouble"] = "watchdog", status
-                await client.interrupt()
+                if not self._end_between_turns(state):
+                    await client.interrupt()
                 return
             # Over the soft cap: hand off like a rejected account, but only when the fresh session would land on an
             # account under its cap and the run may still fork; otherwise keep going here rather than end the run
             if state["can_fork"] and usage.over_cap(state["account"]) and usage.handoff_target(state["account"]):
                 state["reason"], state["trouble"] = "watchdog", "over its 5-hour soft cap"
-                await client.interrupt()
+                if not self._end_between_turns(state):
+                    await client.interrupt()
                 return
+
+    @staticmethod
+    def _end_between_turns(state: dict) -> bool:
+        """A stop ends the run at the result the CLI sends for the turn it interrupts. Between turns (the session
+        waiting on its background agents) there is no turn to interrupt and no result coming, so the attempt's window
+        closes now instead (see deadline in _attempt), and the session is closed with nothing sent to it. Returns
+        whether it did that, so the caller interrupts only a running turn."""
+        window = state.get("window")
+        if window is None or state["turn"]:
+            return False
+        with contextlib.suppress(RuntimeError):  # the window has already closed: the attempt is ending anyway
+            window.reschedule(asyncio.get_running_loop().time())
+        return True
 
     async def _account_status(self, state: dict) -> str | None:
         try:
@@ -222,6 +270,8 @@ class ClaudeRunner:
         loop = asyncio.get_running_loop()
 
         def deadline() -> float:  # the idle window from now, cut short by the run's time budget
+            if state["reason"] and not state["turn"]:  # stopped between turns: no result is coming (_end_between_turns)
+                return loop.time()
             idle = loop.time() + spec.idle_s
             return idle if end is None else min(idle, end)
 
@@ -230,8 +280,11 @@ class ClaudeRunner:
         client = self.client_factory(self.build_options(spec, session_id=session_id, resume=resume))
         # pending: the uuid of each message sent into this session and not yet echoed -> its item id (None for the
         # attempt's own prompt, which is no work item)
+        # tasks: the background agents the session has running (id -> description); a result while any is running is
+        # an interim end of turn. turn: a turn is under way (from its prompt or its first main-thread message to its
+        # result), so a stop gets a result to end at; between turns it doesn't (_end_between_turns)
         state = {"reason": None, "account": None, "sid": session_id or resume, "asked": False, "can_fork": can_fork,
-                 "accepting": False, "pending": {prompt_uuid: None}}
+                 "accepting": False, "pending": {prompt_uuid: None}, "tasks": {}, "turn": True, "window": None}
         self._active[spec.run_id] = (client, state)
         read = self._read.setdefault(spec.run_id, [])
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -242,11 +295,12 @@ class ClaudeRunner:
         watchdog = asyncio.create_task(self._watch(client, state))
         try:
             async with asyncio.timeout_at(deadline()) as window:
+                state["window"] = window
                 await client.connect()
                 await client.query(_user_message(prompt_uuid, prompt))
                 state["accepting"] = True
                 async for msg in client.receive_messages():
-                    window.reschedule(deadline())  # any message is progress
+                    window.reschedule(deadline())  # any message is progress: a background agent's task frames too
                     record = self._append(transcript, msg)
                     if spec.on_message is not None:
                         with contextlib.suppress(Exception):
@@ -258,9 +312,15 @@ class ClaudeRunner:
                         with contextlib.suppress(ProxyUnavailable):
                             state["account"] = await self.proxy.whoami(state["sid"])
                     if isinstance(msg, UserMessage) and msg.uuid in state["pending"]:
+                        state["turn"] = True  # the CLI read a message: a turn answers it
                         if (item_id := state["pending"].pop(msg.uuid)) is not None:
                             read.append(item_id)
+                    elif isinstance(msg, AssistantMessage) and msg.parent_tool_use_id is None:
+                        state["turn"] = True  # the main thread is working (a finished agent woke it, say)
+                    if isinstance(msg, SystemMessage):
+                        track_task(state["tasks"], msg)
                     if isinstance(msg, ResultMessage):
+                        state["turn"] = False
                         switching = msg.is_error and msg.api_error_status in FORK_STATUSES
                         # A result from before the prompt was read answers something else (a background task from
                         # an earlier turn finishing): it doesn't count, unless it moves the run to another account
@@ -271,12 +331,16 @@ class ClaudeRunner:
                         # result. An interrupted session stops here: what it didn't read goes back to the queue.
                         # So does a result that moves the run to another account: the session it would read on into
                         # is the one about to be abandoned, not the one the pending message should land in.
-                        if not state["pending"] or state["reason"] or switching:
+                        # Background agents still running make this an interim end of turn: ending the run here
+                        # would post it as the final reply and close the CLI, and the agents with it. Read on: each
+                        # agent wakes the session when it finishes, and messages sent meanwhile are read at once.
+                        if (not state["pending"] and not state["tasks"]) or state["reason"] or switching:
                             state["accepting"] = False
                             break
         except TimeoutError:
-            state["reason"] = "timeout" if end is not None and window.when() == end else "stalled"
-            await client.interrupt()
+            if state["reason"] is None:  # the idle window or the time budget ran out; a stop has its own reason
+                state["reason"] = "timeout" if end is not None and window.when() == end else "stalled"
+                await client.interrupt()
         finally:
             state["accepting"] = False
             watchdog.cancel()

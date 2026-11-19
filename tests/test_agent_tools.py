@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import re
 
 import pytest
 
@@ -406,3 +407,79 @@ async def test_start_task_follows_the_calling_turn(router, conn):
     await router.call(ctx, "start_task", {"project": "sample", "title": "fix x", "kind": "bug", "brief": "b"})
     child = latest_item(router).payload
     assert (child["follows"], child["source"], child["requester"]) == (ctx.work_item_id, "slack", "ann")
+
+
+async def test_spawn_agent_queues_a_threadless_session_that_reports_back(router, conn):
+    cid = add_conversation(conn, project="sample", channel="C1", thread_ts="9.0")
+    ctx = router.context_for(add_item(router.queue, cid, source="slack", requester="ann", origin="[from ann · DM]"))
+    reply_ = await router.call(ctx, "spawn_agent", {"prompt": "compare A and B", "cwd": "/var/agent/scratch/x"})
+    assert "Spawned agent A-" in reply_.text
+    child = latest_item(router)
+    row = conn.execute("SELECT * FROM spawned_agents").fetchone()
+    convo = conn.execute("SELECT * FROM conversations WHERE id = ?", (child.conversation_id,)).fetchone()
+    assert (row["parent_conversation_id"], row["child_conversation_id"], row["status"]) == \
+        (cid, child.conversation_id, "running")
+    assert (convo["channel"], convo["thread_ts"], convo["cwd"], convo["project"]) == \
+        (None, None, "/var/agent/scratch/x", "sample")
+    assert child.payload["text"].endswith("compare A and B") and row["id"] in child.payload["text"]
+    assert child.payload["origin"] == f"[from ann · DM] (spawned by {router.config.name} as agent {row['id']})"
+    assert (child.payload["follows"], child.payload["actor"]) == (ctx.work_item_id, "ann")
+
+
+async def test_spawn_agent_needs_a_prompt(router, ctx_member):
+    assert "needs a prompt" in (await router.call(ctx_member, "spawn_agent", {"prompt": " "})).text
+    assert router.conn.execute("SELECT COUNT(*) FROM spawned_agents").fetchone()[0] == 0
+
+
+async def test_a_spawned_agent_cannot_spawn(router, ctx_member):
+    await router.call(ctx_member, "spawn_agent", {"prompt": "p"})
+    child = router.context_for(latest_item(router).id)
+    assert "can't spawn" in (await router.call(child, "spawn_agent", {"prompt": "q"})).text
+
+
+async def test_spawn_agent_caps_running_agents_per_conversation(router, ctx_member):
+    for _ in range(3):
+        assert "Spawned" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+    refused = (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+    assert refused.startswith("3 agents you spawned are still running, the most one conversation may have")
+    assert router.conn.execute("SELECT COUNT(*) FROM spawned_agents").fetchone()[0] == 3
+    # one whose turn was cancelled never reports back, and stops counting
+    router.queue.cancel(latest_item(router).id)
+    assert "Spawned" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+
+
+async def test_spawn_agent_caps_running_agents_overall(router):
+    first, second = ctx_for(router, actor="bob"), ctx_for(router, actor="bob", channel="C2")
+    for _ in range(3):
+        await router.call(first, "spawn_agent", {"prompt": "p"})
+    assert "Spawned" in (await router.call(second, "spawn_agent", {"prompt": "p"})).text
+    refused = (await router.call(second, "spawn_agent", {"prompt": "p"})).text
+    assert refused.startswith("4 spawned agents are running already, the most at once")
+    assert router.conn.execute("SELECT COUNT(*) FROM spawned_agents").fetchone()[0] == 4
+
+
+async def test_a_parked_spawned_agent_still_counts_as_running(router, ctx_member):
+    for _ in range(3):
+        await router.call(ctx_member, "spawn_agent", {"prompt": "p"})
+    child = latest_item(router)
+    router.queue.complete(child.id, {})   # its turn ended parked: nothing queued, but it carries on later
+    router.conn.execute("INSERT INTO parks(conversation_id, work_item_id, until_at, created_at) VALUES (?, ?, ?, ?)",
+                        (child.conversation_id, child.id, "2099-01-01T00:00:00Z", db.utcnow()))
+    assert "still running" in (await router.call(ctx_member, "spawn_agent", {"prompt": "p"})).text
+
+
+async def test_spawn_agent_works_in_its_own_folder_unless_told_and_sharing_a_checkout_is_the_callers_call(
+        router, ctx_member):
+    await router.call(ctx_member, "spawn_agent", {"prompt": "p"})
+    child = latest_item(router)
+    # no cwd: the runner gives the agent its conversation's own new folder, never the caller's
+    assert router.conn.execute("SELECT cwd FROM conversations WHERE id = ?",
+                               (child.conversation_id,)).fetchone()[0] is None
+    description = next(t["description"] for t in router.manifest(ctx_member) if t["name"] == "spawn_agent")
+    assert "its own new folder" in description and "shares that checkout with you" in description
+
+
+async def test_the_spawn_agent_description_says_background_agents_keep_the_session_open(router, ctx_member):
+    description = next(t["description"] for t in router.manifest(ctx_member) if t["name"] == "spawn_agent")
+    assert "Background agents (the Agent tool with run_in_background) keep your session open" in description
+    assert not re.search(r"(stopped|die|end|killed)\b[^.]*when your turn ends", description)

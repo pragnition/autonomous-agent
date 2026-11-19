@@ -281,7 +281,10 @@ class Runner:
         note = RESTARTED_NOTE if item.get("attempts") and payload.get("resume_session_id") else ""
         attached = await save_slack_files(self.link, tok, session, payload.get("files") or [])
         origin, prompt = origin_of(payload), origin_of(payload) + note + payload["text"] + attached
-        spec = RunSpec(run_id=item_id, prompt=prompt, cwd=session,
+        # a spawned agent may work in a directory it was given (spawn_agent's cwd); one that's gone falls back to the
+        # conversation's own folder, and the resume check below starts a fresh session if the old one isn't found
+        cwd = Path(payload["cwd"]) if payload.get("cwd") and Path(payload["cwd"]).is_dir() else session
+        spec = RunSpec(run_id=item_id, prompt=prompt, cwd=cwd,
                        model=payload["model"], system_prompt=system_prompt, idle_s=payload["idle_s"],
                        timeout_s=payload.get("timeout_s"),
                        # CLAUDE_CONFIG_DIR and the function-hooks flag (which loads the effortless plugin's code,

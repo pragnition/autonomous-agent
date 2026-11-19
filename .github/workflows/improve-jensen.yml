@@ -1,10 +1,45 @@
-# improve-jensen: the agent that owns this repo. It answers issues labelled `improve-jensen`
-# and comments that mention @improve-jensen, and opens PRs. Its charter is .github/improve-jensen.md.
-# It runs on a self-hosted runner on the stack's host and reaches Claude through the account proxy's
-# `improve-jensen` origin, so it shares the team's account pool. Host setup: deploy/improve-jensen.md.
+# improve-jensen: the agent that owns this repo. It runs on self-hosted runners on the stack's host and reaches
+# Claude through the account proxy's `improve-jensen` origin, so it shares the team's account pool.
+# Host setup: deploy/improve-jensen.md.
+#
+#   watch   - hourly (and on manual dispatch): deploys a pending change, measures what's outstanding, lets
+#             Claude work through the watch instructions, then plans what the review/fix jobs should pick up.
+#   review  - one run per open Jensen PR the watch job's plan names (or the single PR a manual dispatch names).
+#             The scheduled path never puts a PR URL in this workflow's own prompt or logs: it names a review by
+#             index into this run's own `runs/<run id>-reviews.json`, and Claude looks the URL/conversation up
+#             itself with `review-target`.
+#   fix     - the one issue the watch job's plan picked for a fix (or a manual dispatch's target), serialised so
+#             only one runs at a time.
+#   respond - answers issues labelled `improve-jensen` and comments that mention @improve-jensen, and opens PRs.
+#             Its charter is .github/improve-jensen.md.
+#   assess  - four times a day: decides whether there's anything new to assess, lets Claude write an assessment
+#             and update the pinned assessment issue, then records which project (if any) to run next.
+#   project - the one active improvement project, from the assess job's plan (or a manual dispatch's target),
+#             serialised so only one project runs at a time.
+#   yardstick - nightly, and after any of watch/fix/project/respond that leaves a yardstick gate active (each ends
+#             with a `gate status` step and reports it as its `gate` output): runs the yardstick tasks. A gate run
+#             ends the gate once it could be measured and removes `gating`; a failed gate also gets a `Yardstick
+#             gate failed ...: picked to revert.` comment on its issue. A gate it couldn't measure stays active, and
+#             the next job that reports it starts the gate run again.
+#   gate-revert - after a failed gate: reverts the change it measured, in a job of its own. If it dies before the
+#             revert lands, the watch picks the issue again from that comment.
 name: improve-jensen
 
 on:
+  schedule:
+    - cron: "17 * * * *"
+    - cron: "13 */6 * * *"
+    - cron: "7 19 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        description: Which job to run
+        options: [watch, review, fix, assess, yardstick, project]
+        default: watch
+      target:
+        type: string
+        description: PR URL (review); issue number (fix, project); ignored for watch, assess and yardstick
   issues:
     types: [opened, labeled, assigned]
   issue_comment:
@@ -20,26 +55,390 @@ permissions:
   issues: write
   id-token: write
   actions: read
+  checks: read
 
-concurrency:
-  group: improve-jensen-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
+env:
+  ANTHROPIC_BASE_URL: http://127.0.0.1:18092   # the proxy's improve-jensen origin
 
 jobs:
-  improve-jensen:
+  watch:
     if: >
-      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen')) ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@improve-jensen'))
-    runs-on: [self-hosted, improve-jensen]
-    env:
-      ANTHROPIC_BASE_URL: http://127.0.0.1:18092   # the proxy's improve-jensen origin
+      (github.event.schedule == '17 * * * *' && vars.IMPROVE_JENSEN_ENGINE == 'on') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'watch')
+    runs-on: [self-hosted, improve-jensen, watch]
     timeout-minutes: 60
+    outputs:
+      review_indices: ${{ steps.plan.outputs.review_indices }}
+      fix: ${{ steps.plan.outputs.fix }}
+      has_reviews: ${{ steps.plan.outputs.has_reviews }}
+      has_fix: ${{ steps.plan.outputs.has_fix }}
+      gate: ${{ steps.gate.outputs.active }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: deploy a pending change, if one is waiting
+        continue-on-error: true
+        run: python scripts/deploy.py --if-pending --wait-idle-s 0
+      - name: measure
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/jensen_watch.py measure --github-output "$GITHUB_OUTPUT"
+      - name: claude
+        id: claude
+        if: steps.measure.outputs.has_work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Run the hourly watch. Digest: ${{ steps.measure.outputs.digest }}. Use the state folder
+            ($IMPROVE_JENSEN_STATE, default ~/.local/state/improve-jensen). Follow .github/improve-jensen-watch.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 120
+            --append-system-prompt-file .github/improve-jensen-watch.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: plan
+        id: plan
+        if: steps.measure.outputs.has_work == 'true' && steps.claude.outcome == 'success'
+        run: python scripts/jensen_watch.py plan --github-output "$GITHUB_OUTPUT"
+      - name: commit
+        if: steps.measure.outputs.skip_reason != 'pool_hold' && (steps.claude.outcome == 'success' || steps.claude.outcome == 'skipped')
+        run: python scripts/jensen_watch.py commit
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"
+
+  assess:
+    if: >
+      (github.event.schedule == '13 */6 * * *' && vars.IMPROVE_JENSEN_ENGINE == 'on') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'assess')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 90
+    outputs:
+      project: ${{ steps.assess-plan.outputs.project }}
+      has_project: ${{ steps.assess-plan.outputs.has_project }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: assess-check
+        id: assess-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/jensen_watch.py assess-check --github-output "$GITHUB_OUTPUT"
+      - name: claude
+        id: claude
+        if: steps.assess-check.outputs.has_work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Run the assessment. Use the state folder ($IMPROVE_JENSEN_STATE, default
+            ~/.local/state/improve-jensen). Write assessment.md, update the pinned assessment issue, and write
+            assess-plan.json. Follow .github/improve-jensen-assess.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 200
+            --append-system-prompt-file .github/improve-jensen-assess.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: assess-plan
+        id: assess-plan
+        run: python scripts/jensen_watch.py assess-plan --github-output "$GITHUB_OUTPUT"
+      # The next assessment reads everything since this one started, so nothing written while it ran is missed.
+      - name: assess-commit
+        if: steps.claude.outcome == 'success'
+        env:
+          STARTED: ${{ steps.assess-check.outputs.started }}
+        run: python scripts/jensen_watch.py assess-commit --at "$STARTED"
+
+  project:
+    needs: assess
+    if: >
+      !cancelled() &&
+      (needs.assess.outputs.has_project == 'true' || (inputs.mode == 'project' && inputs.target != ''))
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 360
+    concurrency:
+      group: improve-jensen-project
+      cancel-in-progress: false
+    outputs:
+      gate: ${{ steps.gate.outputs.active }}
+    env:
+      # Resolved once, here, so every step below reads the same value through `$TARGET`/`env.TARGET` -- never by
+      # re-interpolating `${{ inputs.target }}` directly into a `run:` script, which would hand a workflow-
+      # dispatch user's raw input straight to the shell.
+      TARGET: ${{ inputs.mode == 'project' && inputs.target || needs.assess.outputs.project }}
+    steps:
+      # No job token left in the git config, for the same reason as in `fix`.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: claude
+        timeout-minutes: 350
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Work on improvement project #${{ env.TARGET }}; if its branch and progress file exist, continue from
+            them. Follow .github/improve-jensen-project.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 500
+            --append-system-prompt-file .github/improve-jensen-project.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"
+
+  yardstick:
+    # After watch/fix/project/respond, so a job that started a gate gets its gate run once it has ended. `!cancelled()`
+    # keeps the jobs this one needs from skipping it when they were skipped themselves (the nightly and a manual run).
+    needs: [watch, fix, project, respond]
+    if: >
+      !cancelled() && (
+        (github.event.schedule == '7 19 * * *' && vars.IMPROVE_JENSEN_ENGINE == 'on') ||
+        (github.event_name == 'workflow_dispatch' && inputs.mode == 'yardstick') ||
+        needs.watch.outputs.gate == 'true' || needs.fix.outputs.gate == 'true' ||
+        needs.project.outputs.gate == 'true' || needs.respond.outputs.gate == 'true')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 240
+    concurrency:
+      group: improve-jensen-yardstick
+      cancel-in-progress: false
+    outputs:
+      # `failed` only once the failed gate has really ended: a `gate end` that refused (another gate is active by
+      # now) reverts nothing.
+      gate_result: ${{ steps.gate-end.outcome == 'success' && steps.yardstick.outputs.gate_result || 'none' }}
+    env:
+      # A gate run when a job before this one reported an active gate. The nightly and a manual run never revert.
+      GATE: >-
+        ${{ (needs.watch.outputs.gate == 'true' || needs.fix.outputs.gate == 'true' ||
+        needs.project.outputs.gate == 'true' || needs.respond.outputs.gate == 'true') && 'true' || 'false' }}
+    steps:
+      # `main` itself, whatever event started the run (a PR review's run would otherwise check out the PR's merge
+      # ref), and no job token left in the git config.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: yardstick run
+        id: yardstick
+        run: >-
+          python scripts/jensen_watch.py yardstick run
+          ${{ env.GATE == 'true' && '--gate' || '' }}
+          --github-output "$GITHUB_OUTPUT"
+      # `gate_result` is passed or failed once the gate was measured; retry (couldn't measure it this time) and none
+      # (no active gate, or no tasks installed -- the gate stays active and retries) leave the gate as it is.
+      # `--started` ends only the gate this run measured.
+      - name: gate end
+        id: gate-end
+        if: steps.yardstick.outputs.gate_result == 'passed' || steps.yardstick.outputs.gate_result == 'failed'
+        env:
+          GATE_RESULT: ${{ steps.yardstick.outputs.gate_result }}
+          GATE_STARTED: ${{ steps.yardstick.outputs.gate_started }}
+          DROP: ${{ steps.yardstick.outputs.drop }}
+          REGRESSIONS: ${{ steps.yardstick.outputs.regressions }}
+        run: >-
+          python scripts/jensen_watch.py gate end --result "$GATE_RESULT" --started "$GATE_STARTED"
+          --drop "$DROP" --regressions "$REGRESSIONS"
+      # The comment is the failed gate's record on its issue: if `gate-revert` dies before the revert lands, the
+      # watch picks the issue again from it. The merge sha only, never a host gate's backup paths.
+      - name: comment on the failed gate's issue
+        if: >-
+          !cancelled() && steps.gate-end.outcome == 'success' && steps.yardstick.outputs.gate_result == 'failed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(python scripts/jensen_watch.py gate status --last)
+          issue=$(python -c 'import json, sys; print(json.loads(sys.argv[1])["issue"])' "$last")
+          body=$(python -c 'import json, sys; g = json.loads(sys.argv[1]); print("Yardstick gate failed " + (
+            "at " + g["handle"] if g["kind"] == "repo" else "(host change)") + ": picked to revert.")' "$last")
+          gh issue comment "$issue" --body "$body" -R ${{ github.repository }}
+      - name: remove the gating label
+        if: "!cancelled() && steps.gate-end.outcome == 'success'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          issue=$(python scripts/jensen_watch.py gate status --last |
+            python -c 'import json, sys; print(json.load(sys.stdin)["issue"])')
+          gh issue edit "$issue" --remove-label gating -R ${{ github.repository }}
+
+  gate-revert:
+    # The failed gate's change comes out in a job of its own, with the charter, its own runner and its own time.
+    needs: yardstick
+    if: "!cancelled() && needs.yardstick.outputs.gate_result == 'failed'"
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 120
+    steps:
+      # `main`, and no job token in the git config, for the same reasons as in `yardstick` and `fix`.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      # A safety net: if the comment step in `yardstick` above didn't run or failed, this revert would otherwise
+      # leave the issue without its recovery marker. Idempotent: skip if the comment is already there.
+      - name: ensure the failed gate's comment is on its issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(python scripts/jensen_watch.py gate status --last)
+          issue=$(python -c 'import json, sys; print(json.loads(sys.argv[1])["issue"])' "$last")
+          body=$(python -c 'import json, sys; g = json.loads(sys.argv[1]); print("Yardstick gate failed " + (
+            "at " + g["handle"] if g["kind"] == "repo" else "(host change)") + ": picked to revert.")' "$last")
+          gh issue view "$issue" --json comments -R ${{ github.repository }} --jq '.comments[].body' |
+            grep -qF "$body" || gh issue comment "$issue" --body "$body" -R ${{ github.repository }}
+      - name: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            The yardstick gate failed for the change in the last gate record
+            (`python scripts/jensen_watch.py gate status --last`). Revert it through its handle and record the
+            failed attempt. Follow .github/improve-jensen.md, "The failed gate".
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 200
+            --append-system-prompt-file .github/improve-jensen.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+
+  review:
+    needs: watch
+    if: >
+      !cancelled() &&
+      ((inputs.mode == 'review' && inputs.target != '') || needs.watch.outputs.has_reviews == 'true')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        index: ${{ fromJSON(inputs.mode == 'review' && '[0]' || needs.watch.outputs.review_indices) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: >-
+            ${{ inputs.mode == 'review' && format('Review the PR at {0}.', inputs.target) || format('Review the
+            PR at index {0} of run {1}; get its URL and conversation with `python scripts/jensen_watch.py
+            review-target --run {1} --index {0}`.', matrix.index, github.run_id) }} Never write product or repo
+            names in your final message. Follow .github/improve-jensen-review.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 200
+            --append-system-prompt-file .github/improve-jensen-review.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+
+  fix:
+    needs: watch
+    if: >
+      !cancelled() &&
+      ((inputs.mode == 'fix' && inputs.target != '') || needs.watch.outputs.has_fix == 'true')
+    runs-on: [self-hosted, improve-jensen, work]
+    timeout-minutes: 120
+    concurrency:
+      group: improve-jensen-fix
+      cancel-in-progress: false
+    outputs:
+      gate: ${{ steps.gate.outputs.active }}
+    env:
+      # Resolved once, here, so every step below reads the same value through `$TARGET`/`env.TARGET` -- never by
+      # re-interpolating `${{ inputs.target }}` directly into a `run:` script, which would hand a workflow-
+      # dispatch user's raw input straight to the shell.
+      TARGET: ${{ inputs.mode == 'fix' && inputs.target || needs.watch.outputs.fix }}
+    steps:
+      # No job token left in the git config: Claude's pushes must go out as the Claude app, since a push made with
+      # this job's GITHUB_TOKEN never triggers `ci` and `gh pr checks --watch` would wait for checks that never come.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - name: add the fixing label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create fixing --force -R ${{ github.repository }}
+          gh issue edit "$TARGET" --add-label fixing -R ${{ github.repository }}
+      - name: claude
+        timeout-minutes: 110   # leaves the always() label cleanup below room inside the job's 120-minute budget
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
+          prompt: |
+            Fix issue #${{ env.TARGET }}. Follow .github/improve-jensen.md.
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 300
+            --append-system-prompt-file .github/improve-jensen.md
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: remove the fixing label
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "$TARGET" --remove-label fixing -R ${{ github.repository }}
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"
+
+  respond:
+    if: >
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'improve-jensen')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@improve-jensen'))
+    runs-on: ${{ fromJSON(vars.IMPROVE_JENSEN_ENGINE == 'on' && '["self-hosted", "improve-jensen", "work"]' ||
+      '["self-hosted", "improve-jensen"]') }}
+    timeout-minutes: 120
+    concurrency:
+      group: improve-jensen-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    outputs:
+      gate: ${{ steps.gate.outputs.active }}
+    steps:
+      - uses: actions/checkout@v4   # persist-credentials: false for the same reason as in `fix`
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -51,8 +450,15 @@ jobs:
           label_trigger: "improve-jensen"
           branch_prefix: "improve-jensen/"
           track_progress: true
+          prompt: >-
+            ${{ vars.IMPROVE_JENSEN_ENGINE != 'on' && 'The engine is not switched on: open the PR and stop there.
+            Don''t merge, deploy or start a gate; a person merges.' || '' }}
           claude_args: |
             --model claude-opus-5-5
             --max-turns 200
             --append-system-prompt-file .github/improve-jensen.md
-            --allowedTools "Bash(pytest:*),Bash(python:*),Bash(pip:*),Bash(git:*),Bash(gh:*),Edit,Write,Read,Glob,Grep"
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
+      - name: gate status
+        id: gate
+        if: always()
+        run: python scripts/jensen_watch.py gate status --github-output "$GITHUB_OUTPUT"

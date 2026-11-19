@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable, Iterable
 
 from agent import db, events, tasks
 from agent.connectors.linear import issue_link
+from agent.core import spawned
 from agent.core.sessions import WorkItem, WorkQueue
 from agent.core.slack_markdown import post_markdown
 from agent.scrub import scrub
@@ -101,11 +102,12 @@ def record_message(conn: sqlite3.Connection, channel: str, ts: str, conversation
 
 
 def create_conversation(conn: sqlite3.Connection, *, channel: str | None, thread_ts: str | None,
-                        project: str | None, task_id: str | None = None, is_primary: int = 1) -> str:
+                        project: str | None, task_id: str | None = None, is_primary: int = 1,
+                        cwd: str | None = None) -> str:
     convo_id, now = f"V-{uuid.uuid4().hex[:12]}", db.utcnow()
-    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, created_at, "
-                 "last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                 (convo_id, channel, thread_ts, project, task_id, is_primary, now, now))
+    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, task_id, is_primary, cwd, created_at, "
+                 "last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (convo_id, channel, thread_ts, project, task_id, is_primary, cwd, now, now))
     return convo_id
 
 
@@ -227,6 +229,14 @@ class Conversations:
                 await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.working, actor="human"))
         return self._row(convo["id"])
 
+    def _unpark(self, convo_id: str, by: str | None) -> None:
+        """End the conversation's open park (core/parking.py) early: a person's message resumes it now."""
+        cur = self.conn.execute("UPDATE parks SET ended_at = ?, ended_how = 'replied' WHERE conversation_id = ? AND "
+                                "ended_at IS NULL", (db.utcnow(), convo_id))
+        if cur.rowcount:
+            events.append(self.conn, "park_ended", task_id=None, actor=by,
+                          data={"conversation_id": convo_id, "how": "replied"})
+
     def _enqueue_turn(self, convo: sqlite3.Row, text: str, actor: str | None, *, origin: str, source: str,
                       requester: str | None, follows: str | None = None, unattended: bool = False,
                       message_ts: str | None = None, reply_thread_ts: str | None = None, continuation: int = 0,
@@ -277,6 +287,7 @@ class Conversations:
         origin = await self._in_order(channel, self._slack_origin(person.key, event, is_dm))
         convo = await self._route(channel, thread_ts, is_dm)
         record_message(self.conn, channel, event["ts"], convo["id"])
+        self._unpark(convo["id"], person.key)  # their message carries the conversation on now
         if _FABLE.search(text):
             self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
             convo = self._row(convo["id"])
@@ -400,7 +411,9 @@ class Conversations:
             return
         outcome, step = result.get("outcome", "done"), int(item.payload.get("continuation") or 0)
         failures = int(item.payload.get("failures") or 0)
-        retrying = outcome in RETRY_OUTCOMES and failures < BUILD_RETRIES and self._builds(convo["id"])
+        # a spawned agent that fails is never retried by itself: it reports the failure and its parent decides
+        retrying = outcome in RETRY_OUTCOMES and failures < BUILD_RETRIES and self._builds(convo["id"]) and \
+            not spawned.is_spawned(self.conn, convo["id"])
         # cut off by a usage limit: waits for capacity and is carried on once (see resume_after_limit)
         waiting = not retrying and not item.payload.get("limit_resume") and \
             cut_by_limit(outcome, result.get("error"))
@@ -442,6 +455,8 @@ class Conversations:
                               "VALUES (?, ?, ?, ?)", (item.id, convo["id"], result.get("error"), db.utcnow()))
             events.append(self.conn, "usage_limit_cut", task_id=convo["task_id"], actor=None,
                           data={"work_item": item.id, "conversation_id": convo["id"], "error": result.get("error")})
+        if not retrying and not waiting:  # a spawned agent's last turn reports to the session that spawned it
+            self._report_to_spawner(convo, item, outcome, failed, text)
         if failed and not convo["channel"] and item.payload.get("report_to"):
             await self._report_scheduled_failure(convo, item.payload["report_to"], text)
         elif text and convo["channel"]:  # answered in the thread the message came from, else the conversation's own
@@ -455,6 +470,31 @@ class Conversations:
         if failed and task is not None and task.status == Status.working:
             await self.notifier.task_changed(tasks.transition(self.conn, task.id, Status.failed, actor="agent",
                                                               data={"outcome": outcome}))
+
+    def _report_to_spawner(self, convo: sqlite3.Row, item: WorkItem, outcome: str, failed: bool,
+                           text: str) -> str | None:
+        """Queue a finished spawned agent's report as a message in the conversation that spawned it, with the
+        spawning turn's actor and origin, so the next turn there (or the running one, mid-turn) acts on it and
+        answers in its Slack thread. Only once the agent is really finished: not while it is parked or has another
+        turn queued (the caller already holds back a retry or a usage-limit wait). Returns the new item's id, or None
+        when the conversation isn't a running spawned agent's or there is more to come in it."""
+        row = spawned.running_for_child(self.conn, convo["id"])
+        status = "failed" if failed else "done"
+        if row is None or spawned.more_to_come(self.conn, convo["id"]) or \
+                not spawned.finish(self.conn, row["id"], status, outcome, text):
+            return None
+        parent = self._row(row["parent_conversation_id"])
+        if parent is None:
+            return None
+        origin = (row["origin"] or origin_line("no Slack thread", who=row["actor"])) + \
+            f" (report from agent {row['id']})"
+        new_id = self._enqueue_turn(parent, spawned.report_text(row, status, outcome, text), row["actor"],
+                                    origin=origin, source=row["source"] or "slack", requester=row["requester"],
+                                    follows=item.id, unattended=bool(row["unattended"]))
+        events.append(self.conn, "agent_reported", task_id=parent["task_id"], actor=row["actor"],
+                      data={"agent": row["id"], "parent": parent["id"], "status": status, "outcome": outcome,
+                            "work_item": new_id})
+        return new_id
 
     def resume_after_limit(self, work_item_id: str) -> str | None:
         """Carry on a turn a usage limit cut off, once: a new turn in its conversation. Like any next turn, the
@@ -479,3 +519,17 @@ class Conversations:
         self.conn.execute("UPDATE limit_waits SET resumed_at = ?, resumed_as = ? WHERE work_item_id = ?",
                           (db.utcnow(), new_id, work_item_id))
         return new_id
+
+    def resume_parked(self, conversation_id: str, work_item_id: str, note: str) -> str | None:
+        """Carry on a conversation the agent parked (core/parking.py): a new turn in it, as whoever the parking turn
+        was for, with `note` as its text. Like any next turn, the runner resumes the session when the proxy keeps it
+        on its account, else starts a fresh one with a digest. The parking turn's own message was already answered,
+        so this turn neither reacts to it nor counts as a continuation. None when the conversation is gone."""
+        convo, item = self._row(conversation_id), self.queue.get(work_item_id)
+        if convo is None:
+            return None
+        p = item.payload if item is not None else {}
+        return self._enqueue_turn(convo, note, p.get("actor"), origin=p.get("origin") or "",
+                                  source=p.get("source") or "slack", requester=p.get("requester"),
+                                  follows=work_item_id, unattended=bool(p.get("unattended")),
+                                  reply_thread_ts=p.get("reply_thread_ts"), report_to=p.get("report_to"))

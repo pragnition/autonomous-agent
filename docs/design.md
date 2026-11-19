@@ -274,12 +274,31 @@ it to the account it last ran on. Usually it doesn't, since the limit was hit on
 fresh session with the digest handoff note instead (never `/resume` on another account). That happens once: a resumed turn that is cut off again fails like any other. A long project's build keeps its own
 retries (below) instead, and the gate holds them until there is capacity.
 
+A session can also park itself (`core/parking.py`) instead of keeping its turn alive to wait. The agent's `park`
+tool takes an optional `until` (HH:MM in the team's timezone, or an ISO date-time) and a `note`. Without `until`,
+the park waits out the whole account pool, since the turn that carries it on runs on whichever account the proxy
+gives it: it refuses while any account the proxy ranks is under its cap, and otherwise lasts until the first one
+has room again (the earliest soft-cap lift, or the reset of an account with no capacity). Core records the park in
+`parks` (event `parked`) and tells the agent when it carries on; it posts nothing in the thread itself. The agent
+then ends its turn. Every minute core carries on each park that is due, as a new turn in the same conversation with
+the agent's note (event `park_resumed`); one that fails stays open for the next minute without holding up the
+others. That turn goes through the same-account check as any next turn, and it neither reacts to the parking turn's
+message nor counts as a continuation. A person's message in the thread ends the park at once (`ended_how =
+replied`, event `park_ended`) and is the next turn itself. The `status` tool shows the conversation's account: how
+much of its 5-hour window is used, its effective cap, when the window resets and when the cap lifts, and how many
+accounts are under their cap.
+
 A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
 whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or
 losing an item revokes its session token, and the runner interrupts the session at its next heartbeat; a later
 claim of the same item runs afresh. A turn has no time or step limit: it runs until the session is done. A session
 that sends nothing for `[limits] idle_minutes` (default 30) is stuck, and the runner stops it as `stalled`. A
 scheduled run, which no one is watching, also has a time budget of `schedule_hours` (default 6) for the whole run.
+A turn whose session has background agents running (the Agent tool with `run_in_background`, or a workflow) stays
+open past its result until they finish: each one wakes the session, messages sent meanwhile are read at once, and
+the reply posts after the last one. Their progress counts against `idle_minutes`, and a stop then ends the turn at
+once. A foreground Bash call that only waits (a sleep over 10 s, `tail -f /dev/null`) is turned away by a hook
+(`runner/idle_wait.py`), since no message reaches the session while it runs.
 
 When the runner claims a turn, core refreshes its payload from the conversation as it is at that moment: the
 session to resume, the project, the checkout and the test keys. A turn queued behind another one therefore
@@ -403,7 +422,7 @@ tier. Every reply is scrubbed of secrets.
 | Tier | Tools |
 |---|---|
 | read | `status`, `list_tasks`, `get_task`, `read_thread`, `slack_read`, `kpis`, `gh_prs`, `gh_checks`, `gh_ci_log`, `gh_issue`, `gh_file`, `linear_issue` |
-| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
+| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `spawn_agent`, `park`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
 | admin | `resume_all`, `az_login` (one `<cli>_login` per `[cli.<name>]` with a `login` command), `linear_install` |
 
 - `work_on`, `open_pr` and `post_files` do local work in the runner (checkout, checks and push, reading files) and
@@ -411,6 +430,19 @@ tier. Every reply is scrubbed of secrets.
 - `ask` posts the question and marks the conversation as waiting; the person's reply arrives as the next turn.
 - `start_task(project, title, kind, brief)` starts a separate session with a self-contained brief, in the same
   thread (or, from a DM, in a new thread under a "Working on <title>" message).
+- `spawn_agent(prompt, cwd)` starts a spawned agent: its own conversation, with no Slack thread, whose turns
+  don't depend on the calling turn, so it runs on its own after that turn ends and reports back later. It returns
+  the agent's id at once. `cwd` is resolved in the runner, relative to the calling session's folder; it must exist,
+  and it stays the agent's working directory on every turn. By default the agent gets its own new folder; a `cwd`
+  inside the caller's folder shares that checkout with it, which is the caller's choice. The agent waits out a usage
+  limit and can park like any conversation. Once it is finished (its turn ended with nothing queued, parked or
+  waiting in its conversation), its outcome and final message are queued in the calling conversation as an
+  `<agent-notification>` message, with the calling turn's actor and origin line. If that conversation is idle, the
+  message starts a new turn that answers in its thread; if it is running, the message reaches it mid-turn. One that
+  fails reports the failure and isn't retried; the caller decides. A spawned agent can't spawn agents of its own, a
+  conversation can have at most 3 running at once and all conversations together 4 (a parked one counts). An agent
+  whose turn is cancelled (`stop_all`) doesn't report back. `spawned_agents` in `agent.db` records each one
+  (`core/spawned.py`).
 - `read_thread` reads the conversation's thread, or a DM chat's messages since it started.
 - `slack_read(method, params)` makes one read-only Slack Web API call with core's bot token. Allowed methods:
   `conversations.history`, `conversations.replies`, `conversations.list`, `conversations.info`, `users.info`,
@@ -567,6 +599,53 @@ Compose also reads `AGENT_NAME` and `AGENT_GIT_EMAIL` from the environment (or a
 `compose.yaml`, kept out of git) for the git identity of the agent's commits. Use the agent's name and its GitHub
 account's noreply address.
 
+## improve-jensen
+
+improve-jensen is the agent that owns this repository and keeps making the agent (Jensen, in this team's install) a
+better engineer. It runs outside the stack, as a Claude Code GitHub Action (`.github/workflows/improve-jensen.yml`)
+on five self-hosted runners on the host (one for the hourly watch, four for everything else), and reaches Claude
+through the proxy's `improve-jensen` origin. A bad deploy can break the agent, but not the agent that has to undo it.
+Nobody tells it what to improve: it works that out from the evidence. The workflow has eight jobs:
+
+- `watch`, hourly: `scripts/jensen_watch.py measure` turns the hour's turns, transcripts and the agent's PRs into
+  signals and a digest. Claude records each problem in a `jensen-watch` issue, follows the deployed improvements and
+  plans the reviews and at most one fix (`.github/improve-jensen-watch.md`).
+- `review`, one per new PR of the agent's, in any repo: reads its CI, reviews the diff for defects it can prove,
+  hands them to the agent in the conversation that made the PR (`scripts/ask_jensen.py`) and records the gap in the
+  agent's process (`.github/improve-jensen-review.md`).
+- `fix`, one at a time: ships one improvement for an issue that qualifies, through a PR, CI, a fresh review, the
+  merge, `just deploy`, the live check and a revert if the check fails (`.github/improve-jensen.md`).
+- `respond`: answers `improve-jensen` issues and `@improve-jensen` mentions under the same rules.
+- `assess`, four times a day: ranks at most ten things that hold the agent back, against the goal (enterprise-grade
+  products, little human help, long runs) and only on evidence from the agent's own work. It writes `assessment.md`
+  on the host and the pinned `jensen-assessment` issue in general terms, files issues, marks up to three `priority`
+  (the watch fixes those first), adds yardstick tasks and starts at most one project
+  (`.github/improve-jensen-assess.md`).
+- `yardstick`, nightly and after each change that alters how the agent behaves: runs the agent through a small set of
+  real tasks in throwaway folders inside `agent-runner` (`V-yardstick-` conversations, at most four at once) and
+  scores only the tasks with a mechanical check. Five synthetic seeds ship in `deploy/yardstick/`; tasks drawn from
+  real failures stay on the host. As a gate it measures one change at a time: the job that ships a change starts its
+  gate as soon as `just deploy` returns 0, each job that can ship one reports as it ends whether a gate is active, and
+  the yardstick job then runs the gate. Other behaviour changes wait, and a gate it couldn't measure yet is retried
+  after the next job. On a drop of two or more or a regression, the yardstick job comments `Yardstick gate failed
+  ...: picked to revert.` on the change's issue and `gate-revert` reverts the change; if that job dies first, the
+  watch picks the issue again. A change to the yardstick or the gate itself is merged by a person, never by
+  improve-jensen.
+- `project`, one at a time: builds a project-scale improvement over runs of up to six hours, with a design note on its
+  issue, a progress file on its `improve-jensen/project-<n>` branch and the same bar as a fix, gate included
+  (`.github/improve-jensen-project.md`).
+
+The agent and improve-jensen talk through `/var/agent/feedback/` in `agent-runner`. The agent writes a short note
+there when something in its setup gets in its way. The watch reads new notes as evidence, records them on issues in
+general terms and answers in the note with a `Status:` line. After each deploy that changes how the agent behaves,
+improve-jensen adds a plain-words line to `CHANGES.md` there, which the agent reads when its setup seems different.
+
+An improvement counts only when its evidence goes away: the issue keeps `fix-deployed` until `jensen_watch.py count`
+shows the signal fixed for three days. improve-jensen's state stays on the host, in `~/.local/state/improve-jensen/`
+(windows, metrics, evidence, deploys, the plan, the digests, the assessments, the yardstick's tasks and results,
+and the gate record; metrics and digests are kept 30 days). Conversations, people and products never go into this
+public repo. Host setup and switch-on: `deploy/improve-jensen.md`.
+
 ## Operations
 
 | Command | What it does |
@@ -575,6 +654,7 @@ account's noreply address.
 | `just down` | stops and removes the stack; data stays under `data/` |
 | `just doctor` | in core: config, packs, each required secret, the proxy (verified accounts, capacity), each pack's checks, GitHub read access per repo, Linear states per pack, the runner token. In the agent container: `gh auth status` and `az account show` |
 | `just smoke` | queues one turn ("reply with pong") with no Slack thread and waits up to 5 minutes for the answer: core, runner, proxy and Claude end to end |
+| `just deploy` | in the live checkout: fetches `main`, rebuilds only the services the change touches (waiting for an idle runner before `agent`), then checks the stack live. Exit 0 deployed, 1 check failed, 2 checkout not deployable, 3 pending |
 | `just dashboard-serve` | `tailscale serve --bg --https=9443 http://127.0.0.1:18086`: the dashboard at `https://<node>.<tailnet>.ts.net:9443`, tailnet only |
 | `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `supervisor-standby`, `relay`) |
 | `just kpis [--days N] [--project P]` | prints the KPIs |

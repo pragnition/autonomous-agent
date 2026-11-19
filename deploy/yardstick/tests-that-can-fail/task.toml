@@ -1,0 +1,11 @@
+prompt = """
+Add a function reserve(item, qty) to inventory.py in this repo, with tests. The contract:
+
+- reserve(item, qty) lowers the item's stock by qty and returns the stock that is left;
+- reserving exactly what is left is allowed, and leaves the item at zero;
+- a reservation that would take the stock below zero raises ValueError and leaves the stock as it was;
+- an unknown item raises ValueError, as available() does.
+
+Put your tests in test_*.py files at the top level of this folder, not in a subfolder.
+"""
+time_limit_min = 20

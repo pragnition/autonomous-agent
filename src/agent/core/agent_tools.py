@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agent import db, events, tasks
+from agent.core import spawned
 from agent.core.conversations import create_conversation, origin_line, record_message
 from agent.core.slack_markdown import post_markdown
 from agent.scrub import scrub
@@ -79,6 +80,8 @@ class AgentToolRouter:
         self.turn_payload = turn_payload or (lambda convo_id, text, actor, unattended:
                                              {"text": text, "actor": actor, "unattended": unattended})
         self._tools: dict[str, tuple[ToolSpec, Handler]] = {}
+        # more lines for the status tool, each from a module with its own state (core/parking.py: the account's use)
+        self.status_lines: list[Callable[[ToolContext], Awaitable[list[str]]]] = []
         self._register_builtins()
 
     # registry
@@ -196,7 +199,21 @@ class AgentToolRouter:
                                    "split one request into parallel tasks.",
                      s({"project": "string", "title": "string", "kind": "string", "brief": "string"}), "act"),
             self._start_task)
-        reg(ToolSpec("status", "What is running and queued, and whether the agent is paused.", s(), "read"),
+        reg(ToolSpec("spawn_agent", "Start a spawned agent: a separate session that works on its own after your "
+                                    "turn and reports back later in a new turn here. Returns its id at once. When it "
+                                    "finishes, its final message arrives in this conversation as an "
+                                    "<agent-notification> and starts a new turn here if you've ended yours, so don't "
+                                    "wait for it. Background agents (the Agent tool with run_in_background) keep your "
+                                    "session open instead, and your reply posts when they finish. The brief must be "
+                                    "self-contained: the agent doesn't see this conversation. At most 3 per "
+                                    "conversation and 4 overall run at once, and one that fails isn't retried. cwd: "
+                                    "the directory it works in (relative to your folder, or absolute); by default its "
+                                    "own new folder. A cwd in your folder (a clone of yours) shares that checkout "
+                                    "with you: only do that when you want it to work on your checkout, and don't "
+                                    "change the same files meanwhile.",
+                     s({"prompt": "string"}, {"cwd": "string"}), "act"), self._spawn_agent)
+        reg(ToolSpec("status", "What is running and queued, whether the agent is paused, and how much of its 5-hour "
+                               "window this session's account has used.", s(), "read"),
             self._status)
         reg(ToolSpec("list_tasks", "List tasks, optionally by status or project.",
                      s(optional={"status": "string", "project": "string"}), "read"), self._list_tasks)
@@ -299,6 +316,41 @@ class AgentToolRouter:
         await self.notifier.task_changed(task)
         return ToolReply(f"Started {task.id} ({task.title}) in a new session for {project}.")
 
+    async def _spawn_agent(self, ctx, args) -> ToolReply:
+        prompt = str(args.get("prompt") or "").strip()
+        if not prompt:
+            return ToolReply("spawn_agent needs a prompt: the agent's self-contained brief")
+        if not ctx.conversation_id:
+            return ToolReply("spawn_agent needs a conversation to report back to")
+        if spawned.is_spawned(self.conn, ctx.conversation_id):
+            return ToolReply("a spawned agent can't spawn agents of its own; do the work in this session")
+        if spawned.running_count(self.conn, ctx.conversation_id) >= spawned.MAX_RUNNING:
+            return ToolReply(f"{spawned.MAX_RUNNING} agents you spawned are still running, the most one conversation "
+                             "may have at once: wait for one to report back before spawning another, or do the work "
+                             "yourself")
+        if spawned.running_total(self.conn) >= spawned.MAX_RUNNING_ALL:
+            return ToolReply(f"{spawned.MAX_RUNNING_ALL} spawned agents are running already, the most at once across "
+                             "every conversation: do the work yourself, or spawn it once one of yours reports back")
+        cwd = str(args.get("cwd") or "").strip() or None  # the runner makes it absolute and checks it exists
+        agent_id = spawned.new_id()
+        child = create_conversation(self.conn, channel=None, thread_ts=None, project=ctx.project, is_primary=0,
+                                    cwd=cwd)
+        asked = self._payload(ctx)
+        payload = self.turn_payload(child, spawned.CHILD_NOTE.format(id=agent_id) + prompt, ctx.actor,
+                                    ctx.unattended)
+        mark = f" (spawned by {self.config.name} as agent {agent_id})"
+        origin = asked.get("origin") or origin_line(ctx.channel or "no Slack thread", who=ctx.actor)
+        payload.update(origin=origin + mark, source=asked.get("source") or "slack",
+                       requester=asked.get("requester", ctx.actor), follows=ctx.work_item_id, spawned_agent=agent_id)
+        spawned.record(self.conn, agent_id=agent_id, parent_conversation_id=ctx.conversation_id,
+                       child_conversation_id=child, spawned_by=ctx.work_item_id, prompt=prompt, cwd=cwd,
+                       parent={"actor": ctx.actor, "unattended": ctx.unattended, "origin": asked.get("origin"),
+                               "source": asked.get("source"), "requester": asked.get("requester", ctx.actor)})
+        self.queue.enqueue(child, "turn", payload)
+        return ToolReply(f"Spawned agent {agent_id}. It runs on its own and keeps going after your turn ends; its "
+                         "report arrives here as an <agent-notification> when it finishes. Don't wait for it: carry "
+                         "on, or end your turn if there's nothing else to do now.")
+
     def _handover_origin(self, ctx: ToolContext) -> str:
         """A hand-over turn's first line: the calling turn's own (who sent its message, where and the link), marked
         as handed over once however often it is handed on. A calling turn without one gives its actor and channel."""
@@ -321,6 +373,11 @@ class AgentToolRouter:
         lines = [f"paused: {'yes' if paused else 'no'}",
                  f"running: {len(running)}" + (f" ({', '.join(_running(*r) for r in running)})" if running else ""),
                  f"queued: {queued}", f"open tasks: {open_tasks}"]
+        for more in self.status_lines:
+            try:
+                lines += await more(ctx)
+            except Exception:  # an extra line never costs the agent the rest of its status
+                log.exception("a status line failed")
         return ToolReply("\n".join(lines))
 
     async def _list_tasks(self, ctx, args) -> ToolReply:

@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     is_primary INTEGER NOT NULL DEFAULT 1,
     waiting INTEGER NOT NULL DEFAULT 0,
     model TEXT,
+    cwd TEXT,              -- a spawned agent's working directory (absolute, in the agent container); NULL: its own folder
     created_at TEXT NOT NULL,
     last_active_at TEXT NOT NULL
 );
@@ -229,6 +230,41 @@ CREATE TABLE IF NOT EXISTS limit_waits (
     resumed_at TEXT,
     resumed_as TEXT                -- the work item that carried it on
 );
+-- A conversation the agent parked until a time (core/parking.py): at until_at core carries it on in a new turn; a
+-- person's reply in its thread ends it earlier
+CREATE TABLE IF NOT EXISTS parks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,    -- the turn that parked it
+    until_at TEXT NOT NULL,        -- UTC, as db.utcnow() writes it
+    note TEXT,                     -- the agent's own note for the turn that carries on
+    created_at TEXT NOT NULL,
+    ended_at TEXT,
+    ended_how TEXT,                -- resumed | replied | replaced
+    resumed_as TEXT                -- the work item that carried it on
+);
+CREATE INDEX IF NOT EXISTS parks_open ON parks(ended_at, until_at);
+-- Sessions a session started with spawn_agent: each its own conversation, reporting back to the one that spawned it
+-- when its last turn ends (core/spawned.py)
+CREATE TABLE IF NOT EXISTS spawned_agents (
+    id TEXT PRIMARY KEY,                   -- A-xxxxxxxx
+    parent_conversation_id TEXT NOT NULL,
+    child_conversation_id TEXT NOT NULL UNIQUE,
+    spawned_by TEXT,                       -- the spawning turn's work item
+    actor TEXT,                            -- the spawning turn's actor, source and origin: the report-back turn's too
+    unattended INTEGER NOT NULL DEFAULT 0,
+    origin TEXT,
+    source TEXT,
+    requester TEXT,
+    prompt TEXT NOT NULL,
+    cwd TEXT,
+    status TEXT NOT NULL DEFAULT 'running', -- running | done | failed | cancelled
+    outcome TEXT,
+    result TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS spawned_agents_parent ON spawned_agents(parent_conversation_id, status);
 """
 
 
@@ -248,7 +284,8 @@ def connect(path: Path | str) -> sqlite3.Connection:
 # Columns added to tables a live install already has; CREATE TABLE IF NOT EXISTS leaves those tables as they were
 ADDED_COLUMNS = [("request_labels", "project", "TEXT"), ("request_labels", "version", "INTEGER NOT NULL DEFAULT 1"),
                  ("task_records", "project", "TEXT"), ("llm_usage", "cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"),
-                 ("work_items", "delivered_into", "TEXT"), ("conversations", "session_account", "TEXT")]
+                 ("work_items", "delivered_into", "TEXT"), ("conversations", "session_account", "TEXT"),
+                 ("conversations", "cwd", "TEXT")]
 # Filled in once, when the column is added: a conversation's session ran on the account its last run recorded
 BACKFILLS = {("conversations", "session_account"):
              "UPDATE conversations SET session_account = (SELECT r.account_code FROM runs r "

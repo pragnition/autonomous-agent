@@ -2,7 +2,7 @@ from agent import db
 
 TABLES = {"tasks", "runs", "events", "pr_stats", "slack_events", "settings", "work_items", "tokens", "llm_usage",
           "conversations", "slack_messages", "linear_issues", "linear_issue_conversations",
-          "agent_prs", "request_labels", "task_records", "projects", "limit_waits"}
+          "agent_prs", "request_labels", "task_records", "projects", "limit_waits", "parks", "spawned_agents"}
 
 
 def columns(conn, table: str) -> set[str]:
@@ -21,8 +21,8 @@ def test_fresh_database_has_every_table_and_column(tmp_path):
                                            "attempts", "result", "created_at", "updated_at", "delivered_into"}
     assert columns(conn, "tokens") == {"hash", "kind", "work_item_id", "expires_at", "revoked"}
     assert columns(conn, "conversations") == {"id", "channel", "thread_ts", "project", "task_id", "session_id",
-                                              "session_account", "is_primary", "waiting", "model", "created_at",
-                                              "last_active_at"}
+                                              "session_account", "is_primary", "waiting", "model", "cwd",
+                                              "created_at", "last_active_at"}
     assert columns(conn, "slack_messages") == {"channel", "ts", "conversation_id"}
     assert conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0
 

@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Pass when answers.md names the model-call URL, the memory folder, the Slack file-posting tool
+and the feedback-notes folder."""
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+REQUIRED = ("172.30.0.10:8087/llm", "/var/agent/memory", "post_files", "/var/agent/feedback")
+
+
+def main() -> int:
+    answers = ROOT / "answers.md"
+    if not answers.exists():
+        print("answers.md is missing")
+        return 1
+
+    text = answers.read_text()
+    missing = [term for term in REQUIRED if term not in text]
+    if missing:
+        print(f"answers.md is missing: {', '.join(missing)}")
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

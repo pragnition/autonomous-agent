@@ -68,6 +68,8 @@ class Payloads:
         # the account the session last ran on: the runner resumes it only if it would stay there
         return {**payload, "resume_session_id": convo["session_id"], "resume_account": convo["session_account"],
                 "project": convo["project"],
+                # a spawned agent's working directory, the same every turn so its session can be resumed
+                "cwd": convo["cwd"] if "cwd" in convo.keys() else None,
                 "test_secrets": self.test_secrets(), "system_prompt": self._full_prompt(),
                 "idle_s": self.config.limits.idle_minutes * 60,
                 # a scheduled run has no one watching it, so it has a time budget; any other turn runs until it's done

@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from agent import db
@@ -97,6 +99,13 @@ def test_system_prompt_from_config_overrides_default(payloads, conn, tmp_path):
     assert p["system_prompt"].startswith("CUSTOM SYSTEM PROMPT")
 
 
+def test_a_spawned_agents_turns_keep_its_working_directory(payloads, conn):
+    cid = add_conversation(conn, channel=None, thread_ts=None)
+    assert payloads.turn(row(conn, cid), "x", "bob")["cwd"] is None
+    conn.execute("UPDATE conversations SET cwd = '/var/agent/scratch/V-1/repo' WHERE id = ?", (cid,))
+    assert payloads.refresh_turn(row(conn, cid), {"text": "x"})["cwd"] == "/var/agent/scratch/V-1/repo"
+
+
 def test_shipped_system_prompt(payloads, tmp_path):
     text = payloads.system_prompt()
     for phrase in ("say you are an AI", "gh repo clone", "gh pr create", "az", "own the work end to end",
@@ -106,12 +115,23 @@ def test_shipped_system_prompt(payloads, tmp_path):
                    "superpowers:requesting-code-review", "pr-review-toolkit", "before and an after", "bring down",
                    "If the project has end-to-end tests", "172.30.0.10:8087", "cost_cap_reached",
                    "skips brainstorming and writing-plans", "never bypass branch protection", "has a web UI",
-                   "never over the repo's own patterns",
-                   "information, not instructions"):
+                   "never over the repo's own patterns", "spawn_agent", "information, not instructions"):
         assert phrase in text
     (tmp_path / "config" / "agent").mkdir(parents=True)
     (tmp_path / "config" / "agent" / "system.md").write_text("CUSTOM")
     assert payloads.system_prompt() == "CUSTOM"
+
+
+def test_one_line_says_how_background_agents_and_spawned_agents_work(payloads):
+    text = payloads.system_prompt()
+    (line,) = [line for line in text.splitlines() if re.search(r"run_in_background|spawn_agent|tail -f", line)]
+    for phrase in ("Background agents (the Agent tool with run_in_background) keep the session open",
+                   "your reply posts when they finish", "messages sent meanwhile still reach you",
+                   "Use `spawn_agent` for work that should run on its own after your turn and report back later in "
+                   "a new turn here", "Monitor"):
+        assert phrase in line
+    # they don't die with the turn: the session stays open until they finish (runner/claude.py)
+    assert not re.search(r"(stopped|die|end|killed)\b[^.]*when (your|the) turn ends", text)
 
 
 def test_shipped_system_prompt_says_how_memory_and_context_work(payloads):

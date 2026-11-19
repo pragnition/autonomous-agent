@@ -1,6 +1,6 @@
 """core's tools as in-process SDK tools. The tool code runs in the runner's process, so the session token stays
-out of the session's environment, files and command lines. One tool does local work: post_files reads files from
-the session folder."""
+out of the session's environment, files and command lines. Two tools do local work: post_files reads files from
+the session folder, and spawn_agent makes its cwd absolute."""
 
 from __future__ import annotations
 
@@ -49,7 +49,16 @@ def remote_sdk_tools(manifest: list[dict], link, tok: str, *, session_dir: Path)
                     "saw them. Attach them where the request came from (e.g. the Linear issue) if they matter.")
         return f"posted {len(items)} file(s)"
 
-    local = {"post_files": post_files}
+    async def spawn_agent(args: dict) -> str:
+        raw = str(args.get("cwd") or "").strip()
+        if raw:  # core can't see this machine's folders: the directory is made absolute and checked here
+            path = (Path(raw) if Path(raw).is_absolute() else session_dir / raw).resolve()
+            if not path.is_dir():
+                return f"no such directory: {raw}"
+            args = {**args, "cwd": str(path)}
+        return await forward("spawn_agent", args)
+
+    local = {"post_files": post_files, "spawn_agent": spawn_agent}
     tools = []
     for entry in manifest:
         name = entry["name"]
