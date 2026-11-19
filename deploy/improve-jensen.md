@@ -302,7 +302,9 @@ tasks that aren't there yet.
 - A `watch` run, a `fix` run for one of this repo's issues, an `assess` run, and a `yardstick` run are safe to start
   by hand. A `project` run takes a `project` issue's number as its `target`.
 - A gate run is improve-jensen's own. When a watch, fix, project or respond job ends with a gate active (it ran
-  `gate start` after a change), the same run's `yardstick` job measures that change, and a failed gate reverts it.
+  `gate start` after a change), the same run's `yardstick` job measures that change. A failed gate gets a
+  `Yardstick gate failed ...: picked to revert.` comment on its issue, and the same run's `gate-revert` job reverts
+  it; if that job dies first, the hourly watch picks the issue again.
   A manual `yardstick` run never gates or reverts anything: start one only while
   `python3 scripts/jensen_watch.py gate status` (in `~/autonomous-agent`) shows none, so it isn't compared with the
   change being measured.

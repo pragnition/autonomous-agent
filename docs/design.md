@@ -573,7 +573,7 @@ improve-jensen is the agent that owns this repository and keeps making the agent
 better engineer. It runs outside the stack, as a Claude Code GitHub Action (`.github/workflows/improve-jensen.yml`)
 on five self-hosted runners on the host (one for the hourly watch, four for everything else), and reaches Claude
 through the proxy's `improve-jensen` origin. A bad deploy can break the agent, but not the agent that has to undo it.
-Nobody tells it what to improve: it works that out from the evidence. The workflow has seven jobs:
+Nobody tells it what to improve: it works that out from the evidence. The workflow has eight jobs:
 
 - `watch`, hourly: `scripts/jensen_watch.py measure` turns the hour's turns, transcripts and the agent's PRs into
   signals and a digest. Claude records each problem in a `jensen-watch` issue, follows the deployed improvements and
@@ -593,9 +593,12 @@ Nobody tells it what to improve: it works that out from the evidence. The workfl
   real tasks in throwaway folders inside `agent-runner` (`V-yardstick-` conversations, at most four at once) and
   scores only the tasks with a mechanical check. Five synthetic seeds ship in `deploy/yardstick/`; tasks drawn from
   real failures stay on the host. As a gate it measures one change at a time: the job that ships a change starts its
-  gate, each job that can ship one reports as it ends whether a gate is active, and the yardstick job then runs the
-  gate. Other behaviour changes wait, a gate it couldn't measure yet is retried after the next job, and the change is
-  reverted on a drop of two or more or a regression.
+  gate as soon as `just deploy` returns 0, each job that can ship one reports as it ends whether a gate is active, and
+  the yardstick job then runs the gate. Other behaviour changes wait, and a gate it couldn't measure yet is retried
+  after the next job. On a drop of two or more or a regression, the yardstick job comments `Yardstick gate failed
+  ...: picked to revert.` on the change's issue and `gate-revert` reverts the change; if that job dies first, the
+  watch picks the issue again. A change to the yardstick or the gate itself is merged by a person, never by
+  improve-jensen.
 - `project`, one at a time: builds a project-scale improvement over runs of up to six hours, with a design note on its
   issue, a progress file on its `improve-jensen/project-<n>` branch and the same bar as a fix, gate included
   (`.github/improve-jensen-project.md`).
