@@ -682,7 +682,7 @@ def test_poll_finds_unfinished_runs_by_status_however_old(tmp_path, monkeypatch)
 
     assert poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0) == {"fix": None, "project": None}
     assert [c[5] for c in gh.calls if c[:2] == ["run", "list"]] == [
-        "in_progress", "queued", "waiting", "pending", "requested"]
+        "in_progress", "queued", "waiting", "requested"]
     assert [c[2] for c in gh.calls if c[:2] == ["run", "view"]] == ["10", "11"]
 
 
