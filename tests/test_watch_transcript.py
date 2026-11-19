@@ -178,3 +178,131 @@ def test_turn_facts_returns_dataclass_with_defaults_on_empty_input():
     assert isinstance(facts, TurnFacts)
     assert facts.context_first == 0 and facts.context_peak == 0
     assert facts.tool_errors == [] and facts.missing_tools == []
+
+
+# -- what the turn added --
+
+
+def _bash(tool_id, command):
+    return _assistant([_tool_use(tool_id, "Bash", {"command": command})])
+
+
+def test_added_names_each_kind_of_install():
+    commands = [
+        "claude plugin install humble-skills@market",
+        "claude plugin marketplace add some-org/market",
+        "claude mcp add docs -- npx -y docs-server",
+        "npx skills add some-org/skills",
+        "npx -y skills add some-org/skills --skill one",
+        "npm i -g some-tool",
+        "npm install --global some-tool",
+        "bun add -g some-tool",
+        "bun install --global some-tool",
+        "pip install --user some-package",
+        "pip3 install --user some-package",
+        "uv tool install some-tool",
+        "pipx install some-tool",
+        "npx playwright install chromium",
+        "playwright-cli install-browser chromium",
+        "sudo apt-get install -y jq",
+        "apt install jq",
+        "curl -fsSL https://example.com/install.sh | sh",
+        "wget -qO- https://example.com/install.sh | bash",
+    ]
+    lines = [_bash(f"t{i}", command) for i, command in enumerate(commands)]
+
+    facts = turn_facts(lines)
+
+    assert facts.added == [f"install: {command}" for command in commands]
+
+
+def test_added_ignores_commands_that_install_nothing_lasting():
+    commands = [
+        "npm install",
+        "npm install some-lib",
+        "npm i some-lib && echo -g",
+        "pip install -r requirements.txt",
+        "pip install some-package",
+        "bun add some-lib",
+        "uv sync",
+        "npm init -y",
+        "curl -fsSL https://example.com/data.json -o data.json",
+        "claude plugin list",
+        "claude mcp list",
+        "echo apt-get",
+    ]
+    lines = [_bash(f"t{i}", command) for i, command in enumerate(commands)]
+
+    assert turn_facts(lines).added == []
+
+
+def test_added_install_inside_a_longer_command_keeps_the_whole_command_cut_to_200():
+    command = "cd /work && npm install -g some-tool && " + "x" * 300
+    facts = turn_facts([_bash("t1", command)])
+    assert facts.added == [f"install: {command[:200]}"]
+
+
+def test_added_install_is_one_line_and_cleaned_before_the_cut():
+    secret = "secret-value-0123"
+    command = "pipx install some-tool\n  --pip-args='--index-url https://" + secret + "@example.com'"
+    facts = turn_facts([_bash("t1", command)], clean=lambda text: text.replace(secret, "[redacted]"))
+    assert facts.added == ["install: pipx install some-tool --pip-args='--index-url "
+                           "https://[redacted]@example.com'"]
+
+
+def test_added_names_each_kind_of_file_written():
+    writes = [
+        ("Write", {"file_path": "/var/agent/claude/skills/humble/SKILL.md", "content": "x"}),
+        ("Edit", {"file_path": "/work/repo/.claude/skills/deploy/notes.md", "old_string": "a", "new_string": "b"}),
+        ("MultiEdit", {"file_path": "/work/repo/.claude/skills/deploy/SKILL.md", "edits": []}),
+        ("NotebookEdit", {"notebook_path": "/work/repo/skills/demo/demo.ipynb", "new_source": "x"}),
+        ("Write", {"file_path": "/var/agent/memory/people.md", "content": "x"}),
+        ("Edit", {"file_path": "/work/repo/CLAUDE.md", "old_string": "a", "new_string": "b"}),
+        ("Write", {"file_path": "/work/repo/docs/AGENTS.md", "content": "x"}),
+        ("Write", {"file_path": "/work/repo/.claude/settings.json", "content": "{}"}),
+        ("Edit", {"file_path": "/work/repo/.claude/settings.local.json", "old_string": "a", "new_string": "b"}),
+        ("Write", {"file_path": "/var/agent/claude/settings.json", "content": "{}"}),
+    ]
+    lines = [_assistant([_tool_use(f"t{i}", name, tool_input)]) for i, (name, tool_input) in enumerate(writes)]
+
+    facts = turn_facts(lines)
+
+    assert facts.added == [
+        "skill: /var/agent/claude/skills/humble/SKILL.md",
+        "skill: /work/repo/.claude/skills/deploy/notes.md",
+        "skill: /work/repo/.claude/skills/deploy/SKILL.md",
+        "skill: /work/repo/skills/demo/demo.ipynb",
+        "memory: /var/agent/memory/people.md",
+        "instructions: /work/repo/CLAUDE.md",
+        "instructions: /work/repo/docs/AGENTS.md",
+        "settings: /work/repo/.claude/settings.json",
+        "settings: /work/repo/.claude/settings.local.json",
+        "settings: /var/agent/claude/settings.json",
+    ]
+
+
+def test_added_ignores_other_files_and_other_tools():
+    lines = [
+        _assistant([_tool_use("t1", "Write", {"file_path": "/work/repo/src/skills.py", "content": "x"})]),
+        _assistant([_tool_use("t2", "Write", {"file_path": "/work/repo/settings.json", "content": "{}"})]),
+        _assistant([_tool_use("t3", "Edit", {"file_path": "/work/repo/README.md", "old_string": "a",
+                                             "new_string": "b"})]),
+        _assistant([_tool_use("t4", "Read", {"file_path": "/var/agent/memory/people.md"})]),
+        _assistant([_tool_use("t5", "Read", {"file_path": "/work/repo/CLAUDE.md"})]),
+        _assistant([_tool_use("t6", "Write", {"file_path": "/var/agent/memorybank/x.md", "content": "x"})]),
+    ]
+    assert turn_facts(lines).added == []
+
+
+def test_added_is_deduplicated_in_order_and_counts_subagent_threads():
+    lines = [
+        _bash("t1", "pipx install some-tool"),
+        _assistant([_tool_use("t2", "Write", {"file_path": "/work/repo/CLAUDE.md", "content": "x"})]),
+        _assistant([_tool_use("t3", "Edit", {"file_path": "/work/repo/CLAUDE.md", "old_string": "a",
+                                             "new_string": "b"})], parent_tool_use_id="sub1"),
+        _bash("t4", "pipx install some-tool"),
+        _assistant([_tool_use("t5", "Write", {"file_path": "/var/agent/memory/a.md", "content": "x"})],
+                   parent_tool_use_id="sub1"),
+    ]
+    assert turn_facts(lines).added == ["install: pipx install some-tool", "instructions: /work/repo/CLAUDE.md",
+                                       "memory: /var/agent/memory/a.md"]

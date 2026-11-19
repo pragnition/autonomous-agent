@@ -11,6 +11,13 @@ measurement.
 tool output and error text before anything is cut to length: a secret holding a `"` or `\\` is escaped in the raw
 JSON line, where a scrub of the raw line can't match it, and once a line is cut a prefix of it is too short to
 match at all.
+
+`added` names what a turn added that outlives it, for the assessment's "what worked that Jensen should keep?": a
+Bash command that installs something lasting (a Claude plugin, marketplace or MCP server, a skills pack, a global
+npm or bun package, a user pip package, a uv or pipx tool, Playwright's browsers, an apt package, a script piped
+from curl or wget into a shell), and a file written under a `skills/` folder, in Jensen's memory, named `CLAUDE.md`
+or `AGENTS.md`, or a Claude settings file. A project-local `npm install` or `pip install -r` adds nothing lasting
+and isn't named. Each is named once, in the order first seen, from the main thread and subagents alike.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ import json
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
 
 # Tools that hand work to a subagent.
@@ -41,6 +49,34 @@ _HEREDOC_RE = re.compile(r"<<-?\s*['\"]?\w+['\"]?")
 
 _GH_CLONE_RE = re.compile(r"gh repo clone\s+(\S+)")
 _GIT_CLONE_RE = re.compile(r"git clone\s+(\S+)")
+
+# A Bash command installs something lasting when one of its parts (split on `&&`, `||`, `;`, `|` and newlines)
+# matches one of these. `npm`/`bun` count only with `-g`/`--global` and `pip` only with `--user` in the same part:
+# without them they install into the project, which adds nothing to Jensen.
+_INSTALL_RES = tuple(re.compile(pattern) for pattern in (
+    r"\bclaude\s+plugins?\s+(?:install|marketplace\s+add)\b",
+    r"\bclaude\s+mcp\s+add\b",
+    r"\bnpx\s+(?:(?:-y|--yes)\s+)?skills(?:@\S+)?\s+add\b",
+    r"\buv\s+tool\s+install\b",
+    r"\bpipx\s+install\b",
+    r"\bplaywright(?:-cli)?\s+install(?:-browser)?\b",
+    r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\b",
+))
+_GLOBAL_INSTALL_RE = re.compile(r"\b(?:npm\s+(?:i|install)|bun\s+(?:add|install))\b")
+_GLOBAL_FLAG_RE = re.compile(r"(?:^|\s)(?:-g|--global)(?=\s|$)")
+_PIP_INSTALL_RE = re.compile(r"\bpip3?\s+install\b")
+_USER_FLAG_RE = re.compile(r"(?:^|\s)--user(?=\s|$)")
+_COMMAND_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")
+# A script fetched and piped straight into a shell, which needs the pipe the split above would cut.
+_PIPE_TO_SHELL_RE = re.compile(r"\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba)?sh\b")
+_INSTALL_CHARS = 200
+
+# The tools that write a file, and the input key naming it.
+_FILE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
+_MEMORY_DIR = "/var/agent/memory/"
+_CLAUDE_HOME = "/var/agent/claude/"
+_INSTRUCTION_FILES = {"CLAUDE.md", "AGENTS.md"}
+_SETTINGS_FILES = {"settings.json", "settings.local.json"}
 
 
 def normalise_error(text: str) -> str:
@@ -72,6 +108,7 @@ class TurnFacts:
     prs_created: list[str] = field(default_factory=list)
     tool_lines: list[str] = field(default_factory=list)
     error_lines: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
 
 
 def _as_dict(value: Any) -> dict:
@@ -122,6 +159,50 @@ def _extract_clone(command: str) -> str | None:
     git_match = _GIT_CLONE_RE.search(command)
     if git_match:
         return _repo_from_clone_url(git_match.group(1))
+    return None
+
+
+def _is_install(command: str) -> bool:
+    if _PIPE_TO_SHELL_RE.search(command):
+        return True
+    for part in _COMMAND_SPLIT_RE.split(command):
+        if any(pattern.search(part) for pattern in _INSTALL_RES):
+            return True
+        if _GLOBAL_INSTALL_RE.search(part) and _GLOBAL_FLAG_RE.search(part):
+            return True
+        if _PIP_INSTALL_RE.search(part) and _USER_FLAG_RE.search(part):
+            return True
+    return False
+
+
+def _added_file(path: str) -> str | None:
+    """What a file written at `path` adds (`skill`, `memory`, `instructions` or `settings`), or `None`."""
+    parts = PurePosixPath(path).parts
+    name = parts[-1] if parts else ""
+    if path.startswith(_MEMORY_DIR):
+        return "memory"
+    if "skills" in parts[:-1]:
+        return "skill"
+    if name in _INSTRUCTION_FILES:
+        return "instructions"
+    if name in _SETTINGS_FILES and (".claude" in parts[:-1] or path.startswith(_CLAUDE_HOME)):
+        return "settings"
+    return None
+
+
+def _added_line(name: str, tool_input: Any, clean: Callable[[str], str]) -> str | None:
+    """The `added` line for one tool call, or `None` when it adds nothing lasting. Whitespace is collapsed, so a
+    multi-line command is still one line."""
+    tool_input = _as_dict(tool_input)
+    if name == "Bash":
+        command = str(tool_input.get("command", ""))
+        if _is_install(command):
+            return f"install: {' '.join(clean(command).split())[:_INSTALL_CHARS]}"
+    elif name in _FILE_TOOLS:
+        path = tool_input.get(_FILE_TOOLS[name])
+        kind = _added_file(path) if isinstance(path, str) else None
+        if kind:
+            return f"{kind}: {' '.join(clean(path).split())}"
     return None
 
 
@@ -179,6 +260,10 @@ def turn_facts(lines: Iterable[str], *, tool_chars: int = 300, error_chars: int 
                         command = str(_as_dict(tool_input).get("command", ""))
                         if _is_heredoc_write(command):
                             facts.inline_code_chars += len(command)
+
+                added = _added_line(name, tool_input, clean)
+                if added and added not in facts.added:
+                    facts.added.append(added)
 
                 if name == "Bash":
                     clone = _extract_clone(str(_as_dict(tool_input).get("command", "")))
