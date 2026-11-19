@@ -148,16 +148,21 @@ cwd = "/var/agent/bridges/outlook-bridge"    # an existing absolute directory
 A task in the runner process (`agent/runner/services.py`), started whether or not there is a runner token yet,
 reads the file every 30 s and reconciles: it starts new services, stops removed ones (SIGTERM to the service's
 process group, SIGKILL after 10 s) and restarts one whose `cmd` or `cwd` changed. A service that exits is started
-again after 5 s, doubling up to 5 minutes, and back to 5 s once a run has lasted 10 minutes. A missing or invalid
-file means no services and an invalid entry is left out, each logged once; nothing in the supervisor can stop the
-runner. A service gets the runner's environment (so the `agent.env` keys) and its own process group. While the
+again after 5 s, doubling up to 5 minutes, and back to 5 s once a run has lasted 10 minutes. A missing file means
+no services. A file that can't be read or parsed keeps the services it listed last (none right after the runner
+starts), and the problem is logged once to the runner's log and once into each running service's `.out`; an invalid
+entry is left out. Nothing in the supervisor can stop the runner. A service gets the runner's environment (so the `agent.env` keys) and its own process group. While the
 runner runs a service it holds an exclusive `flock` on `run/<name>.lock`, so a second runner can't start another
 copy, and keeps its pid in `run/<name>.pid`. Before a service's first start in a runner's life, any process with
 exactly the same argv and working directory (from `/proc`) is stopped, which takes over a copy the agent started by
-hand. A service's stdout and stderr go to `run/<name>.out` with the runner's own start, exit and stop lines,
+hand; a process in the group of a service the runner started is never taken for one, so two services with the same
+command can't stop each other. A service's stdout and stderr go to `run/<name>.out` with the runner's own start, exit and stop lines,
 rotated to `.out.1` at 5 MB; the runner's log has each start, exit code and restart, never the arguments or
-environment. On SIGTERM the runner stops every service before it exits. The container runs with `init: true`, so an
-init process is PID 1 and reaps the orphans sessions leave behind.
+environment. Every one of these files is opened without blocking and must be a regular file: a FIFO or a device in
+its place is refused, since a blocking open would freeze the runner's event loop. On SIGTERM the runner stops every
+service before it exits (the service has `stop_grace_period: 30s`, so Docker waits for that). The container runs
+with `init: true`, so an init process is PID 1 and reaps the orphans sessions leave behind; the runner is no longer
+PID 1, so a broad `pkill` or `kill -1` in the container would kill it, and the prompt tells the agent never to.
 
 ### docker (dind)
 

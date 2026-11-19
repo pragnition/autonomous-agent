@@ -10,29 +10,36 @@ The agent lists them in /var/agent/services.toml:
 Every 30 s the supervisor reads the file again and reconciles: it starts the services that are new, stops the ones
 that are gone (SIGTERM to the service's process group, SIGKILL after 10 s) and restarts a service whose command or
 folder changed. A service that exits is started again after a backoff: 5 s, doubling to 5 minutes, and back to 5 s
-once a run has lasted 10 minutes. A missing or invalid file means no services and an invalid entry is left out; each
-is logged once, and nothing here ever stops the runner.
+once a run has lasted 10 minutes. A missing file means no services. A file that can't be read or parsed keeps the
+services it listed last (none right after the runner starts), and an invalid entry is left out; each problem is
+logged once, and nothing here ever stops the runner.
 
 While the supervisor runs a service it holds an exclusive lock on run/<name>.lock, so a second runner can't start
 another copy, and keeps the service's pid in run/<name>.pid. Before a service's first start in this runner's life,
 any process with exactly the same argv in the same folder is stopped: that takes over a copy the agent started by
-hand. A service runs in its own process group with the runner's environment, and its stdout and stderr go to
-run/<name>.out (rotated to .out.1 at 5 MB) along with the runner's own start and exit lines. The runner's log gets
-names, pids and exit codes only, never a service's arguments or environment.
+hand; a process the supervisor started itself is never taken for one. A service runs in its own process group with
+the runner's environment, and its stdout and stderr go to run/<name>.out (rotated to .out.1 at 5 MB) along with the
+runner's own start and exit lines. The runner's log gets names, pids and exit codes only, never a service's
+arguments or environment.
+
+Every file here is opened without blocking and must be a regular file: a FIFO or a device in its place is refused,
+since a blocking open on the event loop would freeze the whole runner.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import fcntl
 import logging
 import os
 import re
 import signal
+import stat
 import time
 import tomllib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,6 +49,7 @@ log = logging.getLogger(__name__)
 SERVICES_FILE = Path("/var/agent/services.toml")
 RUN_DIR = Path("/var/agent/run")
 OUT_CAP = 5 * 1024 * 1024
+MAX_FILE = 1024 * 1024  # the most of services.toml that's read
 _NAME = re.compile(r"[A-Za-z0-9._-]+")
 
 
@@ -52,22 +60,45 @@ class Service:
     cwd: str
 
 
-def read_services(path: Path) -> tuple[list[Service], list[str]]:
-    """The services the file lists, and what's wrong with it. A missing file lists none. An unreadable or invalid
-    file lists none and says why; an invalid entry is left out and named. Never raises."""
+def open_regular(path: Path, flags: int, mode: int = 0o644) -> int:
+    """os.open that never blocks (on a FIFO, say) and refuses anything but a regular file."""
     try:
-        data = tomllib.loads(path.read_text())
+        fd = os.open(path, flags | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC, mode)
+    except OSError as e:
+        if e.errno == errno.ENXIO:  # a FIFO nobody reads, opened to write
+            raise OSError(errno.EINVAL, "not a regular file", str(path)) from None
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", str(path))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def read_services(path: Path) -> tuple[list[Service] | None, list[str]]:
+    """The services the file lists, and what's wrong with it. A missing file lists none. A file that can't be read
+    or parsed gives None (keep the last good list) and says why; an invalid entry is left out and named. Never
+    raises."""
+    try:
+        with os.fdopen(open_regular(path, os.O_RDONLY), "rb") as f:
+            raw = f.read(MAX_FILE + 1)
     except FileNotFoundError:
         return [], []
     except OSError as e:
-        return [], [f"can't read {path}: {e.strerror or type(e).__name__}"]
+        return None, [f"can't read {path}: {e.strerror or type(e).__name__}"]
+    if len(raw) > MAX_FILE:
+        return None, [f"{path} is over {MAX_FILE // 1024} KB"]
+    try:
+        data = tomllib.loads(raw.decode())
     except UnicodeDecodeError:
-        return [], [f"{path} isn't UTF-8 text"]
+        return None, [f"{path} isn't UTF-8 text"]
     except tomllib.TOMLDecodeError as e:
-        return [], [f"{path} isn't valid TOML: {e}"]
+        return None, [f"{path} isn't valid TOML: {e}"]
     entries = data.get("services", [])
     if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
-        return [], [f"{path}: `services` must be [[services]] tables"]
+        return None, [f"{path}: `services` must be [[services]] tables"]
     services: list[Service] = []
     problems: list[str] = []
     for i, entry in enumerate(entries, 1):
@@ -102,7 +133,7 @@ class Backoff:
 
 def take_lock(path: Path) -> int | None:
     """An exclusive flock on `path`, held until the returned fd is closed; None when someone else holds it."""
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+    fd = open_regular(path, os.O_RDWR | os.O_CREAT)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -111,9 +142,10 @@ def take_lock(path: Path) -> int | None:
     return fd
 
 
-def find_strays(proc_root: Path, cmd: tuple[str, ...] | list[str], cwd: str) -> list[int]:
-    """The pids of the processes (other than this one) running exactly `cmd`, the whole argv and never a part of it,
-    in the folder `cwd`."""
+def find_strays(proc_root: Path, cmd: tuple[str, ...] | list[str], cwd: str,
+                ours: Collection[int] = ()) -> list[int]:
+    """The pids of the processes running exactly `cmd`, the whole argv and never a part of it, in the folder `cwd`:
+    never this process, and never one in a process group in `ours` (the services the supervisor started)."""
     want = [os.fsencode(c) for c in cmd]
     folder = os.path.realpath(cwd)
     me = os.getpid()
@@ -133,17 +165,28 @@ def find_strays(proc_root: Path, cmd: tuple[str, ...] | list[str], cwd: str) -> 
                 continue
         except OSError:
             continue
+        if int(entry.name) in ours or _process_group(proc_root, int(entry.name)) in ours:
+            continue
         found.append(int(entry.name))
     return sorted(found)
 
 
+def _stat_fields(proc_root: Path, pid: int) -> list[str]:
+    """/proc/<pid>/stat after the command name: state, ppid, pgrp, ... ([] when it can't be read)."""
+    try:
+        return (proc_root / str(pid) / "stat").read_text().rpartition(")")[2].split()
+    except OSError:
+        return []
+
+
+def _process_group(proc_root: Path, pid: int) -> int | None:
+    fields = _stat_fields(proc_root, pid)
+    return int(fields[2]) if len(fields) > 2 and fields[2].lstrip("-").isdigit() else None
+
+
 def _alive(proc_root: Path, pid: int) -> bool:
     """Whether `pid` is still running: there, and not a zombie."""
-    try:
-        stat = (proc_root / str(pid) / "stat").read_text()
-    except OSError:
-        return False
-    return stat.rpartition(")")[2].split()[:1] not in (["Z"], ["X"])
+    return _stat_fields(proc_root, pid)[:1] not in ([], ["Z"], ["X"])
 
 
 def _signal_group(pgid: int, sig: int) -> None:
@@ -172,20 +215,24 @@ class Output:
             return
         try:
             if self._file is None:
-                self._file = open(self.path, "ab")
+                self._file = self._open()
             size = os.fstat(self._file.fileno()).st_size
             if size and size + len(data) > self.cap:
                 self._file.close()
                 self._file = None
                 os.replace(self.path, self.path.with_name(self.path.name + ".1"))
-                self._file = open(self.path, "ab")
+                self._file = self._open()
             self._file.write(data)
             self._file.flush()
             self._line_start = data.endswith(b"\n")
+            self._failed = False
         except OSError as e:
             if not self._failed:  # keep draining the service's output either way, so it never blocks on a write
                 log.warning("can't write %s: %s", self.path, e.strerror or type(e).__name__)
                 self._failed = True
+
+    def _open(self):
+        return os.fdopen(open_regular(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT), "ab")
 
     def note(self, text: str) -> None:
         """One line from the runner itself, so the file shows when the service started, exited and why."""
@@ -217,6 +264,7 @@ class _Pipe(asyncio.Protocol):
 @dataclass
 class _Keeper:
     service: Service
+    out: Output
     task: asyncio.Task | None = None
     reason: str = ""  # why it was stopped, for the output file
 
@@ -238,7 +286,11 @@ class ServiceSupervisor:
         self._adopted: set[Service] = set()   # services whose hand-started copies have been looked for already
         self._held_elsewhere: set[str] = set()
         self._file_state: tuple | None = None
+        self._last_good: list[Service] = []   # what the file listed when it last parsed
+        self._file_error = ""                 # why it doesn't parse now, as noted in each service's output
         self._errors: dict[str, str] = {}     # the last error per service (or "" for the whole pass), logged once
+        self._ours: set[int] = set()          # the pids, and so process groups, of the services running now
+        self._spawning = asyncio.Lock()       # a scan for strays never sees a service mid-start
 
     def running(self) -> dict[str, Service]:
         return {name: k.service for name, k in self._keepers.items()}
@@ -260,6 +312,14 @@ class ServiceSupervisor:
 
     async def reconcile(self) -> None:
         services, problems = read_services(self.config)
+        if services is None:  # can't be read or parsed: keep what it listed last
+            services, error = self._last_good, "; ".join(problems)
+            if error != self._file_error:
+                self._file_error = error
+                for keeper in self._keepers.values():
+                    keeper.out.note(f"{self.config} can't be used ({error}); keeping the services it listed last")
+        else:
+            self._last_good, self._file_error = services, ""
         self._note_file(services, problems)
         wanted = {s.name: s for s in services}
         stale = [name for name, k in self._keepers.items() if wanted.get(name) != k.service]
@@ -296,7 +356,7 @@ class ServiceSupervisor:
                 return
             self._locks[name] = fd
         self._held_elsewhere.discard(name)
-        keeper = _Keeper(service)
+        keeper = _Keeper(service, Output(self.run_dir / f"{name}.out", self.out_cap))
         keeper.task = asyncio.create_task(self._keep(keeper), name=f"service {name}")
         self._keepers[name] = keeper
 
@@ -337,13 +397,14 @@ class ServiceSupervisor:
             log.error("%s: %s", what, text)
 
     async def _keep(self, keeper: _Keeper) -> None:
-        service = keeper.service
-        out = Output(self.run_dir / f"{service.name}.out", self.out_cap)
+        service, out = keeper.service, keeper.out
         backoff = Backoff(*self.backoff)
         try:
             if service not in self._adopted:
                 self._adopted.add(service)
-                for pid in find_strays(self.proc_root, service.cmd, service.cwd):
+                async with self._spawning:
+                    strays = find_strays(self.proc_root, service.cmd, service.cwd, self._ours)
+                for pid in strays:
                     await self._stop_stray(service.name, pid, out)
             runs = 0
             while True:
@@ -363,29 +424,40 @@ class ServiceSupervisor:
         """Run the service once, until it exits: how long it ran and how it ended."""
         started = self._clock()
         read_fd, write_fd = os.pipe()
+        reader = os.fdopen(read_fd, "rb", buffering=0)
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *service.cmd, cwd=service.cwd, env=self.env, stdin=asyncio.subprocess.DEVNULL, stdout=write_fd,
-                stderr=write_fd, start_new_session=True)
+            async with self._spawning:
+                proc = await asyncio.create_subprocess_exec(
+                    *service.cmd, cwd=service.cwd, env=self.env, stdin=asyncio.subprocess.DEVNULL, stdout=write_fd,
+                    stderr=write_fd, start_new_session=True)
+                self._ours.add(proc.pid)
         except (OSError, ValueError) as e:
-            os.close(read_fd)
+            reader.close()
             why = getattr(e, "strerror", None) or type(e).__name__
             log.warning("service %s couldn't start: %s", service.name, why)
             return 0.0, f"couldn't start ({why})"
+        except BaseException:
+            reader.close()
+            raise
         finally:
             os.close(write_fd)
-        loop = asyncio.get_running_loop()
         try:
-            transport, pipe = await loop.connect_read_pipe(lambda: _Pipe(out), os.fdopen(read_fd, "rb", buffering=0))
+            transport, pipe = await asyncio.get_running_loop().connect_read_pipe(lambda: _Pipe(out), reader)
         except BaseException:
-            with contextlib.suppress(OSError):
-                os.close(read_fd)
+            reader.close()  # the file object, never the fd number: the transport may close it too
             _signal_group(proc.pid, signal.SIGKILL)
+            self._ours.discard(proc.pid)
             raise
         pid_file = self.run_dir / f"{service.name}.pid"
+        wrote_pid = False
         try:
-            with contextlib.suppress(OSError):
-                pid_file.write_text(f"{proc.pid}\n")
+            try:
+                fd = open_regular(pid_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+                with os.fdopen(fd, "w") as f:
+                    f.write(f"{proc.pid}\n")
+                wrote_pid = True
+            except OSError as e:
+                log.warning("can't write %s: %s", pid_file, e.strerror or type(e).__name__)
             log.info("service %s %s (pid %d)", service.name, "restarted" if restart else "started", proc.pid)
             out.note(f"started (pid {proc.pid})")
             try:
@@ -395,8 +467,10 @@ class ServiceSupervisor:
                 raise
         finally:
             _signal_group(proc.pid, signal.SIGKILL)  # anything the service left behind in its group
-            with contextlib.suppress(OSError):
-                pid_file.unlink(missing_ok=True)
+            self._ours.discard(proc.pid)
+            if wrote_pid:
+                with contextlib.suppress(OSError):
+                    pid_file.unlink(missing_ok=True)
             try:
                 await asyncio.wait([pipe.closed], timeout=2)  # the rest of its output
             finally:

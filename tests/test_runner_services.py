@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import itertools
 import json
 import logging
@@ -6,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -77,6 +79,43 @@ async def make_supervisor(tmp_path):
         await sup.stop_all()
 
 
+class Unblocker:
+    """Opens a FIFO from the other side every half second after the first two, so a call that blocks the event loop
+    on it fails the test (`fired`) instead of hanging it."""
+
+    def __init__(self, fifo: Path):
+        self.fifo, self.fired = fifo, False
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        if self._stop.wait(2.0):
+            return
+        while not self._stop.is_set():
+            self.fired = True
+            with contextlib.suppress(OSError):
+                os.close(os.open(self.fifo, os.O_RDWR | os.O_NONBLOCK))
+            self._stop.wait(0.5)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join()
+
+
+async def loop_gaps(until_done: asyncio.Event) -> float:
+    """The longest the event loop went without running this task, until `until_done` is set."""
+    longest, last = 0.0, time.monotonic()
+    while not until_done.is_set():
+        await asyncio.sleep(0.01)
+        now = time.monotonic()
+        longest, last = max(longest, now - last), now
+    return longest
+
+
 class FakeSleep:
     """Records each restart wait and returns at once, until `limit` waits; then it waits forever."""
 
@@ -117,16 +156,24 @@ def test_a_missing_file_lists_no_services(tmp_path):
     b"services = [1, 2]",
     b'services = "outlook-bridge"',
 ])
-def test_an_invalid_file_lists_no_services_and_says_why(tmp_path, content):
+def test_a_file_that_wont_parse_gives_no_list_and_says_why(tmp_path, content):
     (tmp_path / "s.toml").write_bytes(content)
     services, problems = read_services(tmp_path / "s.toml")
-    assert services == [] and len(problems) == 1
+    assert services is None and len(problems) == 1  # None: keep the last good list
 
 
-def test_a_directory_where_the_file_should_be_lists_no_services(tmp_path):
+def test_a_directory_where_the_file_should_be_gives_no_list(tmp_path):
     (tmp_path / "s.toml").mkdir()
     services, problems = read_services(tmp_path / "s.toml")
-    assert services == [] and problems
+    assert services is None and "not a regular file" in problems[0]
+
+
+def test_a_fifo_where_the_file_should_be_gives_no_list_without_blocking(tmp_path):
+    os.mkfifo(tmp_path / "s.toml")
+    with Unblocker(tmp_path / "s.toml") as unblocker:
+        services, problems = read_services(tmp_path / "s.toml")
+    assert not unblocker.fired
+    assert services is None and "not a regular file" in problems[0]
 
 
 @pytest.mark.parametrize("change, problem", [
@@ -294,7 +341,7 @@ async def test_a_command_that_cant_start_backs_off_and_never_raises(tmp_path, wo
     assert "couldn't start" in (tmp_path / "run" / "missing.out").read_text()
 
 
-async def test_an_invalid_file_never_raises_and_stops_what_ran(tmp_path, work, make_supervisor, caplog):
+async def test_a_file_that_wont_parse_keeps_the_last_good_list(tmp_path, work, make_supervisor, caplog):
     run = tmp_path / "run"
     write_services(tmp_path / "services.toml", {"name": "bridge", "cmd": [PY, "-c", SLEEP], "cwd": work})
     sup = make_supervisor()
@@ -305,10 +352,23 @@ async def test_an_invalid_file_never_raises_and_stops_what_ran(tmp_path, work, m
     with caplog.at_level(logging.INFO, logger="agent.runner.services"):
         await sup.reconcile()
         await sup.reconcile()  # the same problem is logged once
-    assert sup.running() == {} and not running(pid)
+    assert set(sup.running()) == {"bridge"} and running(pid) and pid_of(run, "bridge") == pid
     assert caplog.text.count("services file:") == 1
+    out = (run / "bridge.out").read_text()
+    assert out.count("can't be used") == 1 and "keeping the services it listed last" in out
     (tmp_path / "services.toml").unlink()
-    (tmp_path / "services.toml").mkdir()
+    (tmp_path / "services.toml").mkdir()  # can't be read: still the last good list
+    await sup.reconcile()
+    assert set(sup.running()) == {"bridge"} and running(pid)
+    assert (run / "bridge.out").read_text().count("can't be used") == 2  # a new problem is noted once more
+    (tmp_path / "services.toml").rmdir()  # only a missing file means no services
+    await sup.reconcile()
+    assert sup.running() == {} and not running(pid)
+
+
+async def test_a_file_that_wont_parse_at_start_runs_nothing(tmp_path, make_supervisor):
+    (tmp_path / "services.toml").write_text("[[services]\n")
+    sup = make_supervisor()
     await sup.reconcile()
     assert sup.running() == {}
 
@@ -351,6 +411,55 @@ async def test_runner_shutdown_stops_every_service(tmp_path, work, make_supervis
         assert "stopped: the runner is stopping" in (run / f"{name}.out").read_text()
 
 
+# -- files that aren't regular files --
+
+
+async def test_a_fifo_at_the_services_file_never_freezes_the_runner(tmp_path, make_supervisor, caplog):
+    os.mkfifo(tmp_path / "services.toml")
+    sup = make_supervisor()
+    with Unblocker(tmp_path / "services.toml") as unblocker, \
+            caplog.at_level(logging.INFO, logger="agent.runner.services"):
+        await sup.reconcile()
+        await sup.reconcile()
+    assert not unblocker.fired and sup.running() == {}
+    assert caplog.text.count("not a regular file") == 1
+
+
+@pytest.mark.parametrize("suffix", [".out", ".pid"])
+async def test_a_fifo_at_a_services_run_file_never_freezes_the_runner(tmp_path, work, make_supervisor, caplog,
+                                                                     suffix):
+    run = tmp_path / "run"
+    run.mkdir()
+    os.mkfifo(run / f"bridge{suffix}")
+    write_services(tmp_path / "services.toml",
+                   {"name": "bridge", "cmd": [PY, "-c", "open('up', 'w').close(); " + SLEEP], "cwd": work})
+    sup = make_supervisor()
+    done = asyncio.Event()
+    with Unblocker(run / f"bridge{suffix}") as unblocker, \
+            caplog.at_level(logging.INFO, logger="agent.runner.services"):
+        gaps = asyncio.create_task(loop_gaps(done))
+        await sup.reconcile()
+        await until(lambda: (work / "up").exists())
+        await asyncio.sleep(0.2)
+        done.set()
+        longest = await gaps
+    assert not unblocker.fired and longest < 1.0
+    assert set(sup.running()) == {"bridge"}
+    assert "not a regular file" in caplog.text
+
+
+async def test_a_fifo_at_the_lock_file_is_refused(tmp_path, work, make_supervisor, caplog):
+    run = tmp_path / "run"
+    run.mkdir()
+    os.mkfifo(run / "bridge.lock")
+    write_services(tmp_path / "services.toml", {"name": "bridge", "cmd": [PY, "-c", SLEEP], "cwd": work})
+    sup = make_supervisor()
+    with caplog.at_level(logging.INFO, logger="agent.runner.services"):
+        await sup.reconcile()
+        await sup.reconcile()
+    assert sup.running() == {} and caplog.text.count("not a regular file") == 1
+
+
 # -- taking over a copy started by hand --
 
 
@@ -384,6 +493,46 @@ def test_find_strays_matches_the_whole_argv_in_the_same_folder(tmp_path, work):
     assert find_strays(proc, cmd, str(work)) == [100]
     assert find_strays(proc, cmd, str(work) + "/") == [100]
     assert find_strays(tmp_path / "no-proc", cmd, str(work)) == []
+
+
+def test_find_strays_never_returns_a_process_of_ours(tmp_path, work):
+    proc = tmp_path / "proc"
+    cmd = ["python3", "-I", "bridge.py"]
+    fake_proc_entry(proc, 200, cmd, work)   # a service we started: its group is 200
+    fake_proc_entry(proc, 201, cmd, work)   # a process in that service's group
+    fake_proc_entry(proc, 300, cmd, work)   # someone else's copy
+    (proc / "200" / "stat").write_text("200 (python3) S 1 200 200 0 -1")
+    (proc / "201" / "stat").write_text("201 (python3 x) S 200 200 200 0 -1")
+    (proc / "300" / "stat").write_text("300 (python3) S 1 300 300 0 -1")
+    assert find_strays(proc, cmd, str(work), ours={200}) == [300]
+
+
+async def test_never_takes_over_a_service_it_started_itself(tmp_path, work, make_supervisor):
+    run = tmp_path / "run"
+    cmd = [PY, "-c", SLEEP]
+    write_services(tmp_path / "services.toml", {"name": "a", "cmd": cmd, "cwd": work})
+    sup = make_supervisor()
+    await sup.reconcile()
+    await until(lambda: pid_of(run, "a"))
+    a = pid_of(run, "a")
+    write_services(tmp_path / "services.toml", {"name": "a", "cmd": cmd, "cwd": work},
+                   {"name": "b", "cmd": cmd, "cwd": work})  # the same argv in the same folder
+    await sup.reconcile()
+    await until(lambda: pid_of(run, "b"))
+    await asyncio.sleep(0.3)
+    assert running(a) and pid_of(run, "a") == a and running(pid_of(run, "b"))
+
+
+async def test_services_with_the_same_command_started_together_both_run(tmp_path, work, make_supervisor):
+    run = tmp_path / "run"
+    cmd = [PY, "-c", SLEEP]
+    write_services(tmp_path / "services.toml", *({"name": n, "cmd": cmd, "cwd": work} for n in "abcd"))
+    sup = make_supervisor()
+    await sup.reconcile()
+    await until(lambda: all(pid_of(run, n) for n in "abcd"))
+    pids = {n: pid_of(run, n) for n in "abcd"}
+    await asyncio.sleep(0.3)
+    assert {n: pid_of(run, n) for n in "abcd"} == pids and all(running(p) for p in pids.values())
 
 
 async def test_takes_over_a_copy_started_by_hand(tmp_path, work, make_supervisor, caplog):
@@ -465,6 +614,14 @@ async def test_a_chatty_service_rotates_its_output(tmp_path, work, make_supervis
 
 
 # -- in the runner --
+
+
+def test_the_prompt_says_how_to_keep_something_running_and_not_to_kill_the_runner():
+    system_md = Path(__file__).resolve().parent.parent / "src" / "agent" / "defaults" / "system.md"
+    text = system_md.read_text()
+    assert "/var/agent/services.toml" in text and "/var/agent/run/<name>.out" in text
+    assert "`python -m agent runner`" in text and "kill -1" in text
+    assert len(system_md.read_bytes()) < 12_288
 
 
 async def test_supervise_starts_again_after_a_failure(tmp_path, monkeypatch):
