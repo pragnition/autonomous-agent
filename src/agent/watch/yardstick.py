@@ -13,7 +13,9 @@ A task is a folder `<id>/` under `$STATE/yardstick/tasks/` (a person retires one
 An id may hold only plain characters, and never ends in `-r`: that's the name of a retry's folder.
 
 A task is mechanical when it has a `check` and no rubric. Only mechanical tasks count toward the score or the gate,
-so improve-jensen is never the judge of its own change; the others are recorded as `judged`.
+so improve-jensen is never the judge of its own change; the others are recorded as `judged`. A gate run's results
+carry the gate's `started` (`gate`), and its verdict is recorded in `$STATE/yardstick/gate-runs.jsonl`
+(`record_gate_run`): a run whose gate failed is never compared against again.
 
 `run` first removes run folders under `/var/agent/yardstick/` older than 7 days, then copies each task into
 `/var/agent/yardstick/<run>/<id>/` (made with a plain `mkdir` in the same command as the copy, so a folder that is
@@ -94,9 +96,9 @@ _WAITING = "waiting"
 # Results that say nothing about Jensen: the task couldn't be set up, handed over, checked or got no turn at all.
 # They're recorded with `infra: true`, and the score, `compare` and its regressions leave them out.
 INFRA_REASONS = ("queue failed", "queue error", "copy failed", "build failed", "check error", "folder exists",
-                 "never left the queue", "skipped: time budget")
+                 "never left the queue", _OUT_OF_TIME)
 # Failures that are never retried: the folder is someone else's, or the run is out of time.
-_NO_RETRY = ("folder exists", "skipped: time budget")
+_NO_RETRY = ("folder exists", _OUT_OF_TIME)
 # Exit codes of `timeout` when it stopped the command: 124 after SIGTERM, 137 when it had to SIGKILL it too.
 _TIMED_OUT = (124, 137)
 # The exit code the copy uses when the task's folder is already there (its plain `mkdir` failed).
