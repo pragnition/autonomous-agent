@@ -289,7 +289,9 @@ def test_improve_jensen_waits_for_its_subagents(improve_jensen):
 
 def test_improve_jensen_triggers_and_jobs(improve_jensen):
     on = improve_jensen[True]
-    assert on["schedule"] == [{"cron": "17 * * * *"}, {"cron": "13 */6 * * *"}, {"cron": "*/10 * * * *"}]
+    # GitHub's cron never fired these; the host listener sends the clock as repository_dispatch events instead.
+    assert "schedule" not in on
+    assert on["repository_dispatch"] == {"types": list(_DISPATCH_TYPES.values())}
     dispatch_inputs = on["workflow_dispatch"]["inputs"]
     assert dispatch_inputs["mode"]["default"] == "watch"
     assert set(dispatch_inputs["mode"]["options"]) == {"watch", "review", "fix", "assess", "project", "approvals"}
@@ -419,7 +421,7 @@ def test_instructions_carry_the_key_rules():
         ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #",
                                       "Closes #N", "Proposed in Slack: <change>", "gh issue reopen",
                                       ".github/workflows/", ".github/improve-jensen*.md",
-                                      "deploy/improve-jensen-seed.json"),
+                                      "deploy/improve-jensen-seed.json", "Note from Slack:"),
         ".github/improve-jensen-assess.md": ('{"propose": [{"issue":', "under 100 characters",
                                              "Project decision:"),
         ".github/improve-jensen-project.md": ("approved in Slack", "project-mark --issue <N> --status done"),
@@ -440,30 +442,43 @@ def test_charter_drops_the_old_rules():
 # -- assess / approvals / fix / project jobs --
 
 
-_SCHEDULE_CRONS = {"watch": "17 * * * *", "assess": "13 */6 * * *", "approvals": "*/10 * * * *"}
+_DISPATCH_TYPES = {"watch": "improve-jensen-watch", "assess": "improve-jensen-assess",
+                   "approvals": "improve-jensen-approvals"}
 
 
-def test_each_schedule_runs_only_its_job(improve_jensen):
-    """Three jobs each wake on their own cron. A job's `if` must name its own cron string and never another
-    scheduled job's, or the wrong job would run on the wrong hour."""
+def test_each_dispatch_type_runs_only_its_job(improve_jensen):
+    """Three jobs each wake on their own repository_dispatch type. A job's `if` must name its own type and never
+    another's, or the wrong job would run on the wrong tick."""
     jobs = improve_jensen["jobs"]
-    for name, own_cron in _SCHEDULE_CRONS.items():
+    for name, own_type in _DISPATCH_TYPES.items():
         job_if = str(jobs[name]["if"])
-        assert own_cron in job_if, (name, job_if)
-        for other_name, other_cron in _SCHEDULE_CRONS.items():
+        assert "github.event.schedule" not in job_if, name
+        assert f"'{own_type}'" in job_if, (name, job_if)
+        for other_name, other_type in _DISPATCH_TYPES.items():
             if other_name != name:
-                assert other_cron not in job_if, (name, other_name, job_if)
+                assert f"'{other_type}'" not in job_if, (name, other_name, job_if)
 
 
-def test_scheduled_jobs_wait_for_the_engine_switch(improve_jensen):
-    """Merging this workflow must not change today's behaviour: `watch`, `assess` and `approvals` may only fire on
-    their own cron once a person sets the repo variable `IMPROVE_JENSEN_ENGINE` to `on` (deploy/
-    improve-jensen.md). A manual `workflow_dispatch` is a person's explicit choice and keeps working regardless."""
+def test_dispatched_jobs_wait_for_the_engine_switch(improve_jensen):
+    """`watch`, `assess` and `approvals` may only fire on the listener's dispatch once a person sets the repo
+    variable `IMPROVE_JENSEN_ENGINE` to `on` (deploy/improve-jensen.md). A manual `workflow_dispatch` is a person's
+    explicit choice and keeps working regardless."""
     jobs = improve_jensen["jobs"]
-    for name, cron in _SCHEDULE_CRONS.items():
+    for name, event_type in _DISPATCH_TYPES.items():
         job_if = " ".join(str(jobs[name]["if"]).split())
-        assert f"github.event.schedule == '{cron}' && vars.IMPROVE_JENSEN_ENGINE == 'on'" in job_if, name
+        assert (f"(github.event_name == 'repository_dispatch' && github.event.action == '{event_type}' && "
+                f"vars.IMPROVE_JENSEN_ENGINE == 'on')") in job_if, name
         assert f"(github.event_name == 'workflow_dispatch' && inputs.mode == '{name}')" in job_if, name
+
+
+def test_listener_unit():
+    unit = (ROOT / "deploy" / "improve-jensen-listen.service").read_text()
+    service = unit[unit.index("[Service]"):]
+    for line in ("User=pragnition", "WorkingDirectory=/home/pragnition/autonomous-agent",
+                 "ExecStart=/usr/bin/python3 scripts/jensen_watch.py listen", "Restart=always", "RestartSec=5",
+                 "Nice=10", "CPUWeight=20", "IOWeight=20"):
+        assert line in service.splitlines(), line
+    assert "improve-jensen-listen.service" in (ROOT / "deploy" / "improve-jensen.md").read_text()
 
 
 def test_new_jobs_runners_timeouts_and_files(improve_jensen):

@@ -1,0 +1,20 @@
+# improve-jensen's host listener: the workflow's clock (repository_dispatch events) and plain-language answers to
+# the proposals in Slack. It exits when the live checkout moves, and systemd starts it again on the new code.
+# Install: deploy/improve-jensen.md, step 9.
+[Unit]
+Description=improve-jensen listener (workflow clock and Slack replies)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pragnition
+WorkingDirectory=/home/pragnition/autonomous-agent
+ExecStart=/usr/bin/python3 scripts/jensen_watch.py listen
+Restart=always
+RestartSec=5
+Nice=10
+CPUWeight=20
+IOWeight=20
+
+[Install]
+WantedBy=multi-user.target

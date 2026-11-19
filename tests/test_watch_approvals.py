@@ -558,6 +558,53 @@ def test_poll_skips_records_with_nothing_left_to_decide(tmp_path):
     assert slack.reads == [] and slack.posts == []
 
 
+def _decision(verdict, note="", ts="1700000001.000000"):
+    return {"verdict": verdict, "note": note, "ts": ts, "by": APPROVER}
+
+
+def test_poll_applies_the_listeners_stored_decisions_without_posting(tmp_path):
+    _record(tmp_path, [(31, "a"), (40, "b"), (52, "c")],
+            decisions={"1": _decision("approve", "Only for new projects"), "2": _decision("reject")})
+    gh = FakeGh({31: {"proposed"}, 40: {"proposed"}, 52: {"proposed"}})
+    slack = FakeSlack()
+
+    out = poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
+
+    assert gh.labels == {31: {"approved"}, 40: {"rejected"}, 52: {"proposed"}}
+    assert gh.comments == [(31, "Approved in Slack."), (31, "Note from Slack: Only for new projects"),
+                           (40, "Not approved in Slack.")]
+    assert slack.posts == []
+    assert out["fix"] == 31
+
+    calls = len(gh.calls)
+    poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
+    assert [c for c in gh.calls[calls:] if c[:2] != ["issue", "list"] and c[0] != "run"] == []
+
+
+def test_poll_stored_decisions_follow_the_same_rules(tmp_path):
+    # Approved is final, closed never changes, and a rejected item can still be approved.
+    _record(tmp_path, [(31, "a"), (40, "b"), (52, "c")],
+            decisions={"1": _decision("reject"), "2": _decision("approve"), "3": _decision("approve")})
+    gh = FakeGh({31: {"approved"}, 40: {"rejected"}, 52: {"proposed"}}, closed={52})
+
+    poll(FakeSlack(), gh, tmp_path, {APPROVER}, REPO, T0)
+
+    assert gh.labels == {31: {"approved"}, 40: {"approved"}, 52: {"proposed"}}
+    assert gh.edits() == [["issue", "edit", "40", "--add-label", "approved", "--remove-label", "rejected"]]
+
+
+def test_poll_skips_replies_the_listener_handled(tmp_path):
+    _record(tmp_path, [(31, "a"), (40, "b")], handled=["1700000001.000000"])
+    gh = FakeGh({31: {"proposed"}, 40: {"proposed"}})
+    slack = FakeSlack(threads={PARENT: [_reply("approve", ts="1700000001.000000"),
+                                        _reply("reject 2", ts="1700000002.000000")]})
+
+    poll(slack, gh, tmp_path, {APPROVER}, REPO, T0)
+
+    assert gh.labels == {31: {"proposed"}, 40: {"rejected"}}
+    assert slack.thread_posts() == ["Dropped 2."]
+
+
 def test_poll_a_slack_error_on_one_record_leaves_the_others_going(tmp_path, capsys):
     other = "1700000500.000100"
     _record(tmp_path, [(31, "a")])

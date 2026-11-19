@@ -21,15 +21,18 @@ output a public Actions log would show) looks the URL and conversation back up. 
 `host.jensen_gh` -- that call is reading the record of Jensen's work from the outside, not acting as Jensen.
 
 `assess-check`/`assess-commit` drive the assess job the same way `measure`/`commit` drive the watch (`assess-check`
-outputs when it `started`, and `assess-commit --at` records that time); `project-mark` is the deterministic record
-of which `project` issue, if any, is currently being worked (`$STATE/project-active.json`), read back by
-`assess-check`'s own "is anything waiting" check.
+outputs when it `started`, and `assess-commit --at` records that time; it runs only on new conversation since the
+last assessment); `project-mark` is the deterministic record of which `project` issue, if any, is currently being
+worked (`$STATE/project-active.json`).
 
 `propose --from watch|assess` posts a plan's proposed changes to Slack as one numbered message, `approvals` reads
 the decisions people made in those threads and names the next approved fix and project to fire (nothing while
 core's pool holds), `ready` checks at the start of a fix or project run that its issue is still approved, and
 `fired` tells a proposal's thread how its run ended (`approvals.py`). All four go through the job's own plain `gh`,
 and post as Jensen's bot with the token read from the live install, never printed.
+
+`listen` is the host listener's loop (`listen.py`, run by systemd, not by the workflow): it sends the workflow's
+clock as `repository_dispatch` events and answers the proposals' threads, until the live checkout moves.
 """
 
 from __future__ import annotations
@@ -41,11 +44,11 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.watch import approvals, feedback
+from agent.watch import approvals, feedback, listen
 from agent.watch.host import Host, pool_is_holding
 from agent.watch.measure import measure
 from agent.watch.slack import Slack, SlackError, load_approvers, load_token
-from agent.watch.state import FMT, State
+from agent.watch.state import FMT, State, is_improve_jensens_own
 
 # Labels every install needs regardless of what the seed file's own entries use, so a fresh repo always has
 # somewhere for the fix job and the record to put these states (and the assessment its "what worked" issues).
@@ -120,6 +123,7 @@ def _build_parser() -> argparse.ArgumentParser:
     project_mark_p.add_argument("--status", choices=["active", "done"], required=True)
 
     _add_approvals_parsers(sub)
+    sub.add_parser("listen")
     return parser
 
 
@@ -281,11 +285,17 @@ def _has_new_notes(host: Host, since: datetime, until: datetime) -> bool:
     return bool(notes)
 
 
+def _has_new_turns(state: State, since: datetime) -> bool:
+    """Whether Jensen finished a turn after `since` (committed or staged metrics), improve-jensen's own left out."""
+    return any(record.get("kind") == "turn" and not is_improve_jensens_own(record) and record["ts"] > _iso(since)
+               for record in state.read_metrics(since))
+
+
 def _cmd_assess_check(host: Host, state: State, now: datetime, github_output: str | None) -> int:
     """`has_work=false`/`skip_reason=pool_hold` while core's usage watch holds (checked first, the same way
     `measure` sits a whole hour out on it, regardless of anything else waiting); otherwise `has_work=true` when
-    the assessment has never run, or there's a new digest, a new note from Jensen, or an active project since the
-    last one; `skip_reason=quiet` when none of those are true. A pool that can't be read is not a hold: the check
+    the assessment has never run, or there's new conversation since the last one (a turn of Jensen's, or a new
+    note from Jensen); `skip_reason=quiet` when there isn't. A pool that can't be read is not a hold: the check
     falls through to its other signals rather than holding the assessment hostage to one failed probe. Always also
     `started=<now>`: `assess-commit --at` records that, so anything that arrives while the assessment runs is still
     new to the next check."""
@@ -298,8 +308,7 @@ def _cmd_assess_check(host: Host, state: State, now: datetime, github_output: st
     if last_assess is None:
         has_work = True
     else:
-        has_work = (state.digest_newer_than(last_assess) or _has_new_notes(host, last_assess, now)
-                    or state.project_active() is not None)
+        has_work = _has_new_turns(state, last_assess) or _has_new_notes(host, last_assess, now)
 
     _emit([f"has_work={_bool_str(has_work)}", f"skip_reason={'' if has_work else 'quiet'}", started],
           github_output)
@@ -550,4 +559,6 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
         return _cmd_project_mark(state, args.issue, args.status, now)
     if args.command in ("propose", "approvals", "ready", "fired"):
         return _cmd_slack_approval(host, state, now, args)
+    if args.command == "listen":
+        return listen.run(host, state.root, os.environ.get("GITHUB_REPOSITORY") or listen.DEFAULT_REPO)
     raise AssertionError(f"unhandled command: {args.command!r}")  # pragma: no cover - argparse already validated

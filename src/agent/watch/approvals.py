@@ -2,14 +2,16 @@
 them in that message's thread, and the approved ones are handed to the `fix` and `project` jobs to ship.
 
 `post_proposals` posts the watch's or the assessment's proposals as numbered bullets and labels each issue
-`proposed`; `poll` (the `approvals` job, every ten minutes) reads each open proposal's thread, moves issues
-`proposed` -> `approved` or `rejected`, says what changed in the thread, and picks the next approved fix and
-project to fire; `ready` (the first step of a fix or project run) checks the issue is still approved; `fired` (the
-last step) says in the thread whether it shipped.
+`proposed`; `answer_threads` (the host listener, every 15 seconds) puts 👀 on each new reply from an approver, has
+Claude read it in plain language, answers in the thread and stores the decisions it took; `poll` (the `approvals`
+job) applies those decisions and any strict reply the listener hasn't handled, moving issues `proposed` ->
+`approved` or `rejected`, and picks the next approved fix and project to fire; `ready` (the first step of a fix or
+project run) checks the issue is still approved; `fired` (the last step) says in the thread whether it shipped.
 
 Each posted message is remembered in `<state root>/proposals/<ts>.json`
 (`{"channel", "ts", "posted", "items": [{"n", "issue", "change"}], "notified"}`, plus `"released": true` once
-it has expired), written atomically; an item from the assessment's "what worked" carries `"kind": "learned"`
+it has expired, and the listener's `"handled": [<reply ts>]` and `"decisions": {"<n>": {"verdict", "note", "ts",
+"by"}}`), written atomically; an item from the assessment's "what worked" carries `"kind": "learned"`
 and maybe `"credit"` (whose session it came from), which go into Slack and this record but never into GitHub. An
 issue belongs to the newest record that names it. GitHub's labels stay the record of where each issue is: a poll
 decides everything again from the thread and the labels, never from what an earlier poll saw, so a poll that dies
@@ -61,6 +63,7 @@ _REJECT_WORDS = ("reject", "rejected", "no", "nope", "skip", "drop", "don't", "d
 _DECISION = re.compile("(" + "|".join(re.escape(word) for word in sorted(_APPROVE_WORDS + _REJECT_WORDS,
                                                                          key=len, reverse=True)) + r")(?![\w'])")
 _MENTION = re.compile(r"<@[^>]*>")
+_VERDICTS = ("approve", "reject")
 # What may follow the word, one token at a time; anything else (`bad`) means the reply isn't a plain decision.
 _TOKEN = re.compile(r"\s*(?:(?P<num>#?\d+)|(?P<range>[-–—]|to\b)|(?P<sep>[,&]|and\b)|(?P<all>all\b)"
                     r"|(?P<bad>\S+))")
@@ -145,7 +148,10 @@ def _valid_record(data) -> dict | None:
     items = [item for item in items if isinstance(item, dict) and isinstance(item.get("n"), int)
              and isinstance(item.get("issue"), int) and isinstance(item.get("change"), str)]
     notified = [n for n in data.get("notified") or [] if isinstance(n, int)]
-    return {**data, "items": items, "notified": notified}
+    handled = [ts for ts in data.get("handled") or [] if isinstance(ts, str)]
+    decisions = data.get("decisions") if isinstance(data.get("decisions"), dict) else {}
+    decisions = {n: d for n, d in decisions.items() if isinstance(d, dict) and d.get("verdict") in _VERDICTS}
+    return {**data, "items": items, "notified": notified, "handled": handled, "decisions": decisions}
 
 
 def _read_records(root: Path) -> list[dict]:
@@ -284,10 +290,17 @@ def _undecided(labels: set[str] | None) -> bool:
     return labels is not None and APPROVED not in labels and bool(labels & {PROPOSED, REJECTED})
 
 
+def _counts(reply: dict, approvers: set[str]) -> bool:
+    """Whether a thread reply is an approver's own: not anyone else's, not a bot's, and of no subtype but a reply
+    also sent to the channel."""
+    return (reply.get("user") in approvers and not reply.get("bot_id")
+            and reply.get("subtype") in (None, "thread_broadcast"))
+
+
 def _decisions(slack, record: dict, approvers: set[str]) -> list[tuple[str, set[int] | None]]:
     """The decisions in `record`'s thread, in the order they apply: approvers' reactions on the message first (a
-    reject reaction before an approve one), then their replies in time order (`parse_decision`). Replies from
-    anyone else, from a bot, or of any subtype but a reply also sent to the channel don't count. Reactions that
+    reject reaction before an approve one), then their replies in time order (`parse_decision`). Replies that don't
+    `_counts`, or that the listener already handled (it stored their decisions), are left out. Reactions that
     can't be read (the bot without `reactions:read`, say) are logged and left out: they only decide items no reply
     names, so without them those items just wait."""
     decisions: list[tuple[str, set[int] | None]] = []
@@ -302,8 +315,7 @@ def _decisions(slack, record: dict, approvers: set[str]) -> list[tuple[str, set[
     if reacted & _APPROVE_REACTIONS:
         decisions.append(("approve", None))
     for reply in sorted(slack.replies(record["channel"], record["ts"]), key=lambda m: _ts_key(m.get("ts"))):
-        if (reply.get("user") not in approvers or reply.get("bot_id")
-                or reply.get("subtype") not in (None, "thread_broadcast")):
+        if not _counts(reply, approvers) or reply.get("ts") in record["handled"]:
             continue
         decision = parse_decision(reply.get("text") or "")
         if decision is not None:
@@ -342,6 +354,26 @@ def _apply(gh: Gh, issue: int, labels: set[str], target: str) -> bool:
     except Exception as exc:
         _warn(f"commenting on #{issue}", exc)
     return True
+
+
+def _apply_stored(gh: Gh, record: dict, mine: list[dict], labels: dict[int, set[str]]) -> None:
+    """Apply the listener's stored decisions on `mine` by `_apply`'s rules (only undecided items change, so approved
+    stays final and a rejected item can still be approved), with an approval's note as `Note from Slack: <note>`.
+    Nothing goes to Slack: the listener already answered."""
+    for item in mine:
+        decision = record["decisions"].get(str(item["n"]))
+        current = labels.get(item["issue"])
+        if decision is None or not _undecided(current):
+            continue
+        target = APPROVED if decision["verdict"] == "approve" else REJECTED
+        if target in current or not _apply(gh, item["issue"], current, target):
+            continue
+        note = decision.get("note")
+        if target == APPROVED and isinstance(note, str) and note.strip():
+            try:
+                gh(["issue", "comment", str(item["issue"]), "--body", f"Note from Slack: {note.strip()}"])
+            except Exception as exc:
+                _warn(f"commenting on #{item['issue']}", exc)
 
 
 def _expired(record: dict, now: datetime) -> bool:
@@ -436,7 +468,8 @@ def poll(slack, gh: Gh, state_root: Path, approvers: set[str], repo: str, now: d
     marked `released`, after which it's skipped. A `proposed` issue no live record owns (the state folder lost it,
     or its file is broken) is released the same way, since nothing could ever decide it.
 
-    Of the rest, only records with an item still undecided (its issue open and `proposed` or `rejected`) are read.
+    Of the rest, the listener's stored decisions are applied first, quietly; then only records with an item still
+    undecided (its issue open and `proposed` or `rejected`) are read.
     Approved is final: an issue already `approved`, or closed, never changes. Each record whose items changed gets
     one thread reply saying how. A Slack error on one record is logged (its code only) and the others go on; a
     failing `gh issue list` raises."""
@@ -460,6 +493,7 @@ def poll(slack, gh: Gh, state_root: Path, approvers: set[str], repo: str, now: d
             if all(released):
                 _write_record(state_root, {**record, "released": True})
             continue
+        _apply_stored(gh, record, mine, labels)
         if not any(_undecided(labels.get(item["issue"])) for item in mine):
             continue
         try:
@@ -483,6 +517,163 @@ def poll(slack, gh: Gh, state_root: Path, approvers: set[str], repo: str, now: d
             except SlackError as exc:
                 _warn(f"replying in proposal {record['ts']}", exc)
     return _pick(gh, labels) if fire else {"fix": None, "project": None}
+
+
+# -- listen --
+
+_LISTEN_SYSTEM = """\
+You read one Slack message a person wrote in the thread under a list of changes improve-jensen proposes for Jensen,
+the team's engineering agent, and say what it asks for. You get the items (number, change, kind, issue number,
+current state, and the issue's title and the start of its body), the thread so far, and the new message with who
+sent it.
+
+Answer with JSON only, nothing before or after it:
+{"decisions": [{"n": 1, "verdict": "approve", "note": "..."}], "reply": "..."}
+
+- Decide only what the person clearly asked for. "approve", "yes", "go ahead with all" and the like approve every
+  item still open; "reject", "no", "drop them" and the like reject every item still open. Numbers or descriptions
+  pick out items.
+- Only items in state "open" or "rejected" can be decided. Approved items are final and can't be rejected; closed
+  and stuck items can't be decided.
+- A question gets an answer from the items and their issues, with no decision.
+- A condition on an item ("only for project X", "but keep it short") goes in that item's "note", in general terms,
+  with no names of people, products or customers: it is posted on a public issue. Leave "note" out otherwise.
+- "reply" is a short plain Slack message with no headings: what you understood and did, and what happens next.
+  Approved items start shipping one at a time within minutes, and this thread hears when each one ships.
+- If you don't understand the message, decide nothing and ask in "reply".
+"""
+_LISTEN_FALLBACK = "Sorry, I couldn't read that just now. Try again, or reply `approve 1 3` / `reject 2`."
+_BODY_CHARS = 1500
+_OPEN_STATES = ("open", "rejected")
+
+
+def _item_state(labels: set[str] | None, decision: dict | None) -> str:
+    """An item as Claude is told it: `closed`, `stuck`, `approved`, `rejected` or `open`, counting a decision the
+    listener stored that `poll` hasn't applied yet."""
+    verdict = (decision or {}).get("verdict")
+    if labels is None:
+        return "closed"
+    if labels & _NEEDS_PERSON:
+        return "stuck"
+    if APPROVED in labels or verdict == "approve":
+        return "approved"
+    if REJECTED in labels or verdict == "reject":
+        return "rejected"
+    return "open"
+
+
+def _read_answer(text: str) -> dict:
+    """Claude's answer as `{"decisions", "reply"}` (the JSON object in `text`, fenced or not). Raises when there's
+    no object or no reply."""
+    data = json.loads(text[text.find("{"):text.rfind("}") + 1])
+    if not isinstance(data, dict) or not isinstance(data.get("reply"), str) or not data["reply"].strip():
+        raise ValueError("no reply in Claude's answer")
+    return data
+
+
+def _valid_decisions(raw, states: dict[int, str]) -> dict[int, tuple[str, str]]:
+    """The decisions in `raw` that name a known item still open or rejected with `approve` or `reject`, as
+    `{n: (verdict, note)}`; anything else is dropped."""
+    out: dict[int, tuple[str, str]] = {}
+    for decision in raw if isinstance(raw, list) else []:
+        if not isinstance(decision, dict):
+            continue
+        n, verdict, note = decision.get("n"), decision.get("verdict"), decision.get("note")
+        if type(n) is int and states.get(n) in _OPEN_STATES and verdict in _VERDICTS:
+            out[n] = (verdict, note.strip() if isinstance(note, str) else "")
+    return out
+
+
+def answer_threads(slack, gh: Gh, ask: Callable[[str, str], str], dispatch: Callable[[str], None],
+                   state_root: Path, people: dict[str, str], now: datetime) -> None:
+    """Answer every new reply from an approver (`people`, `{slack id: name}`) in the thread of each proposal that is
+    neither released nor older than `_DECIDE_DAYS`: 👀 on it at once, then `ask(system, prompt)` (Claude, with one
+    retry) reads it against the items, their issues and the thread so far. The valid decisions it returns go into
+    the record's `decisions`, its reply goes into the thread, and the reply's `ts` into `handled`; a stored
+    decision sends `improve-jensen-approvals` through `dispatch` at once, so `poll` applies it. When Claude fails
+    twice, the thread hears the plain words that still work. Every failure is logged without the message's text;
+    a reply that couldn't be read against GitHub is tried again next time."""
+    approvers = set(people)
+    cache: dict = {}
+
+    def issue(n: int) -> dict:
+        if n not in cache:
+            data = json.loads(gh(["issue", "view", str(n), "--json", "title,body"]))
+            cache[n] = {"title": str(data.get("title") or ""), "body": str(data.get("body") or "")[:_BODY_CHARS]}
+        return cache[n]
+
+    def name(message: dict) -> str:
+        return "improve-jensen" if message.get("bot_id") else people.get(message.get("user"), "someone else")
+
+    for record in _read_records(state_root):
+        if record.get("released") or _expired(record, now):
+            continue
+        channel, parent = record["channel"], record["ts"]
+        try:
+            thread = sorted(slack.replies(channel, parent), key=lambda m: _ts_key(m.get("ts")))
+        except SlackError as exc:
+            _warn(f"reading proposal {parent} from Slack", exc)
+            continue
+        seen: list[dict] = []
+        for message in thread:
+            if not _counts(message, approvers) or message.get("ts") in record["handled"]:
+                seen.append(message)
+                continue
+            try:
+                slack.react(channel, message["ts"], "eyes")
+            except SlackError as exc:
+                _warn(f"reacting in proposal {parent}", exc)
+            try:
+                if "open" not in cache:
+                    cache["open"] = _open_issues(gh)
+                states = {item["n"]: _item_state(cache["open"].get(item["issue"]),
+                                                 record["decisions"].get(str(item["n"])))
+                          for item in record["items"]}
+                items = [{"n": item["n"], "change": item["change"],
+                          "kind": "learned" if item.get("kind") == "learned"
+                          else "project" if "project" in cache["open"].get(item["issue"], ()) else "fix",
+                          "issue": item["issue"], "state": states[item["n"]], **issue(item["issue"])}
+                         for item in record["items"]]
+            except Exception as exc:
+                _warn(f"reading proposal {parent}'s issues", exc)
+                break
+            prompt = json.dumps({"items": items,
+                                 "thread": [{"from": name(m), "text": m.get("text") or ""} for m in seen],
+                                 "new_message": {"from": name(message), "text": message.get("text") or ""}})
+            answer = None
+            for _ in range(2):
+                try:
+                    answer = _read_answer(ask(_LISTEN_SYSTEM, prompt))
+                    break
+                except Exception as exc:
+                    _warn(f"asking Claude about a reply in proposal {parent}", exc)
+            decided = _valid_decisions(answer["decisions"], states) if answer else {}
+            for n, (verdict, note) in decided.items():
+                record["decisions"][str(n)] = {"verdict": verdict, "note": note, "ts": message["ts"],
+                                               "by": message.get("user")}
+            reply = answer["reply"].strip() if answer else _LISTEN_FALLBACK
+            try:
+                slack.post(channel, _escape(reply), thread_ts=parent)
+            except SlackError as exc:
+                _warn(f"replying in proposal {parent}", exc)
+            record["handled"] = [*record["handled"], message["ts"]]
+            _save_listened(state_root, record)
+            if decided:
+                try:
+                    dispatch("improve-jensen-approvals")
+                except Exception as exc:
+                    _warn("sending improve-jensen-approvals", exc)
+            seen += [message, {"bot_id": "self", "text": reply}]
+
+
+def _save_listened(root: Path, record: dict) -> None:
+    """Write `record`'s `handled` and `decisions` onto the newest copy on disk, so a `notified` or `released` that
+    `fired` or `poll` wrote meanwhile isn't lost."""
+    try:
+        fresh = _valid_record(json.loads(_record_path(root, record["ts"]).read_text())) or record
+    except (OSError, ValueError):
+        fresh = record
+    _write_record(root, {**fresh, "handled": record["handled"], "decisions": record["decisions"]})
 
 
 # -- ready --
