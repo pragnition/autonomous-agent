@@ -568,6 +568,13 @@ def test_workflow_reads_gate_result_not_gate_failed():
     assert "gate_failed" not in (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
 
 
+def test_project_job_sets_no_labels_of_its_own(improve_jensen):
+    # `project-active.json` is the record of the active project; the job adds and removes no label.
+    for step in improve_jensen["jobs"]["project"]["steps"]:
+        assert "--add-label" not in str(step.get("run", "")) and "--remove-label" not in str(step.get("run", ""))
+    assert "project-active" not in (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
+
+
 def test_no_job_dispatches_a_gate(improve_jensen):
     text = (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
     assert "gh workflow run" not in text
