@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.watch.deploy import check, deploy, main, services_for
+from agent.watch.deploy import check, deploy, main, resume_if_left_paused, services_for
 from agent.watch.host import Host
 from agent.watch.state import State
 
@@ -372,7 +372,7 @@ def test_core_that_never_answers_resume_is_reported(tmp_path, capsys):
 
     deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
 
-    assert "just resume" in capsys.readouterr().err
+    assert "couldn't resume core" in capsys.readouterr().err
 
 
 def test_a_failed_swap_still_resumes(tmp_path):
@@ -737,3 +737,66 @@ def test_cli_wires_if_pending(tmp_path):
 
     assert result == 0
     assert fake.calls == []
+
+
+# -- a deploy never leaves core paused --
+
+
+def test_the_paused_marker_is_there_during_the_swap_and_gone_after(tmp_path):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    fake = FakeDocker()
+    state = State(tmp_path / "state")
+    seen = []
+    original = fake._compose
+
+    def compose(rest):
+        if rest[0] == "up":
+            seen.append((state.root / "deploy-paused").exists())
+        return original(rest)
+
+    fake._compose = compose
+    assert deploy(Host(run=fake, live=live), state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0) == 0
+    assert seen == [True]
+    assert not (state.root / "deploy-paused").exists()
+
+
+def test_a_resume_that_fails_leaves_the_marker_for_the_listener(tmp_path):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    fake = FakeDocker()
+    fake.resume_failures = 100
+    state = State(tmp_path / "state")
+    deploy(Host(run=fake, live=live), state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
+    assert (state.root / "deploy-paused").exists() and fake.paused == "1"
+
+    fake.resume_failures = 0
+    assert resume_if_left_paused(Host(run=fake, live=live), state) is True
+    assert fake.paused == "0" and not (state.root / "deploy-paused").exists()
+
+
+def test_a_running_deploy_is_never_resumed_from_outside(tmp_path):
+    import fcntl as _fcntl
+    fake = FakeDocker()
+    fake.paused = "1"
+    state = State(tmp_path / "state")
+    (state.root / "deploy-paused").write_text("1\n")
+    with open(state.root / "deploy.lock", "a+") as held:
+        _fcntl.flock(held, _fcntl.LOCK_EX)
+        assert resume_if_left_paused(Host(run=fake, live=tmp_path), state) is False
+    assert fake.paused == "1"
+
+
+def test_nothing_to_resume_without_a_marker(tmp_path):
+    fake = FakeDocker()
+    assert resume_if_left_paused(Host(run=fake, live=tmp_path), State(tmp_path / "state")) is False
+    assert fake.calls == []
+
+
+def test_sigterm_unwinds_so_the_finally_resumes():
+    import signal as _signal
+    import pytest as _pytest
+    from agent.watch.deploy import _stop_cleanly
+    with _pytest.raises(SystemExit) as exc:
+        _stop_cleanly(_signal.SIGTERM, None)
+    assert exc.value.code == 128 + _signal.SIGTERM

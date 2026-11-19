@@ -24,8 +24,9 @@ from pathlib import Path
 from typing import Callable
 
 from agent.watch.approvals import answer_threads
+from agent.watch.deploy import resume_if_left_paused
 from agent.watch.slack import Slack, SlackError, load_people, load_token
-from agent.watch.state import FMT
+from agent.watch.state import FMT, State
 
 DEFAULT_REPO = "pragnition/autonomous-agent"
 WATCH, ASSESS, APPROVALS = "improve-jensen-watch", "improve-jensen-assess", "improve-jensen-approvals"
@@ -142,6 +143,11 @@ def run(host, state_root: Path, repo: str, *, ask: Callable[[str, str], str] | N
                            load_people(host.live), now)
         except Exception as exc:
             _warn("answering the proposals' threads", exc)
+        try:
+            if resume_if_left_paused(host, State(state_root)):
+                print("listen: resumed core, which a deploy that died had left paused", file=sys.stderr)
+        except Exception as exc:
+            _warn("checking for a deploy that left core paused", exc)
         sleep(_LOOP_S)
         head = _head(host)
         if start is None:
