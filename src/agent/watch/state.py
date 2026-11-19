@@ -49,11 +49,16 @@ _DIGEST_FMT = "%Y%m%dT%H%MZ"
 _RUNS_DIR = "runs"
 _RUN_REVIEWS_SUFFIX = "-reviews.json"
 _GATE_FILE = "gate.json"
+# The gate that ended last, with its `result` and `ended` time: what the workflow reads after it ends a gate.
+_GATE_LAST_FILE = "gate-last.json"
+_GATE_RESULTS = ("passed", "failed")
 # A gate.json older than this counts as expired (Review Focus 5): the yardstick job that was meant to call
 # gate_end() can die, and an unending gate must never block deploys or the watch's own fix picks forever.
 _GATE_MAX_AGE = timedelta(hours=12)
 _ASSESS_PLAN_FILE = "assess-plan.json"
 _PROJECT_ACTIVE_FILE = "project-active.json"
+# The yardstick's results (`agent.watch.yardstick`), one JSON line per task per run, each with a `ts` in `FMT`.
+_YARDSTICK_RESULTS = Path("yardstick") / "results.jsonl"
 
 # Numeric per-turn/per-midturn signals `count` reports as n/median/p90/max, and which record `kind` they live on.
 _TURN_NUMERIC = {"context_first", "context_peak", "inline_code_chars"}
@@ -375,6 +380,18 @@ class State:
         _atomic_write(path, text)
         return path
 
+    def digest_newer_than(self, ts: datetime) -> bool:
+        """Whether any digest was written after `ts`, going by the file's own mtime (not the end time baked into
+        its name -- a window measured late can write a digest well after the hour it's named for)."""
+        cutoff = ts.timestamp()
+        for path in self.root.glob(f"{_DIGEST_PREFIX}*{_DIGEST_SUFFIX}"):
+            try:
+                if path.stat().st_mtime > cutoff:
+                    return True
+            except OSError:
+                continue
+        return False
+
     def prune(self, now: datetime, days: int = 30) -> None:
         """Drop digests older than `days`, metric lines whose `ts` is older than `days`, and `runs/*-reviews.json`
         files older than `days` (a run id isn't a timestamp, so age there is the file's own mtime)."""
@@ -532,6 +549,19 @@ class State:
         records = _read_jsonl(self.root / _DEPLOYS_FILE)
         return records[-1] if records else None
 
+    def deploys_between(self, start: datetime, end: datetime) -> list[dict]:
+        """The `deploys.jsonl` records whose `ts` is in `(start, end]`, oldest first; one without a parseable `ts`
+        is left out."""
+        out = []
+        for record in _read_jsonl(self.root / _DEPLOYS_FILE):
+            try:
+                ts = _parse(record["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start < ts <= end:
+                out.append(record)
+        return out
+
     # -- gate (holds other behaviour changes while the yardstick measures one) --
 
     def gate_start(self, issue: int, kind: str, handle: str, now: datetime) -> None:
@@ -547,14 +577,8 @@ class State:
     def gate(self, now: datetime) -> dict | None:
         """The active gate (`gate.json`), or `None` if there isn't one, it can't be read, or it's older than 12
         hours -- an expired gate counts as no gate at all (Review Focus 5)."""
-        path = self.root / _GATE_FILE
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(data, dict):
+        data = self._read_json_object(_GATE_FILE)
+        if data is None:
             return None
         started = data.get("started")
         if not isinstance(started, str):
@@ -567,8 +591,48 @@ class State:
             return None
         return data
 
-    def gate_end(self) -> None:
+    def gate_end(self, result: str | None = None, now: datetime | None = None) -> None:
+        """End the gate: `gate.json` (expired or not) is archived to `gate-last.json` with `result` (`passed`,
+        `failed`, or `None` for a gate a person ended by hand) and `ended` added, replacing the gate archived
+        before it, then removed. With no `gate.json` there is nothing to end, and the last archived gate stays as
+        it was. Any other `result` raises `ValueError`."""
+        if result is not None and result not in _GATE_RESULTS:
+            raise ValueError(f"bad gate result: {result!r}")
+        data = self._read_json_object(_GATE_FILE)
+        if data is not None:
+            ended = _iso(now if now is not None else datetime.now(UTC))
+            _atomic_write(self.root / _GATE_LAST_FILE, json.dumps({**data, "result": result, "ended": ended}))
         (self.root / _GATE_FILE).unlink(missing_ok=True)
+
+    def last_gate(self) -> dict | None:
+        """The gate that ended last (`gate-last.json`), or `None` if none has, or it can't be read."""
+        return self._read_json_object(_GATE_LAST_FILE)
+
+    def _read_json_object(self, name: str) -> dict | None:
+        try:
+            data = json.loads((self.root / name).read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    # -- yardstick results --
+
+    def yardstick_results_path(self) -> Path:
+        return self.root / _YARDSTICK_RESULTS
+
+    def yardstick_result_newer_than(self, ts: datetime) -> bool:
+        """Whether the yardstick's results hold a line whose `ts` is after `ts`. A missing file, a malformed line or
+        one with no parseable `ts` is simply not a match -- one bad line must not hide every result after it."""
+        for record in _read_jsonl(self.yardstick_results_path()):
+            stamp = record.get("ts")
+            if not isinstance(stamp, str):
+                continue
+            try:
+                if _parse(stamp) > ts:
+                    return True
+            except ValueError:
+                continue
+        return False
 
     # -- assessment (what Jensen needs) --
 

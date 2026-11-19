@@ -205,6 +205,29 @@ def test_pool_hold_skips_without_consuming_window(tmp_path):
     assert start == baseline
 
 
+def test_pool_hold_comes_from_the_shared_pool_helper(tmp_path, monkeypatch):
+    # measure, `yardstick run` and `assess-check` share one reading of core's pool (`host.pool_is_holding`).
+    from agent.watch import measure as measure_module
+
+    seen = []
+
+    def holding(host, now=None):
+        seen.append(now)
+        return True
+
+    monkeypatch.setattr(measure_module, "pool_is_holding", holding)
+    host = FakeHost(collect=_EMPTY, **_NO_PRS)  # core itself says "normal": only the helper says hold
+
+    result = measure(State(tmp_path), host, T0, open_deployed=[])
+
+    assert result.skip_reason == "pool_hold" and seen == [T0]
+
+    # Unreadable (None) is not a hold: the hour goes on, and core's own reply decides the rest.
+    monkeypatch.setattr(measure_module, "pool_is_holding", lambda host, now=None: None)
+    assert measure(State(tmp_path / "unread"), FakeHost(collect=_EMPTY, **_NO_PRS), T0,
+                   open_deployed=[]).skip_reason == "quiet"
+
+
 # -- turn records and signals --
 
 
@@ -897,6 +920,51 @@ def test_an_ok_deploy_after_a_failed_one_leaves_a_quiet_hour_quiet(tmp_path):
 
     assert result.has_work is False
     assert result.skip_reason == "quiet"
+
+
+def _attention(digest: Path) -> list[str]:
+    text = digest.read_text()
+    return text.split("## Needs attention\n", 1)[1].split("\n\n", 1)[0].splitlines()
+
+
+def test_a_behaviour_changing_deploy_that_landed_this_window_is_work(tmp_path):
+    # A deploy that was pending (Jensen busy) can land in an otherwise quiet hour: the watch must still see it, to
+    # gate it.
+    state = State(tmp_path)
+    state.log_deploy({"ts": "2026-11-19T09:30:00Z", "from": "a" * 40, "to": "b" * 40,
+                      "services": ["agent", "core"], "result": "ok"})
+
+    result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+
+    assert result.has_work is True
+    assert _attention(result.digest) == [
+        f"- A behaviour-changing deploy landed (from {'a' * 40} to {'b' * 40}, at 2026-11-19T09:30:00Z): "
+        "Jensen's running services changed."]
+
+    # Only shas go into the line: anything else in the record's sha fields reads as unknown.
+    other = State(tmp_path / "other")
+    other.log_deploy({"ts": "2026-11-19T09:45:00Z", "from": None, "to": "acme-widgets main",
+                      "services": ["agent"], "result": "ok"})
+    attention = _attention(measure(other, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[]).digest)
+    assert attention == ["- A behaviour-changing deploy landed (from unknown to unknown, at 2026-11-19T09:45:00Z): "
+                         "Jensen's running services changed."]
+
+
+def test_deploys_that_change_no_service_or_land_outside_the_window_leave_a_quiet_hour_quiet(tmp_path):
+    # The window is (09:00, 10:00].
+    for n, record in enumerate((
+            {"ts": "2026-11-19T09:30:00Z", "services": [], "result": "ok"},  # docs only: nothing restarted
+            {"ts": "2026-11-19T08:59:59Z", "services": ["agent"], "result": "ok"},  # an earlier window's
+            {"ts": "2026-11-19T09:00:00Z", "services": ["agent"], "result": "ok"},  # on the boundary: earlier
+            {"ts": "2026-11-19T10:00:01Z", "services": ["agent"], "result": "ok"},  # after the window
+            {"ts": "2026-11-19T09:30:00Z", "services": ["agent"], "result": "pending"},  # not landed yet
+            {"ts": "not a time", "services": ["agent"], "result": "ok"})):
+        state = State(tmp_path / str(n))
+        state.log_deploy({"from": "a" * 40, "to": "b" * 40, **record})
+
+        result = measure(state, FakeHost(collect=_EMPTY, **_NO_PRS), T0, open_deployed=[])
+
+        assert result.has_work is False and result.skip_reason == "quiet", record
 
 
 def test_a_pr_with_no_created_at_still_gets_a_record(tmp_path):

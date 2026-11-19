@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -52,6 +53,66 @@ def test_core_python_pipes_file_and_raises_on_error(tmp_path):
     with pytest.raises(RuntimeError, match="boom") as excinfo:
         host3.core_python(mod, [])
     assert "1" in str(excinfo.value)
+
+
+def test_core_and_runner_python_pass_a_timeout_only_when_given(tmp_path):
+    mod = tmp_path / "mod.py"
+    mod.write_text("print('hi')\n")
+    calls, run = _fake_run([_cp(), _cp(), _cp(), _cp()])
+    host = Host(run=run, live=tmp_path)
+
+    host.core_python(mod, [], timeout=120)
+    host.runner_python(mod, [], timeout=120)
+    host.core_python(mod, [])
+    host.runner_python(mod, [])
+
+    assert [kwargs.get("timeout") for _, kwargs in calls[:2]] == [120, 120]
+    assert calls[1][0][:4] == ["docker", "exec", "-i", "agent-runner"]
+    # No timeout asked for: the call is exactly what it was before the parameter existed.
+    assert all("timeout" not in kwargs for _, kwargs in calls[2:])
+
+    # An exec that outlives its timeout raises subprocess.TimeoutExpired, for the caller to handle.
+    def hang(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        Host(run=hang, live=tmp_path).core_python(mod, [], timeout=1)
+
+
+# -- pool_is_holding --
+
+
+class _PoolHost:
+    def __init__(self, reply):
+        self.reply = reply
+        self.calls = []
+
+    def core_python(self, module_file, args):
+        self.calls.append((module_file, list(args)))
+        if isinstance(self.reply, BaseException):
+            raise self.reply
+        return self.reply
+
+
+def test_pool_is_holding_reads_core_once_at_one_instant():
+    from datetime import UTC, datetime
+
+    from agent.watch.host import pool_is_holding
+
+    now = datetime(2026, 11, 19, 10, 0, 0, tzinfo=UTC)
+    for pool, holding in (("hold_scheduled", True), ("empty", True), ("normal", False), (None, False)):
+        host = _PoolHost(json.dumps({"items": [], "pool": pool} if pool else {"items": []}))
+        assert pool_is_holding(host, now) is holding
+        assert host.calls == [("core_collect.py", ["--since", "2026-11-19T10:00:00Z",
+                                                   "--until", "2026-11-19T10:00:00Z"])]
+
+    # Couldn't read it: None, never a guess either way -- each caller decides what that means for it.
+    assert pool_is_holding(_PoolHost(RuntimeError("docker exec returned 1")), now) is None
+    assert pool_is_holding(_PoolHost(subprocess.TimeoutExpired(["docker"], 1)), now) is None
+    assert pool_is_holding(_PoolHost("not json"), now) is None
+    assert pool_is_holding(_PoolHost("[1, 2]"), now) is None
+    # Without `now`, the current time.
+    assert pool_is_holding(_PoolHost(json.dumps({"pool": "empty"}))) is True
 
 
 # -- transcripts --

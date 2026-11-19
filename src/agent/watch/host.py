@@ -4,17 +4,24 @@ Stdlib only — `Host` takes its `run` callable (defaulting to `subprocess.run`)
 can swap in a fake that records calls instead of touching Docker or the network. `host.run` stays public (not
 `_run`): later commands call it directly for a plain `docker inspect` or `docker exec` that doesn't fit one of the
 named helpers here.
+
+`pool_is_holding(host)` is the one reading of core's usage-watch pool that `measure`, `yardstick run` and
+`assess-check` all share: `True` while the pool holds (improve-jensen sits it out), `False` when it doesn't, `None`
+when it couldn't be read -- each caller decides for itself what an unreadable pool means for it.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
 
 from agent.secrets import load_secrets
+from agent.watch.state import FMT
 
 # Where core_collect.py / core_ask.py actually live, so a caller can hand core_python() a bare file name.
 _WATCH_DIR = Path(__file__).parent
@@ -28,6 +35,24 @@ _CONTAINER_UNREACHABLE = ("no such container", "is not running")
 
 # The runner token as `agent-runner` sees it: compose mounts `<live>/data/runner` at `/run/agent`, read-only.
 _RUNNER_TOKEN_IN_RUNNER = "/run/agent/runner-token"
+
+# core's usage-watch `pool` values that mean improve-jensen should sit this one out.
+POOL_HOLD = frozenset({"hold_scheduled", "empty"})
+
+
+def pool_is_holding(host, now: datetime | None = None) -> bool | None:
+    """Whether core's usage-watch pool holds right now, read through `core_collect.py` at a single instant
+    (`since == until == now`: `pool` is a snapshot, not windowed data). `None` when it couldn't be read: core
+    down, the exec failing, or a reply that isn't a JSON object. A pool core doesn't name counts as `normal`."""
+    stamp = (now or datetime.now(UTC)).astimezone(UTC).strftime(FMT)
+    try:
+        collected = json.loads(host.core_python("core_collect.py", ["--since", stamp, "--until", stamp]))
+    except Exception:
+        return None
+    if not isinstance(collected, dict):
+        return None
+    pool = collected.get("pool")
+    return isinstance(pool, str) and pool in POOL_HOLD
 
 
 class Host:
@@ -44,29 +69,30 @@ class Host:
         live = Path(env) if env else Path.home() / "autonomous-agent"
         return cls(live=live)
 
-    def core_python(self, module_file: str | Path, args: list[str]) -> str:
+    def core_python(self, module_file: str | Path, args: list[str], *, timeout: float | None = None) -> str:
         """Run `module_file`'s text inside `agent-core` (`docker exec -i agent-core python - <args>`), the file
         piped on stdin so core never needs to carry or import it. A bare name (no directory) resolves relative to
-        `src/agent/watch/`, where `core_collect.py` and `core_ask.py` live; an absolute path is used as given."""
-        path = Path(module_file)
-        if not path.is_absolute():
-            path = _WATCH_DIR / path
-        result = self.run(["docker", "exec", "-i", CORE_CONTAINER, "python", "-", *args],
-                           input=path.read_text(), capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"docker exec returned {result.returncode}: {result.stderr}")
-        return result.stdout
+        `src/agent/watch/`, where `core_collect.py` and `core_ask.py` live; an absolute path is used as given.
+        With `timeout` (seconds), an exec that outlives it raises `subprocess.TimeoutExpired`; without one it
+        waits as long as the command runs."""
+        return self._python(CORE_CONTAINER, "python", module_file, args, timeout)
 
-    def runner_python(self, module_file: str | Path, args: list[str]) -> str:
+    def runner_python(self, module_file: str | Path, args: list[str], *, timeout: float | None = None) -> str:
         """Run `module_file`'s text inside `agent-runner` (`docker exec -i agent-runner python3 - <args>`), the
         file piped on stdin so the runner never needs to carry or import it. Same contract as `core_python`
         (a bare name resolves relative to `src/agent/watch/`, where `runner_feedback.py` lives), except it runs
         `python3` rather than `python`: the runner's own interpreter is 3.12, invoked by that name there."""
+        return self._python(RUNNER_CONTAINER, "python3", module_file, args, timeout)
+
+    def _python(self, container: str, python: str, module_file: str | Path, args: list[str],
+                timeout: float | None) -> str:
         path = Path(module_file)
         if not path.is_absolute():
             path = _WATCH_DIR / path
-        result = self.run(["docker", "exec", "-i", RUNNER_CONTAINER, "python3", "-", *args],
-                           input=path.read_text(), capture_output=True, text=True)
+        kwargs: dict = {"input": path.read_text(), "capture_output": True, "text": True}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        result = self.run(["docker", "exec", "-i", container, python, "-", *args], **kwargs)
         if result.returncode != 0:
             raise RuntimeError(f"docker exec returned {result.returncode}: {result.stderr}")
         return result.stdout
