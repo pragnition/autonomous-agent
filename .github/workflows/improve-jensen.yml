@@ -40,12 +40,8 @@ on:
         description: PR URL (review); issue number (fix, project); ignored for watch, assess and approvals
   issues:
     types: [opened, labeled, assigned]
-  issue_comment:
+  issue_comment:   # also a PR's ordinary comments; PR reviews aren't triggers, since they run the PR's own workflow
     types: [created]
-  pull_request_review_comment:
-    types: [created]
-  pull_request_review:
-    types: [submitted]
 
 permissions:
   contents: write
@@ -357,9 +353,7 @@ jobs:
     if: >
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen') &&
        (github.event.action != 'labeled' || github.event.label.name == 'improve-jensen')) ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@improve-jensen')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@improve-jensen'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@improve-jensen'))
     runs-on: ${{ fromJSON(vars.IMPROVE_JENSEN_ENGINE == 'on' && '["self-hosted", "improve-jensen", "work"]' ||
       '["self-hosted", "improve-jensen"]') }}
     timeout-minutes: 120
