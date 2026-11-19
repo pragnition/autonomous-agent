@@ -69,6 +69,7 @@ services:
     container_name: agent-runner
     restart: unless-stopped
     init: true                  # an init process as PID 1 reaps the orphans the agent's sessions leave behind
+    stop_grace_period: 30s      # time for the runner to stop the agent's services (10 s each at most)
     network_mode: service:docker
     depends_on: [docker]
     command: [python, -m, agent, runner, --token-file, /run/agent/runner-token, --core, "http://core:8080",
