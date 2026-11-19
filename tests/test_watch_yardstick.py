@@ -70,7 +70,9 @@ class FakeClock:
 class FakeHost:
     """Stands in for `Host`: records every docker/git call in order in `calls`, as `(kind, detail...)` tuples,
     and serves the turns' statuses from `status(item_id, poll_number)`. `check_rc(folder)` is the check's exit
-    code for a task folder, `existing` the folders `test -e` finds already there."""
+    code for a task folder (or an exception for the check's `docker exec` to raise), `existing` the folders the
+    copy's own `mkdir` finds already there. `exec_timeouts` records the `timeout` each `core_python` and
+    `runner_python` call was given."""
 
     def __init__(self, tmp_path: Path, *, status=lambda item, poll: "done", check_rc=lambda folder: 0,
                  existing=(), pool: str = "normal"):
@@ -82,6 +84,7 @@ class FakeHost:
         self.calls: list[tuple] = []
         self.asks: dict[str, dict] = {}  # item id -> {"args", "text", "folder"}
         self.polls = 0
+        self.exec_timeouts: list[tuple[str, object]] = []
 
     def run(self, args, **kwargs):
         args = list(args)
@@ -89,30 +92,43 @@ class FakeHost:
             assert args[2] == str(self.live) and args[3:] == ["rev-parse", "HEAD"]
             self.calls.append(("sha",))
             return _cp(stdout="abc1234def\n")
-        if args[:4] == ["docker", "exec", "agent-runner", "test"]:
-            assert args[4] == "-e"
-            self.calls.append(("exists?", args[5]))
-            return _cp(returncode=0 if args[5] in self.existing else 1)
+        if args[:4] == ["docker", "exec", "agent-runner", "find"]:
+            self.calls.append(("prune", args[4:], kwargs.get("timeout")))
+            return _cp()
         if args[:5] == ["docker", "exec", "-i", "agent-runner", "sh"]:
             script = args[-1]
             folder = re.search(r"tar -x -C (\S+)$", script).group(1)
             with tarfile.open(fileobj=io.BytesIO(kwargs["input"])) as tar:
                 members = {m.name: m for m in tar.getmembers()}
             self.calls.append(("tar", folder, sorted(members), script))
+            if f" mkdir {folder} " in f" {script} " and folder in self.existing:
+                return _cp(returncode=17)  # the plain mkdir refuses a folder that is already there
             return _cp()
         if args[:5] == ["docker", "exec", "agent-runner", "sh", "-c"]:
             script = args[-1]
+            cleanup = re.fullmatch(r"rm -rf (\S+)/hidden (\S+)/check", script)
+            if cleanup:
+                assert cleanup.group(1) == cleanup.group(2)
+                self.calls.append(("cleanup", cleanup.group(1)))
+                return _cp()
             folder = re.match(r"cd (\S+) && ", script).group(1)
             if script.endswith("./check"):
-                assert kwargs.get("timeout") == 600
+                assert script == f"cd {folder} && timeout -k 10 600 ./check"
+                assert kwargs.get("timeout") == 660  # the host's own backstop, past the one inside the runner
                 self.calls.append(("check", folder))
-                return _cp(returncode=self.check_rc(folder))
+                rc = self.check_rc(folder)
+                if isinstance(rc, BaseException):
+                    raise rc
+                return _cp(returncode=rc)
             if script.endswith("sh build.sh"):
+                assert script == f"cd {folder} && timeout -k 10 300 sh build.sh"
+                assert kwargs.get("timeout") == 360
                 self.calls.append(("build", folder))
                 return _cp()
         raise AssertionError(f"unexpected run call: {args}")
 
-    def core_python(self, module_file, args):
+    def core_python(self, module_file, args, timeout=None):
+        self.exec_timeouts.append((module_file, timeout))
         if module_file == "core_ask.py":
             text = base64.b64decode(args[args.index("--text-b64") + 1]).decode()
             item = f"W-{len(self.asks) + 1}"
@@ -131,7 +147,8 @@ class FakeHost:
                                "running": []})
         raise AssertionError(f"unexpected core_python call: {module_file} {args}")
 
-    def runner_python(self, module_file, args):
+    def runner_python(self, module_file, args, timeout=None):
+        self.exec_timeouts.append((module_file, timeout))
         assert module_file == "runner_memory.py"
         mode = "snapshot" if "--snapshot" in args else "clean"
         self.calls.append(("memory", mode, list(args)))
@@ -219,6 +236,23 @@ def test_add_refuses_overwrite(tmp_path):
     assert not (root / "junk").exists()
 
 
+def test_a_task_id_ending_in_dash_r_is_refused(tmp_path, capsys):
+    # `<id>-r` is the folder a failed task's retry runs in: a task by that id would share it.
+    root = tmp_path / "tasks"
+    _write_task(root, "fix-it")
+    _write_task(root, "fix-it-r")
+    _write_task(root, "docker")  # ends in "r", not "-r": fine
+
+    assert [task.id for task in yardstick.load_tasks(root)] == ["docker", "fix-it"]
+    assert "skipped 1" in capsys.readouterr().err
+
+    src = tmp_path / "src"
+    _write_task(src, "auth-hole-r")
+    with pytest.raises(ValueError, match="-r"):
+        yardstick.add(src / "auth-hole-r", tmp_path / "yardstick" / "tasks")
+    assert not (tmp_path / "yardstick" / "tasks" / "auth-hole-r").exists()
+
+
 def test_install_copies_only_new(tmp_path):
     src, root = tmp_path / "deploy-yardstick", tmp_path / "yardstick" / "tasks"
     _write_task(root, "setup-facts", prompt="already installed")
@@ -271,7 +305,8 @@ def test_run_passes_and_records_results(tmp_path):
         "finished.\n\nFix the failing test in calc.py.")
     [fixture_tar] = [c for c in host.kinds("tar") if c[1] == f"{BASE}/fix-it" and "app.py" in c[2]]
     assert fixture_tar[2] == ["app.py"]
-    assert fixture_tar[3] == f"mkdir -p {BASE}/fix-it && tar -x -C {BASE}/fix-it"
+    # The folder is made with a plain mkdir, which refuses one already there, in the same command as the copy.
+    assert fixture_tar[3] == f"mkdir -p {BASE} && {{ mkdir {BASE}/fix-it || exit 17; }} && tar -x -C {BASE}/fix-it"
 
     # Memory is snapshotted before the first turn, and cleaned once at the very end.
     memory = host.kinds("memory")
@@ -315,11 +350,11 @@ def test_run_times_out_when_status_reads_keep_failing(tmp_path, capsys):
     _write_task(root, "slow", time_limit_min=1)
 
     class StatusDownHost(FakeHost):
-        def core_python(self, module_file, args):
+        def core_python(self, module_file, args, timeout=None):
             if module_file == "core_items.py":
                 self.calls.append(("poll", ()))
                 raise RuntimeError("docker exec returned 1: /home/someone/secret")
-            return super().core_python(module_file, args)
+            return super().core_python(module_file, args, timeout)
 
     host, clock = StatusDownHost(tmp_path), FakeClock()
     [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
@@ -426,8 +461,12 @@ def test_run_skips_a_task_whose_folder_exists(tmp_path):
     [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
                              sleep=clock.sleep, clock=clock.clock)
 
-    assert result["passed"] is False and result["reason"] == "folder exists"
-    assert host.kinds("ask") == [] and host.kinds("tar") == []
+    assert result["passed"] is False and result["reason"] == "folder exists" and result["tries"] == 1
+    assert host.kinds("ask") == []
+    # One atomic attempt: no separate existence check that a folder made in between could slip past.
+    [attempt] = host.kinds("tar")
+    assert attempt[3] == f"mkdir -p {BASE} && {{ mkdir {BASE}/t1 || exit 17; }} && tar -x -C {BASE}/t1"
+    assert not any(call[0] == "exists?" for call in host.calls)
 
 
 def test_run_builds_the_fixture_before_queuing(tmp_path):
@@ -444,6 +483,173 @@ def test_run_builds_the_fixture_before_queuing(tmp_path):
     assert build[1] == f"{BASE}/t1"
     t1_ask = next(c for c in host.kinds("ask") if c[2] == f"{BASE}/t1")
     assert host.calls.index(build) < host.calls.index(t1_ask)
+
+
+def test_run_prunes_run_folders_older_than_a_week_first(tmp_path, capsys):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1")
+    host, clock = FakeHost(tmp_path), FakeClock()
+
+    yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
+                  clock=clock.clock)
+
+    [prune] = host.kinds("prune")
+    assert prune[1] == ["/var/agent/yardstick", "-mindepth", "1", "-maxdepth", "1", "-mtime", "+7",
+                        "-exec", "rm", "-rf", "{}", "+"]
+    assert prune[2] == 120
+    assert host.calls.index(prune) < host.calls.index(host.kinds("memory")[0])
+
+    # A prune that fails is no reason to skip the run.
+    class NoPruneHost(FakeHost):
+        def run(self, args, **kwargs):
+            if list(args[:4]) == ["docker", "exec", "agent-runner", "find"]:
+                raise RuntimeError("docker exec returned 1: /home/someone/secret")
+            return super().run(args, **kwargs)
+
+    [result] = yardstick.run(NoPruneHost(tmp_path), State(tmp_path / "state2"), yardstick.load_tasks(root),
+                             run_id=RUN, sleep=clock.sleep, clock=clock.clock)
+    assert result["passed"] is True
+    printed = capsys.readouterr()
+    assert "prun" in printed.err and "secret" not in printed.out + printed.err
+
+
+def test_hidden_and_check_are_removed_after_each_check(tmp_path):
+    # Left in place, a retry in `<id>-r` (or any later turn) could read the first try's hidden tests.
+    root = tmp_path / "tasks"
+    _write_task(root, "flaky", hidden=True)
+    _write_task(root, "steady", hidden=True)
+    host = FakeHost(tmp_path, check_rc=lambda folder: 1 if folder == f"{BASE}/flaky" else 0)
+    clock = FakeClock()
+
+    yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
+                  clock=clock.clock)
+
+    checks = host.kinds("check")
+    assert sorted(c[1] for c in checks) == [f"{BASE}/flaky", f"{BASE}/flaky-r", f"{BASE}/steady"]
+    # Right after each check, failed or passed, its own folder's hidden/ and check go.
+    for check in checks:
+        assert host.calls[host.calls.index(check) + 1] == ("cleanup", check[1])
+    assert len(host.kinds("cleanup")) == 3
+
+
+def test_a_check_that_times_out_fails_with_check_timeout(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "slow-check", hidden=True)
+    _write_task(root, "slow-inside")
+
+    def check_rc(folder):
+        if "slow-check" in folder:  # the host-side backstop fires
+            return subprocess.TimeoutExpired(["docker"], 660)
+        return 124  # `timeout` inside the runner stopped it
+
+    host, clock = FakeHost(tmp_path, check_rc=check_rc), FakeClock()
+
+    results = {r["task"]: r for r in yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root),
+                                                    run_id=RUN, sleep=clock.sleep, clock=clock.clock)}
+
+    for task_id in ("slow-check", "slow-inside"):
+        assert results[task_id]["passed"] is False and results[task_id]["reason"] == "check timeout"
+        assert results[task_id]["tries"] == 2
+    # The hidden tests are removed after a check that timed out too.
+    assert sorted(c[1] for c in host.kinds("cleanup")) == [f"{BASE}/slow-check", f"{BASE}/slow-check-r",
+                                                           f"{BASE}/slow-inside", f"{BASE}/slow-inside-r"]
+
+
+def test_time_limit_starts_when_the_turn_leaves_the_queue(tmp_path):
+    # Queued behind real work for 4 minutes on a 2-minute task, then done 1 minute after it started: a pass.
+    root = tmp_path / "tasks"
+    _write_task(root, "t1", time_limit_min=2)
+    host = FakeHost(tmp_path, status=lambda item, poll: "queued" if poll <= 8 else "claimed" if poll <= 10
+                    else "done")
+    clock = FakeClock()
+
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is True and result["tries"] == 1 and result["reason"] == ""
+    assert result["minutes"] == 5.5  # still the whole time since it was queued
+
+
+def test_a_turn_that_never_leaves_the_queue_times_out_at_three_times_its_limit(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "stuck", time_limit_min=2, rubric="Judge it.", check=False)  # judged: one try only
+    host = FakeHost(tmp_path, status=lambda item, poll: "queued")
+    clock = FakeClock()
+
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is False and result["reason"] == "timeout"
+    assert result["minutes"] == 6.0
+    assert len(host.kinds("poll")) == 12  # never cut off at the 2-minute limit while it was still queued
+
+
+def test_every_exec_in_the_run_loop_has_a_timeout(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1")
+    host, clock = FakeHost(tmp_path), FakeClock()
+
+    yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN, sleep=clock.sleep,
+                  clock=clock.clock)
+
+    assert {module for module, _ in host.exec_timeouts} == {"core_ask.py", "core_items.py", "runner_memory.py"}
+    assert {timeout for _, timeout in host.exec_timeouts} == {120}
+
+
+def test_a_status_read_that_times_out_is_no_news(tmp_path, capsys):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1", time_limit_min=5)
+
+    class SlowStatusHost(FakeHost):
+        def core_python(self, module_file, args, timeout=None):
+            if module_file == "core_items.py" and self.polls < 2:
+                self.polls += 1
+                raise subprocess.TimeoutExpired(["docker"], timeout)
+            return super().core_python(module_file, args, timeout)
+
+    host, clock = SlowStatusHost(tmp_path), FakeClock()
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is True and result["tries"] == 1
+    assert "2 status read(s)" in capsys.readouterr().err
+
+
+def test_a_queue_that_times_out_fails_the_task(tmp_path):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1")
+
+    class SlowQueueHost(FakeHost):
+        def core_python(self, module_file, args, timeout=None):
+            if module_file == "core_ask.py":
+                raise subprocess.TimeoutExpired(["docker"], timeout)
+            return super().core_python(module_file, args, timeout)
+
+    host, clock = SlowQueueHost(tmp_path), FakeClock()
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is False and result["reason"] == "queue error" and result["tries"] == 2
+    assert host.kinds("poll") == []
+
+
+def test_a_memory_step_that_times_out_is_logged_and_skipped(tmp_path, capsys):
+    root = tmp_path / "tasks"
+    _write_task(root, "t1")
+
+    class SlowMemoryHost(FakeHost):
+        def runner_python(self, module_file, args, timeout=None):
+            self.calls.append(("memory-timeout",))
+            raise subprocess.TimeoutExpired(["docker"], timeout)
+
+    host, clock = SlowMemoryHost(tmp_path), FakeClock()
+    [result] = yardstick.run(host, State(tmp_path / "state"), yardstick.load_tasks(root), run_id=RUN,
+                             sleep=clock.sleep, clock=clock.clock)
+
+    assert result["passed"] is True
+    assert len(host.kinds("memory-timeout")) == 2  # the snapshot before and the cleanup after
+    err = capsys.readouterr().err
+    assert "no note will be removed" in err and "memory cleanup after the yardstick run failed" in err
 
 
 def test_run_keeps_at_most_concurrency_turns_in_flight(tmp_path):
@@ -475,7 +681,7 @@ def test_run_survives_core_being_unreachable(tmp_path, capsys):
     _write_task(root, "t1", time_limit_min=1)
 
     class DownHost(FakeHost):
-        def core_python(self, module_file, args):
+        def core_python(self, module_file, args, timeout=None):
             raise RuntimeError("docker exec returned 1: secret path /home/someone")
 
     host, clock = DownHost(tmp_path), FakeClock()
@@ -718,10 +924,10 @@ def test_cli_yardstick_run_goes_ahead_when_core_cannot_be_read(tmp_path, monkeyp
     _write_task(state.root / "yardstick" / "tasks", "t1")
 
     class NoPoolHost(FakeHost):
-        def core_python(self, module_file, args):
+        def core_python(self, module_file, args, timeout=None):
             if module_file == "core_collect.py":
                 raise RuntimeError("docker exec returned 1")
-            return super().core_python(module_file, args)
+            return super().core_python(module_file, args, timeout)
 
     host = NoPoolHost(tmp_path)
     monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)

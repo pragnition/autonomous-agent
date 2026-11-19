@@ -54,6 +54,30 @@ def test_core_python_pipes_file_and_raises_on_error(tmp_path):
     assert "1" in str(excinfo.value)
 
 
+def test_core_and_runner_python_pass_a_timeout_only_when_given(tmp_path):
+    mod = tmp_path / "mod.py"
+    mod.write_text("print('hi')\n")
+    calls, run = _fake_run([_cp(), _cp(), _cp(), _cp()])
+    host = Host(run=run, live=tmp_path)
+
+    host.core_python(mod, [], timeout=120)
+    host.runner_python(mod, [], timeout=120)
+    host.core_python(mod, [])
+    host.runner_python(mod, [])
+
+    assert [kwargs.get("timeout") for _, kwargs in calls[:2]] == [120, 120]
+    assert calls[1][0][:4] == ["docker", "exec", "-i", "agent-runner"]
+    # No timeout asked for: the call is exactly what it was before the parameter existed.
+    assert all("timeout" not in kwargs for _, kwargs in calls[2:])
+
+    # An exec that outlives its timeout raises subprocess.TimeoutExpired, for the caller to handle.
+    def hang(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        Host(run=hang, live=tmp_path).core_python(mod, [], timeout=1)
+
+
 # -- transcripts --
 
 

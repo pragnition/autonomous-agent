@@ -44,29 +44,30 @@ class Host:
         live = Path(env) if env else Path.home() / "autonomous-agent"
         return cls(live=live)
 
-    def core_python(self, module_file: str | Path, args: list[str]) -> str:
+    def core_python(self, module_file: str | Path, args: list[str], *, timeout: float | None = None) -> str:
         """Run `module_file`'s text inside `agent-core` (`docker exec -i agent-core python - <args>`), the file
         piped on stdin so core never needs to carry or import it. A bare name (no directory) resolves relative to
-        `src/agent/watch/`, where `core_collect.py` and `core_ask.py` live; an absolute path is used as given."""
-        path = Path(module_file)
-        if not path.is_absolute():
-            path = _WATCH_DIR / path
-        result = self.run(["docker", "exec", "-i", CORE_CONTAINER, "python", "-", *args],
-                           input=path.read_text(), capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"docker exec returned {result.returncode}: {result.stderr}")
-        return result.stdout
+        `src/agent/watch/`, where `core_collect.py` and `core_ask.py` live; an absolute path is used as given.
+        With `timeout` (seconds), an exec that outlives it raises `subprocess.TimeoutExpired`; without one it
+        waits as long as the command runs."""
+        return self._python(CORE_CONTAINER, "python", module_file, args, timeout)
 
-    def runner_python(self, module_file: str | Path, args: list[str]) -> str:
+    def runner_python(self, module_file: str | Path, args: list[str], *, timeout: float | None = None) -> str:
         """Run `module_file`'s text inside `agent-runner` (`docker exec -i agent-runner python3 - <args>`), the
         file piped on stdin so the runner never needs to carry or import it. Same contract as `core_python`
         (a bare name resolves relative to `src/agent/watch/`, where `runner_feedback.py` lives), except it runs
         `python3` rather than `python`: the runner's own interpreter is 3.12, invoked by that name there."""
+        return self._python(RUNNER_CONTAINER, "python3", module_file, args, timeout)
+
+    def _python(self, container: str, python: str, module_file: str | Path, args: list[str],
+                timeout: float | None) -> str:
         path = Path(module_file)
         if not path.is_absolute():
             path = _WATCH_DIR / path
-        result = self.run(["docker", "exec", "-i", RUNNER_CONTAINER, "python3", "-", *args],
-                           input=path.read_text(), capture_output=True, text=True)
+        kwargs: dict = {"input": path.read_text(), "capture_output": True, "text": True}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        result = self.run(["docker", "exec", "-i", container, python, "-", *args], **kwargs)
         if result.returncode != 0:
             raise RuntimeError(f"docker exec returned {result.returncode}: {result.stderr}")
         return result.stdout
