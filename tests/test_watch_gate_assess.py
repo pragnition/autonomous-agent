@@ -95,6 +95,63 @@ def test_gate_cli_start_status_end(tmp_path, capsys):
     assert rc_fresh == 0
 
 
+def test_gate_end_archives_the_gate_with_its_result(tmp_path):
+    state = State(tmp_path)
+    assert state.last_gate() is None
+
+    state.gate_start(7, "repo", "abc123", T0)
+    state.gate_end("failed", T0 + timedelta(hours=2))
+
+    assert state.gate(T0) is None and not (tmp_path / "gate.json").exists()
+    assert state.last_gate() == {"issue": 7, "kind": "repo", "handle": "abc123", "started": "2026-11-19T10:00:00Z",
+                                 "result": "failed", "ended": "2026-11-19T12:00:00Z"}
+    assert json.loads((tmp_path / "gate-last.json").read_text())["result"] == "failed"
+
+    # Ending with no gate active changes nothing: the last ended gate stays on record.
+    state.gate_end("passed", T0 + timedelta(hours=3))
+    assert state.last_gate()["result"] == "failed"
+
+    # An expired gate is still archived (it's the record of the change it was measuring), and a new one replaces
+    # the last record.
+    state.gate_start(8, "host", "backup-1", T0)
+    state.gate_end("passed", T0 + timedelta(hours=13))
+    assert state.last_gate()["issue"] == 8 and state.last_gate()["result"] == "passed"
+
+    with pytest.raises(ValueError):
+        state.gate_end("maybe", T0)
+
+
+def test_gate_cli_status_last_github_output_and_end_result(tmp_path, capsys):
+    state = State(tmp_path / "state")
+    out = tmp_path / "out.txt"
+
+    # No gate: active=false, and nothing on stdout -- a workflow log never shows a gate's handle.
+    assert main(["gate", "status", "--github-output", str(out)], host=object(), state=state, now=T0) == 0
+    assert _kv(out.read_text()) == {"active": "false"}
+    assert capsys.readouterr().out == ""
+    assert main(["gate", "status", "--last"], host=object(), state=state, now=T0) == 0
+    assert capsys.readouterr().out.strip() == "none"
+
+    main(["gate", "start", "--issue", "5", "--kind", "host", "--handle", "backup-7"], host=object(), state=state,
+         now=T0)
+    out.unlink()
+    assert main(["gate", "status", "--github-output", str(out)], host=object(), state=state, now=T0) == 0
+    assert _kv(out.read_text()) == {"active": "true"}
+    assert capsys.readouterr().out == ""
+
+    assert main(["gate", "end", "--result", "passed"], host=object(), state=state,
+                now=T0 + timedelta(hours=1)) == 0
+    main(["gate", "status"], host=object(), state=state, now=T0 + timedelta(hours=1))
+    assert capsys.readouterr().out.strip() == "none"
+    main(["gate", "status", "--last"], host=object(), state=state, now=T0 + timedelta(hours=1))
+    assert json.loads(capsys.readouterr().out) == {"issue": 5, "kind": "host", "handle": "backup-7",
+                                                   "started": "2026-11-19T10:00:00Z", "result": "passed",
+                                                   "ended": "2026-11-19T11:00:00Z"}
+
+    with pytest.raises(SystemExit):
+        main(["gate", "end", "--result", "maybe"], host=object(), state=state, now=T0)
+
+
 def test_gate_start_rejects_bad_kind(tmp_path):
     state = State(tmp_path / "state")
     with pytest.raises(SystemExit):

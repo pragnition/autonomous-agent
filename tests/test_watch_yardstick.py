@@ -742,16 +742,18 @@ def test_compare_gate_fails_on_drop_of_two_and_on_regression(tmp_path):
     state = State(tmp_path / "drop")
     _record(state, "r1", {"a": True, "b": True, "c": True, "d": False})
     _record(state, "r2", {"a": True, "b": False, "c": False, "d": False}, judged={"j": False})
-    assert yardstick.compare(state, "r2") == {"previous": "r1", "drop": 2, "regressions": [], "gate_failed": True}
+    assert yardstick.compare(state, "r2") == {"previous": "r1", "shared": 4, "drop": 2, "regressions": [],
+                                              "gate_failed": True}
     _record(state, "r3", {"a": True, "b": True, "c": False, "d": False})
-    assert yardstick.compare(state, "r3") == {"previous": "r2", "drop": -1, "regressions": [], "gate_failed": False}
+    assert yardstick.compare(state, "r3") == {"previous": "r2", "shared": 4, "drop": -1, "regressions": [],
+                                              "gate_failed": False}
 
     # A task that passed its last 3 runs and fails now is a regression, even with a drop of only 1.
     state = State(tmp_path / "regression")
     for run in ("r1", "r2", "r3"):
         _record(state, run, {"a": True, "b": False})
     _record(state, "r4", {"a": False, "b": False})
-    assert yardstick.compare(state, "r4") == {"previous": "r3", "drop": 1, "regressions": ["a"],
+    assert yardstick.compare(state, "r4") == {"previous": "r3", "shared": 2, "drop": 1, "regressions": ["a"],
                                               "gate_failed": True}
 
     # Two passes in a row is not yet a streak.
@@ -770,13 +772,48 @@ def test_compare_previous_is_the_last_run_sharing_tasks_and_new_tasks_never_trip
     # Two tasks added since r1 fail on their first run: they're not shared with r1, so no drop.
     _record(state, "r3", {"a": True, "b": True, "new1": False, "new2": False}, judged={"j": True})
 
-    assert yardstick.compare(state, "r3") == {"previous": "r1", "drop": 0, "regressions": [], "gate_failed": False}
+    assert yardstick.compare(state, "r3") == {"previous": "r1", "shared": 2, "drop": 0, "regressions": [],
+                                              "gate_failed": False}
 
     first = State(tmp_path / "first")
     _record(first, "r1", {"a": False, "b": False})
-    assert yardstick.compare(first, "r1") == {"previous": None, "drop": 0, "regressions": [], "gate_failed": False}
-    assert yardstick.compare(first, "missing") == {"previous": None, "drop": 0, "regressions": [],
+    assert yardstick.compare(first, "r1") == {"previous": None, "shared": 0, "drop": 0, "regressions": [],
+                                              "gate_failed": False}
+    assert yardstick.compare(first, "missing") == {"previous": None, "shared": 0, "drop": 0, "regressions": [],
                                                    "gate_failed": False}
+
+
+def test_compare_needs_two_shared_tasks_and_looks_past_a_run_that_shares_fewer(tmp_path):
+    state = State(tmp_path / "state")
+    _record(state, "r1", {"a": True, "b": True, "c": True})
+    _record(state, "r2", {"a": True, "z": True})  # a --tasks run sharing only one task with r3
+    _record(state, "r3", {"a": True, "b": False, "c": False})
+
+    assert yardstick.compare(state, "r3") == {"previous": "r1", "shared": 3, "drop": 2, "regressions": [],
+                                              "gate_failed": True}
+
+    lone = State(tmp_path / "lone")
+    _record(lone, "r1", {"a": True, "b": True})
+    _record(lone, "r2", {"a": False, "c": False})
+    assert yardstick.compare(lone, "r2")["previous"] is None
+
+
+def test_gate_verdict(tmp_path):
+    first = State(tmp_path / "first")
+    _record(first, "r1", {"a": False, "b": False})
+    assert yardstick.gate_verdict(first, "r1") == "passed"  # nothing before it: it is the baseline
+
+    state = State(tmp_path / "state")
+    _record(state, "r1", {"a": True, "b": True, "c": True})
+    _record(state, "r2", {"a": True, "b": True, "c": False})
+    assert yardstick.gate_verdict(state, "r2") == "passed"  # a drop of 1
+    _record(state, "r3", {"a": False, "b": False, "c": False})
+    assert yardstick.gate_verdict(state, "r3") == "failed"
+    _record(state, "r4", {"a": True, "new": True})  # one task in common with every earlier run
+    assert yardstick.gate_verdict(state, "r4") == "retry"
+    _record(state, "r5", {}, judged={"j": True})  # no mechanical task at all
+    assert yardstick.gate_verdict(state, "r5") == "retry"
+    assert yardstick.gate_verdict(state, "never-ran") == "retry"
 
 
 # -- memory cleanup --
@@ -949,10 +986,12 @@ def test_cli_yardstick_run_goes_ahead_when_core_cannot_be_read(tmp_path, monkeyp
     host = NoPoolHost(tmp_path)
     monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
     out = tmp_path / "out.txt"
+    state.gate_start(12, "repo", "abc123", T0)
 
     assert main(["yardstick", "run", "--gate", "--github-output", str(out)], host=host, state=state, now=T0) == 0
     kv = _kv(out.read_text())
     assert kv["skip_reason"] == "" and kv["score"] == "1" and kv["counted"] == "1" and kv["gate_failed"] == "false"
+    assert kv["gate_result"] == "passed"  # the first run ever: the baseline
 
 
 def test_cli_yardstick_run_with_no_tasks_skips(tmp_path):
@@ -974,6 +1013,7 @@ def test_cli_yardstick_run_writes_outputs_and_gate(tmp_path, monkeypatch, capsys
     host = FakeHost(tmp_path, check_rc=lambda folder: 0 if folder.endswith("acme-a") else 1)
     monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)  # the CLI waits with the real sleep: make it instant
     out = tmp_path / "out.txt"
+    state.gate_start(12, "repo", "abc123", T0)
 
     rc = main(["yardstick", "run", "--gate", "--github-output", str(out)], host=host, state=state, now=T0)
 
@@ -981,10 +1021,110 @@ def test_cli_yardstick_run_writes_outputs_and_gate(tmp_path, monkeypatch, capsys
     kv = _kv(out.read_text())
     assert kv["score"] == "1" and kv["counted"] == "3" and kv["skip_reason"] == ""
     assert re.fullmatch(r"20261119T190700Z-[0-9a-f]{4}", kv["run_id"])
-    assert kv["gate_failed"] == "true"
+    assert kv["gate_result"] == "failed" and kv["gate_failed"] == "true"
+    assert state.gate(T0) is not None  # the run never ends the gate itself: the workflow does, with its result
     printed = capsys.readouterr()
     assert printed.out.strip().splitlines()[-1] == "score=1/3"
     assert "acme" not in printed.out and "acme" not in printed.err
+
+
+def _gate_run(state, host, out, now=T0):
+    rc = main(["yardstick", "run", "--gate", "--github-output", str(out)], host=host, state=state, now=now)
+    kv = _kv(out.read_text())
+    out.unlink()
+    return rc, kv
+
+
+def test_cli_gate_run_without_an_active_gate_measures_nothing(tmp_path):
+    state = State(tmp_path / "state")
+    _write_task(state.root / "yardstick" / "tasks", "t1")
+    host, out = FakeHost(tmp_path), tmp_path / "out.txt"
+
+    rc, kv = _gate_run(state, host, out)
+
+    assert rc == 0
+    assert kv["gate_result"] == "none" and kv["gate_failed"] == "false" and kv["skip_reason"] == "no_gate"
+    assert kv["run_id"] == "" and kv["counted"] == "0"
+    assert host.calls == [] and not yardstick.results_path(state).exists()
+
+
+def test_cli_gate_run_retries_when_it_cannot_measure(tmp_path, monkeypatch, capsys):
+    state = State(tmp_path / "state")
+    state.gate_start(12, "repo", "abc123", T0)
+    out = tmp_path / "out.txt"
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+
+    # No tasks installed.
+    rc, kv = _gate_run(state, FakeHost(tmp_path), out)
+    assert rc == 0 and kv["gate_result"] == "retry" and kv["skip_reason"] == "no_tasks"
+
+    # The pool holds.
+    _write_task(state.root / "yardstick" / "tasks", "t1")
+    _write_task(state.root / "yardstick" / "tasks", "t2")
+    rc, kv = _gate_run(state, FakeHost(tmp_path, pool="hold_scheduled"), out)
+    assert rc == 0 and kv["gate_result"] == "retry" and kv["skip_reason"] == "pool_hold"
+
+    # The run itself raises.
+    def broken_run(*args, **kwargs):
+        raise RuntimeError("boom in /home/someone")
+
+    with monkeypatch.context() as m:
+        m.setattr(yardstick, "run", broken_run)
+        rc, kv = _gate_run(state, FakeHost(tmp_path), out)
+    assert rc == 1 and kv["gate_result"] == "retry" and kv["gate_failed"] == "false"
+
+    # The comparison raises.
+    def broken_verdict(*args, **kwargs):
+        raise ValueError("bad results")
+
+    with monkeypatch.context() as m:
+        m.setattr(yardstick, "gate_verdict", broken_verdict)
+        rc, kv = _gate_run(state, FakeHost(tmp_path), out)
+    assert rc == 1 and kv["gate_result"] == "retry"
+
+    # Fewer than 2 mechanical tasks in common with any earlier run.
+    state2 = State(tmp_path / "state2")
+    state2.gate_start(12, "repo", "abc123", T0)
+    _write_task(state2.root / "yardstick" / "tasks", "t1")
+    _write_task(state2.root / "yardstick" / "tasks", "t2")
+    _record(state2, "20261118T190700Z-0000", {"t1": True, "old": True})
+    rc, kv = _gate_run(state2, FakeHost(tmp_path), out)
+    assert rc == 0 and kv["gate_result"] == "retry" and kv["skip_reason"] == ""
+
+    # Every retry leaves the gate active, for the next gate run.
+    assert state.gate(T0) is not None and state2.gate(T0) is not None
+    printed = capsys.readouterr()
+    assert "boom" not in printed.out + printed.err and "/home" not in printed.out + printed.err
+
+
+def test_cli_gate_run_passes_without_a_drop(tmp_path, monkeypatch):
+    state = State(tmp_path / "state")
+    for task_id in ("a", "b", "c"):
+        _write_task(state.root / "yardstick" / "tasks", task_id)
+    _record(state, "20261118T190700Z-0000", {"a": True, "b": True, "c": False})
+    state.gate_start(12, "repo", "abc123", T0)
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+
+    rc, kv = _gate_run(state, FakeHost(tmp_path), tmp_path / "out.txt")
+
+    assert rc == 0 and kv["gate_result"] == "passed" and kv["gate_failed"] == "false" and kv["score"] == "3"
+
+
+def test_cli_nightly_run_never_judges_a_gate(tmp_path, monkeypatch):
+    state = State(tmp_path / "state")
+    for task_id in ("a", "b"):
+        _write_task(state.root / "yardstick" / "tasks", task_id)
+    _record(state, "20261118T190700Z-0000", {"a": True, "b": True})
+    state.gate_start(12, "repo", "abc123", T0)
+    monkeypatch.setattr(yardstick, "POLL_SECONDS", 0)
+    out = tmp_path / "out.txt"
+
+    assert main(["yardstick", "run", "--github-output", str(out)], host=FakeHost(tmp_path, check_rc=lambda f: 1),
+                state=state, now=T0) == 0
+
+    kv = _kv(out.read_text())
+    assert kv["gate_result"] == "none" and kv["gate_failed"] == "false" and kv["score"] == "0"
+    assert state.gate(T0) is not None
 
 
 def test_cli_yardstick_run_only_named_tasks(tmp_path, monkeypatch, capsys):

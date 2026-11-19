@@ -21,9 +21,16 @@ is logged in as (`host.run`), never through `host.jensen_gh` -- that call is rea
 from the outside, not acting as Jensen.
 
 `gate start`/`gate status`/`gate end` wrap `state.py`'s own gate (held while the yardstick measures one change at a
-time); `assess-check`/`assess-plan`/`assess-commit` drive the assess job the same way `measure`/`plan`/`commit`
-drive the watch; `project-mark` is the deterministic record of which `project` issue, if any, is currently being
-worked (`$STATE/project-active.json`), read back by `assess-check`'s own "is anything waiting" check.
+time). `gate status` prints the active gate, or with `--last` the one that ended last (with its `result`), or
+`none`; with `--github-output` it only writes `active=true|false` there, so a workflow log never shows a gate's
+handle. `gate end --result passed|failed` archives the gate with its result. `yardstick run --gate` measures the
+active gate's change and says what it found in `gate_result`: `none` (no active gate: nothing measured), `retry`
+(it couldn't be measured this time -- the pool held, no tasks, an error, or too few tasks in common with an earlier
+run -- and the gate stays active for the next gate run), or `passed`/`failed`; it never ends the gate itself.
+
+`assess-check`/`assess-plan`/`assess-commit` drive the assess job the same way `measure`/`plan`/`commit` drive the
+watch; `project-mark` is the deterministic record of which `project` issue, if any, is currently being worked
+(`$STATE/project-active.json`), read back by `assess-check`'s own "is anything waiting" check.
 """
 
 from __future__ import annotations
@@ -124,12 +131,25 @@ def _pool_holding(host: Host, now: datetime) -> bool:
 
 def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | None, gate: bool,
                    github_output: str | None) -> int:
-    """Outputs `score`, `counted`, `skip_reason`, `run_id` and `gate_failed` (the comparison's verdict on a `--gate`
-    run, always `false` otherwise: a nightly run never reverts anything), then prints `score=<passed>/<counted>`."""
+    """Outputs `score`, `counted`, `skip_reason`, `run_id`, `gate_result` and `gate_failed` (`true` only when
+    `gate_result` is `failed`), then prints `score=<passed>/<counted>`. `gate_result` is always `none` without
+    `--gate` (a nightly run never judges a gate); with it, see the module docstring."""
+
+    def emit(passed: int, counted: int, skip_reason: str, run_id: str, gate_result: str) -> None:
+        _emit([f"score={passed}", f"counted={counted}", f"skip_reason={skip_reason}", f"run_id={run_id}",
+               f"gate_result={gate_result}", f"gate_failed={_bool_str(gate_result == 'failed')}"], github_output)
+        print(f"score={passed}/{counted}")
+
+    if gate and state.gate(now) is None:
+        emit(0, 0, "no_gate", "", "none")
+        return 0
+    cannot_measure = "retry" if gate else "none"
+
     try:
         tasks = yardstick.load_tasks(yardstick.tasks_root(state))
     except OSError as exc:
         print(f"yardstick run: reading the tasks failed ({type(exc).__name__})", file=sys.stderr)
+        emit(0, 0, "error", "", cannot_measure)
         return 1
     if tasks_arg is not None:
         wanted = {task_id for task_id in tasks_arg.split(",") if task_id}
@@ -140,27 +160,23 @@ def _yardstick_run(host: Host, state: State, now: datetime, tasks_arg: str | Non
             return 2
         tasks = [task for task in tasks if task.id in wanted]
 
-    def emit(passed: int, counted: int, skip_reason: str, run_id: str, gate_failed: bool) -> None:
-        _emit([f"score={passed}", f"counted={counted}", f"skip_reason={skip_reason}", f"run_id={run_id}",
-               f"gate_failed={_bool_str(gate_failed)}"], github_output)
-        print(f"score={passed}/{counted}")
-
     if not tasks:
-        emit(0, 0, "no_tasks", "", False)
+        emit(0, 0, "no_tasks", "", cannot_measure)
         return 0
     if _pool_holding(host, now):
-        emit(0, 0, "pool_hold", "", False)
+        emit(0, 0, "pool_hold", "", cannot_measure)
         return 0
 
     run_id = yardstick.new_run_id(now)
     try:
         results = yardstick.run(host, state, tasks, run_id=run_id)
-        gate_failed = yardstick.compare(state, run_id)["gate_failed"] if gate else False
+        gate_result = yardstick.gate_verdict(state, run_id) if gate else "none"
     except Exception as exc:
         print(f"yardstick run failed ({type(exc).__name__})", file=sys.stderr)
+        emit(0, 0, "error", run_id, cannot_measure)
         return 1
     passed, counted = yardstick.score(results)
-    emit(passed, counted, "", run_id, gate_failed)
+    emit(passed, counted, "", run_id, gate_result)
     return 0
 
 
@@ -245,8 +261,12 @@ def _add_gate_assess_parsers(sub: argparse._SubParsersAction) -> None:
     gate_start_p.add_argument("--issue", type=int, required=True)
     gate_start_p.add_argument("--kind", choices=["repo", "host"], required=True)
     gate_start_p.add_argument("--handle", required=True)
-    gate_sub.add_parser("status")
-    gate_sub.add_parser("end")
+    gate_status_p = gate_sub.add_parser("status")
+    gate_status_p.add_argument("--last", action="store_true", help="the gate that ended last, with its result")
+    gate_status_p.add_argument("--github-output")
+    gate_end_p = gate_sub.add_parser("end")
+    gate_end_p.add_argument("--result", choices=["passed", "failed"],
+                            help="what the yardstick found; left out when a person ends a gate by hand")
 
     assess_check_p = sub.add_parser("assess-check")
     assess_check_p.add_argument("--github-output")
@@ -445,14 +465,20 @@ def _cmd_gate_start(state: State, issue: int, kind: str, handle: str, now: datet
     return 0
 
 
-def _cmd_gate_status(state: State, now: datetime) -> int:
-    gate = state.gate(now)
-    print(json.dumps(gate) if gate else "none")
+def _cmd_gate_status(state: State, now: datetime, last: bool, github_output: str | None) -> int:
+    """The active gate's JSON (or, with `last`, the one that ended last), or `none`. With `github_output`, only
+    `active=true|false` is written there and nothing is printed: a gate's handle can be a host path."""
+    active = state.gate(now)
+    if github_output:
+        _emit([f"active={_bool_str(active is not None)}"], github_output)
+        return 0
+    shown = state.last_gate() if last else active
+    print(json.dumps(shown) if shown else "none")
     return 0
 
 
-def _cmd_gate_end(state: State) -> int:
-    state.gate_end()
+def _cmd_gate_end(state: State, result: str | None, now: datetime) -> int:
+    state.gate_end(result, now)
     return 0
 
 
@@ -527,9 +553,9 @@ def _dispatch_gate_assess(args: argparse.Namespace, host: Host, state: State, no
         if args.gate_command == "start":
             return _cmd_gate_start(state, args.issue, args.kind, args.handle, now)
         if args.gate_command == "status":
-            return _cmd_gate_status(state, now)
+            return _cmd_gate_status(state, now, args.last, args.github_output)
         if args.gate_command == "end":
-            return _cmd_gate_end(state)
+            return _cmd_gate_end(state, args.result, now)
         raise AssertionError(f"unhandled gate command: {args.gate_command!r}")  # pragma: no cover
     if args.command == "assess-check":
         return _cmd_assess_check(host, state, now, args.github_output)

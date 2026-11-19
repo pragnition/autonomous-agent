@@ -49,6 +49,9 @@ _DIGEST_FMT = "%Y%m%dT%H%MZ"
 _RUNS_DIR = "runs"
 _RUN_REVIEWS_SUFFIX = "-reviews.json"
 _GATE_FILE = "gate.json"
+# The gate that ended last, with its `result` and `ended` time: what the workflow reads after it ends a gate.
+_GATE_LAST_FILE = "gate-last.json"
+_GATE_RESULTS = ("passed", "failed")
 # A gate.json older than this counts as expired (Review Focus 5): the yardstick job that was meant to call
 # gate_end() can die, and an unending gate must never block deploys or the watch's own fix picks forever.
 _GATE_MAX_AGE = timedelta(hours=12)
@@ -561,14 +564,8 @@ class State:
     def gate(self, now: datetime) -> dict | None:
         """The active gate (`gate.json`), or `None` if there isn't one, it can't be read, or it's older than 12
         hours -- an expired gate counts as no gate at all (Review Focus 5)."""
-        path = self.root / _GATE_FILE
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(data, dict):
+        data = self._read_json_object(_GATE_FILE)
+        if data is None:
             return None
         started = data.get("started")
         if not isinstance(started, str):
@@ -581,8 +578,29 @@ class State:
             return None
         return data
 
-    def gate_end(self) -> None:
+    def gate_end(self, result: str | None = None, now: datetime | None = None) -> None:
+        """End the gate: `gate.json` (expired or not) is archived to `gate-last.json` with `result` (`passed`,
+        `failed`, or `None` for a gate a person ended by hand) and `ended` added, replacing the gate archived
+        before it, then removed. With no `gate.json` there is nothing to end, and the last archived gate stays as
+        it was. Any other `result` raises `ValueError`."""
+        if result is not None and result not in _GATE_RESULTS:
+            raise ValueError(f"bad gate result: {result!r}")
+        data = self._read_json_object(_GATE_FILE)
+        if data is not None:
+            ended = _iso(now if now is not None else datetime.now(UTC))
+            _atomic_write(self.root / _GATE_LAST_FILE, json.dumps({**data, "result": result, "ended": ended}))
         (self.root / _GATE_FILE).unlink(missing_ok=True)
+
+    def last_gate(self) -> dict | None:
+        """The gate that ended last (`gate-last.json`), or `None` if none has, or it can't be read."""
+        return self._read_json_object(_GATE_LAST_FILE)
+
+    def _read_json_object(self, name: str) -> dict | None:
+        try:
+            data = json.loads((self.root / name).read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
 
     # -- yardstick results --
 

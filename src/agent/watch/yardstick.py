@@ -72,6 +72,8 @@ _BACKSTOP_S = 60
 _COPY_TIMEOUT_S = 120
 _EXEC_TIMEOUT_S = 120  # each `core_python`/`runner_python` call: queue, poll, memory
 PRUNE_DAYS = 7
+# A run is compared with an earlier one only when they share at least this many mechanical tasks.
+MIN_SHARED = 2
 _FINISHED = ("done", "failed", "cancelled")
 _QUEUED = "queued"
 # Exit codes of `timeout` when it stopped the command: 124 after SIGTERM, 137 when it had to SIGKILL it too.
@@ -257,20 +259,23 @@ def _runs(state: State) -> tuple[list[str], dict[str, dict[str, bool]]]:
 
 
 def compare(state: State, current_run_id: str) -> dict:
-    """The current run against the most recent earlier run that shares mechanical tasks with it. `drop` is how many
-    fewer of those shared tasks passed now; a task added since can't move it. A regression is a mechanical task that
-    passed each of its last 3 earlier runs and fails now (after its retry). The gate fails on a drop of 2 or more,
-    or on any regression."""
+    """The current run against the most recent earlier run that shares at least `MIN_SHARED` mechanical tasks with
+    it (`previous`, `None` when no earlier run does; `shared`, how many). `drop` is how many fewer of those shared
+    tasks passed now; a task added since can't move it. A regression is a mechanical task that passed each of its
+    last 3 earlier runs and fails now (after its retry). The gate fails on a drop of 2 or more, or on any
+    regression."""
     order, by_run = _runs(state)
-    out = {"previous": None, "drop": 0, "regressions": [], "gate_failed": False}
+    out = {"previous": None, "shared": 0, "drop": 0, "regressions": [], "gate_failed": False}
     current = by_run.get(current_run_id)
     if not current:
         return out
     earlier = order[:order.index(current_run_id)]
-    previous = next((run_id for run_id in reversed(earlier) if set(by_run[run_id]) & set(current)), None)
+    previous = next((run_id for run_id in reversed(earlier)
+                     if len(set(by_run[run_id]) & set(current)) >= MIN_SHARED), None)
     if previous is not None:
         shared = set(by_run[previous]) & set(current)
         out["previous"] = previous
+        out["shared"] = len(shared)
         out["drop"] = sum(by_run[previous][t] for t in shared) - sum(current[t] for t in shared)
     for task_id in sorted(current):
         if current[task_id]:
@@ -280,6 +285,21 @@ def compare(state: State, current_run_id: str) -> dict:
             out["regressions"].append(task_id)
     out["gate_failed"] = out["drop"] >= 2 or bool(out["regressions"])
     return out
+
+
+def gate_verdict(state: State, run_id: str) -> str:
+    """What the run `run_id` says about the change a gate is measuring: `passed` or `failed` from `compare`;
+    `passed` too for the first run there has ever been, which becomes the baseline; `retry` when it can't say --
+    the run recorded no results, or it shares fewer than `MIN_SHARED` mechanical tasks with every earlier run."""
+    order, _ = _runs(state)
+    if run_id not in order:
+        return "retry"
+    if order.index(run_id) == 0:
+        return "passed"
+    comparison = compare(state, run_id)
+    if comparison["previous"] is None:
+        return "retry"
+    return "failed" if comparison["gate_failed"] else "passed"
 
 
 # -- run --
