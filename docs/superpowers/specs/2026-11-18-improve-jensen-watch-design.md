@@ -237,7 +237,7 @@ checkout. That user has Docker and passwordless sudo, so the runners have full a
 | `approvals` | `work` | the listener's `improve-jensen-approvals` every 10 minutes and after each decision in Slack, `workflow_dispatch mode=approvals` | no Claude: applies the decisions from the Slack threads, labels issues approved or rejected, and names the next approved fix and project (§12) |
 | `fix` | `work` | `needs: approvals` when it named an issue; `workflow_dispatch mode=fix` | ships one approved improvement: change, PR, CI, review, merge, deploy, check, revert |
 | `respond` | `work` | today's issue and comment triggers | answers people's and Jensen's `improve-jensen` issues under the fix rules, with no Slack approval |
-| `assess` | `work` | the listener's `improve-jensen-assess` at :47 every hour, `workflow_dispatch mode=assess` | the assessment (§11): ranks what holds Jensen back, files or updates the issues, and proposes the top items |
+| `assess` | `work` | the listener's `improve-jensen-assess` at :55 every hour, `workflow_dispatch mode=assess` | the assessment (§11): ranks what holds Jensen back, files or updates the issues, and proposes the top items |
 | `project` | `work` | `needs: approvals` when it named one; `workflow_dispatch mode=project` | one approved improvement project (§13), which can carry on over several runs |
 
 - Only people with write access can trigger a run, which is the action's default. That matters because every run has

@@ -2,7 +2,7 @@
 clock and its ear in Slack, one loop every 15 seconds.
 
 - The clock: GitHub's cron never fires the workflow, so the listener sends its `repository_dispatch` events through
-  Jensen's `gh` (`watch` at :17 and `assess` at :47 every hour, `approvals` every 10 minutes, all UTC). `<state>/clock.json` keeps each type's last slot sent; each loop sends a type's most recent
+  Jensen's `gh` (`watch` at :17 and `assess` at :55 every hour, `approvals` every 10 minutes, all UTC). `<state>/clock.json` keeps each type's last slot sent; each loop sends a type's most recent
   slot once when it's later than that, so a long stop catches up with one event, not a burst. The first start sends
   nothing and just records the slots.
 - The threads: `approvals.answer_threads` answers new replies to the proposals in plain language, with Claude
@@ -58,7 +58,7 @@ def latest_slots(now: datetime) -> dict[str, datetime]:
         slot = now.replace(minute=minute)
         return slot if slot <= now else slot - timedelta(hours=1)
 
-    return {WATCH: hourly(17), ASSESS: hourly(47), APPROVALS: now.replace(minute=now.minute - now.minute % 10)}
+    return {WATCH: hourly(17), ASSESS: hourly(55), APPROVALS: now.replace(minute=now.minute - now.minute % 10)}
 
 
 def tick(dispatch: Callable[[str], None], state_root: Path, now: datetime) -> None:
