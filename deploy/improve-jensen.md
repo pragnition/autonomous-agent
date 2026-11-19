@@ -228,14 +228,19 @@ Reply here: `approve` ships them all, `approve 1 3` ships some, `reject 2` drops
   `autonomous-agent`.
 - The approvers are the people in `data/config/agent.toml`: the `slack` id of each `[people.*]` entry. Replies and
   reactions from anyone else are ignored; with no one listed, nothing is approved.
-- To approve, reply in the list's thread: `approve` (or `yes`, `ok`, `lgtm`, `ship it`) ships them all, `approve 1 3`
-  or `approve 1-3` ships some, `reject 2` (or `no`, `skip`, `drop`) drops one. Or react on the list itself:
-  `:white_check_mark:` or `:+1:` approves them all, `:x:` or `:-1:` rejects them all. A later reply overrides an
-  earlier one, and a dropped item can still be approved later in the same thread; an approved one is final.
-  Items nobody answers within 14 days are released, and a later watch can propose them again.
+- To approve, reply in the list's thread with just the word and, if you like, item numbers: `approve` (or `yes`,
+  `ok`, `lgtm`, `ship it`) ships them all, `approve 1 3`, `approve 1, 3` or `approve 1-3` ships some, `reject 2`
+  (or `no`, `skip`, `drop`) drops one. Anything more in the reply (`ok, I'll check 2 tomorrow`) and it counts for
+  nothing. Or react on the list itself: `:white_check_mark:` or `:ballot_box_with_check:` approves them all, `:x:`
+  or `:-1:` rejects them all; a `:+1:` doesn't approve. A later reply overrides an earlier one for the items it
+  names. A dropped item can still be approved later in the same thread, by its number (`approve 2`): a bare
+  `approve` or a reaction never brings it back. An approved item is final. Items nobody answers within 14 days are
+  released, and a later watch can propose them again.
 - Every 10 minutes the `approvals` job reads the threads, labels each issue `approved` or `rejected`, says in the
-  thread what it took, and starts the next approved fix and the next approved project, one of each at a time. When
-  a fix or project ends, its thread hears whether it shipped or needs a person (the issue then has `stuck`).
+  thread what it took, and starts the next approved fix and the next approved project, one of each at a time; while
+  core's usage watch holds the pool it starts neither. Each fix or project run first checks that its issue is still
+  approved and does nothing if not. When a fix or project ends, its thread hears whether it shipped or needs a
+  person (the issue then has `stuck`); a project whose runs fail twice in a row is marked `stuck` too.
 - Nothing checks a change after it ships, beyond the deploy's own check: an approved change that ships is done.
 
 ## 10. First watch and the token check

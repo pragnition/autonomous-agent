@@ -653,7 +653,8 @@ before it ships. The workflow has seven jobs:
   on the host and the pinned `jensen-assessment` issue in general terms, files issues and proposes up to three of
   the top items, projects included, the same way (`.github/improve-jensen-assess.md`).
 - `approvals`, every 10 minutes, with no Claude: reads the Slack threads, labels each issue `approved` or `rejected`,
-  answers in the thread, and names the next approved fix and the next approved project.
+  answers in the thread, and names the next approved fix and the next approved project (none while core's usage
+  watch holds the pool). Each fix or project run first checks that its issue is still approved.
 - `fix`, one at a time: ships one approved change through a PR that closes its issue, CI, a fresh review, the merge,
   `just deploy`, its health check and a revert if the check fails (`.github/improve-jensen.md`).
 - `project`, one at a time: builds an approved project-scale improvement over runs of up to six hours, with a design
@@ -664,9 +665,10 @@ before it ships. The workflow has seven jobs:
 
 Proposals go to `#autonomous-agent` (or the channel the repo variable `IMPROVE_JENSEN_SLACK_CHANNEL` names) through
 the agent's Slack bot, as one short numbered list of what will change, and each issue gets `proposed`. A person in
-`[people]` answers in the thread (`approve`, `approve 1 3`, `reject 2`) or with a reaction on the list. When a fix or
-project ends, `jensen_watch.py fired` tells the thread whether it shipped; a fix that didn't ship is marked `stuck`
-for a person. Nothing measures a change after it ships beyond the deploy's health check.
+`[people]` answers in the thread with just the word and item numbers (`approve`, `approve 1 3`, `reject 2`), or with
+`:white_check_mark:` (approve all) or `:x:` (reject all) on the list. When a fix or project ends, `jensen_watch.py
+fired` tells the thread whether it shipped; a fix that didn't ship, or a project whose runs failed twice in a row, is
+marked `stuck` for a person. Nothing measures a change after it ships beyond the deploy's health check.
 
 The agent and improve-jensen talk through `/var/agent/feedback/` in `agent-runner`. The agent writes a short note
 there when something in its setup gets in its way. The watch reads new notes as evidence, records them on issues in

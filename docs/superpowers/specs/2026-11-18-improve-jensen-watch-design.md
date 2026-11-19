@@ -241,8 +241,9 @@ checkout. That user has Docker and passwordless sudo, so the runners have full a
   the host.
 - All runs use the `improve-jensen` proxy origin and `claude-opus-5-5`, and use subagents freely.
 - The `fix` job is in one concurrency group, so at most one fix runs, with at most one waiting.
-- The approvals job starts a fix only when no other fix job is queued or running. The fix job adds the `fixing`
-  label when it starts and always removes it when it ends.
+- The approvals job starts a fix only when no other fix job is queued or running. The fix job first checks that its
+  issue is still open and approved (`jensen_watch.py ready`), adds the `fixing` label when it starts and always
+  removes it when it ends.
 - Deploys from any job are serialised by a host lock (§8).
 - At most one `project` run at a time, in its own concurrency group. A project and a fix can run side by side, and
   their deploys queue on the host lock.
@@ -470,7 +471,7 @@ person.
 
 - An hour with nothing new makes no Claude call.
 - While core's usage watch holds scheduled runs, no watch, review or assess job starts Claude, so nothing new is
-  proposed.
+  proposed, and the approvals job starts no fix or project (it still records people's answers in Slack).
 - An assessment with nothing new since the last one, and no project active, makes no Claude call.
 - The approvals job makes no Claude call. Fixes and projects run only once a person approves them.
 - The proxy's usage page shows improve-jensen's share separately, because its origin isn't in `agent_origins`.
@@ -536,13 +537,20 @@ Each line says in general terms what will change, not what goes wrong. Each issu
 `Proposed in Slack: <change>` comment. Issues that are closed or already in the flow are left out, and nothing is
 posted when none are left.
 
-**Approving.** A person replies in the message's thread: `approve` (or `yes`, `lgtm`, `ship it` and the like)
-approves every item, `approve 1 3` or `approve 1-3` some, and `reject 2` (or `no`, `skip`, `drop`) drops one. A
-reaction on the message itself answers for every item: `:white_check_mark:` or `:+1:` approves, `:x:` or `:-1:`
-rejects. Reactions are read first, then the replies in order, each overriding earlier answers. An approved item is
-final; a rejected one can still be approved later in the same thread. A proposal nobody answers within 14 days
-is released: its undecided items lose `proposed` and its thread is no longer read, so a later watch can propose
-them again.
+**Approving.** A person replies in the message's thread: `approve` (or `yes`, `ok`, `lgtm`, `ship it` and the like)
+approves every item, `approve 1 3`, `approve 1, 3`, `approve 1 and 3` or `approve 1-3` some, and `reject 2` (or
+`no`, `skip`, `drop`) drops one. A reply counts only when it is exactly that: the word and a plain list of item
+numbers, nothing else, so `ok, I will check #2 tomorrow` or `approve 1; reject 2` decides nothing and can be said
+again plainly. A reaction on the message itself answers for every item: `:white_check_mark:` or
+`:ballot_box_with_check:` approves, `:x:` or `:-1:` rejects; a `:+1:` approves nothing, since it often means "seen".
+Reactions are read first, then the replies in order. A reply that names an item decides it either way; one that
+names none (`approve`, `approve all`, or a reaction) only decides items still waiting, so it never turns a dropped
+item into an approved one: that takes its number (`approve 2`). An approved item is final.
+
+A proposal nobody answers within 14 days is released: its undecided items lose `proposed`, with a comment, and its
+thread is no longer read, so a later watch can propose them again. Each issue belongs to its newest proposal, so an
+old one never touches a newer proposal of the same issue. An issue labelled `proposed` that no live proposal on the
+host names (its record lost, unreadable or already released) is released the same way.
 
 **Who can approve:** the people in `agent.toml`, by the `slack` id of each `[people.*]` entry. Anyone else's reply or
 reaction is ignored, and if the list can't be read, nothing is approved.
@@ -551,15 +559,21 @@ reaction is ignored, and if the list can't be read, nothing is approved.
 threads of open proposals, moves each answered issue from `proposed` to `approved` or `rejected` with a comment, and
 replies once in the thread with what it took (`Approved 1, 3: queued to ship. Dropped 2.`). Then it fires the next
 change: the lowest-numbered approved issue goes to the `fix` job, and the lowest-numbered approved `project` issue to
-the `project` job, each only when no job of that kind is queued or running.
+the `project` job, each only when no job of that kind is queued or running in any unfinished run of the workflow,
+however long ago it started. While core's usage watch holds the pool, it still records the answers but fires
+nothing. The `fix` or `project` run it starts first checks that the issue is still open and approved, with no
+`stuck` or `needs-person` (`jensen_watch.py ready`), and does nothing otherwise; a person's own dispatch with a
+target skips that check.
 
 **After the run,** the last step of the `fix` and `project` jobs (`jensen_watch.py fired`) answers in the proposal's
 thread:
 - the issue is closed: `Shipped <n>: <change>.`;
 - a fix whose issue is still open didn't ship: the issue gets `stuck` in place of `approved`, and the thread hears
   `Couldn't ship <n>: <change>. It needs a person (#N).`;
-- a project that needs a person (`stuck` or `needs-person`) says so once. An unfinished project says nothing, and the
-  next approvals run starts its next run.
+- a project whose last two runs failed is marked `stuck` in place of `approved`, with a comment, so it doesn't run
+  again and again; a run that succeeds starts the count afresh.
+- a project that needs a person (`stuck` or `needs-person`) says so once (`<n> needs a person (#N).`). An
+  unfinished project says nothing, and the next approvals run starts its next run.
 
 A run started by an `improve-jensen` issue or an `@improve-jensen` mention (`respond`) is a person's own request and
 needs no approval.
