@@ -1,8 +1,8 @@
 # improve-jensen host setup
 
-improve-jensen (`.github/workflows/improve-jensen.yml`; see `docs/design.md`) runs on five self-hosted GitHub Actions
-runners on this host: one for the hourly watch and four for the reviews, fixes, assessments, approvals and
-improvement projects. All five run as `pragnition`, the user that owns the live checkout `~/autonomous-agent`, with
+improve-jensen (`.github/workflows/improve-jensen.yml`; see `docs/design.md`) runs on two self-hosted GitHub Actions
+runners on this host: one for the hourly watch and one for the reviews, fixes, assessments, approvals and
+improvement projects, which take turns. Both run as `pragnition`, the user that owns the live checkout `~/autonomous-agent`, with
 Docker and passwordless sudo, so every run has the whole host. Only people with write access can start a run.
 improve-jensen reaches Claude through the account proxy's `improve-jensen` origin.
 
@@ -83,12 +83,13 @@ It should also show `restricted_to_workflows: true`. If it comes back `false`, t
 restriction, and fork-run approval (step 5) is the only guard. (On a plan without runner groups, register on the repo
 instead: `url=https://github.com/pragnition/autonomous-agent; tokens=repos/pragnition/autonomous-agent; group=`.)
 
-Then register the five runners, labelled `improve-jensen` plus `watch` for one and `work` for the other four. A
-project run can hold a `work` runner for hours, so four keep the reviews within the hour:
+Then register the two runners, labelled `improve-jensen` plus `watch` for one and `work` for the other. Most of the
+host belongs to Jensen, so improve-jensen runs at most one job besides the watch: while a fix or project runs, the
+approvals, reviews and assessment wait their turn.
 
 ```sh
 v=$(gh release view -R actions/runner --json tagName --jq .tagName | sed 's/^v//')
-for name in watch work-1 work-2 work-3 work-4; do
+for name in watch work-1; do
   mkdir -p ~/actions-runners/$name && cd ~/actions-runners/$name
   curl -fsSL -o runner.tar.gz \
     https://github.com/actions/runner/releases/download/v$v/actions-runner-linux-x64-$v.tar.gz
@@ -100,9 +101,18 @@ for name in watch work-1 work-2 work-3 work-4; do
 done
 ```
 
-An install that already has `watch`, `work-1` and `work-2` runs the loop for `work-3 work-4` only.
+Give both runners low CPU and disk priority, so their jobs only take what Jensen leaves idle:
 
-Check: the organization's Settings → Actions → Runners shows the five runners Idle in the `improve-jensen` group, and
+```sh
+for name in watch work-1; do
+  unit=actions.runner.pragnition-autonomous-agent.improve-jensen-$name.service
+  sudo mkdir -p /etc/systemd/system/$unit.d
+  printf '[Service]\nNice=10\nCPUWeight=20\nIOWeight=20\n' | sudo tee /etc/systemd/system/$unit.d/low-priority.conf
+done
+sudo systemctl daemon-reload && sudo systemctl restart 'actions.runner.pragnition-autonomous-agent.improve-jensen-*'
+```
+
+Check: the organization's Settings → Actions → Runners shows the two runners Idle in the `improve-jensen` group, and
 `curl -s http://127.0.0.1:18092/proxy/whoami` answers.
 
 ## 5. Fork PRs

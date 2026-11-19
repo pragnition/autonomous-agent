@@ -211,11 +211,12 @@ Each run reads the record and the state folder, so it picks up where the last on
 
 ### 1. Runners and jobs
 
-**Runners.** Five GitHub Actions runners on the host, all running as `pragnition`, the user that owns the live
+**Runners.** Two GitHub Actions runners on the host, all running as `pragnition`, the user that owns the live
 checkout. That user has Docker and passwordless sudo, so the runners have full access to the host.
 - One runner is labelled `watch`, so the hourly watch never queues behind a long fix.
-- Four are labelled `work`, for reviews, fixes, assessments, approvals, projects and the runs that answer issues. A
-  project run can hold a runner for hours, so four keeps reviews within the hour. That's five runners in total.
+- One is labelled `work`, for reviews, fixes, assessments, approvals, projects and the runs that answer issues; they
+  take turns. Most of the host belongs to Jensen, so improve-jensen runs at most one job besides the watch, and both
+  runners run at low CPU and disk priority (systemd `CPUWeight=20`, `IOWeight=20`, `Nice=10`).
 - The runners' work folders stay outside `~/autonomous-agent`.
 - `gh` is installed on the host.
 
@@ -624,8 +625,8 @@ The notes stay on the host. Public issues describe them in general terms only.
 
 The build ships nothing to the live install. When Jensen is idle and a person is around:
 1. Widen Jensen's GitHub token: checks, statuses and Actions, read.
-2. Install `gh` on the host, and re-register the runner as five runners running as `pragnition`: one labelled `watch` and
-   four labelled `work`.
+2. Install `gh` on the host, and re-register the runner as two runners running as `pragnition`: one labelled `watch` and
+   one labelled `work`.
 3. Merge the PR. Protect `main` so that CI is required.
 4. Run the live core-rebuild check (§8).
 5. `just deploy` once by hand, then `jensen_watch.py seed`.
