@@ -4,7 +4,9 @@ Code only routes. A Slack thread, a DM or a Linear issue is a conversation mappe
 message is the next turn of that session (the work queue never runs two turns of one conversation at once). Every
 top-level message, in a DM or a channel, starts its own thread and its own conversation. A reply in a thread goes to a session that asked a question there, otherwise to the thread's primary conversation,
 otherwise to the conversation of the message the thread hangs off (every message core receives or posts is
-recorded in slack_messages). Each turn carries a line for the top of its prompt: who sent the message, where,
+recorded in slack_messages). A thread the agent started itself, posting with its own bot token rather than through
+core, is noted in own_threads: a reply there starts a new conversation, since which session posted it isn't known.
+Each turn carries a line for the top of its prompt: who sent the message, where,
 and its link.
 """
 
@@ -148,8 +150,22 @@ class Conversations:
 
     def _known_thread(self, channel: str, thread_ts: str) -> bool:
         return self.conn.execute("SELECT 1 FROM conversations WHERE channel = ? AND thread_ts IS ? UNION ALL "
-                                 "SELECT 1 FROM slack_messages WHERE channel = ? AND ts = ? LIMIT 1",
-                                 (channel, thread_ts, channel, thread_ts)).fetchone() is not None
+                                 "SELECT 1 FROM slack_messages WHERE channel = ? AND ts = ? UNION ALL "
+                                 "SELECT 1 FROM own_threads WHERE channel = ? AND ts = ? LIMIT 1",
+                                 (channel, thread_ts, channel, thread_ts, channel, thread_ts)).fetchone() is not None
+
+    def _own_thread(self, channel: str, thread_ts: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM own_threads WHERE channel = ? AND ts = ?",
+                                 (channel, thread_ts)).fetchone() is not None
+
+    def _note_own_post(self, event: dict) -> None:
+        """The agent's own top-level message in a channel opens a thread whose replies should reach it, even when it
+        was posted straight through Slack's Web API and core never recorded it. A DM needs nothing: every DM message
+        reaches the agent."""
+        if event.get("subtype") or event.get("thread_ts") or event.get("channel_type") == "im" or not event.get("ts"):
+            return
+        self.conn.execute("INSERT OR IGNORE INTO own_threads(channel, ts, at) VALUES (?, ?, ?)",
+                          (event["channel"], event["ts"], db.utcnow()))
 
     def _new(self, channel: str | None, thread_ts: str | None, project: str | None, task_id: str | None = None) -> str:
         return create_conversation(self.conn, channel=channel, thread_ts=thread_ts, project=project, task_id=task_id)
@@ -174,15 +190,17 @@ class Conversations:
             return None
         return named.get(await self._channel_name(channel))
 
-    async def _slack_origin(self, person_key: str, event: dict, is_dm: bool) -> str:
+    async def _slack_origin(self, person_key: str, event: dict, is_dm: bool, own: bool = False) -> str:
         """Who sent the message, where, and its link. A lookup that fails or is slow is left out (a channel
-        without a name shows its id); the turn never waits on it for more than LOOKUP_S."""
+        without a name shows its id); the turn never waits on it for more than LOOKUP_S. `own`: the message is a
+        reply in a thread the agent started itself."""
         channel = event["channel"]
         lookups = [self.person_name(person_key), self.permalink(channel, event["ts"])]
         if not is_dm:
             lookups.append(self._channel_name(channel))
         name, link, *channel_name = await asyncio.gather(*map(_answer, lookups))
-        where = "DM" if is_dm else f"#{channel_name[0] or channel}" + (" thread" if event.get("thread_ts") else "")
+        where = "DM" if is_dm else f"#{channel_name[0] or channel}" + (" thread" if event.get("thread_ts") else "") \
+            + (" you started" if own else "")
         github = getattr(self.config.people.get(person_key), "github", "")  # so PRs can be assigned to them
         tags = ", ".join(t for t in (person_key if name else "", f"GitHub @{github}" if github else "") if t)
         return origin_line(where, who=f"{name or person_key} ({tags})" if tags else person_key, link=link)
@@ -268,8 +286,10 @@ class Conversations:
     async def handle_slack(self, event: dict) -> None:
         user, channel = event.get("user"), event.get("channel")
         subtype = event.get("subtype")
-        if not user or not channel or event.get("bot_id") or (subtype and subtype != FILE_SHARE) \
-                or user == self.bot_user_id:
+        if channel and self.bot_user_id and user == self.bot_user_id:
+            self._note_own_post(event)
+            return
+        if not user or not channel or event.get("bot_id") or (subtype and subtype != FILE_SHARE):
             return
         is_dm = event.get("channel_type") == "im"
         thread_ts = event.get("thread_ts") or event["ts"]  # a top-level message starts its own thread
@@ -284,7 +304,8 @@ class Conversations:
                 await self.slack.chat_postEphemeral(channel=channel, user=user, text=NOT_AUTHORISED)
             return
         text = _MENTION.sub("", event.get("text") or "").strip()
-        origin = await self._in_order(channel, self._slack_origin(person.key, event, is_dm))
+        own = bool(event.get("thread_ts")) and self._own_thread(channel, thread_ts)
+        origin = await self._in_order(channel, self._slack_origin(person.key, event, is_dm, own))
         convo = await self._route(channel, thread_ts, is_dm)
         record_message(self.conn, channel, event["ts"], convo["id"])
         self._unpark(convo["id"], person.key)  # their message carries the conversation on now

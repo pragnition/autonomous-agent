@@ -207,6 +207,36 @@ async def test_own_and_bot_messages_ignored(convos, queue):
     assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
 
 
+def own_post(ts, channel="C-SAMPLE", **extra):
+    """The agent's own message, as Slack echoes it back when the agent posts with its bot token."""
+    return {"type": "message", "user": "UBOT", "bot_id": "BSELF", "channel": channel, "ts": ts, "text": "ok?",
+            "channel_type": "channel", **extra}
+
+
+async def test_replies_in_a_thread_the_agent_started_itself_reach_it(convos, queue, conn, lookups):
+    await convos.handle_slack(own_post("8.1"))
+    assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
+    first, second = reply("8.1", "ok"), reply("8.1", "show me the before and after")
+    await convos.handle_slack(first)
+    await convos.handle_slack(second)
+    items = [r["id"] for r in conn.execute("SELECT id FROM work_items ORDER BY rowid")]
+    assert len(items) == 2
+    one, two = queue.get(items[0]), queue.get(items[1])
+    assert one.conversation_id == two.conversation_id == convo(conn, "8.1")["id"]
+    assert one.payload["text"] == "ok"
+    assert one.payload["origin"] == (f"[from Ann Lee (ann, GitHub @ann-gh) · #chilliclaw thread you started · "
+                                     f"{permalink_of('C-SAMPLE', first['ts'])}]")
+
+
+async def test_only_the_agents_own_top_level_channel_posts_open_a_thread(convos, queue):
+    await convos.handle_slack(own_post("8.2", thread_ts="8.0"))  # a reply of its own in some thread
+    await convos.handle_slack(own_post("8.3", subtype="message_changed"))
+    await convos.handle_slack({**own_post("8.4"), "user": "UOTHER", "bot_id": "B1"})  # another bot
+    for thread in ("8.0", "8.2", "8.3", "8.4"):
+        await convos.handle_slack(reply(thread, "hello?"))
+    assert queue.conn.execute("SELECT COUNT(*) FROM work_items").fetchone()[0] == 0
+
+
 SHOT = {"id": "F1", "name": "shot.png", "mimetype": "image/png", "size": 2048}
 
 

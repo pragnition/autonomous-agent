@@ -141,6 +141,14 @@ CREATE TABLE IF NOT EXISTS slack_messages (
     conversation_id TEXT NOT NULL,
     PRIMARY KEY(channel, ts)
 );
+-- Top-level channel messages the agent posted itself through Slack's Web API (not through core), so replies in
+-- their threads reach it without an @mention
+CREATE TABLE IF NOT EXISTS own_threads (
+    channel TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY(channel, ts)
+);
 -- Linear issues handed to the agent, recorded from the webhook; Linear's own state is polled into them (KPIs)
 CREATE TABLE IF NOT EXISTS linear_issues (
     issue_id TEXT PRIMARY KEY,
