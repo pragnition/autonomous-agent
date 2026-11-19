@@ -1,10 +1,11 @@
-"""Parking: a conversation waits out its account's soft cap (or any time a person names) and carries itself on.
+"""Parking: a conversation waits out the account pool's soft caps (or any time a person names) and carries itself on.
 
 The agent calls `park` and ends its turn. Core records the park (the parks table) and tells the agent when it carries
 on; it posts nothing itself, so the agent says so in the thread if it wants to. Every minute core carries on each
-park that is due: a new turn in the same conversation with the agent's own note. Like any next turn, the runner resumes the session when the proxy keeps it on
-the account it ran on, and otherwise starts a fresh one with a digest of it (runner/handoff.py). A person's message
-in the thread ends the park at once (Conversations._unpark) and is the next turn itself.
+park that is due: a new turn in the same conversation with the agent's own note. Like any next turn, the runner
+resumes the session when the proxy keeps it on the account it ran on, and otherwise starts a fresh one with a digest
+of it (runner/handoff.py). A person's message in the thread ends the park at once (Conversations._unpark) and is the
+next turn itself.
 
 Without a time, a park waits out the whole pool, since the turn that carries it on runs on whichever account the
 proxy gives it (runner/handoff.py): it refuses while any account the proxy would use is under its cap, and otherwise

@@ -1078,8 +1078,8 @@ async def test_a_report_reaches_a_running_parent_mid_turn(convos, conn, queue):
 
 
 def reports_to(conn, parent):
-    return [r["payload"] for r in conn.execute("SELECT payload FROM work_items WHERE conversation_id = ? ORDER BY rowid",
-                                               (parent,))]
+    return [r["payload"] for r in conn.execute("SELECT payload FROM work_items WHERE conversation_id = ? "
+                                               "ORDER BY rowid", (parent,))]
 
 
 async def test_a_spawned_agent_that_parked_reports_only_once_the_park_is_carried_on_and_done(convos, conn, queue):
