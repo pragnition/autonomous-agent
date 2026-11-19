@@ -1075,3 +1075,36 @@ async def test_a_report_reaches_a_running_parent_mid_turn(convos, conn, queue):
     await finish_turn(convos, queue, "found it")
     got = await convos.on_beat(running, {"accepts_messages": True})
     assert len(got["messages"]) == 1 and "found it" in got["messages"][0]["payload"]["text"]
+
+
+def reports_to(conn, parent):
+    return [r["payload"] for r in conn.execute("SELECT payload FROM work_items WHERE conversation_id = ? ORDER BY rowid",
+                                               (parent,))]
+
+
+async def test_a_spawned_agent_that_parked_reports_only_once_the_park_is_carried_on_and_done(convos, conn, queue):
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    child = spawn(conn, queue, parent)
+    item = queue.claim()
+    conn.execute("INSERT INTO parks(conversation_id, work_item_id, until_at, note, created_at) VALUES (?, ?, ?, ?, ?)",
+                 (child, item.id, "2099-01-01T00:00:00Z", "rerun the B side", db.utcnow()))
+    queue.complete(item.id, {})
+    await convos.on_result(queue.get(item.id), {"outcome": "done", "text": "Parked until the cap lifts."})
+    assert reports_to(conn, parent) == []
+    # the park is due: core carries the agent on, and its turn ends with nothing more to come
+    convos.resume_parked(child, item.id, "(It's time: carry on.)")
+    conn.execute("UPDATE parks SET ended_at = ?, ended_how = 'resumed' WHERE conversation_id = ?", (db.utcnow(), child))
+    await finish_turn(convos, queue, "B is 12% faster")
+    (report,) = reports_to(conn, parent)
+    assert "B is 12% faster" in report and "Parked until" not in report
+
+
+async def test_a_spawned_agent_with_another_turn_queued_reports_after_that_one(convos, conn, queue):
+    parent = add_conversation(conn, channel="C-SAMPLE", thread_ts="7.0")
+    child = spawn(conn, queue, parent)
+    queue.enqueue(child, "turn", {"text": "and the C side too", "actor": "ann"})
+    await finish_turn(convos, queue, "A and B done")
+    assert reports_to(conn, parent) == []
+    await finish_turn(convos, queue, "A, B and C done")
+    (report,) = reports_to(conn, parent)
+    assert "A, B and C done" in report

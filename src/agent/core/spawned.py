@@ -29,6 +29,20 @@ def new_id() -> str:
     return f"A-{uuid.uuid4().hex[:8]}"
 
 
+# Still to run in a conversation: a turn queued, running or delivered into one, a park not yet carried on
+# (core/parking.py), or a turn a usage limit cut off that hasn't been carried on (core/usage_watch.py)
+_MORE_TO_COME = ("EXISTS (SELECT 1 FROM work_items w WHERE w.conversation_id = {c} AND "
+                 "w.status IN ('queued', 'claimed', 'delivered')) OR "
+                 "EXISTS (SELECT 1 FROM parks p WHERE p.conversation_id = {c} AND p.ended_at IS NULL) OR "
+                 "EXISTS (SELECT 1 FROM limit_waits l WHERE l.conversation_id = {c} AND l.resumed_at IS NULL)")
+
+
+def more_to_come(conn: sqlite3.Connection, conversation_id: str) -> bool:
+    """Whether anything is still to run in the conversation, so a spawned agent's turn that just ended isn't its last."""
+    return conn.execute("SELECT " + _MORE_TO_COME.format(c="?"),
+                        (conversation_id,) * 3).fetchone()[0] == 1
+
+
 def running_count(conn: sqlite3.Connection, parent_conversation_id: str) -> int:
     """Agents still running for a conversation: not yet reported, with a turn queued or running. One whose turn was
     cancelled (stop_all, cancel_task) or gave up after the runner died never reports, and doesn't count."""

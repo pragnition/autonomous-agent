@@ -473,11 +473,13 @@ class Conversations:
                            text: str) -> str | None:
         """Queue a finished spawned agent's report as a message in the conversation that spawned it, with the
         spawning turn's actor and origin, so the next turn there (or the running one, mid-turn) acts on it and
-        answers in its Slack thread. Returns the new item's id, or None when the conversation isn't a running
-        spawned agent's."""
+        answers in its Slack thread. Only once the agent is really finished: not while it is parked or has another
+        turn queued (the caller already holds back a retry or a usage-limit wait). Returns the new item's id, or None
+        when the conversation isn't a running spawned agent's or there is more to come in it."""
         row = spawned.running_for_child(self.conn, convo["id"])
         status = "failed" if failed else "done"
-        if row is None or not spawned.finish(self.conn, row["id"], status, outcome, text):
+        if row is None or spawned.more_to_come(self.conn, convo["id"]) or \
+                not spawned.finish(self.conn, row["id"], status, outcome, text):
             return None
         parent = self._row(row["parent_conversation_id"])
         if parent is None:
