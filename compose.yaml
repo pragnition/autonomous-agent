@@ -79,6 +79,9 @@ services:
     environment:                                   # the watchdog's soft cap, the same as core's
       SOFT_CAP_5H: ${SOFT_CAP_5H:-0.65}
       SOFT_CAP_LIFT_S: ${SOFT_CAP_LIFT_S:-5400}
+      # Sessions and their subagents compact near this many tokens of context instead of near the model's 1M window,
+      # past which every request re-reads the whole conversation from cache
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: ${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-200000}
     volumes:
       - ${AGENT_DATA:-./data}/runner:/run/agent:ro
       - ${AGENT_DATA:-./data}/cli/azure:/data/cli/azure
