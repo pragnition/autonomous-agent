@@ -641,7 +641,7 @@ account's noreply address.
 
 improve-jensen is the agent that owns this repository and keeps making the agent (Jensen, in this team's install) a
 better engineer. It runs outside the stack, as a Claude Code GitHub Action (`.github/workflows/improve-jensen.yml`)
-on five self-hosted runners on the host (one for the hourly watch, four for everything else), and reaches Claude
+on two self-hosted runners on the host, below Jensen on CPU and disk (one for the hourly watch, one for everything else), and reaches Claude
 through the proxy's `improve-jensen` origin. A bad deploy can break the agent, but not the agent that has to undo it.
 Nobody tells it what to improve: it works that out from the evidence, and a person approves each change in Slack
 before it ships. The workflow has seven jobs:
