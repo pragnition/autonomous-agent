@@ -10,7 +10,8 @@
 #               index into this run's own `runs/<run id>-reviews.json`, and Claude looks the URL/conversation up
 #               itself with `review-target`.
 #   assess    - four times a day: decides whether there's anything new to assess, lets Claude write an assessment
-#               and update the pinned assessment issue, then posts the changes it proposes to Slack.
+#               (what holds Jensen back, and what worked that Jensen should keep) and update the pinned assessment
+#               issue, then posts the changes it proposes to Slack, learned ones marked as such.
 #   approvals - every 10 minutes, no Claude: reads the replies and reactions on the Slack proposals, labels each
 #               issue `approved` or `rejected`, answers in the thread, and names the next approved fix and project
 #               (none while core's usage watch holds the pool).
