@@ -183,15 +183,20 @@ deploys must also wait for an idle runner (`src/agent/watch/deploy.py`) before t
 cd ~/improve-jensen-setup
 python3 scripts/deploy.py   # deploys main into ~/autonomous-agent, the same as `just deploy` run there
 python3 scripts/jensen_watch.py seed deploy/improve-jensen-seed.json --repo pragnition/autonomous-agent
+python3 scripts/jensen_watch.py yardstick install deploy/yardstick
 python3 scripts/jensen_watch.py gh api 'repos/<a repo Jensen works in>/actions/runs?per_page=1'
 docker exec agent-runner mkdir -p /var/agent/feedback
 cd && rm -rf ~/improve-jensen-setup
 ```
 
+`yardstick install` copies the seed tasks into the state folder (`~/.local/state/improve-jensen/yardstick/tasks/`)
+before the first watch: a gate a job starts with no tasks installed can't be measured, and holds every deploy that
+changes how Jensen behaves until it expires.
+
 `/var/agent/feedback` in `agent-runner` is where Jensen writes its notes about what gets in its way, and where
 improve-jensen answers them and keeps `CHANGES.md`, the list of what changed for Jensen.
 
-The last command must answer with JSON, not a 403. If it still 403s, give Jensen a classic token with the `repo` scope
+The `gh api` line must answer with JSON, not a 403. If it still 403s, give Jensen a classic token with the `repo` scope
 as `GH_TOKEN` in `agent.env`; the agent container reads it when recreated
 (`docker compose up -d --force-recreate agent` in `~/autonomous-agent`, while Jensen is idle).
 
@@ -206,7 +211,8 @@ From now on, deploy with `cd ~/autonomous-agent && just deploy`. Its exit codes:
 `needs-person`, `stuck`, `project`, `gating`, `priority`, `jensen-assessment`) and files the starting issues that
 aren't open already. An install switched on before the assessment existed runs the same `seed` line once more, from
 `~/autonomous-agent` and logged in to `gh` as in step 3 (log out afterwards): it adds the new labels (`gating`,
-`priority`, `jensen-assessment`) and skips the issues that are open already.
+`priority`, `jensen-assessment`) and skips the issues that are open already. Before its next watch, it also runs
+`python3 scripts/jensen_watch.py yardstick install deploy/yardstick` there.
 
 ## 9. First watch and the token check
 
@@ -255,15 +261,8 @@ host to paper over either.
 
 ## 10. The yardstick baseline
 
-Install the seed tasks into the state folder, then run the yardstick once to set the baseline that later runs are
-compared with:
-
-```sh
-cd ~/autonomous-agent
-python3 scripts/jensen_watch.py yardstick install deploy/yardstick
-```
-
-Start the run from the Actions tab (improve-jensen → Run workflow, mode `yardstick`), or with
+The seed tasks are in the state folder since step 8. Run the yardstick once to set the baseline that later runs are
+compared with. Start the run from the Actions tab (improve-jensen → Run workflow, mode `yardstick`), or with
 `gh workflow run improve-jensen.yml -R pragnition/autonomous-agent -f mode=yardstick` from a machine logged in to
 `gh`. Start it at a quiet hour: it runs Jensen through each task in a silent `V-yardstick-` conversation, at most four
 at once, and can take a few hours. When it's done:
@@ -303,7 +302,9 @@ tasks that aren't there yet.
 - A `watch` run, a `fix` run for one of this repo's issues, an `assess` run, and a `yardstick` run are safe to start
   by hand. A `project` run takes a `project` issue's number as its `target`.
 - A gate run is improve-jensen's own. When a watch, fix, project or respond job ends with a gate active (it ran
-  `gate start` after a change), the same run's `yardstick` job measures that change, and a failed gate reverts it.
+  `gate start` after a change), the same run's `yardstick` job measures that change. A failed gate gets a
+  `Yardstick gate failed ...: picked to revert.` comment on its issue, and the same run's `gate-revert` job reverts
+  it; if that job dies first, the hourly watch picks the issue again.
   A manual `yardstick` run never gates or reverts anything: start one only while
   `python3 scripts/jensen_watch.py gate status` (in `~/autonomous-agent`) shows none, so it isn't compared with the
   change being measured.

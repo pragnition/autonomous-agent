@@ -102,8 +102,7 @@ be reproduced on synthetic code and checked by a script, and no task covers it y
 - At most 2 new tasks per assessment. The rest wait for the next one, highest-ranked first.
 - Build it in a scratch folder, `$RUNNER_TEMP/yardstick/<id>/`, with an id in general terms (`ci-before-merge`, never
   a product's name):
-  - `task.toml`: `prompt` (the request to Jensen), `time_limit_min`, and a `rubric` only for what no script can
-    check. A task with a rubric is judged, and judged tasks never count toward the score;
+  - `task.toml`: `prompt` (the request to Jensen) and `time_limit_min`;
   - `fixture/`: the files Jensen works on, with a `build.sh` that makes the git repo and its first commit and then
     deletes itself;
   - `check`: executable, run in the task folder after Jensen's turn; exit 0 is a pass. It may use only `python3`,

@@ -142,3 +142,19 @@ def test_seed_prompts_are_general():
         haystack = data["prompt"].lower()
         for term in _WORD_BOUNDARY_TERMS:
             assert not re.search(rf"\b{re.escape(term)}\b", haystack), f"{task_id}: prompt leaks {term!r}"
+
+
+# -- tests-that-can-fail states the contract its hidden tests check, and its fixture agrees with it --
+
+
+def test_tests_that_can_fail_states_the_contract_its_hidden_tests_check():
+    task_dir = YARDSTICK_DIR / "tests-that-can-fail"
+    prompt = " ".join(tomllib.loads((task_dir / "task.toml").read_text())["prompt"].split())
+    hidden = (task_dir / "hidden" / "test_inventory_hidden.py").read_text()
+    # every rejection the hidden tests check raises ValueError, and the prompt names it for each one
+    assert "assertRaises(ValueError)" in hidden and "KeyError" not in hidden
+    assert "below zero raises ValueError" in prompt and "unknown item raises ValueError" in prompt
+    assert "returns the stock that is left" in prompt
+    # the existing code Jensen starts from raises the same exception, so nothing nudges it towards another
+    for path in (task_dir / "fixture" / "inventory.py", task_dir / "hidden" / "mutant.py"):
+        assert "KeyError" not in path.read_text(), path

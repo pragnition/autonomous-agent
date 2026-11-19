@@ -1,6 +1,8 @@
+import json
 import os
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -277,13 +279,14 @@ def test_improve_jensen_triggers_and_jobs(improve_jensen):
     assert dispatch_inputs["target"]["type"] == "string"
     for trigger in ("issues", "issue_comment", "pull_request_review_comment", "pull_request_review"):
         assert trigger in on
-    assert set(improve_jensen["jobs"]) == {"watch", "review", "fix", "respond", "assess", "project", "yardstick"}
+    assert set(improve_jensen["jobs"]) == {"watch", "review", "fix", "respond", "assess", "project", "yardstick",
+                                           "gate-revert"}
 
 
 def test_jobs_run_on_the_right_runners(improve_jensen):
     jobs = improve_jensen["jobs"]
     for name, want_label in (("watch", "watch"), ("review", "work"), ("fix", "work"), ("respond", "work"),
-                             ("assess", "work"), ("project", "work"), ("yardstick", "work")):
+                             ("assess", "work"), ("project", "work"), ("yardstick", "work"), ("gate-revert", "work")):
         labels = _runs_on_labels(jobs[name])
         assert labels == {"self-hosted", "improve-jensen", want_label}, name
 
@@ -372,11 +375,15 @@ def test_instructions_carry_the_key_rules():
     anchors = {
         ".github/improve-jensen-watch.md": (
             "jensen_watch.py note", "jensen_watch.py count", "plan.json", "fixing",
-            "core is unreachable", "not_deployable", "two such comments", "ci_unknown"),
+            "core is unreachable", "not_deployable", "two such comments", "ci_unknown",
+            "Start the gate first", "A behaviour-changing deploy landed"),
         ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit", "/status"),
         ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #",
                                       ".github/workflows/", ".github/improve-jensen*.md",
-                                      "deploy/improve-jensen-seed.json"),
+                                      "deploy/improve-jensen-seed.json",
+                                      "improve-jensen never merges a change to its own yardstick or gate",
+                                      "starts its gate as soon as `just deploy` returns 0",
+                                      "Gate waiting: a deploy is pending"),
         "deploy/improve-jensen.md": ("Never approve a fork run on this repo", "debug logging",
                                      "persist-credentials: false", "claude[bot]", "gh run list"),
     }
@@ -465,32 +472,118 @@ def test_yardstick_runs_after_the_jobs_that_can_start_a_gate(improve_jensen):
     assert "inputs.target" not in job_if
 
 
+def _checkout(job):
+    return next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))
+
+
 def test_yardstick_gate_run_steps(improve_jensen):
-    steps = improve_jensen["jobs"]["yardstick"]["steps"]
+    yardstick = improve_jensen["jobs"]["yardstick"]
+    steps = yardstick["steps"]
     run_step = next(s for s in steps if "jensen_watch.py yardstick run" in str(s.get("run", "")))
     assert "--github-output" in run_step["run"]
     assert "env.GATE == 'true' && '--gate'" in run_step["run"]
 
-    # Only a measured gate ends: retry (couldn't measure it this time) and none leave it active.
+    # Only a measured gate ends, and only the gate this run measured (`--started`): retry (couldn't measure it this
+    # time) and none leave it active. The counts go on record with it.
     gate_end = next(s for s in steps if "jensen_watch.py gate end" in str(s.get("run", "")))
     assert gate_end["if"] == ("steps.yardstick.outputs.gate_result == 'passed' || "
                               "steps.yardstick.outputs.gate_result == 'failed'")
-    assert gate_end["run"] == 'python scripts/jensen_watch.py gate end --result "$GATE_RESULT"'
-    assert gate_end["env"]["GATE_RESULT"] == "${{ steps.yardstick.outputs.gate_result }}"
+    assert " ".join(gate_end["run"].split()) == (
+        'python scripts/jensen_watch.py gate end --result "$GATE_RESULT" --started "$GATE_STARTED" '
+        '--drop "$DROP" --regressions "$REGRESSIONS"')
+    assert gate_end["env"] == {"GATE_RESULT": "${{ steps.yardstick.outputs.gate_result }}",
+                               "GATE_STARTED": "${{ steps.yardstick.outputs.gate_started }}",
+                               "DROP": "${{ steps.yardstick.outputs.drop }}",
+                               "REGRESSIONS": "${{ steps.yardstick.outputs.regressions }}"}
     assert "always()" not in gate_end["if"]
 
+    # A failed gate leaves its record on its issue before anything else can fail.
+    comment = next(s for s in steps if "gh issue comment" in str(s.get("run", "")))
+    assert steps.index(gate_end) < steps.index(comment)
+    assert str(comment["if"]).startswith("!cancelled()")
+    assert f"steps.{gate_end['id']}.outcome == 'success'" in comment["if"]
+    assert "steps.yardstick.outputs.gate_result == 'failed'" in comment["if"]
+    assert "jensen_watch.py gate status --last" in comment["run"]
+
     label = next(s for s in steps if "--remove-label gating" in str(s.get("run", "")))
-    assert label["if"] == f"steps.{gate_end['id']}.outcome == 'success'"
+    assert label["if"] == f"!cancelled() && steps.{gate_end['id']}.outcome == 'success'"
     assert "jensen_watch.py gate status --last" in label["run"]
     assert steps.index(gate_end) < steps.index(label)
 
-    revert = next(s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@"))
-    assert steps.index(label) < steps.index(revert)
-    revert_if = str(revert["if"])
-    assert revert_if.startswith("!cancelled()")  # a failed label removal never skips the revert
-    assert f"steps.{gate_end['id']}.outcome == 'success'" in revert_if
-    assert "steps.yardstick.outputs.gate_result == 'failed'" in revert_if
-    assert "gate status --last" in revert["with"]["prompt"]
+    # The revert is no longer a step here: it runs in `gate-revert`, off the job's `gate_result` output, which says
+    # `failed` only once `gate end` has really ended the failed gate.
+    assert not any(str(s.get("uses", "")).startswith("anthropics/claude-code-action@") for s in steps)
+    assert yardstick["outputs"]["gate_result"] == (
+        f"${{{{ steps.{gate_end['id']}.outcome == 'success' && steps.yardstick.outputs.gate_result || 'none' }}}}")
+
+
+def _failed_gate_comment(gate_last: dict, tmp_path) -> str:
+    """Runs the comment step's script with `gh` and the gate CLI stubbed, and returns what it would post."""
+    steps = yaml.safe_load((ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text())["jobs"][
+        "yardstick"]["steps"]
+    script = next(s for s in steps if "gh issue comment" in str(s.get("run", "")))["run"]
+    script = script.replace("python scripts/jensen_watch.py gate status --last", f"echo '{json.dumps(gate_last)}'")
+    script = script.replace("${{ github.repository }}", "owner/repo")
+    bin_dir, out = tmp_path / "bin", tmp_path / "gh.out"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "gh").write_text(f'#!/bin/bash\nprintf "%s\\n" "$@" > {out}\n')
+    (bin_dir / "gh").chmod(0o755)
+    (bin_dir / "python").symlink_to(sys.executable)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    subprocess.run(["bash", "-e", "-c", script], env=env, check=True, capture_output=True)
+    return out.read_text().splitlines()
+
+
+def test_a_failed_gate_comments_its_merge_or_says_host_change(tmp_path):
+    repo = {"issue": 12, "kind": "repo", "handle": "abc1234", "started": "2026-11-19T01:00:00Z", "result": "failed",
+            "drop": 2, "regressions": 1}
+    assert _failed_gate_comment(repo, tmp_path / "repo") == [
+        "issue", "comment", "12", "--body", "Yardstick gate failed at abc1234: picked to revert.", "-R", "owner/repo"]
+    # A host gate's handle is backup paths on the host: never in the public comment.
+    host = {**repo, "issue": 7, "kind": "host", "handle": "/home/someone/data/agent.toml.bak-20261119-0100"}
+    posted = _failed_gate_comment(host, tmp_path / "host")
+    assert posted[2] == "7" and posted[4] == "Yardstick gate failed (host change): picked to revert."
+    # The watch and the charter treat that comment like `Deploy check failed ... picked to revert`.
+    for path in (".github/improve-jensen.md", ".github/improve-jensen-watch.md"):
+        text = " ".join((ROOT / path).read_text().split())
+        assert "Yardstick gate failed at <merge sha>: picked to revert." in text, path
+        assert "Yardstick gate failed (host change): picked to revert." in text, path
+
+
+def test_gate_revert_runs_the_charter_after_a_failed_gate(improve_jensen):
+    job = improve_jensen["jobs"]["gate-revert"]
+    assert job["needs"] == "yardstick"
+    assert job["if"] == "!cancelled() && needs.yardstick.outputs.gate_result == 'failed'"
+    assert job["timeout-minutes"] == 120
+    [claude] = [s for s in job["steps"] if str(s.get("uses", "")).startswith("anthropics/claude-code-action@")]
+    assert "--append-system-prompt-file .github/improve-jensen.md" in claude["with"]["claude_args"]
+    assert "gate status --last" in claude["with"]["prompt"] and '"The failed gate"' in claude["with"]["prompt"]
+
+
+def test_yardstick_and_gate_revert_check_out_main_without_the_job_token(improve_jensen):
+    # A run started by a PR review would otherwise check out the PR's merge ref; and no job token in the git config.
+    for name in ("yardstick", "gate-revert"):
+        checkout = _checkout(improve_jensen["jobs"][name])
+        assert checkout["with"]["ref"] == "main", name
+        assert checkout["with"]["persist-credentials"] is False, name
+
+
+def test_workflow_reads_gate_result_not_gate_failed():
+    assert "gate_failed" not in (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
+
+
+def test_project_job_sets_no_labels_of_its_own(improve_jensen):
+    # `project-active.json` is the record of the active project; the job adds and removes no label.
+    for step in improve_jensen["jobs"]["project"]["steps"]:
+        assert "--add-label" not in str(step.get("run", "")) and "--remove-label" not in str(step.get("run", ""))
+    assert "project-active" not in (ROOT / ".github" / "workflows" / "improve-jensen.yml").read_text()
+
+
+def test_assess_commit_records_when_the_assessment_started(improve_jensen):
+    commit = next(s for s in improve_jensen["jobs"]["assess"]["steps"]
+                  if "jensen_watch.py assess-commit" in str(s.get("run", "")))
+    assert commit["run"] == 'python scripts/jensen_watch.py assess-commit --at "$STARTED"'
+    assert commit["env"]["STARTED"] == "${{ steps.assess-check.outputs.started }}"
 
 
 def test_no_job_dispatches_a_gate(improve_jensen):
