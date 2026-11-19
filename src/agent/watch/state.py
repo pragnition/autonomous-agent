@@ -549,6 +549,19 @@ class State:
         records = _read_jsonl(self.root / _DEPLOYS_FILE)
         return records[-1] if records else None
 
+    def deploys_between(self, start: datetime, end: datetime) -> list[dict]:
+        """The `deploys.jsonl` records whose `ts` is in `(start, end]`, oldest first; one without a parseable `ts`
+        is left out."""
+        out = []
+        for record in _read_jsonl(self.root / _DEPLOYS_FILE):
+            try:
+                ts = _parse(record["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start < ts <= end:
+                out.append(record)
+        return out
+
     # -- gate (holds other behaviour changes while the yardstick measures one) --
 
     def gate_start(self, issue: int, kind: str, handle: str, now: datetime) -> None:

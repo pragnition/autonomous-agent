@@ -31,6 +31,9 @@ the one after a deploy broke Jensen -- and only Claude reverts it. So:
   held open (`State.hold_window`) so the turns core couldn't hand over are read once it answers again;
 - a newest `deploys.jsonl` record of `check_failed` or `not_deployable` gives `has_work` on an otherwise quiet hour,
   with the record named in the digest;
+- so does a deploy that landed this window and changed running services (an `ok` record with `services`): a deploy
+  left pending while Jensen was busy can land in a quiet hour, and the watch must still see it to gate it. Its
+  "Needs attention" line names only the two shas and the time;
 - `gh` failing outright, one PR's own calls failing in any way, the runner's transcripts being unavailable, or
   one malformed turn are each caught around just the work that depends on them; the rest of the window is still
   measured and written. A caught error's message never reaches the digest or the log -- only its type, since a
@@ -47,6 +50,7 @@ the one after a deploy broke Jensen -- and only Claude reverts it. So:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -73,6 +77,7 @@ _PR_SEARCH_LIMIT = 200
 
 # A newest deploy record starting with one of these means Jensen may be broken by the last deploy.
 _DEPLOY_FAILURES = ("check_failed", "not_deployable")
+_SHA = re.compile(r"[0-9a-f]{7,40}")
 
 _CORE_DOWN = ("Jensen's core is unreachable: this hour's finished turns could not be read, and the window stays "
               "open until core answers again.")
@@ -326,6 +331,20 @@ def _deploy_alert(state: State) -> str | None:
             f"folder.")
 
 
+def _sha_or_unknown(value: object) -> str:
+    return value if isinstance(value, str) and _SHA.fullmatch(value) else "unknown"
+
+
+def _landed_deploys(state: State, start: datetime, end: datetime) -> list[str]:
+    """A "Needs attention" line for each deploy in `(start, end]` that landed (`ok`) and changed running services.
+    Only shas and the time go in: the record's other fields are never quoted."""
+    return [f"A behaviour-changing deploy landed (from {_sha_or_unknown(record.get('from'))} to "
+            f"{_sha_or_unknown(record.get('to'))}, at {_iso(_parse(record['ts']))}): Jensen's running services "
+            f"changed."
+            for record in state.deploys_between(start, end)
+            if record.get("result") == "ok" and isinstance(record.get("services"), list) and record["services"]]
+
+
 def _midturn_record(item: dict) -> dict:
     created, updated = _parse(item["created_at"]), _parse(item["updated_at"])
     return {"ts": _iso(updated), "kind": "midturn", "id": item["id"], "conversation": item.get("conversation_id"),
@@ -439,6 +458,7 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
 
     pr_records, prs_error = _fetch_prs(host, now, start, pr_to_conversation, projects)
     deploy_alert = _deploy_alert(state)
+    landed = _landed_deploys(state, start, end)
     # Notes have their own cursor, independent of this window: holding *this* window back on a notes failure
     # (the way `core_down` does) would mean the turns/PRs core already handed over this hour get re-fetched --
     # and, since `metrics.jsonl` only appends, re-committed -- next time, compounding every hour notes stay
@@ -449,7 +469,7 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     if not notes_error:
         state.stage_notes_end(end)
 
-    if (not items and not pr_records and not open_deployed and not deploy_alert and not core_down
+    if (not items and not pr_records and not open_deployed and not deploy_alert and not landed and not core_down
             and not notes and not notes_error):
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
@@ -475,7 +495,7 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     if notes_error:
         totals["jensen_reports"] = f"Jensen reports: unavailable ({notes_error})"
 
-    alerts = ([_CORE_DOWN] if core_down else []) + ([deploy_alert] if deploy_alert else [])
+    alerts = ([_CORE_DOWN] if core_down else []) + ([deploy_alert] if deploy_alert else []) + landed
     deployed = [{"number": issue.get("number"), "title": scrub(issue.get("title") or "", secrets)}
                 for issue in open_deployed]
 
