@@ -2,7 +2,9 @@
 
 Everything the hourly watch remembers between runs lives under one root directory (`State.default()` is
 `~/.local/state/improve-jensen`, overridden by env `IMPROVE_JENSEN_STATE`), as a handful of small files:
-`state.json` (the window boundary and known clones), `metrics.jsonl` (one line per turn, midturn or PR, stamped
+`state.json` (the window boundary, known clones, and Jensen's notes' own, separate cursor --
+`notes_committed_end`/`notes_pending_end`, two-phase exactly like the main window but never held back by it or
+holding it back: see `hold_window`'s own warning about why), `metrics.jsonl` (one line per turn, midturn or PR, stamped
 with when it happened and read back by `count`), `pending-metrics.jsonl`/`pending-clones.json` (this window's
 not-yet-final measurement, written by `stage`), `evidence.jsonl` (one line per `note`), `deploys.jsonl` (one line
 per `log_deploy`), `deploy-pending` (present means a deploy is pending -- its own file, not a `state.json` key,
@@ -246,9 +248,33 @@ class State:
     def hold_window(self) -> None:
         """Keep the window being measured open: the next `commit()` leaves `committed_end` where it is, so the
         next window starts from the same place. For an hour whose finished turns couldn't be read at all (core
-        unreachable) -- committing it would skip them for good."""
+        unreachable) -- committing it would skip them for good.
+
+        Never use this for a source that doesn't zero out `items` the way core being unreachable does: holding
+        the *main* window back while turns/PRs core *did* hand over this hour still get staged and committed
+        would mean the next window re-fetches (and, since `metrics.jsonl` only ever appends, re-commits) those
+        same turns, compounding every hour the other source stays down. Jensen's notes have their own,
+        independent cursor (`notes_committed_end`/`stage_notes_end`) for exactly this reason."""
         data = self._read_state()
         data["pending_end"] = data.get("committed_end")
+        self._write_state(data)
+
+    def notes_committed_end(self) -> datetime | None:
+        """The end of the last window Jensen's notes were successfully read through, or `None` if they never
+        have been. This is notes' own cursor, separate from the main window's `committed_end`: a failed notes
+        read must not hold the *main* window back (see `hold_window`'s warning), so notes need a boundary of
+        their own that only moves forward on a successful read, and that can lag behind the main window for as
+        long as notes keep failing."""
+        committed = self._read_state().get("notes_committed_end")
+        return _parse(committed) if committed else None
+
+    def stage_notes_end(self, end: datetime) -> None:
+        """Record `end` as this window's notes cursor, staged until the next `commit()`. Call this only after a
+        successful notes read -- a failed one must leave `notes_pending_end` exactly as it was (whatever an
+        earlier successful attempt staged, or nothing), so the next attempt still starts from the last point
+        notes were actually read, covering the whole gap in between once it succeeds again."""
+        data = self._read_state()
+        data["notes_pending_end"] = _iso(end)
         self._write_state(data)
 
     def commit(self) -> None:
@@ -256,9 +282,18 @@ class State:
         is staged for it into the permanent record: staged metrics are appended to `metrics.jsonl`, staged
         clones merge into `known_clones`, and both staging files are cleared. A window with nothing staged (no
         `stage()` call ever happened, or a previous `commit()` already cleared it) only moves the window
-        boundary -- there is nothing to fold in, and that's fine."""
+        boundary -- there is nothing to fold in, and that's fine.
+
+        The notes cursor moves the same way, but only when there's something staged for it: `notes_committed_end
+        = notes_pending_end` when a `stage_notes_end` call landed one (a successful notes read happened at some
+        point since the last commit), then `notes_pending_end` is cleared either way -- so a run whose notes kept
+        failing right up to this commit leaves `notes_committed_end` exactly where it was, lagging behind the
+        main window until notes finally succeed."""
         data = self._read_state()
         data["committed_end"] = data.get("pending_end")
+        if data.get("notes_pending_end"):
+            data["notes_committed_end"] = data["notes_pending_end"]
+        data.pop("notes_pending_end", None)
         self._write_state(data)
 
         staged_metrics = self._read_pending_metrics()

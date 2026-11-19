@@ -16,6 +16,10 @@ def _cp(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
+def _iso(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _line(**obj) -> str:
     return json.dumps(obj)
 
@@ -158,6 +162,24 @@ def test_quiet_hour_writes_nothing(tmp_path):
     assert result.digest is None
     assert not list(tmp_path.glob("digest-*.md"))
     assert not (tmp_path / "metrics.jsonl").exists()
+
+
+def test_quiet_hour_with_a_successful_empty_notes_read_still_stages_the_notes_cursor(tmp_path):
+    # A notes read that succeeds but finds nothing must still advance the staged cursor, even on an otherwise
+    # quiet hour -- staging happens before the quiet-check precisely so this isn't skipped. Left unstaged, a
+    # long run of quiet-but-notes-successful hours would never move the cursor forward at all.
+    state = State(tmp_path)
+    host = FakeHost(collect={"items": [], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+                    **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is False  # genuinely quiet: no items, no notes, no error
+    raw = json.loads((tmp_path / "state.json").read_text())
+    assert raw["notes_pending_end"] == _iso(T0)
+
+    state.commit()
+    assert state.notes_committed_end() == T0
 
 
 def test_pool_hold_skips_without_consuming_window(tmp_path):
@@ -592,10 +614,11 @@ def test_measure_digest_has_jensen_reports_scrubbed(tmp_path):
     assert "[redacted]" in text
 
 
-def test_measure_holds_the_window_and_marks_the_digest_when_notes_cannot_be_read(tmp_path):
-    # A failed note read must not look exactly like "no notes this hour" (the notes would just fall out of
-    # every future window's range for good); it gets named in the digest, by exception type only, and -- the
-    # same mechanism as core being unreachable -- holds the window open so they're read again next time.
+def test_measure_marks_the_digest_when_notes_cannot_be_read_but_still_advances_the_window(tmp_path):
+    # A failed note read must not look exactly like "no notes this hour" -- it gets named in the digest, by
+    # exception type only. Unlike core being unreachable, it must NOT hold the main window back: notes have
+    # their own, separate cursor for that (see the next two tests), since the main window may well have real
+    # turns/PRs to commit this same hour.
     state = State(tmp_path)
     state.window(T0 - timedelta(hours=1))
     state.commit()  # an earlier, committed hour
@@ -610,10 +633,60 @@ def test_measure_holds_the_window_and_marks_the_digest_when_notes_cannot_be_read
     assert "Jensen reports: unavailable (RuntimeError)" in text
     assert "/secret/host/path" not in text  # the raw error message never reaches the digest
 
-    # Committing this hour must not skip the notes that couldn't be read: the next window starts where this one did.
+    # The main window still advances normally: a notes failure alone no longer holds it open.
     state.commit()
     start, _ = state.window(T0 + timedelta(hours=1))
-    assert start == T0 - timedelta(hours=1)
+    assert start == T0
+
+
+def test_notes_error_with_core_items_present_does_not_re_fetch_them_next_window(tmp_path):
+    # The regression this guards against: holding the *main* window open on a notes failure, while core's own
+    # turns for this hour were staged and committed anyway, would mean the next window re-fetches -- and, since
+    # metrics.jsonl only ever appends, re-commits -- those same turns, compounding every hour notes stay down.
+    state = State(tmp_path)
+    item = _item("W-a", conversation_id="C-a")
+    host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+                    notes_error=RuntimeError("docker exec returned 1: boom"), **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    assert result.has_work is True
+    assert any(r["id"] == "W-a" for r in state.read_metrics(_since(T0)))  # core's turn is staged despite the error
+
+    state.commit()  # Claude's action on this digest succeeded
+
+    # The next window starts at this hour's own end -- not held back by the notes failure -- so core's own
+    # filter by `updated_at` would never hand this same turn back again.
+    start, _ = state.window(T0 + timedelta(hours=1))
+    assert start == T0
+
+
+def test_notes_gap_is_covered_after_an_error_then_a_successful_collect(tmp_path):
+    # Notes' own cursor must lag, not reset, across a failure: the next successful read has to start from the
+    # last point notes were actually read, not from wherever the main window happens to be that hour -- or the
+    # notes sitting there during the failed hour would never be looked at again.
+    state = State(tmp_path)
+    item = _item("W-a", conversation_id="C-a")  # keeps every hour non-quiet, so each one writes a digest
+    host = FakeHost(collect={"items": [item], "conversations": {}, "projects": [], "pool": "normal", "claimed": 0},
+                    **_NO_PRS)
+
+    hour_a = T0
+    measure(state, host, hour_a, open_deployed=[])  # notes succeed
+    state.commit()  # notes_committed_end -> hour_a
+
+    hour_b = T0 + timedelta(hours=1)
+    host._notes_error = RuntimeError("docker exec returned 1: boom")
+    measure(state, host, hour_b, open_deployed=[])  # notes fail
+    state.commit()  # main window advances to hour_b; notes' own cursor stays at hour_a
+
+    hour_c = T0 + timedelta(hours=2)
+    host._notes_error = None
+    host.runner_python_calls.clear()
+    measure(state, host, hour_c, open_deployed=[])
+
+    [(_, args)] = [call for call in host.runner_python_calls if call[1][0] == "collect"]
+    assert args[args.index("--since") + 1] == _iso(hour_a)  # covers the whole gap since the last good read
+    assert args[args.index("--until") + 1] == _iso(hour_c)
 
 
 def test_digest_never_leaks_a_secret_prefix_across_the_truncation_boundary(tmp_path):

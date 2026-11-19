@@ -77,6 +77,36 @@ def test_commit_without_a_prior_stage_only_moves_the_window(tmp_path):
     assert state.read_metrics(_dt(2000, 1, 1, 0, 0, 0)) == []
 
 
+def test_notes_cursor_is_two_phase_and_independent_of_the_main_window(tmp_path):
+    state = State(tmp_path)
+    assert state.notes_committed_end() is None  # never read successfully yet
+
+    end1 = _dt(2026, 11, 19, 1, 0, 0)
+    state.window(end1)
+    state.stage_notes_end(end1)  # a successful notes read this window
+    assert state.notes_committed_end() is None  # staged, not committed yet
+
+    state.commit()
+    assert state.notes_committed_end() == end1
+
+    # A window whose notes failed must never call stage_notes_end -- the cursor stays exactly where it was,
+    # even though the main window still advances normally on its own commit().
+    end2 = _dt(2026, 11, 19, 2, 0, 0)
+    start2, _ = state.window(end2)
+    assert start2 == end1
+    state.commit()
+    assert state.notes_committed_end() == end1
+    start3, _ = state.window(_dt(2026, 11, 19, 3, 0, 0))
+    assert start3 == end2  # the main window moved on regardless
+
+    # A later successful read stages a new end, promoted on its own commit().
+    end4 = _dt(2026, 11, 19, 4, 0, 0)
+    state.window(end4)
+    state.stage_notes_end(end4)
+    state.commit()
+    assert state.notes_committed_end() == end4
+
+
 def test_count_numeric_and_counted_and_pr(tmp_path):
     state = State(tmp_path)
     since = _dt(2026, 11, 19, 0, 0, 0)

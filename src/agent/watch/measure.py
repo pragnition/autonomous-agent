@@ -36,9 +36,12 @@ the one after a deploy broke Jensen -- and only Claude reverts it. So:
   measured and written. A caught error's message never reaches the digest or the log -- only its type, since a
   message can carry a host path or worse.
 - a note Jensen wrote this window, with nothing else to show for the hour, still gives `has_work`; the runner
-  being unreachable (or anything else going wrong) when reading notes is caught, named in the digest by type
-  only, and -- like core being unreachable -- holds the window open (`State.hold_window`) so those same notes
-  are read again once the runner answers, rather than silently falling out of every future window's range.
+  being unreachable (or anything else going wrong) when reading notes is caught and named in the digest by type
+  only. Unlike core, notes do *not* hold the main window open on failure: that window still has turns/PRs core
+  genuinely handed over this hour, and holding it back would mean re-fetching (and, since `metrics.jsonl` only
+  appends, re-committing) those same turns next time. Notes instead keep their own cursor
+  (`State.notes_committed_end`/`State.stage_notes_end`), advanced only on a successful read, so a run of failures
+  simply leaves it lagging until the next success, which then covers the whole gap in between.
 """
 
 from __future__ import annotations
@@ -274,14 +277,15 @@ def _collect(host: Host, start: datetime, end: datetime) -> dict | None:
 
 def _collect_notes(host: Host, start: datetime, end: datetime,
                    secrets: list[str]) -> tuple[list[dict], str | None]:
-    """This window's Jensen notes (`feedback.collect`), each scrubbed the same way a tool line is -- a note can
-    carry a secret or a product name just as easily as a transcript can.
+    """Jensen's notes (`feedback.collect`) over `(start, end]` -- the caller passes notes' own cursor as `start`,
+    not necessarily this hour's main window start. Each note is scrubbed the same way a tool line is -- a note
+    can carry a secret or a product name just as easily as a transcript can.
 
     The runner being unreachable, or anything else going wrong reading notes, is caught here and logged by type
     only (never the message), the same as every other optional source in this file -- but unlike those, a failed
-    read here must not look exactly like "no notes this hour": the caller holds the window open on a non-`None`
-    `error`, so the notes already sitting in `/var/agent/feedback/` are read again next time rather than being
-    silently skipped for good once the window moves past them."""
+    read here must not look exactly like "no notes this hour": a non-`None` `error` tells the caller not to
+    advance notes' own cursor, so the notes already sitting in `/var/agent/feedback/` are read again next time
+    rather than being silently skipped for good."""
     try:
         notes = feedback.collect(host, start, end)
     except Exception as exc:
@@ -435,11 +439,15 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
 
     pr_records, prs_error = _fetch_prs(host, now, start, pr_to_conversation, projects)
     deploy_alert = _deploy_alert(state)
-    notes, notes_error = _collect_notes(host, start, end, secrets)
-    if notes_error:
-        # Same mechanism as `core_down`: hold the window so the notes `collect` couldn't read this time are
-        # still inside the next window's `(since, until]`, instead of being skipped for good.
-        state.hold_window()
+    # Notes have their own cursor, independent of this window: holding *this* window back on a notes failure
+    # (the way `core_down` does) would mean the turns/PRs core already handed over this hour get re-fetched --
+    # and, since `metrics.jsonl` only appends, re-committed -- next time, compounding every hour notes stay
+    # unreadable. So the main window always advances normally; only the notes cursor itself lags on failure,
+    # and only it is staged (never held) when a read succeeds, so the next failure-free read covers the gap.
+    notes_start = state.notes_committed_end() or start
+    notes, notes_error = _collect_notes(host, notes_start, end, secrets)
+    if not notes_error:
+        state.stage_notes_end(end)
 
     if (not items and not pr_records and not open_deployed and not deploy_alert and not core_down
             and not notes and not notes_error):
