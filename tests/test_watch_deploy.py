@@ -93,6 +93,9 @@ class FakeDocker:
         self.raise_on_git: set[str] = set()
         self.fail_git: dict[str, str] = {}
         self._inspect_rounds: dict[str, int] = {}
+        self.paused = "0"            # core's `paused` setting
+        self.resume_failures = 0     # how many `agent resume` calls fail first (core still starting)
+        self.swaps: list[str] = []   # "pause", "up <services>", "resume", in order
 
     def __call__(self, args, **kwargs):
         self.calls.append(list(args))
@@ -109,6 +112,18 @@ class FakeDocker:
             return self._compose(args[2:])
         if args[1] == "exec" and args[2] == "-i":
             return self._core_collect()
+        if args[1] == "exec" and args[3:5] == ["python", "-c"] and "'paused'" in args[5]:
+            was = self.paused
+            self.paused = "1"
+            self.swaps.append("pause")
+            return subprocess.CompletedProcess([], 0, was + "\n", "")
+        if args[1] == "exec" and args[3:] == ["python", "-m", "agent", "resume"]:
+            if self.resume_failures:
+                self.resume_failures -= 1
+                return subprocess.CompletedProcess([], 1, "", "Error: container is restarting")
+            self.paused = "0"
+            self.swaps.append("resume")
+            return subprocess.CompletedProcess([], 0, "resume: done\n", "")
         if args[1] == "exec":
             return self._health(args)
         raise AssertionError(f"unexpected docker call: {args}")
@@ -125,6 +140,7 @@ class FakeDocker:
         if rest[0] == "build":
             return subprocess.CompletedProcess([], 1 if self.build_fails else 0, "", "")
         if rest[0] == "up":
+            self.swaps.append("up " + " ".join(rest[3:]))
             return subprocess.CompletedProcess([], 1 if self.up_fails else 0, "", "")
         if rest[0] == "exec":
             stdout = "smoke ok\n" if self.smoke_ok else "smoke FAILED: timed out\n"
@@ -262,36 +278,6 @@ def test_fetch_failure_returns_2_and_is_logged(tmp_path):
     assert records[0]["from"] is not None  # HEAD is always readable even when the fetch itself failed
 
 
-def test_drift_during_idle_wait_returns_2_and_builds_nothing(tmp_path):
-    """Review Focus 4, the slow way: the checkout drifts *during* the up-to-30-minute idle wait, not before it.
-    The pre-merge re-check must still catch it, and nothing must have been built or recreated."""
-    origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
-
-    fake = FakeDocker()
-    fake.claimed = 1
-    clock = FakeClock()
-    fired = {"done": False}
-
-    def sleep(seconds):
-        clock.sleep(seconds)
-        if not fired["done"]:
-            fired["done"] = True
-            (live / "surprise.txt").write_text("drift during the wait\n")
-            fake.claimed = 0  # so the idle wait ends on the very next poll
-
-    host = Host(run=fake, live=live)
-    state = State(tmp_path / "state")
-
-    result = deploy(host, state, wait_idle_s=1800, sleep=sleep, clock=clock.time)
-
-    assert result == 2
-    assert fired["done"] is True
-    assert not any(c[0] == "docker" and c[1] == "compose" and c[2] in ("build", "up") for c in fake.calls)
-    records = _deploys(tmp_path)
-    assert records[-1]["result"].startswith("not_deployable")
-
-
 def test_failed_ff_merge_returns_2_and_is_logged(tmp_path):
     """Defensive: even after both drift checks pass, a non-zero `merge --ff-only` itself must not be treated as
     success -- `fail_git` forces this exit code directly since a real tmp repo won't produce this failure on
@@ -315,10 +301,11 @@ def test_failed_ff_merge_returns_2_and_is_logged(tmp_path):
 # -- deploy: the idle-runner wait --
 
 
-def test_runner_change_waits_for_idle_then_pending(tmp_path):
+def test_a_busy_runner_change_pauses_core_swaps_and_resumes(tmp_path):
+    """Jensen busy the whole time: the deploy still lands -- core stops starting turns, the running turn gets the
+    grace period, the container is swapped and core resumes. Nothing goes pending."""
     origin, live = _repo_pair(tmp_path)
     _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
-    head_before = _head(live)
 
     fake = FakeDocker()
     fake.claimed = 1  # never drops to 0
@@ -326,19 +313,79 @@ def test_runner_change_waits_for_idle_then_pending(tmp_path):
     host = Host(run=fake, live=live)
     state = State(tmp_path / "state")
 
-    result = deploy(host, state, wait_idle_s=1800, sleep=clock.sleep, clock=clock.time)
+    result = deploy(host, state, wait_idle_s=120, sleep=clock.sleep, clock=clock.time)
 
-    assert result == 3
-    assert state.deploy_pending() is True
-    assert _head(live) == head_before  # never merged
-    assert not any(c[0] == "docker" and c[1] == "compose" for c in fake.calls)
-    # Polled every 30s, never slept past the 1800s budget.
-    assert all(s == 30 for s in clock.slept)
-    assert sum(clock.slept) >= 1800
-    records = _deploys(tmp_path)
-    assert len(records) == 1
-    assert records[0]["result"] == "pending"
-    assert records[0]["services"] == ["agent"]
+    assert result == 0
+    assert fake.swaps == ["pause", "up agent", "resume"]
+    assert fake.paused == "0"
+    assert state.deploy_pending() is False
+    assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()
+    assert _deploys(tmp_path)[-1]["result"] == "ok"
+    assert 120 <= sum(s for s in clock.slept if s == 30) <= 150  # the grace period, then the swap anyway
+
+
+def test_an_idle_runner_change_still_pauses_around_the_swap(tmp_path):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    host = Host(run=fake, live=live)
+
+    assert deploy(host, State(tmp_path / "state"), wait_idle_s=120, sleep=lambda s: None, clock=lambda: 0.0) == 0
+    assert fake.swaps == ["pause", "up agent", "resume"]
+
+
+def test_a_pause_someone_set_on_purpose_is_left_in_place(tmp_path):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    fake.paused = "1"
+    host = Host(run=fake, live=live)
+
+    assert deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0) == 0
+    assert fake.swaps == ["pause", "up agent"]  # no resume
+    assert fake.paused == "1"
+
+
+def test_resume_is_retried_while_core_comes_back(tmp_path):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    fake.resume_failures = 3
+    clock = FakeClock()
+    host = Host(run=fake, live=live)
+
+    assert deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=clock.sleep, clock=clock.time) == 0
+    assert fake.swaps[-1] == "resume" and fake.paused == "0"
+    assert clock.slept.count(10) >= 3
+
+
+def test_core_that_never_answers_resume_is_reported(tmp_path, capsys):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    fake.resume_failures = 100
+    host = Host(run=fake, live=live)
+
+    deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
+
+    assert "just resume" in capsys.readouterr().err
+
+
+def test_a_failed_swap_still_resumes(tmp_path):
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+
+    fake = FakeDocker()
+    fake.up_fails = True
+    host = Host(run=fake, live=live)
+
+    assert deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0) == 1
+    assert fake.swaps == ["pause", "up agent", "resume"]
+    assert fake.paused == "0"
 
 
 def test_core_down_for_whole_wait_still_deploys(tmp_path):
@@ -361,52 +408,6 @@ def test_core_down_for_whole_wait_still_deploys(tmp_path):
     assert state.deploy_pending() is False
 
 
-def test_core_down_with_short_wait_still_counts_as_busy(tmp_path):
-    """The hourly watch calls `deploy` with `--wait-idle-s 0`. A single failed probe there must not be read as
-    "core is down for good" and recreate `agent` blindly -- only a sustained (>= 300s) all-raises wait does."""
-    origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
-
-    fake = FakeDocker()
-    fake.core_unreachable = True  # the one probe this makes raises, but the wait is instant
-    host = Host(run=fake, live=live)
-    state = State(tmp_path / "state")
-
-    result = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
-
-    assert result == 3
-    assert not any(c[0] == "docker" and c[1] == "compose" for c in fake.calls)
-    assert state.deploy_pending() is True
-
-
-def test_a_probe_that_only_sometimes_raises_still_counts_as_busy(tmp_path):
-    """Unlike the whole-wait-unreachable case, a mix of a real (non-zero) reading and a raise must not short
-    circuit into "proceed" -- only every single poll raising does."""
-    origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
-
-    fake = FakeDocker()
-    fake.claimed = 1
-    clock = FakeClock()
-    calls = {"n": 0}
-    real_core_collect = fake._core_collect
-
-    def flaky_core_collect():
-        calls["n"] += 1
-        if calls["n"] == 2:
-            return subprocess.CompletedProcess([], 1, "", "Error: No such container: agent-core")
-        return real_core_collect()
-
-    fake._core_collect = flaky_core_collect
-    host = Host(run=fake, live=live)
-    state = State(tmp_path / "state")
-
-    result = deploy(host, state, wait_idle_s=1800, sleep=clock.sleep, clock=clock.time)
-
-    assert result == 3  # busy (claimed=1) the whole time -- the one raise doesn't make this "idle enough"
-    assert state.deploy_pending() is True
-
-
 # -- deploy: the second idle wait, after the build and before the recreate --
 
 
@@ -424,60 +425,6 @@ def _claim_during_build(fake: FakeDocker):
 
     fake._compose = hook
     return original_compose
-
-
-def test_turn_claimed_during_build_returns_pending_before_up(tmp_path):
-    origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
-
-    fake = FakeDocker()
-    fake.claimed = 0  # idle before the merge, so the first wait passes right away
-    _claim_during_build(fake)
-    host = Host(run=fake, live=live)
-    state = State(tmp_path / "state")
-
-    result = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
-
-    assert result == 3
-    assert not any(c[:3] == ["docker", "compose", "up"] for c in fake.calls)
-    assert state.deploy_pending() is True
-    records = _deploys(tmp_path)
-    assert records[-1]["result"] == "pending"
-
-
-def test_post_build_pending_without_ok_anchor_recreates_agent_on_retry(tmp_path):
-    """The exact Important repro: no `"ok"` record exists yet (a fresh install's empty state folder) when the
-    second, post-build idle wait times out. `HEAD` is already fast-forwarded onto the new commit by then; the
-    retry must still recreate `agent` rather than see an empty `HEAD`-vs-`target` diff (`HEAD` already equals
-    `target`) and silently clear pending with nothing rebuilt -- the first attempt's own pending record (its
-    `from` sha, the pre-merge commit) has to anchor the diff instead."""
-    origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
-
-    fake = FakeDocker()
-    fake.claimed = 0
-    original_compose = _claim_during_build(fake)
-    host = Host(run=fake, live=live)
-    state = State(tmp_path / "state")
-
-    first = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
-
-    assert first == 3
-    assert state.deploy_pending() is True
-    assert not any(c[:3] == ["docker", "compose", "up"] for c in fake.calls)
-    assert _deploys(tmp_path)[-1]["result"] == "pending"
-    assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()  # already ff'd
-
-    # The runner goes idle; no new commits land on origin in the meantime.
-    fake.claimed = 0
-    fake._compose = original_compose
-    fake.calls.clear()
-    retried = deploy(host, state, wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
-
-    assert retried == 0
-    assert ["docker", "compose", "up", "-d", "--no-build", "agent"] in fake.calls
-    assert state.deploy_pending() is False
-    assert _deploys(tmp_path)[-1]["result"] == "ok"
 
 
 # -- deploy: a successful rebuild, and the two-step build/up split --
@@ -502,6 +449,7 @@ def test_core_change_deploys_without_waiting(tmp_path):
     assert records[0]["services"] == ["core"]
     assert records[0]["result"] == "ok"
     assert state.deploy_pending() is False
+    assert fake.swaps == ["up core"]  # a core-only swap never pauses
 
 
 def test_rename_from_runner_to_watch_still_rebuilds_agent(tmp_path):

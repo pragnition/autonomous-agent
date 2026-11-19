@@ -1,12 +1,13 @@
 """`just deploy`: fetch `origin/main` into the live checkout, work out which Compose services the changed paths
-touch, rebuild only those, wait for an idle runner before touching `agent`, and check the stack is actually
+touch, rebuild only those, swap `agent` gracefully (pause, swap, resume), and check the stack is actually
 healthy live before calling the deploy done.
 
 `services_for` maps changed paths to service names (the rules in `_services_for_one`). `deploy` runs the whole
 pipeline under a host-wide `fcntl.flock` on `<state>/deploy.lock`, so two jobs never deploy at once; `check` is
 the live probe after a rebuild that decides whether a deploy counts as `ok` or `check_failed`. Every wait here --
-the lock poll, the two idle-runner polls, the container-stability wait inside `check` -- takes `sleep`/`clock`
-arguments (defaulting to `time.sleep`/`time.monotonic`), so a test can inject a fake pair and run the whole thing
+the lock poll, the idle-runner grace period, the resume retries, the container-stability wait inside `check` --
+takes `sleep`/`clock` arguments (defaulting to `time.sleep`/`time.monotonic`), so a test can inject a fake pair and
+run the whole thing
 without a real delay; `deploy` forwards its own `sleep` into `check` for the same reason.
 
 Git state is read and changed with `host.run(["git", ...], cwd=host.live)` -- never a bare `subprocess` call --
@@ -22,9 +23,7 @@ only ever lands the commit it actually planned around.
 A checkout that is dirty or has drifted from `target` (an uncommitted change, a local commit never pushed, a
 failed fetch, a non-fast-forward) fails loudly with exit 2 before anything is rebuilt, and every such failure is
 logged to `deploys.jsonl` as `not_deployable: <reason>`: a drifted live install must never get silently papered
-over by a deploy. Since waiting for an idle runner can take up to
-`wait_idle_s` (30 minutes), the drift check runs twice: once right after the fetch, and again right before the
-fast-forward merge, in case the checkout itself moved while this run was waiting.
+over by a deploy. The drift check runs right after the fetch, before anything is merged or built.
 
 **What gets rebuilt is not a single `HEAD`-vs-`target` diff.** It is the union, over every *base* in a small set
 of candidate commits, of `services_for(git diff --name-only --no-renames <base> target)`. The candidates are
@@ -45,24 +44,19 @@ path, hiding whichever side the old path's own rule would have triggered). If th
 is still behind `target` (a docs-only change, or nothing outstanding needs rebuilding), the checkout still
 fast-forwards and logs `"ok"` -- `HEAD` and `target` stay level either way.
 
-The rebuild itself is two steps, not one, so a multi-minute image build can never recreate a running container
-out from under a turn that started mid-build: `docker compose build <services>` first (builds images, touches no
-running container), then, only if `agent`'s own queue needs to be idle for this change, a *second* idle check
-(the first one, before the merge, is stale by the time a slow build finishes), and only then `docker compose up
--d --no-build <services>` to actually recreate containers. Every Compose step's exit code is checked; a
-non-zero one is `check_failed: compose <step> exited N`, never silently treated as `ok`.
+The rebuild itself is two steps, not one: `docker compose build <services>` first (builds images while Jensen keeps
+working, touches no running container), then `docker compose up -d --no-build <services>` to recreate containers.
+When `agent` (or `*`) is among them, that swap is graceful: core's queue is paused (only if nobody had paused it on
+purpose), a running turn gets up to `wait_idle_s` to finish, the containers are swapped, and core resumes -- in a
+`finally`, retried while core comes back, so a deploy never leaves Jensen paused. A turn still running when its
+container goes is re-queued and picks its session up again once core resumes. Every Compose step's exit code is
+checked; a non-zero one is `check_failed: compose <step> exited N`, never silently treated as `ok`.
 
-A rebuild is "pending" (exit 3, retried by the next hourly run) when the host-wide lock is held by another
-deploy for the whole `wait_idle_s` wait, or when `agent`'s queue never goes idle in time. Whichever reason it is,
-`state.set_deploy_pending(True)` and a `"pending"` log record are both written. The flag converges back to
-`False` as soon as a run commits to actually landing the pending change -- right after the pre-merge drift
-check passes, not at the very end -- and also on the "nothing outstanding" path, so a pending flag never
-outlives whatever it was flagging. A `claimed` probe that raises counts as "still busy" the way any other busy
-reading does -- *unless every single poll in one wait raised, and that wait ran for at least 300s* -- which
-means core itself was genuinely unreachable for a meaningful stretch, not just one flaky reading (the hourly
-watch's own `--wait-idle-s 0` call must never let a single failed probe recreate `agent` blindly): nothing can
-have been dispatched to the runner in that case, so proceeding (rather than going pending) is the safer failure
-mode -- the deploy might be exactly the revert that brings core back.
+A rebuild is "pending" (exit 3, retried by the next hourly run) only when the host-wide lock is held by another
+deploy for the whole `wait_idle_s` wait: `state.set_deploy_pending(True)` and a `"pending"` log record are both
+written. The flag converges back to `False` as soon as a run commits to actually landing the pending change --
+right after the pre-merge drift check passes, not at the very end -- and also on the "nothing outstanding" path,
+so a pending flag never outlives whatever it was flagging.
 """
 
 from __future__ import annotations
@@ -75,7 +69,7 @@ import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from agent.watch.host import Host
+from agent.watch.host import CORE_CONTAINER, Host
 from agent.watch.state import FMT, State
 
 # -- services_for --
@@ -287,6 +281,40 @@ def _wait_for_idle(host: Host, wait_idle_s: int, sleep, clock) -> bool:
         sleep(_IDLE_POLL_S)
 
 
+# -- the graceful swap: pause core's queue, swap, resume --
+
+_PAUSE_PY = ("from agent import db; c = db.connect('/data/db/agent.db'); was = db.get_setting(c, 'paused', '0'); "
+             "print(was); was == '1' or db.set_setting(c, 'paused', '1'); c.commit()")
+_RESUME_TRIES = 12  # 10 s apart: core may still be starting after its own swap
+
+
+def _pause(host: Host) -> bool:
+    """Stop core from starting turns. True when this call paused it, False when it was already paused (someone
+    did that on purpose, so the deploy leaves it paused) or core couldn't be reached (nothing can start then)."""
+    try:
+        result = host.run(["docker", "exec", CORE_CONTAINER, "python", "-c", _PAUSE_PY],
+                          capture_output=True, text=True)
+    except Exception:
+        return False
+    return result.returncode == 0 and result.stdout.strip() != "1"
+
+
+def _resume(host: Host, sleep) -> None:
+    """Let core start turns again, retrying while core comes back up. If it never answers, says so on stderr:
+    Jensen stays paused until someone runs `just resume`."""
+    for attempt in range(_RESUME_TRIES):
+        try:
+            result = host.run(["docker", "exec", CORE_CONTAINER, "python", "-m", "agent", "resume"],
+                              capture_output=True, text=True)
+            if result.returncode == 0:
+                return
+        except Exception:
+            pass
+        if attempt < _RESUME_TRIES - 1:
+            sleep(10)
+    print("deploy: couldn't resume core after the swap; Jensen stays paused until `just resume`", file=sys.stderr)
+
+
 # -- check --
 
 
@@ -387,7 +415,7 @@ def _log_pending(state: State, from_sha: str | None, to_sha: str | None, service
     return 3
 
 
-def deploy(host: Host, state: State, *, wait_idle_s: int = 1800, if_pending: bool = False,
+def deploy(host: Host, state: State, *, wait_idle_s: int = 120, if_pending: bool = False,
            sleep=time.sleep, clock=time.monotonic) -> int:
     """Fetch, decide what to rebuild, wait for an idle runner if needed, fast-forward, rebuild and check.
 
@@ -452,16 +480,6 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
         state.log_deploy({"ts": _iso_now(), "from": head, "to": target, "services": [], "result": "ok"})
         return 0
 
-    if services & {"agent", "*"}:
-        if not _wait_for_idle(host, wait_idle_s, sleep, clock):
-            return _log_pending(state, head, target, services)
-
-    # The checkout may have moved while this run was waiting for the runner to go idle; re-check right before
-    # committing to the fast-forward: a drifted checkout is never papered over.
-    reason = _drift_reason(host, target)
-    if reason:
-        return _log_not_deployable(host, state, reason, target)
-
     # Past this point the run is committed to landing everything up to `target` -- clear pending here, not at
     # the end, so a pending flag never outlives the attempt it was flagging.
     state.set_deploy_pending(False)
@@ -481,23 +499,29 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
         reason = f"compose build exited {build_result.returncode}"
         return _log_check_failed(state, old_sha, new_sha, services, reason)
 
-    # The build can take minutes; a turn could have been claimed in the meantime, so `agent`/`*` needs a second,
-    # fresh idle check right before the containers that actually run it get recreated.
-    if services & {"agent", "*"}:
-        if not _wait_for_idle(host, wait_idle_s, sleep, clock):
-            return _log_pending(state, old_sha, new_sha, services)
+    # Swapping the agent's container cuts whatever turn it is running, so the swap is graceful: core stops starting
+    # turns, a running one gets up to `wait_idle_s` to finish, then the containers are swapped and core resumes. A
+    # turn still running is re-queued and picks its session up again once core resumes. Jensen is never left paused
+    # by a deploy, and a pause someone set on purpose is left as it was.
+    paused_here = _pause(host) if services & {"agent", "*"} else False
+    try:
+        if services & {"agent", "*"}:
+            _wait_for_idle(host, wait_idle_s, sleep, clock)
 
-    up_args = (["up", "-d", "--no-build", "--remove-orphans"] if "*" in services
-              else ["up", "-d", "--no-build", *sorted(services)])
-    up_result = host.compose(up_args)
-    if up_result.returncode != 0:
-        return _log_check_failed(state, old_sha, new_sha, services, f"compose up exited {up_result.returncode}")
+        up_args = (["up", "-d", "--no-build", "--remove-orphans"] if "*" in services
+                  else ["up", "-d", "--no-build", *sorted(services)])
+        up_result = host.compose(up_args)
+        if up_result.returncode != 0:
+            return _log_check_failed(state, old_sha, new_sha, services, f"compose up exited {up_result.returncode}")
 
-    ok, reason = check(host, services, sleep=sleep)
-    result = "ok" if ok else f"check_failed: {reason}"
-    state.log_deploy({"ts": _iso_now(), "from": old_sha, "to": new_sha, "services": sorted(services),
-                       "result": result})
-    return 0 if ok else 1
+        ok, reason = check(host, services, sleep=sleep)
+        result = "ok" if ok else f"check_failed: {reason}"
+        state.log_deploy({"ts": _iso_now(), "from": old_sha, "to": new_sha, "services": sorted(services),
+                           "result": result})
+        return 0 if ok else 1
+    finally:
+        if paused_here:
+            _resume(host, sleep)
 
 
 # -- CLI --
@@ -525,7 +549,7 @@ def _dry_run(host: Host, state: State) -> int:
 def main(argv: list[str] | None = None, *, host: Host | None = None, state: State | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(prog="deploy")
-    parser.add_argument("--wait-idle-s", type=int, default=1800)
+    parser.add_argument("--wait-idle-s", type=int, default=120)
     parser.add_argument("--if-pending", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

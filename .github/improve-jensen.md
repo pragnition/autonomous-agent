@@ -108,12 +108,14 @@ A `learned` issue makes something that worked part of Jensen's setup in every pr
 - Then merge: `gh pr merge <PR> --merge --delete-branch`.
 
 ## Deploy and check
-Deploy from the live checkout, waiting at most 10 minutes for an idle runner; a 3 (pending) is fine, the hourly watch
-retries it. A deploy can outlast one Bash call (at most 10 minutes), so start it detached from the shell:
+Deploy from the live checkout. A change to Jensen's own container is swapped gracefully: core stops starting turns,
+a running turn gets up to 2 minutes to finish, the container is swapped and core resumes; a turn that was still
+running picks its session up again. A 3 (pending) means another deploy held the lock; the hourly watch retries it. A
+deploy can outlast one Bash call (at most 10 minutes), so start it detached from the shell:
 
 ```sh
 rm -f "$RUNNER_TEMP/deploy.exit"
-nohup sh -c 'cd ~/autonomous-agent && just deploy --wait-idle-s 600 > "$RUNNER_TEMP/deploy.log" 2>&1;
+nohup sh -c 'cd ~/autonomous-agent && just deploy --wait-idle-s 120 > "$RUNNER_TEMP/deploy.log" 2>&1;
   echo $? > "$RUNNER_TEMP/deploy.exit"' > /dev/null 2>&1 < /dev/null &
 ```
 
@@ -138,7 +140,7 @@ stash or clean the live checkout yourself.
 - **2, the checkout isn't deployable** (dirty, diverged, or the fetch failed; logged in `deploys.jsonl`): comment the
   reason in general terms, @-mention the admins to make `~/autonomous-agent` deployable and run `just deploy`, and add
   `needs-person`.
-- **3, pending** (a busy runner, or another deploy holds the lock): comment `Merged <merge sha>; deploy pending, the
+- **3, pending** (another deploy holds the lock): comment `Merged <merge sha>; deploy pending, the
   hourly watch retries it.` and stop. Once it lands, the watch comments `Deployed` and tells Jensen.
 
 A host-config or Claude-home change has no merge to deploy, and always alters how Jensen behaves. Once its check
