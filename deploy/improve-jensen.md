@@ -301,7 +301,7 @@ cat ~/.local/state/improve-jensen/plan.json                 # the reviews and th
 The first window is the last hour. An hour with no finished turns, no new PRs and nothing that needs attention
 (core unreachable, a failed deploy) starts no Claude run and writes no plan, and neither does one while core's usage
 watch is holding scheduled runs. The changes it proposes, if any, are in the Slack channel (step 9). From here the
-listener (step 9) starts the watch every hour at :17, the assessment every hour at :55 (it runs only when there's new
+listener (step 9) starts the watch every hour at :17, the assessment every hour at :10 (it runs only when there's new
 conversation since the last one), and the approvals job every 10 minutes.
 
 Then check, once, that the jobs work on their own tokens. The `fix` and `respond` jobs check out with
