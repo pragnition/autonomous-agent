@@ -210,7 +210,8 @@ From now on, deploy with `cd ~/autonomous-agent && just deploy`. Its exit codes:
 - 1: the check failed, logged as `check_failed` in `~/.local/state/improve-jensen/deploys.jsonl`; a later plain
   deploy retries the same services until a revert or a fix lands;
 - 2: the live checkout isn't deployable (dirty, diverged, or the fetch failed; logged). Fix it by hand;
-- 3: pending: Jensen is busy or another deploy holds the lock. The hourly watch retries it.
+- 3: pending: another deploy holds the lock. The hourly watch retries it. A busy Jensen never makes a deploy wait:
+  a change to its container pauses core, gives a running turn up to `--wait-idle-s` to finish, swaps and resumes.
 
 `seed` creates the labels (`jensen-watch`, `ships`, `works`, `long-runs`, `people`, `fixing`, `needs-person`,
 `stuck`, `project`, `proposed`, `approved`, `rejected`, `learned`, `jensen-assessment`) and files the starting issues
