@@ -46,8 +46,13 @@ def _prepare_run_dir(task_id: str, tmp_path: Path) -> Path:
     return run_dir
 
 
-def _run_check(run_dir: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["./check"], cwd=run_dir, capture_output=True, text=True)
+def _run_check(run_dir: Path, timeout: float = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(["./check"], cwd=run_dir, capture_output=True, text=True, timeout=timeout)
+
+
+def _commit_all(run_dir: Path, message: str) -> None:
+    subprocess.run(["git", "add", "-A"], cwd=run_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=run_dir, check=True, capture_output=True, text=True)
 
 
 def _apply_solution(task_id: str, run_dir: Path) -> None:
@@ -88,6 +93,46 @@ def test_check_passes_on_reference_solution(task_id, tmp_path):
     result = _run_check(run_dir)
     assert result.returncode == 0, (
         f"{task_id}: check must pass on the reference solution\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+
+
+# -- split-change: each of the two new commits must pass on its OWN tree, never on HEAD's --
+
+
+def test_split_change_rejects_decoy_first_commit_with_real_second_commit(tmp_path):
+    """The reviewer's exploit: a first commit that only swaps test_orders.py for the final tests
+    (no production change at all), then a second commit that does the rename and the fix in one
+    shot. orders.py at HEAD already defines order_total, so unless `check` scopes the first
+    commit's test run to its own archived tree, the decoy's tests wrongly pass against HEAD's
+    orders.py instead of failing against the decoy's own (unchanged) orders.py."""
+    run_dir = _prepare_run_dir("split-change", tmp_path)
+    sol_dir = SOLUTIONS_DIR / "split-change"
+
+    shutil.copy(sol_dir / "step2" / "test_orders.py", run_dir / "test_orders.py")
+    _commit_all(run_dir, "decoy: swap in the final tests")
+
+    shutil.copy(sol_dir / "step2" / "orders.py", run_dir / "orders.py")
+    _commit_all(run_dir, "do the rename and the fix")
+
+    result = _run_check(run_dir)
+    assert result.returncode != 0, (
+        f"split-change: a decoy first commit plus one real commit must not pass\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+
+
+def test_split_change_rejects_single_commit_doing_everything(tmp_path):
+    run_dir = _prepare_run_dir("split-change", tmp_path)
+    sol_dir = SOLUTIONS_DIR / "split-change"
+
+    shutil.copy(sol_dir / "step2" / "orders.py", run_dir / "orders.py")
+    shutil.copy(sol_dir / "step2" / "test_orders.py", run_dir / "test_orders.py")
+    _commit_all(run_dir, "do everything in one commit")
+
+    result = _run_check(run_dir)
+    assert result.returncode != 0, (
+        f"split-change: a single commit doing everything must not pass\n"
         f"stdout={result.stdout}\nstderr={result.stderr}"
     )
 

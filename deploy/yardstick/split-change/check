@@ -48,6 +48,41 @@ def run_discovered_tests(root: Path, unique: str) -> tuple[int, bool, str]:
     return total, ok, out
 
 
+def run_commit_tests(commit_root: Path, unique: str) -> tuple[int, bool, str]:
+    """Run `commit_root`'s own test_*.py against `commit_root`'s own production modules only.
+    ROOT (the live run dir, i.e. HEAD) is kept out of sys.path for the duration, and any module
+    the tests might import (orders.py and friends) is evicted from sys.modules first, so a test
+    file can't silently resolve its imports against the current working tree instead of the
+    historical commit it was archived from."""
+    prod_names = [p.stem for p in commit_root.glob("*.py") if not p.stem.startswith("test_")]
+    saved_path = sys.path[:]
+    for name in prod_names:
+        sys.modules.pop(name, None)
+    if str(ROOT) in sys.path:
+        sys.path.remove(str(ROOT))
+    sys.path.insert(0, str(commit_root))
+    try:
+        return run_discovered_tests(commit_root, unique)
+    finally:
+        sys.path[:] = saved_path
+        for name in prod_names:
+            sys.modules.pop(name, None)
+
+
+def commit_touches_production_code(base: str, commit: str) -> bool:
+    """True if `commit` changes any file (relative to `base`) that isn't a test file and isn't
+    harness scaffolding (`check`, `hidden/`) -- i.e. it carries a real change (the rename or the
+    fix), not just a rewritten test_*.py."""
+    names = git(["diff", "--name-only", base, commit]).stdout.split()
+    for name in names:
+        path = Path(name)
+        if "hidden" in path.parts or path.name == "check":
+            continue
+        if not path.name.startswith("test_"):
+            return True
+    return False
+
+
 def contains_calc_total(root: Path) -> bool:
     for path in root.rglob("*"):
         if path.is_dir() or ".git" in path.parts or "hidden" in path.parts or path.name == "check":
@@ -74,13 +109,18 @@ def main() -> int:
         return 1
 
     first_commit = new_commits[0]
+    if not commit_touches_production_code(root_commit, first_commit):
+        print("the first new commit only touches test files -- it must also carry the rename "
+              "or the fix, not just the final tests")
+        return 1
+
     archive = subprocess.run(["git", "archive", "--format=tar", first_commit], cwd=ROOT,
                               stdout=subprocess.PIPE, check=True)
     with tempfile.TemporaryDirectory() as tmp_s:
         tmp = Path(tmp_s)
         with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
             tar.extractall(tmp)
-        count1, ok1, out1 = run_discovered_tests(tmp, "commit1")
+        count1, ok1, out1 = run_commit_tests(tmp, "commit1")
 
     if count1 == 0:
         print("the first new commit has no tests to run")
