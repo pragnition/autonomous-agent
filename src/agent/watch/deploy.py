@@ -64,6 +64,8 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import os
+import signal
 import sys
 import time
 from collections.abc import Iterable
@@ -299,20 +301,52 @@ def _pause(host: Host) -> bool:
     return result.returncode == 0 and result.stdout.strip() != "1"
 
 
-def _resume(host: Host, sleep) -> None:
-    """Let core start turns again, retrying while core comes back up. If it never answers, says so on stderr:
-    Jensen stays paused until someone runs `just resume`."""
-    for attempt in range(_RESUME_TRIES):
+def _resume(host: Host, sleep, tries: int = _RESUME_TRIES) -> bool:
+    """Let core start turns again, retrying while core comes back up. If it never answers, says so on stderr and
+    returns False: the paused marker stays, and the host listener resumes core once it answers."""
+    for attempt in range(tries):
         try:
             result = host.run(["docker", "exec", CORE_CONTAINER, "python", "-m", "agent", "resume"],
                               capture_output=True, text=True)
             if result.returncode == 0:
-                return
+                return True
         except Exception:
             pass
-        if attempt < _RESUME_TRIES - 1:
+        if attempt < tries - 1:
             sleep(10)
-    print("deploy: couldn't resume core after the swap; Jensen stays paused until `just resume`", file=sys.stderr)
+    print("deploy: couldn't resume core after the swap; the host listener keeps trying", file=sys.stderr)
+    return False
+
+
+# A deploy that paused core writes this file and removes it once core resumes. A deploy that died in between (killed,
+# or the host lost power) leaves it behind with the lock free: `resume_if_left_paused` (the host listener calls it
+# every loop) resumes core then, so Jensen is never left paused by a deploy.
+_PAUSED_MARKER = "deploy-paused"
+
+
+def resume_if_left_paused(host: Host, state: State) -> bool:
+    """Resume core when a deploy paused it and is no longer running (its marker is there, the deploy lock is free).
+    True when it resumed core."""
+    marker = state.root / _PAUSED_MARKER
+    if not marker.exists():
+        return False
+    with open(state.root / "deploy.lock", "a+") as lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False  # a deploy is running: its own `finally` resumes core
+        try:
+            if not _resume(host, lambda s: None, tries=1):
+                return False
+            marker.unlink(missing_ok=True)
+            return True
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def _stop_cleanly(signum, frame):
+    """SIGTERM or SIGHUP mid-deploy: unwind through the `finally` blocks, so a paused core is resumed."""
+    raise SystemExit(128 + signum)
 
 
 # -- check --
@@ -504,6 +538,9 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
     # turn still running is re-queued and picks its session up again once core resumes. Jensen is never left paused
     # by a deploy, and a pause someone set on purpose is left as it was.
     paused_here = _pause(host) if services & {"agent", "*"} else False
+    marker = state.root / _PAUSED_MARKER
+    if paused_here:
+        marker.write_text(f"{os.getpid()}\n")
     try:
         if services & {"agent", "*"}:
             _wait_for_idle(host, wait_idle_s, sleep, clock)
@@ -520,8 +557,8 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
                            "result": result})
         return 0 if ok else 1
     finally:
-        if paused_here:
-            _resume(host, sleep)
+        if paused_here and _resume(host, sleep):
+            marker.unlink(missing_ok=True)
 
 
 # -- CLI --
@@ -556,6 +593,8 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
 
     host = Host.default() if host is None else host
     state = State.default() if state is None else state
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, _stop_cleanly)
 
     if args.dry_run:
         return _dry_run(host, state)
