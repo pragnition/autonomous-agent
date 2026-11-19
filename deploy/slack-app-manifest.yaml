@@ -2,7 +2,8 @@
 # The agent here is Jensen; use your agent's name (agent.toml `name`) if it differs. Read access is as wide as a bot
 # token allows, so reading more of Slack (the slack_read tool) never needs a reinstall: the app can join any public
 # channel and read every channel, DM and group DM it's in. Private channels still need an /invite; no bot token can
-# read private channels it isn't in, or DMs between other people.
+# read private channels it isn't in, or DMs between other people. Adding a scope to an installed app (as pins:write
+# was) means editing the app's manifest or OAuth & Permissions page and reinstalling it in the workspace.
 display_information:
   name: Jensen
   description: The team's autonomous engineering agent (an AI).
@@ -45,9 +46,10 @@ oauth_config:
       - team:read
       - emoji:read
       - dnd:read
-      # writing: replies, reactions, file uploads, DMs
+      # writing: replies, reactions, pins, file uploads, DMs
       - chat:write
       - reactions:write
+      - pins:write
       - files:write
       - im:write
 settings:
