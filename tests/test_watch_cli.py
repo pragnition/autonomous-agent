@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import subprocess
@@ -292,6 +293,64 @@ def test_review_target_missing_file_or_index_exits_2(tmp_path, capsys):
     rc2 = main(["review-target", "--run", "42", "--index", "5"], host=object(), state=state, now=T0)
     assert rc2 == 2
     assert "42" in capsys.readouterr().err
+
+
+# -- feedback-reply / changes-add --
+
+
+class _FeedbackHost:
+    """Records every `runner_python` call `feedback-reply`/`changes-add` makes, decoding the base64'd payload
+    back out so a test can check exactly what crossed the `docker exec` boundary."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def runner_python(self, module_file, args):
+        self.calls.append((module_file, list(args)))
+        return "ok\n"
+
+
+def _flag(args: list[str], flag: str) -> str:
+    return args[args.index(flag) + 1]
+
+
+def test_feedback_reply_appends_status(tmp_path):
+    host = _FeedbackHost()
+
+    rc = main(["feedback-reply", "2026-11-19-thing.md", "fixed in the next deploy"],
+              host=host, state=State(tmp_path), now=T0)
+
+    assert rc == 0
+    [(module_file, args)] = host.calls
+    assert module_file == "runner_feedback.py"
+    assert args[0] == "reply"
+    assert _flag(args, "--name") == "2026-11-19-thing.md"
+    assert _flag(args, "--now") == "2026-11-19T10:00:00Z"
+    assert base64.b64decode(_flag(args, "--status-b64")).decode() == "fixed in the next deploy"
+
+
+def test_feedback_reply_rejects_bad_names_without_touching_the_runner(tmp_path, capsys):
+    host = _FeedbackHost()
+
+    for bad_name in ("../x.md", "a/b.md", "x.txt"):
+        rc = main(["feedback-reply", bad_name, "status"], host=host, state=State(tmp_path), now=T0)
+        assert rc == 2
+        assert "bad note name" in capsys.readouterr().err
+
+    assert host.calls == []  # a bad name never reaches docker exec at all
+
+
+def test_changes_add_prepends_a_changelog_entry(tmp_path):
+    host = _FeedbackHost()
+
+    rc = main(["changes-add", "jensen ran out of disk space"], host=host, state=State(tmp_path), now=T0)
+
+    assert rc == 0
+    [(module_file, args)] = host.calls
+    assert module_file == "runner_feedback.py"
+    assert args[0] == "change"
+    assert _flag(args, "--now") == "2026-11-19T10:00:00Z"
+    assert base64.b64decode(_flag(args, "--text-b64")).decode() == "jensen ran out of disk space"
 
 
 # -- gh passthrough --

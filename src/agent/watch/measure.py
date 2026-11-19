@@ -1,15 +1,18 @@
-"""`measure`: one hourly pass over core's finished work and Jensen's PRs, boiled down to a digest.
+"""`measure`: one hourly pass over core's finished work, Jensen's PRs and Jensen's own notes, boiled down to a
+digest.
 
 Pulls the window's finished work items out of core (`core_collect.py`, run inside `agent-core` through
 `Host.core_python`), fetches each undelivered turn's own runner transcript to size it up with
 `agent.watch.transcript.turn_facts`, finds Jensen's PRs for the window with `gh search prs` and nails down each
 one's size, CI result and co-author trail with `gh pr view`/`gh pr checks` (or, when the token can't read checks,
-the Actions runs on the PR's head commit, then its commit statuses), then stages what `agent.watch.state.State`
-keeps (`State.stage`) and writes a digest file for improve-jensen to read next. Every piece of free text that lands
-in the digest -- a person's ask, Jensen's reply, a tool or error line, a deployed issue's title -- is scrubbed of
-secrets first, since it might end up quoted back out in a public issue; so is every tool input, tool output and
-error text *before* `turn_facts` truncates it (its `clean` hook, on the decoded strings), since a secret that
-straddles that cut would otherwise leak a prefix no exact-value or pattern match could catch after the fact.
+the Actions runs on the PR's head commit, then its commit statuses), reads whatever notes Jensen wrote to
+`/var/agent/feedback/` this window (`agent.watch.feedback.collect`, run inside `agent-runner` through
+`Host.runner_python`), then stages what `agent.watch.state.State` keeps (`State.stage`) and writes a digest file
+for improve-jensen to read next. Every piece of free text that lands in the digest -- a person's ask, Jensen's
+reply, a tool or error line, a deployed issue's title, a note Jensen wrote itself -- is scrubbed of secrets
+first, since it might end up quoted back out in a public issue; so is every tool input, tool output and error
+text *before* `turn_facts` truncates it (its `clean` hook, on the decoded strings), since a secret that straddles
+that cut would otherwise leak a prefix no exact-value or pattern match could catch after the fact.
 
 Every record is stamped with when its event happened, not when it was measured: a turn or midturn with its
 `updated_at`, a PR with its `mergedAt`, else its `createdAt`. So `count --since <deploy time>` reads only what
@@ -32,6 +35,8 @@ the one after a deploy broke Jensen -- and only Claude reverts it. So:
   one malformed turn are each caught around just the work that depends on them; the rest of the window is still
   measured and written. A caught error's message never reaches the digest or the log -- only its type, since a
   message can carry a host path or worse.
+- a note Jensen wrote this window, with nothing else to show for the hour, still gives `has_work`; the runner
+  being unreachable when reading notes is caught the same way, by type only, and costs just the notes section.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.scrub import scrub
+from agent.watch import feedback
 from agent.watch.digest import SIGNAL_KEYS, ConvoView, render
 from agent.watch.host import Host
 from agent.watch.state import FMT, State, is_improve_jensens_own, summarize
@@ -264,6 +270,19 @@ def _collect(host: Host, start: datetime, end: datetime) -> dict | None:
     return collected if isinstance(collected, dict) else None
 
 
+def _collect_notes(host: Host, start: datetime, end: datetime, secrets: list[str]) -> list[dict]:
+    """This window's Jensen notes (`feedback.collect`), each scrubbed the same way a tool line is -- a note can
+    carry a secret or a product name just as easily as a transcript can. The runner being unreachable, or
+    anything else going wrong reading notes, is caught and logged by type only, the same as every other
+    optional source here: a note improve-jensen can't read yet must never cost the rest of the hour."""
+    try:
+        notes = feedback.collect(host, start, end)
+    except Exception as exc:
+        _warn("reading Jensen's notes", exc)
+        return []
+    return [{**note, "text": scrub(note.get("text") or "", secrets)} for note in notes]
+
+
 def _fetch_transcripts(host: Host, ids: list[str]) -> tuple[dict[str, bytes], str | None]:
     """Each id's runner transcript as raw bytes, plus a host-path-free reason when none could be read at all."""
     if not ids:
@@ -409,8 +428,10 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
 
     pr_records, prs_error = _fetch_prs(host, now, start, pr_to_conversation, projects)
     deploy_alert = _deploy_alert(state)
+    notes = _collect_notes(host, start, end, secrets)
 
-    if not items and not pr_records and not open_deployed and not deploy_alert and not core_down:
+    if (not items and not pr_records and not open_deployed and not deploy_alert and not core_down
+            and not notes):
         return MeasureResult(has_work=False, skip_reason="quiet", digest=None, window=window)
 
     # Claude gets a new hour: the last hour's plan is spent. Nothing else consumes plan.json, so a run that
@@ -437,7 +458,8 @@ def measure(state: State, host: Host, now: datetime, open_deployed: list[dict]) 
     deployed = [{"number": issue.get("number"), "title": scrub(issue.get("title") or "", secrets)}
                 for issue in open_deployed]
 
-    digest_text = render(window, list(convo_views.values()), totals, pr_records, deployed, alerts=alerts)
+    digest_text = render(window, list(convo_views.values()), totals, pr_records, deployed, notes=notes,
+                         alerts=alerts)
     digest_text = scrub(digest_text, secrets)
     digest_path = state.write_digest(end, digest_text)
     state.prune(now, days=_RETENTION_DAYS)

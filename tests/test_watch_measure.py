@@ -53,7 +53,8 @@ class FakeHost:
     `gh` dispatch table, recording every call for tests to inspect."""
 
     def __init__(self, *, collect, transcripts=None, login=None, search=None, views=None, checks=None,
-                 runs=None, statuses=None, secrets=None, gh_error=None, transcripts_error=None, core_error=None):
+                 runs=None, statuses=None, secrets=None, gh_error=None, transcripts_error=None, core_error=None,
+                 notes=None, notes_error=None):
         self.collect = collect
         self._runs = runs or {}
         self._statuses = statuses or {}
@@ -66,9 +67,12 @@ class FakeHost:
         self._secrets = secrets or []
         self._gh_error = gh_error
         self._transcripts_error = transcripts_error
+        self._notes = notes or []
+        self._notes_error = notes_error
         self.gh_calls: list[list[str]] = []
         self.transcripts_calls: list[list[str]] = []
         self.core_python_calls: list[tuple] = []
+        self.runner_python_calls: list[tuple] = []
 
     def core_python(self, module_file, args):
         self.core_python_calls.append((module_file, tuple(args)))
@@ -113,6 +117,12 @@ class FakeHost:
 
     def secret_values(self):
         return self._secrets
+
+    def runner_python(self, module_file, args):
+        self.runner_python_calls.append((module_file, tuple(args)))
+        if self._notes_error:
+            raise self._notes_error
+        return json.dumps(self._notes)
 
 
 _NO_PRS = {"login": _cp(stdout="jensen-bot\n"), "search": _cp(stdout="[]")}
@@ -558,6 +568,27 @@ def test_digest_redacts_secrets(tmp_path):
     text = result.digest.read_text()
     assert "xoxb-123456789012-abcdefghij" not in text
     assert "supersecretvalue" not in text
+    assert "[redacted]" in text
+
+
+def test_measure_digest_has_jensen_reports_scrubbed(tmp_path):
+    # A note Jensen wrote itself can carry a secret or a product name just as easily as a transcript can
+    # (Review Focus 3): it must only ever reach the digest through the scrub, same as everything else.
+    state = State(tmp_path)
+    note = {"name": "2026-11-19-blocked.md",
+            "text": "hit a limit: supersecretvalue and a token xoxb-1234567890-abcdefghij got in the way",
+            "modified": "2026-11-19T09:30:00Z"}
+    host = FakeHost(collect=_EMPTY, notes=[note], secrets=["supersecretvalue"], **_NO_PRS)
+
+    result = measure(state, host, T0, open_deployed=[])
+
+    # Even though no turns finished this hour, a new note alone is still work.
+    assert result.has_work is True
+    text = result.digest.read_text()
+    assert "## Jensen reports" in text
+    assert "2026-11-19-blocked.md" in text
+    assert "supersecretvalue" not in text
+    assert "xoxb-1234567890-abcdefghij" not in text
     assert "[redacted]" in text
 
 

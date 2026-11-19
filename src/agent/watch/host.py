@@ -57,6 +57,20 @@ class Host:
             raise RuntimeError(f"docker exec returned {result.returncode}: {result.stderr}")
         return result.stdout
 
+    def runner_python(self, module_file: str | Path, args: list[str]) -> str:
+        """Run `module_file`'s text inside `agent-runner` (`docker exec -i agent-runner python3 - <args>`), the
+        file piped on stdin so the runner never needs to carry or import it. Same contract as `core_python`
+        (a bare name resolves relative to `src/agent/watch/`, where `runner_feedback.py` lives), except it runs
+        `python3` rather than `python`: the runner's own interpreter is 3.12, invoked by that name there."""
+        path = Path(module_file)
+        if not path.is_absolute():
+            path = _WATCH_DIR / path
+        result = self.run(["docker", "exec", "-i", RUNNER_CONTAINER, "python3", "-", *args],
+                           input=path.read_text(), capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"docker exec returned {result.returncode}: {result.stderr}")
+        return result.stdout
+
     def transcripts(self, ids: list[str], dest: Path) -> dict[str, Path]:
         """Copy each id's runner transcript out of `agent-runner` into `dest/<id>.jsonl`. An id with no transcript
         file (the run never got that far, or it's already been pruned) is silently skipped; `agent-runner` itself

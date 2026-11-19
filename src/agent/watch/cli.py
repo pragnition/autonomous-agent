@@ -30,6 +30,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from agent.watch import feedback
 from agent.watch.host import Host
 from agent.watch.measure import measure
 from agent.watch.state import FMT, State
@@ -83,6 +84,13 @@ def _build_parser() -> argparse.ArgumentParser:
     seed_p = sub.add_parser("seed")
     seed_p.add_argument("file")
     seed_p.add_argument("--repo")
+
+    feedback_reply_p = sub.add_parser("feedback-reply")
+    feedback_reply_p.add_argument("name")
+    feedback_reply_p.add_argument("status")
+
+    changes_add_p = sub.add_parser("changes-add")
+    changes_add_p.add_argument("text")
 
     return parser
 
@@ -231,6 +239,25 @@ def _cmd_seed(host: Host, file: str, repo: str | None) -> int:
     return 0
 
 
+# -- feedback-reply / changes-add --
+
+
+def _cmd_feedback_reply(host: Host, name: str, status: str, now: datetime) -> int:
+    """Answer one of Jensen's notes in place. A bad name (`/`, `..`, not `.md`) is a usage error, not a crash:
+    print it and exit 2, the same as `count`'s unknown-signal case."""
+    try:
+        feedback.reply(host, name, status, now)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    return 0
+
+
+def _cmd_changes_add(host: Host, text: str, now: datetime) -> int:
+    feedback.add_change(host, text, now)
+    return 0
+
+
 # -- gh passthrough --
 
 
@@ -271,4 +298,8 @@ def main(argv: list[str] | None = None, *, host: Host | None = None, state: Stat
         return _cmd_review_target(state, args.run, args.index)
     if args.command == "seed":
         return _cmd_seed(host, args.file, args.repo)
+    if args.command == "feedback-reply":
+        return _cmd_feedback_reply(host, args.name, args.status, now)
+    if args.command == "changes-add":
+        return _cmd_changes_add(host, args.text, now)
     raise AssertionError(f"unhandled command: {args.command!r}")  # pragma: no cover - argparse already validated

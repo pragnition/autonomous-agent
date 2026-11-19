@@ -80,7 +80,7 @@ def _render_turn(turn: dict, cap: int | None) -> list[str]:
 
 
 def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
-               deployed: list[dict], cap: int | None, alerts: list[str]) -> str:
+               deployed: list[dict], notes: list[dict], cap: int | None, alerts: list[str]) -> str:
     start, end = window
     out = ["# Jensen hourly digest", "", f"Window: {_iso(start)} to {_iso(end)}", "", "## Needs attention"]
     if alerts:
@@ -111,6 +111,15 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
     else:
         out.append("- none")
 
+    out += ["", "## Jensen reports"]
+    if notes:
+        for note in notes:
+            out.append(f"### {note.get('name')} (modified {note.get('modified')})")
+            out.extend((note.get("text") or "").splitlines())
+            out.append("")
+    else:
+        out.append("- none")
+
     out += ["", "## Conversations"]
     if convos:
         for convo in convos:
@@ -125,14 +134,17 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
 
 
 def render(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
-           deployed: list[dict], budget: int = 400_000, *, alerts: list[str] | None = None) -> str:
+           deployed: list[dict], budget: int = 400_000, *, notes: list[dict] | None = None,
+           alerts: list[str] | None = None) -> str:
     """The digest's markdown text. `alerts` (core unreachable, a failed deploy) go first, under "Needs attention".
-    Tries the tool-line cap at each step in `_CAPS`, returning the first rendering that fits `budget`; if none fit
-    (the people's own messages alone are already over budget), returns the last (narrowest) one anyway, since
-    `asked`/`replied` are never cut."""
+    `notes` (already-scrubbed Jensen reports, each `{name, text, modified}`) get their own "## Jensen reports"
+    section, one `###` subsection per note, its text shown in full -- never cut by the tool-line budget below,
+    the same as `asked`/`replied`. Tries the tool-line cap at each step in `_CAPS`, returning the first
+    rendering that fits `budget`; if none fit (the people's own messages alone are already over budget), returns
+    the last (narrowest) one anyway."""
     text = ""
     for cap in _CAPS:
-        text = _render_at(window, convos, totals, prs, deployed, cap, list(alerts or []))
+        text = _render_at(window, convos, totals, prs, deployed, list(notes or []), cap, list(alerts or []))
         if len(text) <= budget:
             return text
     return text
