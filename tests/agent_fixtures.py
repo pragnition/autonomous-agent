@@ -49,7 +49,6 @@ class FakeSlack:
         self.posts, self.updates, self.reactions, self.ephemerals, self.uploads, self.opened = [], [], [], [], [], []
         self.replies: list[dict] = []
         self.unreacted: list[dict] = []
-        self.pins: list[tuple[str, dict]] = []
         self.history: list[dict] = []  # a channel's top-level messages, each with a ts
         self._ts = 100
 
@@ -67,12 +66,6 @@ class FakeSlack:
 
     async def reactions_remove(self, **kw):
         self.unreacted.append(kw)
-
-    async def pins_add(self, **kw):
-        self.pins.append(("add", kw))
-
-    async def pins_remove(self, **kw):
-        self.pins.append(("remove", kw))
 
     async def chat_postEphemeral(self, **kw):
         self.ephemerals.append(kw)
