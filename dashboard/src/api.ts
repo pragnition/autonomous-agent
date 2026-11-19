@@ -170,7 +170,6 @@ export type KpiView = {
     tasks: number; by_source: Record<TaskSource, number>; by_project: Record<string, number>; time: Stat
     finished: number; finished_rate: number | null
     merged: number; issues_closed: number
-    tokens_by_project: Record<string, Usage>
   }
   daily: { date: string; slack: number; linear: number; schedule: number }[]
   tasks: TaskRecord[]

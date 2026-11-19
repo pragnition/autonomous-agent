@@ -121,6 +121,7 @@ async def test_kpis_tool(seeded, tmp_path):
                         unattended=False, task_id=None, channel=None, thread_ts=None)
     [spec] = [s for s in router.manifest(admin) if s["name"] == "kpis"]
     assert "cost" not in spec["description"].lower() and "tasks" in spec["description"]
+    assert "Tokens today:" in text and "Tokens last 7 days:" in text and "Tokens this month:" in text
 
 
 def test_projects_come_first_by_count_and_general_last(conn):
@@ -154,7 +155,7 @@ def test_a_days_projects_add_up_to_its_run_tokens(conn):
     day = conn.execute("SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), "
                        "SUM(cache_write_tokens) FROM runs WHERE started_at >= ? AND started_at < ?",
                        (at("00:00"), at("00:00", 14))).fetchone()
-    assert total(usage) == Usage(*day)
+    assert total(usage.values()) == Usage(*day)
 
 
 def test_format_kpis_shows_tokens_by_project_and_no_cost(conn):
@@ -180,3 +181,25 @@ def test_usage_windows_today_7d_month_and_the_apps_meter(conn):
     assert {k: v["total"].runs for k, v in w.items()} == {"today": 1, "7d": 2, "month": 3}
     assert w["month"]["by_project"]["general"] == Usage(1, 100, 10, 1000, 50)
     assert w["today"]["apps_by_upstream"] == {"alpha-foundry": AppUsage(1, 10, 3, 2, 0, 0.25)}
+
+
+def test_blank_project_counts_as_general_and_a_project_named_general_merges(conn):
+    from agent.core.kpis import Usage, tokens_by_project
+
+    run(conn, "R1", "", "10:00", (1, 1, 1, 1))
+    run(conn, "R2", None, "10:00", (2, 2, 2, 2))
+    run(conn, "R3", "general", "10:00", (4, 4, 4, 4))
+    assert tokens_by_project(conn, since=SINCE, until=UNTIL) == {"general": Usage(3, 7, 7, 7, 7)}
+
+
+def test_format_usage_windows_lists_projects_and_the_apps_meter(conn):
+    from agent.core.kpis import format_usage_windows, usage_windows
+
+    run(conn, "R1", "alpha", "02:00")
+    conn.execute("INSERT INTO llm_usage(at, upstream, model, status, input_tokens, cached_tokens, output_tokens, "
+                 "cost_usd) VALUES (?, 'alpha-foundry', 'm', 200, 10, 2, 3, 0.25)", (at("03:00"),))
+    text = format_usage_windows(usage_windows(conn, datetime(2026, 11, 13, 4, 0, tzinfo=UTC), "UTC"))
+    assert text.splitlines()[:3] == [
+        "Tokens today: 100 in · 10 out · 1k cache read · 50 cache write",
+        "  alpha: 100 in · 10 out · 1k cache read · 50 cache write",
+        "  app meter, alpha-foundry: 1 call · 10 in · 3 out · 2 cache read · 0 cache write · $0.25 billed"]

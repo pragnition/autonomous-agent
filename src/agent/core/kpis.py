@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import sqlite3
 import statistics
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -61,18 +62,22 @@ def tokens_by_project(conn: sqlite3.Connection, *, since: datetime, until: datet
     "general" last."""
     lo, hi = _window(since, until)
     rows = conn.execute(
-        "SELECT project, COUNT(*) AS runs, SUM(input_tokens) AS i, SUM(output_tokens) AS o, "
+        "SELECT NULLIF(project, '') AS project, COUNT(*) AS runs, SUM(input_tokens) AS i, SUM(output_tokens) AS o, "
         "SUM(cache_read_tokens) AS cr, SUM(cache_write_tokens) AS cw "
-        "FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY project", (lo, hi)).fetchall()
-    usage = {r["project"]: Usage(r["runs"], r["i"], r["o"], r["cr"], r["cw"]) for r in rows}
-    out = dict(sorted(((p, u) for p, u in usage.items() if p), key=lambda kv: (-kv[1].output_tokens, kv[0])))
-    if None in usage:
-        out[GENERAL] = usage[None]
+        "FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY 1", (lo, hi)).fetchall()
+    usage: dict[str, Usage] = {}
+    for r in rows:   # every run lands in exactly one row, so the rows add up to the window's total
+        key = r["project"] or GENERAL
+        usage[key] = total((usage.get(key, Usage()), Usage(r["runs"], r["i"], r["o"], r["cr"], r["cw"])))
+    out = dict(sorted(((p, u) for p, u in usage.items() if p != GENERAL), key=lambda kv: (-kv[1].output_tokens, kv[0])))
+    if GENERAL in usage:
+        out[GENERAL] = usage[GENERAL]
     return out
 
 
-def total(usage: dict[str, Usage]) -> Usage:
-    return Usage(*(sum(getattr(u, f) for u in usage.values()) for f in USAGE_FIELDS))
+def total(parts: Iterable[Usage]) -> Usage:
+    parts = list(parts)
+    return Usage(*(sum(getattr(u, f) for u in parts) for f in USAGE_FIELDS))
 
 
 def app_tokens_by_upstream(conn: sqlite3.Connection, *, since: datetime, until: datetime) -> dict[str, AppUsage]:
@@ -92,7 +97,7 @@ def usage_windows(conn: sqlite3.Connection, now: datetime, tz: str) -> dict[str,
     out = {}
     for name, since in (("today", local), ("7d", now - timedelta(days=7)), ("month", local.replace(day=1))):
         projects = tokens_by_project(conn, since=since, until=now)
-        out[name] = {"since": _window(since, now)[0], "by_project": projects, "total": total(projects),
+        out[name] = {"since": _window(since, now)[0], "by_project": projects, "total": total(projects.values()),
                      "apps_by_upstream": app_tokens_by_upstream(conn, since=since, until=now)}
     return out
 
@@ -172,6 +177,21 @@ def format_usage(u: Usage) -> str:
             f"{format_tokens(u.cache_read_tokens)} cache read · {format_tokens(u.cache_write_tokens)} cache write")
 
 
+WINDOW_NAMES = {"today": "today", "7d": "last 7 days", "month": "this month"}
+
+
+def format_usage_windows(windows: dict[str, dict]) -> str:
+    """Tokens by project for today, 7 days and this month, and the apps' metered calls by upstream."""
+    lines = []
+    for key, label in WINDOW_NAMES.items():
+        w = windows[key]
+        lines.append(f"Tokens {label}: {format_usage(w['total'])}")
+        lines += [f"  {project}: {format_usage(u)}" for project, u in w["by_project"].items()]
+        lines += [f"  app meter, {name}: {_n(u.runs, 'call', 'calls')} · {format_usage(u)} · ${u.cost_usd:.2f} billed"
+                  for name, u in w["apps_by_upstream"].items()]
+    return "\n".join(lines)
+
+
 def _n(count: int, one: str, many: str) -> str:
     return f"{count} {one if count == 1 else many}"
 
@@ -188,7 +208,7 @@ def format_kpis(k: Kpis, name: str = "Agent") -> str:
         f"Time per task: {time}",
         f"Finished: {rate} ({k.finished} of {k.tasks})",
         f"Shipped: {_n(k.merged, 'PR', 'PRs')} merged · {_n(k.issues_closed, 'Linear issue', 'Linear issues')} closed",
-        f"Tokens: {format_usage(total(k.tokens_by_project))}",
+        f"Tokens: {format_usage(total(k.tokens_by_project.values()))}",
         *(f"  {project}: {format_usage(u)}" for project, u in k.tokens_by_project.items()),
     ])
 
@@ -199,12 +219,14 @@ def register_kpi_tools(router: AgentToolRouter) -> None:
         if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 365:
             return ToolReply("days must be a whole number from 1 to 365")
         until = datetime.now(UTC)
-        return ToolReply(format_kpis(compute_kpis(router.conn, since=until - timedelta(days=days), until=until),
-                                     router.config.name))
+        k = compute_kpis(router.conn, since=until - timedelta(days=days), until=until)
+        return ToolReply(format_kpis(k, router.config.name) + "\n\n"
+                         + format_usage_windows(usage_windows(router.conn, until, router.config.timezone)))
 
     router.register(ToolSpec(
         "kpis", "The agent's own KPIs over the last `days` days (default 7): tasks by project, time per task, the "
-                "share finished, PRs merged and Linear issues closed, and its tokens by project.",
+                "share finished, PRs merged and Linear issues closed, and its tokens by project (also today, 7 days and this month, with the apps' "
+                "metered model calls by upstream).",
         schema({}, {"days": "integer"}), "read"), kpis)
 
 
