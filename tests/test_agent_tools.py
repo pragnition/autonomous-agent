@@ -4,6 +4,7 @@ import json
 import pytest
 
 from agent import db, tasks
+from agent.core import projects
 from agent.core.agent_tools import AgentToolRouter, ToolReply, ToolSpec
 from agent.core.conversations import Conversations, record_message
 from agent.core.notifier import SlackNotifier
@@ -172,6 +173,30 @@ async def test_start_task_queues_code_session(router, ctx_general, conn):
     row = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
     assert (row["channel"], row["thread_ts"], row["is_primary"]) == ("D-ann", "1.0", 0)
     assert tasks.get_task(conn, row["task_id"]).title == "fix x" and row["project"] == "sample"
+
+
+async def test_start_task_accepts_a_long_project_without_a_pack(router, ctx_general, conn):
+    """A long project registered with start_project (nyp-exams, say) can be split into parallel tasks too: the task
+    is owned by whoever started its build, and the child is a separate conversation, not the build."""
+    build = add_conversation(conn, project=None, channel="C-NYP")
+    projects.start(conn, name="nyp-exams", repo="pragnition/RosterRolo-NYP", conversation_id=build,
+                   started_by="bob", thread_link=None)
+    reply = await router.call(ctx_general, "start_task", {"project": "nyp-exams", "title": "lane 1", "kind": "feature",
+                                                          "brief": "b"})
+    assert reply.text.startswith("Started ")
+    item = latest_item(router)
+    row = conn.execute("SELECT * FROM conversations WHERE id = ?", (item.conversation_id,)).fetchone()
+    assert row["project"] == "nyp-exams" and row["id"] != build
+    task = tasks.get_task(conn, row["task_id"])
+    assert (task.project, task.owner, task.status) == ("nyp-exams", "bob", Status.working)
+    assert projects.get(conn, "nyp-exams")["conversation_id"] == build
+
+
+async def test_unknown_project_lists_packs_and_long_projects(router, ctx_general, conn):
+    projects.start(conn, name="nyp-exams", repo="o/nyp", conversation_id=add_conversation(conn, project=None),
+                   started_by="bob", thread_link=None)
+    reply = await router.call(ctx_general, "start_task", {"project": "nope", "title": "t", "kind": "bug", "brief": "b"})
+    assert reply.text == "unknown project 'nope' (known: nyp-exams, sample)"
 
 
 async def test_start_task_from_dm_posts_its_own_thread(router, conn):
