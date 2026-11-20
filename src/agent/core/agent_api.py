@@ -52,12 +52,14 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                    runs_dir: Path | None = None,
                    slack_file: Callable[[str], Awaitable[bytes]] | None = None,
                    runner_stale_s: float = RUNNER_STALE_S,
+                   on_host: Callable[[dict], None] | None = None,
                    clock: Callable[[], float] = time.monotonic) -> web.Application:
     """`refresh(conversation_id, payload)` re-reads a turn's conversation when the turn is claimed (see
     Payloads.refresh_turn); what it returns is handed out and kept as the item's payload. `slack_file(id)`
     downloads a Slack file with core's bot token, for a session whose conversation was sent it.
     `/health/runner` is the runner's heartbeat for the supervisors: 503 once the runner hasn't pulled or
-    heartbeated for runner_stale_s. A fresh core gives the runner that long to show up."""
+    heartbeated for runner_stale_s. A fresh core gives the runner that long to show up. `on_host(snapshot)` takes the
+    runner's samples of what the machine is doing (agent.runner.host), for the dashboard."""
     runner_seen = [clock()]
 
     async def runner_health(request: web.Request) -> web.Response:
@@ -202,6 +204,18 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
             log.exception("handling the result of %s failed", info.work_item_id)
         return web.json_response({"ok": True})
 
+    async def host(request: web.Request) -> web.Response:
+        resolved(request, "runner")
+        try:
+            snap = await request.json()
+        except ValueError:
+            snap = None
+        if not isinstance(snap, dict):
+            return web.json_response({"error": "a JSON object is expected"}, status=400)
+        if on_host is not None:
+            on_host(snap)
+        return web.json_response({"ok": True})
+
     async def bundle(request: web.Request) -> web.Response:
         resolved(request, "runner")
         version, data = bundles()
@@ -213,6 +227,6 @@ def make_agent_app(*, conn: sqlite3.Connection, queue: WorkQueue, gate, tools,
                     web.post("/agent/events", events), web.post("/agent/tool", tool),
                     web.post("/agent/files", files), web.post("/agent/result", result),
                     web.get("/agent/slack_file/{file_id}", fetch_slack_file),
-                    web.get("/agent/bundle", bundle), web.get("/health", health),
+                    web.get("/agent/bundle", bundle), web.post("/agent/host", host), web.get("/health", health),
                     web.get("/health/runner", runner_health)])
     return app
