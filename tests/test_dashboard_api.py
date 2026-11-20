@@ -631,3 +631,45 @@ async def test_foundry_spend_and_caps(tmp_path, conn, proxy):
         assert r.status == 400
     finally:
         await client.close()
+
+
+async def test_host_monitor_totals_history_and_consumers(tmp_path, conn, proxy):
+    from agent.dashboard.host import HostStore
+
+    queue = WorkQueue(conn)
+    cid = add_conversation(conn, project=None)
+    item = add_item(queue, cid, text="fix the build")
+    store = HostStore()
+    client = await make_client(tmp_path, conn, proxy, host=store)
+    try:
+        empty = await (await client.get("/api/host", headers=ANN)).json()
+        assert empty["available"] is False and empty["stale"] is True and empty["history"] == []
+        store.add({"ts": 1.0, "cpu": {"percent": 50.0, "per_core": [50.0], "cores": 1, "load": [1, 1, 1]},
+                   "memory": {"total": 100, "available": 40, "used": 60, "swap_total": 0, "swap_used": 0},
+                   "network": {"rx_bps": 10, "tx_bps": 20, "interfaces": [{"name": "eth0", "rx_bps": 10,
+                                                                           "tx_bps": 20}]},
+                   "disk_io": {"read_bps": 1, "write_bps": 2},
+                   "disk_space": {"at": 1.0, "complete": True, "volumes": [{"path": "/var/agent", "total": 9,
+                                                                            "used": 3, "free": 6}],
+                                  "top": [{"name": cid, "kind": "conversation", "bytes": 5, "conversation": cid}]},
+                   "containers": [{"name": "db", "conversation": cid, "cpu_percent": 5.0, "mem_bytes": 10}],
+                   "ports": [{"port": 5173, "consumer": f"session:{item}", "kind": "session", "item": item,
+                              "conversation": cid}],
+                   "consumers": [{"key": f"session:{item}", "kind": "session", "name": item, "item": item,
+                                  "conversation": cid, "cpu_percent": 30.0, "mem_bytes": 20},
+                                 {"key": "container:db", "kind": "container", "name": "db", "item": None,
+                                  "conversation": cid, "cpu_percent": 5.0, "mem_bytes": 10}]})
+        totals = await (await client.get("/api/host", headers=ANN)).json()
+        assert totals["available"] is True and totals["stale"] is False
+        assert totals["cpu"]["percent"] == 50.0 and totals["containers"] == 1 and totals["ports"] == 1
+        assert totals["history"][0]["cpu_by_kind"]["session"] == 30.0
+        assert totals["history"][0]["cpu_by_kind"]["host"] == 15.0   # what the agent container can't see
+        assert totals["disk_space"]["volumes"][0]["path"] == "/var/agent"
+        body = await (await client.get("/api/host/consumers", headers=ANN)).json()
+        rows = {c["key"]: c for c in body["consumers"]}
+        assert rows[f"session:{item}"]["session"] == {"id": item, "title": "fix the build", "state": "queued"}
+        assert rows["container:db"]["session"]["id"] == item   # by its conversation's newest turn
+        assert rows["host"]["cpu_percent"] == 15.0 and rows["host"]["mem_bytes"] == 30
+        assert body["ports"][0]["session"]["id"] == item and body["disk"][0]["session"]["id"] == item
+    finally:
+        await client.close()

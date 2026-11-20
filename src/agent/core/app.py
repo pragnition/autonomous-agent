@@ -47,6 +47,7 @@ from agent.core.task_record import export_all
 from agent.core.tracker_tools import register_tracker_tools
 from agent.core.usage_watch import UsageWatch
 from agent.dashboard.app import make_dashboard_app
+from agent.dashboard.host import HostStore
 from agent.dashboard.names import NAMES_FILE, AccountNames
 from agent.dashboard.transcript import make_scrubber
 from agent.persona import load_persona, render_persona
@@ -175,13 +176,14 @@ class CoreApp:
         register_parking_tools(self.router, self.parking)
         self.pr_stats = PrStatsPoller(self.conn, github_reader, agent_login=self.config.github, packs=self.packs,
                                       on_change=self.notifier.task_changed) if github_reader else None
+        self.host = HostStore()  # the runner's samples of what the machine is doing, for the dashboard
         self.agent_app = make_agent_app(
             conn=self.conn, queue=self.queue, gate=Gate(self.conn, self.config, proxy), tools=self.router,
             context_for=self.router.context_for,
             bundles=lambda: build_bundle(self.config_dir),
             on_result=self.on_result, on_files=self.on_files, refresh=self._refresh_turn,
             on_start=self.conversations.on_start, on_beat=self.conversations.on_beat,
-            runs_dir=self.data_dir / "runs", slack_file=self.slack_file)
+            runs_dir=self.data_dir / "runs", slack_file=self.slack_file, on_host=self.host.add)
         # The task record: Haiku labels each answered request in the background, and the agent reads data/tasks
         self.labeler = TaskLabeler(self.conn, self.config, complete=self._haiku(proxy),
                                    has_capacity=lambda: self._has_capacity(proxy), tasks_dir=self.data_dir / "tasks",
@@ -196,7 +198,8 @@ class CoreApp:
             conn=self.conn, config=self.config, proxy=proxy, runs_dir=self.data_dir / "runs",
             static_dir=DASHBOARD_STATIC if DASHBOARD_STATIC.is_dir() else None, permalink=self.permalink,
             scrub=make_scrubber(self.secret_values), account_names=self.account_names,
-            person_name=self.person_name, **dict(zip(("llm_view", "llm_set_caps"), self.llm_meter())))
+            person_name=self.person_name, host=self.host,
+            **dict(zip(("llm_view", "llm_set_caps"), self.llm_meter())))
         # Model calls from the apps the agent runs and tests, metered against caps; only the stack's network reaches it
         self.meter_app = make_meter_app(self.conn, self.config.llm_meter, secrets=secrets,
                                         timezone=self.config.timezone, rates=self.azure_rates) \

@@ -3,6 +3,7 @@ import { Layout } from "@/components/Layout"
 import { Accounts } from "@/pages/Accounts"
 import { Activity } from "@/pages/Activity"
 import { Foundry } from "@/pages/Foundry"
+import { Host } from "@/pages/Host"
 import { Kpis } from "@/pages/Kpis"
 import { NotFound } from "@/pages/NotFound"
 import { Overview } from "@/pages/Overview"
@@ -20,6 +21,7 @@ export function App() {
         <Route path="foundry" element={<Foundry />} />
         <Route path="kpis" element={<Kpis />} />
         <Route path="activity" element={<Activity />} />
+        <Route path="host" element={<Host />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
