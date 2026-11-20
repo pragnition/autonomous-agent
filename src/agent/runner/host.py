@@ -16,8 +16,9 @@ Each process is counted for one consumer:
 - the runner itself (and the container's init); anything else is "other".
 A container is a consumer of its own, linked to the conversation whose folder its compose project is in.
 
-Folder sizes take a while to add up, so disk space is measured every 10 minutes in a thread; everything else is
-cheap enough for every sample. Nothing here can stop the runner: a sample that fails is logged and skipped.
+Folder sizes take a while to add up, so disk space is measured every 10 minutes in a thread, and a process's PSS
+(its fair share of memory, which the kernel works out by walking its page tables) once a minute; everything else is
+cheap enough for every sample, a few tens of milliseconds for a hundred processes. Nothing here can stop the runner: a sample that fails is logged and skipped.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ log = logging.getLogger(__name__)
 ITEM_VAR, CONVO_VAR = "AGENT_WORK_ITEM", "AGENT_CONVERSATION"
 SAMPLE_S = 5.0
 SPACE_EVERY_S = 600.0
+PSS_EVERY_S = 60.0
 SPACE_BUDGET_S = 300.0   # the most one disk-space measurement walks folders for; past it the sizes are partial
 DOCKER_URL = "http://127.0.0.1:2375"
 MAX_ROWS = 200
@@ -152,11 +154,8 @@ def read_proc(proc: Path, pid: int) -> Proc | None:
         return None
     # after the command: state ppid pgrp session ... utime(11) stime(12) ... starttime(19)
     p = Proc(pid=pid, ppid=int(f[1]), sid=int(f[3]), start=int(f[19]), comm=comm, ticks=int(f[11]) + int(f[12]))
-    rollup = _read(proc / str(pid) / "smaps_rollup")
-    m = re.search(rb"^Pss:\s+(\d+) kB", rollup or b"", re.M)
-    if m is None:
-        status = _read(proc / str(pid) / "status")
-        m = re.search(rb"^VmRSS:\s+(\d+) kB", status or b"", re.M)
+    status = _read(proc / str(pid) / "status")
+    m = re.search(rb"^VmRSS:\s+(\d+) kB", status or b"", re.M)
     p.mem = int(m.group(1)) * 1024 if m else 0
     io = _read(proc / str(pid) / "io")
     if io:
@@ -164,6 +163,14 @@ def read_proc(proc: Path, pid: int) -> Proc | None:
         w = re.search(rb"^write_bytes:\s+(\d+)", io, re.M)
         p.io = (int(r.group(1)) if r else 0, int(w.group(1)) if w else 0)
     return p
+
+
+def read_pss(proc: Path, pid: int) -> int | None:
+    """A process's proportional share of memory (shared pages split among the processes that map them), which
+    adds up across processes where RSS counts shared pages over and over. The kernel walks the process's page
+    tables for it, so it costs far more than RSS: the sampler reads it once a minute per process."""
+    m = re.search(rb"^Pss:\s+(\d+) kB", _read(proc / str(pid) / "smaps_rollup") or b"", re.M)
+    return int(m.group(1)) * 1024 if m else None
 
 
 def read_tag(proc: Path, pid: int) -> tuple[tuple[str, str] | None, str]:
@@ -468,6 +475,7 @@ class HostSampler:
         self.clk = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
         self.prev = _Prev()
         self.tags: dict[tuple[int, int], tuple] = {}  # (pid, start) -> (tag, argv0): a process's env never changes
+        self.pss: dict[tuple[int, int], tuple] = {}   # (pid, start) -> (read at, PSS bytes or None)
         self.space: dict | None = None
         self.docker_df: list[dict] = []
         self._space_task: asyncio.Task | None = None
@@ -475,7 +483,7 @@ class HostSampler:
 
     # the /proc part, run in a thread
     def _procs(self) -> dict[int, Proc]:
-        procs = {}
+        procs, now = {}, self.clock()
         for entry in os.scandir(self.proc):
             if not entry.name.isdigit():
                 continue
@@ -486,10 +494,17 @@ class HostSampler:
             if key not in self.tags:
                 self.tags[key] = read_tag(self.proc, p.pid)
             p.tag, p.argv0 = self.tags[key]
+            at, pss = self.pss.get(key, (None, None))
+            if at is None or now - at >= PSS_EVERY_S:
+                at, pss = now, read_pss(self.proc, p.pid)
+                self.pss[key] = (at, pss)
+            if pss is not None:
+                p.mem = pss
             procs[p.pid] = p
         alive = {(p.pid, p.start) for p in procs.values()}
-        for key in [k for k in self.tags if k not in alive]:
-            del self.tags[key]
+        for cache in (self.tags, self.pss):
+            for key in [k for k in cache if k not in alive]:
+                del cache[key]
         return procs
 
     def _read_host(self) -> dict:

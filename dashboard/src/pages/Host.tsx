@@ -178,7 +178,7 @@ function CategoryView({ tab, h, c }: { tab: Tab; h: HostTotals; c: HostConsumers
     case "memory":
       return (
         <div className="grid gap-6 xl:grid-cols-[2fr_3fr]">
-          <ChartCard title="Memory by consumer" desc={`PSS where the kernel has it, else RSS; ${desc}`}>
+          <ChartCard title="Memory by consumer" desc={`PSS, refreshed each minute per process (RSS where the kernel has no PSS); ${desc}`}>
             <TimeSeries data={byKindRows(points, "mem_by_kind")} series={kindSeries} xKey="t" xFormat={clock}
               yFormat={fmtBytes} labelFormat={clockSeconds} />
           </ChartCard>

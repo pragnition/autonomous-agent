@@ -50,6 +50,7 @@ class FakeProc:
         d.mkdir(exist_ok=True)
         (d / "stat").write_text(stat_line(pid, comm, ppid, sid, ticks))
         (d / "smaps_rollup").write_text(f"00 [rollup]\nRss: {pss_kb * 2} kB\nPss: {pss_kb} kB\n")
+        (d / "status").write_text(f"Name: {comm}\nVmRSS: {pss_kb * 2} kB\n")
         (d / "io").write_text(f"rchar: 1\nread_bytes: {io[0]}\nwrite_bytes: {io[1]}\n")
         (d / "environ").write_bytes(b"\0".join(f"{k}={v}".encode() for k, v in (env or {}).items()))
         (d / "cmdline").write_bytes(f"/usr/bin/{argv0 or comm}\0--flag".encode())
@@ -179,6 +180,12 @@ async def test_sampler_attributes_use_to_consumers(tmp_path):
     assert rows["session:W-1"]["write_bps"] == 400 and rows["session:W-1"]["conversation"] == "V-1"
     assert rows["browser:W-1"]["cpu_percent"] == 10.0 and rows["browser:W-1"]["item"] == "W-1"
     assert rows["runner"]["mem_bytes"] == 10 * 1024
+    # PSS is read once a minute; meanwhile a process keeps the PSS it had
+    proc.add(10, "python", 1, 1, 0, pss_kb=50)
+    now[0] += 10
+    assert {c["key"]: c for c in (await sampler.sample())["consumers"]}["runner"]["mem_bytes"] == 10 * 1024
+    now[0] += h.PSS_EVERY_S
+    assert {c["key"]: c for c in (await sampler.sample())["consumers"]}["runner"]["mem_bytes"] == 50 * 1024
     db = rows["container:app-db-1"]
     assert db["cpu_percent"] == 20.0 and db["mem_bytes"] == 4096 and db["rx_bps"] == 2 * 10**8
     assert snap["containers"][0]["conversation"] is None   # its folder isn't under this root's scratch
