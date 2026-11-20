@@ -290,6 +290,20 @@ _PAUSE_PY = ("from agent import db; c = db.connect('/data/db/agent.db'); was = d
 _RESUME_TRIES = 12  # 10 s apart: core may still be starting after its own swap
 
 
+_IS_PAUSED_PY = ("from agent import db; c = db.connect('/data/db/agent.db'); "
+                 "print(db.get_setting(c, 'paused', '0'))")
+
+
+def _is_paused(host: Host) -> bool:
+    """Whether core is paused right now (unreadable counts as not paused)."""
+    try:
+        result = host.run(["docker", "exec", CORE_CONTAINER, "python", "-c", _IS_PAUSED_PY],
+                          capture_output=True, text=True)
+    except Exception:
+        return False
+    return result.returncode == 0 and result.stdout.strip() == "1"
+
+
 def _pause(host: Host) -> bool:
     """Stop core from starting turns. True when this call paused it, False when it was already paused (someone
     did that on purpose, so the deploy leaves it paused) or core couldn't be reached (nothing can start then)."""
@@ -373,7 +387,8 @@ def _health_probe(host: Host, path: str) -> bool:
     return result.returncode == 0
 
 
-def check(host: Host, services: set[str], *, stable_s: int = 120, sleep=time.sleep) -> tuple[bool, str]:
+def check(host: Host, services: set[str], *, stable_s: int = 120, sleep=time.sleep,
+          smoke: bool = True) -> tuple[bool, str]:
     """The live probe after a rebuild: `(ok, reason)`, `reason` naming the first thing that failed (empty on
     success).
 
@@ -414,10 +429,11 @@ def check(host: Host, services: set[str], *, stable_s: int = 120, sleep=time.sle
         if not _health_probe(host, path):
             return False, f"{path} did not return 200"
 
-    smoke = host.run(["docker", "compose", "exec", "-T", "core", "python", "/app/scripts/smoke.py"],
-                      cwd=host.live, capture_output=True, text=True)
-    if "smoke ok" not in (smoke.stdout or ""):
-        return False, "smoke test did not print smoke ok"
+    if smoke:
+        result = host.run(["docker", "compose", "exec", "-T", "core", "python", "/app/scripts/smoke.py"],
+                          cwd=host.live, capture_output=True, text=True)
+        if "smoke ok" not in (result.stdout or ""):
+            return False, "smoke test did not print smoke ok"
 
     return True, ""
 
@@ -551,7 +567,14 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
         if up_result.returncode != 0:
             return _log_check_failed(state, old_sha, new_sha, services, f"compose up exited {up_result.returncode}")
 
-        ok, reason = check(host, services, sleep=sleep)
+        # Resume before the check: its smoke test is a real turn through core's queue, which a paused core never
+        # starts.
+        if paused_here and _resume(host, sleep):
+            marker.unlink(missing_ok=True)
+            paused_here = False
+
+        # A core someone paused on purpose starts no turn, so the smoke turn is left out; the other probes still run.
+        ok, reason = check(host, services, sleep=sleep, smoke=not _is_paused(host))
         result = "ok" if ok else f"check_failed: {reason}"
         state.log_deploy({"ts": _iso_now(), "from": old_sha, "to": new_sha, "services": sorted(services),
                            "result": result})

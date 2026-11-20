@@ -112,6 +112,9 @@ class FakeDocker:
             return self._compose(args[2:])
         if args[1] == "exec" and args[2] == "-i":
             return self._core_collect()
+        if args[1] == "exec" and args[3:5] == ["python", "-c"] and "set_setting" not in args[5] \
+                and "'paused'" in args[5]:
+            return subprocess.CompletedProcess([], 0, self.paused + "\n", "")
         if args[1] == "exec" and args[3:5] == ["python", "-c"] and "'paused'" in args[5]:
             was = self.paused
             self.paused = "1"
@@ -143,8 +146,10 @@ class FakeDocker:
             self.swaps.append("up " + " ".join(rest[3:]))
             return subprocess.CompletedProcess([], 1 if self.up_fails else 0, "", "")
         if rest[0] == "exec":
-            stdout = "smoke ok\n" if self.smoke_ok else "smoke FAILED: timed out\n"
-            return subprocess.CompletedProcess([], 0 if self.smoke_ok else 1, stdout, "")
+            self.swaps.append("smoke")
+            ok = self.smoke_ok and self.paused != "1"   # a paused core never starts the smoke turn
+            stdout = "smoke ok\n" if ok else "smoke FAILED: timed out\n"
+            return subprocess.CompletedProcess([], 0 if ok else 1, stdout, "")
         raise AssertionError(f"unexpected compose call: {rest}")
 
     def _core_collect(self):
@@ -316,7 +321,7 @@ def test_a_busy_runner_change_pauses_core_swaps_and_resumes(tmp_path):
     result = deploy(host, state, wait_idle_s=120, sleep=clock.sleep, clock=clock.time)
 
     assert result == 0
-    assert fake.swaps == ["pause", "up agent", "resume"]
+    assert fake.swaps == ["pause", "up agent", "resume", "smoke"]  # resumed before the smoke turn
     assert fake.paused == "0"
     assert state.deploy_pending() is False
     assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()
@@ -332,7 +337,7 @@ def test_an_idle_runner_change_still_pauses_around_the_swap(tmp_path):
     host = Host(run=fake, live=live)
 
     assert deploy(host, State(tmp_path / "state"), wait_idle_s=120, sleep=lambda s: None, clock=lambda: 0.0) == 0
-    assert fake.swaps == ["pause", "up agent", "resume"]
+    assert fake.swaps == ["pause", "up agent", "resume", "smoke"]
 
 
 def test_a_pause_someone_set_on_purpose_is_left_in_place(tmp_path):
@@ -344,7 +349,7 @@ def test_a_pause_someone_set_on_purpose_is_left_in_place(tmp_path):
     host = Host(run=fake, live=live)
 
     assert deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0) == 0
-    assert fake.swaps == ["pause", "up agent"]  # no resume
+    assert fake.swaps == ["pause", "up agent"]  # no resume, and no smoke turn a paused core would never start
     assert fake.paused == "1"
 
 
@@ -358,7 +363,7 @@ def test_resume_is_retried_while_core_comes_back(tmp_path):
     host = Host(run=fake, live=live)
 
     assert deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=clock.sleep, clock=clock.time) == 0
-    assert fake.swaps[-1] == "resume" and fake.paused == "0"
+    assert fake.swaps[-2:] == ["resume", "smoke"] and fake.paused == "0"
     assert clock.slept.count(10) >= 3
 
 
@@ -449,7 +454,7 @@ def test_core_change_deploys_without_waiting(tmp_path):
     assert records[0]["services"] == ["core"]
     assert records[0]["result"] == "ok"
     assert state.deploy_pending() is False
-    assert fake.swaps == ["up core"]  # a core-only swap never pauses
+    assert fake.swaps == ["up core", "smoke"]  # a core-only swap never pauses
 
 
 def test_rename_from_runner_to_watch_still_rebuilds_agent(tmp_path):
