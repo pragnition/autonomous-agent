@@ -37,7 +37,9 @@ code, review PRs or fix anything yourself.
 - An issue's description carries two marker lines, each on a line of its own and edited in place:
   - `Seen: <total> times since <first date>, last <date>` (a seeded issue keeps `since seeding`), always present;
 - Match each problem to an open `jensen-watch` issue and note it. Before opening a new issue, look for an open one
-  about the same problem in other words, and note it there instead: one issue per problem. Then set its `Seen:` line to the total `note`
+  about the same problem in other words, and note it there instead: one issue per problem. A closed one about the
+  same problem (`gh issue list --state closed --search "<key words>"`) that comes back after the change that closed it
+  is reopened with the new evidence (`gh issue reopen <N>`), not filed again. Then set its `Seen:` line to the total `note`
   printed: `gh issue view N --json body --jq .body > body.md`, edit the line, `gh issue edit N --body-file body.md`.
   Editing a description notifies no one.
 - No issue fits: open one with `gh issue create --label jensen-watch --label <area>`, a plain title and a description

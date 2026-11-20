@@ -129,3 +129,13 @@ def test_the_assessment_asks_what_worked_and_credits_only_in_slack():
     assert "src/agent/plugins/core/skills/<name>/SKILL.md" in charter
     assert "never in the issue, a PR or a commit" in charter
     assert "`rejected`, `learned`, `jensen-assessment`" in _flat(DEPLOY)
+
+
+def test_the_assessment_checks_the_code_before_it_proposes():
+    assess = _flat(ASSESS)
+    assert "Before you propose: check it isn't already fixed" in assess
+    assert "Propose only a PASS." in assess
+    for check in ("Already handled in the code?", "Changed recently?", "Asked and answered?",
+                  "Real and worth a person's time?"):
+        assert check in assess
+    assert "src/agent/defaults/system.md" in assess and "deploys.jsonl" in assess
