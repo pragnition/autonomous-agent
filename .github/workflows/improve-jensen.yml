@@ -9,8 +9,8 @@
 # proposals in Slack in plain language and stores the decisions it read for `approvals` to apply.
 #
 #   watch     - hourly (and on manual dispatch): deploys a pending change, measures what's outstanding, lets
-#               Claude work through the watch instructions, then plans what the review jobs should pick up and posts
-#               the changes it proposes to Slack for a person to approve.
+#               Claude record what went wrong in the issues, then plans what the review jobs should pick up. It proposes
+#               nothing: only the assessment posts proposals, a few at most and only with new evidence.
 #   review    - one run per open Jensen PR the watch job's plan names (or the single PR a manual dispatch names).
 #               The scheduled path never puts a PR URL in this workflow's own prompt or logs: it names a review by
 #               index into this run's own `runs/<run id>-reviews.json`, and Claude looks the URL/conversation up
@@ -109,14 +109,6 @@ jobs:
         id: plan
         if: steps.measure.outputs.has_work == 'true' && steps.claude.outcome == 'success'
         run: python scripts/jensen_watch.py plan --github-output "$GITHUB_OUTPUT"
-      # One Slack message with the changes the plan proposes. A Slack error doesn't cost the hour: the issues it
-      # couldn't post stay unlabelled, so a later watch proposes them again.
-      - name: propose
-        if: steps.measure.outputs.has_work == 'true' && steps.claude.outcome == 'success'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python scripts/jensen_watch.py propose --from watch
       - name: commit
         if: steps.measure.outputs.skip_reason != 'pool_hold' && (steps.claude.outcome == 'success' || steps.claude.outcome == 'skipped')
         run: python scripts/jensen_watch.py commit
@@ -156,7 +148,7 @@ jobs:
             --max-turns 200
             --append-system-prompt-file .github/improve-jensen-assess.md
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite"
-      # The assessment's proposals go out the same way as the watch's.
+      # The one place proposals go out: one Slack message, few and fresh (approvals.post_proposals).
       - name: propose
         if: steps.claude.outcome == 'success'
         continue-on-error: true

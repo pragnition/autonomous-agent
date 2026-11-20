@@ -85,17 +85,16 @@ def test_nothing_measures_a_change_after_it_ships():
         assert gone not in section, gone
 
 
-def test_proposals_skip_issues_already_in_the_approval_flow():
+def test_proposals_are_few_fresh_and_one_per_problem():
     watch = _flat(WATCH)
-    assert ("Never propose an issue labelled `proposed`, `approved`, `rejected`, `project`, `stuck`, `needs-person` "
-            "or `fixing`.") in watch
-    assert "At most 5" in watch
+    assert "You propose nothing" in watch
     assess = _flat(ASSESS)
-    assert ("whose issues have none of `proposed`, `approved`, `rejected`, `stuck`, `needs-person` or `fixing`. "
-            "At most 3") in assess
-    for text in (watch, assess):
-        assert "under 100 characters saying what will change in Jensen" in text
-        assert "it is also posted on the public issue" in text
+    assert "Proposing nothing is the normal outcome." in assess
+    assert "One item per problem." in assess
+    assert "Folded into #<kept>." in assess
+    assert ("whose issues have none of `proposed`, `approved`, `rejected`, `stuck`, `needs-person` or `fixing`") in assess
+    assert "under 100 characters saying what will change in Jensen" in assess
+    assert "it is also posted on the public issue" in assess
 
 
 def test_the_workflow_posts_to_slack_not_the_runs():
@@ -121,11 +120,10 @@ def test_the_assessment_asks_what_worked_and_credits_only_in_slack():
     assess = _flat(ASSESS)
     assert "what worked that Jensen should keep?" in assess
     assert "labelled `jensen-watch` and `learned`" in assess
-    assert "Then at most 2 `learned` issues" in assess
     assert '"kind": "learned", "credit":' in assess
     assert "never put it in an issue, a comment or your final message" in assess
     watch = _flat(WATCH)
-    assert "`learned` issues are the assessment's to propose" in watch
+    assert "You propose nothing" in watch
     assert "Never close one labelled `project`, `proposed`, `approved` or `learned` this way." in watch
     charter = _flat(CHARTER)
     assert "src/agent/plugins/core/skills/<name>/SKILL.md" in charter
