@@ -264,8 +264,12 @@ async def test_replies_to_improve_jensens_proposals_are_left_to_it(convos, queue
             self.texts.append(text)
             return "8.7"
 
-    def gh(args):  # every issue open and unlabelled; edits and comments succeed
-        return '[{"number": 31, "labels": []}]' if args[:2] == ["issue", "list"] else ""
+    def gh(args):  # every issue open, unlabelled and just opened; edits and comments succeed
+        if args[:2] == ["issue", "list"]:
+            return '[{"number": 31, "labels": []}]'
+        if args[:2] == ["issue", "view"]:
+            return '{"createdAt": "%s"}' % datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return ""
 
     posts = Posts()
     post_proposals(posts, gh, tmp_path, "C-SAMPLE", [{"issue": 31, "change": "x"}], "acme/widgets",

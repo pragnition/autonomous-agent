@@ -29,6 +29,7 @@ class FakeGh:
         self.fail = {tuple(f.split()) for f in fail}
         self.calls: list[list[str]] = []
         self.comments: list[tuple[int, str]] = []
+        self.created: dict[int, str] = {}  # issue -> createdAt; unlisted ones were opened an hour before T0
 
     def __call__(self, args):
         args = list(args)
@@ -54,6 +55,8 @@ class FakeGh:
             assert args[3] == "--body"
             self.comments.append((int(args[2]), args[4]))
             return ""
+        if args[:2] == ["issue", "view"] and args[3:] == ["--json", "createdAt"]:
+            return json.dumps({"createdAt": self.created.get(int(args[2]), "2026-11-19T09:00:00Z")})
         if args[:2] == ["issue", "view"]:
             assert args[3:] == ["--json", "state,labels"]
             n = int(args[2])
@@ -160,30 +163,26 @@ def test_post_proposals_posts_one_numbered_message_and_labels_each_issue(tmp_pat
 
 
 def test_post_proposals_marks_learned_items_and_credits_them_in_slack_only(tmp_path):
-    gh = FakeGh({31: set(), 40: {"learned"}, 52: {"learned"}})
+    gh = FakeGh({40: {"learned"}, 52: {"learned"}})
     slack = FakeSlack()
-    items = [{"issue": 31, "change": "Retry flaky tool calls"},
-             {"issue": 40, "change": "Make the <x> skill a default", "kind": "learned", "credit": "Some <Person> & co"},
+    items = [{"issue": 40, "change": "Make the <x> skill a default", "kind": "learned", "credit": "Some <Person> & co"},
              {"issue": 52, "change": "Plan before a long build", "kind": "learned"}]
 
-    assert post_proposals(slack, gh, tmp_path, "C9", items, REPO, T0) == 3
+    assert post_proposals(slack, gh, tmp_path, "C9", items, REPO, T0) == 2
 
-    assert slack.posts[0][1].splitlines()[1:4] == [
-        "1. Retry flaky tool calls (<https://github.com/acme/widgets/issues/31|#31>)",
-        "2. Learned: Make the &lt;x&gt; skill a default (from Some &lt;Person&gt; &amp; co) "
+    assert slack.posts[0][1].splitlines()[1:3] == [
+        "1. Learned: Make the &lt;x&gt; skill a default (from Some &lt;Person&gt; &amp; co) "
         "(<https://github.com/acme/widgets/issues/40|#40>)",
-        "3. Learned: Plan before a long build (<https://github.com/acme/widgets/issues/52|#52>)",
+        "2. Learned: Plan before a long build (<https://github.com/acme/widgets/issues/52|#52>)",
     ]
-    assert gh.comments == [(31, "Proposed in Slack: Retry flaky tool calls"),
-                           (40, "Proposed in Slack: Make the <x> skill a default"),
+    assert gh.comments == [(40, "Proposed in Slack: Make the <x> skill a default"),
                            (52, "Proposed in Slack: Plan before a long build")]
     assert not any("Person" in " ".join(call) for call in gh.calls)
     record = json.loads((tmp_path / "proposals" / "1700000000.000200.json").read_text())
     assert record["items"] == [
-        {"n": 1, "issue": 31, "change": "Retry flaky tool calls"},
-        {"n": 2, "issue": 40, "change": "Make the <x> skill a default", "kind": "learned",
+        {"n": 1, "issue": 40, "change": "Make the <x> skill a default", "kind": "learned",
          "credit": "Some <Person> & co"},
-        {"n": 3, "issue": 52, "change": "Plan before a long build", "kind": "learned"}]
+        {"n": 2, "issue": 52, "change": "Plan before a long build", "kind": "learned"}]
 
 
 def test_a_credit_on_an_item_that_isnt_learned_is_not_shown(tmp_path):
@@ -1213,3 +1212,54 @@ def test_cli_fired_passes_the_claude_steps_outcome_on(tmp_path, fake_slack):
                         state=state, now=T0) == 0
     assert gh.labels[33] == {"project", "stuck"}
     assert fake_slack.posts == [("C9", "1 needs a person (#33).", PARENT)]
+
+
+# -- few and fresh --
+
+_OLD = "2026-11-01T00:00:00Z"
+
+
+def _evidence(root: Path, *entries: tuple[int, str]) -> None:
+    with open(root / "evidence.jsonl", "a") as fh:
+        for issue, ts in entries:
+            fh.write(json.dumps({"ts": ts, "issue": issue, "ref": "W-1", "line": "seen"}) + "\n")
+
+
+def test_an_old_issue_with_no_new_evidence_is_not_posted(tmp_path):
+    gh = FakeGh({31: set(), 40: set()})
+    gh.created = {31: _OLD, 40: _OLD}
+    _evidence(tmp_path, (31, "2026-11-19T09:30:00Z"), (40, "2026-11-17T09:00:00Z"))
+    slack = FakeSlack()
+
+    assert post_proposals(slack, gh, tmp_path, "C9", [{"issue": 40, "change": "Stale"},
+                                                      {"issue": 31, "change": "Seen again"}], REPO, T0) == 1
+    assert "Seen again" in slack.posts[0][1] and "Stale" not in slack.posts[0][1]
+
+
+def test_a_request_opened_today_is_posted_without_evidence(tmp_path):
+    gh = FakeGh({72: set()})
+    gh.created = {72: "2026-11-19T08:00:00Z"}
+    assert post_proposals(FakeSlack(), gh, tmp_path, "C9", [{"issue": 72, "change": "Pin messages"}], REPO, T0) == 1
+
+
+def test_at_most_two_items_go_out_at_once(tmp_path):
+    gh = FakeGh({31: set(), 40: set(), 41: set()})
+    slack = FakeSlack()
+    items = [{"issue": n, "change": f"Change {n}"} for n in (31, 40, 41)]
+
+    assert post_proposals(slack, gh, tmp_path, "C9", items, REPO, T0) == 2
+    assert "Change 41" not in slack.posts[0][1]
+
+
+def test_at_most_three_items_a_day(tmp_path):
+    gh = FakeGh({n: set() for n in (31, 40, 41, 42, 43)})
+    slack = FakeSlack()
+    assert post_proposals(slack, gh, tmp_path, "C9", [{"issue": 31, "change": "a"}, {"issue": 40, "change": "b"}],
+                          REPO, T0) == 2
+    later = T0 + timedelta(hours=1)
+    assert post_proposals(slack, gh, tmp_path, "C9", [{"issue": 41, "change": "c"}, {"issue": 42, "change": "d"}],
+                          REPO, later) == 1
+    assert post_proposals(slack, gh, tmp_path, "C9", [{"issue": 43, "change": "e"}], REPO, later) == 0
+    next_day = T0 + timedelta(hours=24, minutes=1)
+    _evidence(tmp_path, (43, "2026-11-20T09:30:00Z"))   # seen again, so still worth proposing
+    assert post_proposals(slack, gh, tmp_path, "C9", [{"issue": 43, "change": "e"}], REPO, next_day) == 1

@@ -192,19 +192,75 @@ def _slack_change(item: dict) -> str:
     return f"Learned: {change}{credit}"
 
 
+# Few and fresh, so the list in Slack is worth reading: at most this many items in one message and in any 24 hours,
+# and only an issue with new evidence from Jensen's work (an `evidence.jsonl` line) or one opened in the last 24 hours.
+_PER_POST = 2
+_PER_DAY = 3
+_FRESH = timedelta(hours=24)
+
+
+def _posted_in_last_day(state_root: Path, now: datetime) -> int:
+    """How many items were posted in the 24 hours before `now`."""
+    count = 0
+    for record in _read_records(state_root):
+        try:
+            posted = datetime.strptime(str(record.get("posted")), FMT).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        if now - posted < _FRESH:
+            count += len(record["items"])
+    return count
+
+
+def _fresh_issues(state_root: Path, now: datetime) -> set[int]:
+    """Issues with an evidence line (a `note` from Jensen's work) in the 24 hours before `now`."""
+    fresh: set[int] = set()
+    path = Path(state_root) / "evidence.jsonl"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return fresh
+    for line in lines:
+        try:
+            entry = json.loads(line)
+            if now - datetime.strptime(entry["ts"], FMT).replace(tzinfo=UTC) < _FRESH:
+                fresh.add(int(entry["issue"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return fresh
+
+
+def _opened_lately(gh: Gh, issue: int, now: datetime) -> bool:
+    """Whether `issue` was opened in the 24 hours before `now` (a request someone just filed)."""
+    try:
+        created = json.loads(gh(["issue", "view", str(issue), "--json", "createdAt"])).get("createdAt", "")
+        return now - datetime.strptime(created, FMT).replace(tzinfo=UTC) < _FRESH
+    except Exception:
+        return False
+
+
 def post_proposals(slack, gh: Gh, state_root: Path, channel: str, items: list[dict], repo: str,
                    now: datetime) -> int:
     """Post `items` (validated proposals) to `channel` as one numbered message, leaving out any whose issue is
-    closed or already in the flow (`proposed`, `approved`, `rejected`, `fixing`, `stuck`, `needs-person`); then
+    closed or already in the flow (`proposed`, `approved`, `rejected`, `fixing`, `stuck`, `needs-person`), and any
+    with no new evidence in the last 24 hours that wasn't opened then either; at most `_PER_POST` items, and none
+    once `_PER_DAY` went out in the last 24 hours. Then
     record the message and label each issue `proposed` with a `Proposed in Slack: <change>` comment. A learned
     item's line reads `Learned: <change> (from <credit>)`; its credit stays out of GitHub. Returns how many were
     posted -- 0, posting nothing, when none are left. A `SlackError` posting propagates before any issue is
     labelled."""
+    room = min(_PER_POST, _PER_DAY - _posted_in_last_day(state_root, now))
+    if room <= 0:
+        return 0
     labels = _open_issues(gh)
+    fresh = _fresh_issues(state_root, now)
     kept: list[dict] = []
     for item in items:
         issue = item["issue"]
-        if issue in labels and not labels[issue] & _IN_FLOW and all(k["issue"] != issue for k in kept):
+        if len(kept) == room:
+            break
+        if (issue in labels and not labels[issue] & _IN_FLOW and all(k["issue"] != issue for k in kept)
+                and (issue in fresh or _opened_lately(gh, issue, now))):
             kept.append({"n": len(kept) + 1, "issue": issue, "change": item["change"],
                          **{key: item[key] for key in ("kind", "credit") if key in item}})
     if not kept:

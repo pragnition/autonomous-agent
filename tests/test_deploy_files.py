@@ -421,7 +421,7 @@ def test_instructions_carry_the_key_rules():
         ".github/improve-jensen-watch.md": (
             "jensen_watch.py note", "jensen_watch.py count", "plan.json", "fixing",
             "core is unreachable", "not_deployable", "ci_unknown", "A behaviour-changing deploy landed",
-            '"propose": [{"issue":', "under 100 characters", "Never revert anything yourself"),
+            "You propose nothing", "Never revert anything yourself"),
         ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit", "/status"),
         ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #",
                                       "Closes #N", "Proposed in Slack: <change>", "gh issue reopen",
@@ -508,21 +508,15 @@ def test_the_slack_channel_is_a_repo_variable_with_a_default(improve_jensen):
         "${{ vars.IMPROVE_JENSEN_SLACK_CHANNEL || 'autonomous-agent' }}")
 
 
-def test_watch_proposes_after_its_plan_and_plans_only_reviews(improve_jensen):
-    """The watch's plan names reviews only; the issues it wants changed go to Slack through `propose`, never
-    straight to a fix job. A Slack error doesn't fail the job or cost the hour's commit."""
+def test_only_the_assessment_proposes(improve_jensen):
+    """The watch's plan names reviews only and it posts nothing; proposals go to Slack from the assessment alone, and
+    a Slack error doesn't fail the job."""
     watch = improve_jensen["jobs"]["watch"]
     assert set(watch["outputs"]) == {"review_indices", "has_reviews"}
-    steps = watch["steps"]
-    plan = _step_running(watch, "jensen_watch.py plan")
-    propose = _step_running(watch, "jensen_watch.py propose")
-    commit = _step_running(watch, "jensen_watch.py commit")
-    assert propose["run"] == "python scripts/jensen_watch.py propose --from watch"
+    assert not any("jensen_watch.py propose" in (step.get("run") or "") for step in watch["steps"])
+    propose = _step_running(improve_jensen["jobs"]["assess"], "jensen_watch.py propose")
+    assert propose["run"] == "python scripts/jensen_watch.py propose --from assess"
     assert propose["continue-on-error"] is True
-    assert propose["env"] == {"GH_TOKEN": "${{ github.token }}"}
-    assert propose["if"] == plan["if"]
-    assert "steps.claude.outcome == 'success'" in propose["if"]
-    assert steps.index(plan) < steps.index(propose) < steps.index(commit)
 
 
 def test_assess_proposes_before_it_commits(improve_jensen):

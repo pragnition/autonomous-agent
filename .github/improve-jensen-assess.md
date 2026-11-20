@@ -135,11 +135,21 @@ For each one you keep:
 4. **`$STATE/assess-plan.json`** on every run, even when it proposes nothing:
    `{"propose": [{"issue": <issue number>, "change": "<one short line>"}]}`. After your run the workflow posts them
    in Slack as one short list; a fix or project runs only once a person approves it there.
-   - The top-ranked items, fix-scale or project, whose issues have none of `proposed`, `approved`, `rejected`,
-     `stuck`, `needs-person` or `fixing`. At most 3, in rank order.
-   - Then at most 2 `learned` issues under the same label rule, the most sessions and people first, each as
-     `{"issue": <N>, "change": "<line>", "kind": "learned", "credit": "<Slack name>"}` (no `credit` when there is
-     none). The workflow marks them as learned in Slack and credits the name there only.
+   - **Proposing nothing is the normal outcome.** Propose only what got new evidence from Jensen's real work since
+     the last assessment, or a request someone filed in the last 24 hours (Jensen's own open `improve-jensen` issues,
+     `gh issue list --label improve-jensen --state open --author "$JENSEN_GITHUB_LOGIN" --json number,title,createdAt`,
+     are such requests). The workflow drops anything else, and posts at most 2 items a run and 3 a day.
+   - **One item per problem.** Before proposing, look for open issues that describe the same problem or would be
+     fixed by the same change (background work, waiting, setup, how it states facts, and so on). Keep the one with
+     the most evidence, close the others with `gh issue close <N> --comment "Folded into #<kept>."`, and propose only
+     the kept one, with a `change` that covers them all. Never propose two items about the same part of Jensen.
+   - Never propose something a change shipped in the last 7 days addresses (`docker exec agent-runner cat
+     /var/agent/feedback/CHANGES.md`), unless it came back after that change.
+   - Then: at most 2 items, best first. Problems first, from the top of the list, whose issues have none of
+     `proposed`, `approved`, `rejected`, `stuck`, `needs-person` or `fixing`; a `learned` issue only when it is
+     clearly worth more than the next problem, as `{"issue": <N>, "change": "<line>", "kind": "learned", "credit":
+     "<Slack name>"}` (no `credit` when there is none). The workflow marks it as learned in Slack and credits the
+     name there only.
    - `change`: one plain line under 100 characters saying what will change in Jensen, not what goes wrong. General
      terms only: it is also posted on the public issue. For a learned item, what Jensen will keep ("Make the
      <skill> skill a default in every project"); never the credit.
