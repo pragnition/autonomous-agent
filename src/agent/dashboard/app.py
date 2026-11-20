@@ -314,7 +314,8 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
         if not item_id and conversation_id:
             r = conn.execute("SELECT id FROM work_items WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
                              (conversation_id,)).fetchone()
-            item_id = r[0] if r else None
+            # a turn with no conversation of its own has its folder under its own id
+            item_id = r[0] if r else conversation_id
         row = get_session(conn, item_id) if item_id else None
         return {"id": row["id"], "title": row["title"], "state": row["state"]} if row else None
 

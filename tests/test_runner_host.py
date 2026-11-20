@@ -9,9 +9,10 @@ from agent.dashboard.host import HostStore
 from agent.runner import host as h
 
 
-def stat_line(pid, comm, ppid, sid, ticks, start=100):
-    # pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt utime stime ... starttime
-    fields = ["S", ppid, sid, sid, 0, 0, 0, 0, 0, 0, 0, ticks, 0, 0, 0, 20, 0, 1, 0, start]
+def stat_line(pid, comm, ppid, sid, ticks, start=100, cticks=0):
+    # pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime
+    # ... starttime
+    fields = ["S", ppid, sid, sid, 0, 0, 0, 0, 0, 0, 0, ticks, 0, cticks, 0, 20, 0, 1, 0, start]
     return f"{pid} ({comm}) " + " ".join(str(f) for f in fields) + " 0 0\n"
 
 
@@ -45,15 +46,16 @@ class FakeProc:
             "   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001 0 555 1\n"
             "   1: 00000000:3E80 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001 0 777 1\n")
 
-    def add(self, pid, comm, ppid, sid, ticks, *, env=None, argv0=None, pss_kb=1, io=(0, 0), sockets=()):
+    def add(self, pid, comm, ppid, sid, ticks, *, env=None, argv0=None, pss_kb=1, io=(0, 0), sockets=(), start=100,
+            cticks=0, cmdline=None):
         d = self.root / str(pid)
         d.mkdir(exist_ok=True)
-        (d / "stat").write_text(stat_line(pid, comm, ppid, sid, ticks))
+        (d / "stat").write_text(stat_line(pid, comm, ppid, sid, ticks, start, cticks))
         (d / "smaps_rollup").write_text(f"00 [rollup]\nRss: {pss_kb * 2} kB\nPss: {pss_kb} kB\n")
         (d / "status").write_text(f"Name: {comm}\nVmRSS: {pss_kb * 2} kB\n")
         (d / "io").write_text(f"rchar: 1\nread_bytes: {io[0]}\nwrite_bytes: {io[1]}\n")
         (d / "environ").write_bytes(b"\0".join(f"{k}={v}".encode() for k, v in (env or {}).items()))
-        (d / "cmdline").write_bytes(f"/usr/bin/{argv0 or comm}\0--flag".encode())
+        (d / "cmdline").write_bytes(cmdline if cmdline is not None else f"/usr/bin/{argv0 or comm}\0--flag".encode())
         fd = d / "fd"
         fd.mkdir(exist_ok=True)
         for i, inode in enumerate(sockets):
@@ -245,3 +247,66 @@ async def test_core_poster_uses_the_current_token():
     await post({"ts": 1})   # no token yet: nothing posted
     await post({"ts": 2})
     assert seen == [("/agent/host", "Bearer tok")]
+
+
+def test_browser_children_and_retitled_processes_count_as_browser(tmp_path):
+    proc = FakeProc(tmp_path / "proc")
+    proc.add(20, "claude", 1, 1, 0, env=session_env("W-1", "V-1"))
+    proc.add(21, "firefox", 20, 1, 0, env=session_env("W-1", "V-1"))
+    proc.add(22, "Web Content", 21, 1, 0, env=session_env("W-1", "V-1"),
+             cmdline=b"/usr/lib/firefox/firefox -contentproc 8 tab")
+    proc.add(23, "Isolated Web Co", 21, 1, 0, env=session_env("W-1", "V-1"), cmdline=b"browser 8 tab")
+    procs = {pid: h.read_proc(proc.root, pid) for pid in (20, 21, 22, 23)}
+    for p in procs.values():
+        p.tag, p.argv0 = h.read_tag(proc.root, p.pid)
+    assert procs[23].argv0 == "browser" and procs[22].argv0 == "firefox"
+    kinds = h.classify(procs, {}, me=10)
+    assert kinds[20][0] == "session"
+    assert kinds[21][0] == kinds[22][0] == kinds[23][0] == "browser"
+
+
+async def test_new_and_ended_processes_are_counted(tmp_path):
+    proc = FakeProc(tmp_path / "proc")
+    (proc.root / "uptime").write_text("10.00 5.00\n")          # 1000 ticks since boot
+    proc.add(20, "cargo", 1, 1, 0, env=session_env("W-1", "V-1"))
+    proc.add(21, "rustc", 20, 1, 100, env=session_env("W-1", "V-1"), start=900)
+    now = [100.0]
+    sampler = h.HostSampler(tmp_path / "agent", proc=proc.root, sys_block=tmp_path / "none",
+                            http=httpx.AsyncClient(transport=httpx.MockTransport(
+                                lambda r: httpx.Response(200, json=[]))), me=10, clock=lambda: now[0])
+    sampler.clk, sampler._space_at = 100, now[0]
+    await sampler.sample()
+    now[0] += 10
+    (proc.root / "uptime").write_text("20.00 5.00\n")
+    proc.set_host(cpu=(0, 1), rx=0, disk=0)
+    # rustc ended after 300 ticks in all (100 counted already), cargo waited for it; a new rustc started since
+    import shutil
+    shutil.rmtree(proc.root / "21")
+    proc.add(20, "cargo", 1, 1, 0, env=session_env("W-1", "V-1"), cticks=300)
+    proc.add(22, "rustc", 20, 1, 400, env=session_env("W-1", "V-1"), start=1500)
+    proc.add(23, "old", 1, 1, 999, start=500)                 # older than the last sample but never seen: not counted
+    snap = await sampler.sample()
+    rows = {c["key"]: c for c in snap["consumers"]}
+    # (300 - 100 already counted) + 400 new = 600 ticks over 10 s at 100 ticks/s on one core
+    assert rows["session:W-1"]["cpu_percent"] == 60.0
+    assert rows["other"]["cpu_percent"] == 0.0
+
+
+def test_exec_reads_the_tag_again(tmp_path):
+    proc = FakeProc(tmp_path / "proc")
+    proc.add(20, "python", 1, 1, 0)
+    sampler = h.HostSampler(tmp_path, proc=proc.root, me=10)
+    assert sampler._procs()[20].tag is None
+    proc.add(20, "claude", 1, 1, 0, env=session_env("W-1", "V-1"))   # the same process after exec
+    assert sampler._procs()[20].tag == ("W-1", "V-1")
+    assert len(sampler.tags) == 1
+
+
+def test_tree_bytes_stops_early_and_counts_hard_links_once(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a").write_bytes(b"x" * 100_000)
+    (d / "b").hardlink_to(d / "a")
+    alone, done = h.tree_bytes(d, time.monotonic() + 60)
+    assert done and alone < 2 * 100_000
+    assert h.tree_bytes(d, time.monotonic() + 60, stop=lambda: True)[1] is False

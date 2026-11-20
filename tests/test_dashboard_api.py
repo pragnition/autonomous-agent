@@ -673,3 +673,31 @@ async def test_host_monitor_totals_history_and_consumers(tmp_path, conn, proxy):
         assert body["ports"][0]["session"]["id"] == item and body["disk"][0]["session"]["id"] == item
     finally:
         await client.close()
+
+
+async def test_host_monitor_survives_odd_snapshots(tmp_path, conn, proxy):
+    from agent.dashboard.host import HostStore
+
+    store = HostStore()
+    client = await make_client(tmp_path, conn, proxy, host=store)
+    try:
+        for odd in ({"consumers": 5}, {"containers": 3}, {"disk_space": [1]}, {"ports": [{"item": ["a"]}]},
+                    {"consumers": [{"kind": ["x"], "cpu_percent": "lots"}]}, {"network": {"interfaces": 1}}):
+            store.add(odd)
+            assert (await client.get("/api/host", headers=ANN)).status == 200, odd
+            assert (await client.get("/api/host/consumers", headers=ANN)).status == 200, odd
+    finally:
+        await client.close()
+
+
+def test_host_store_keeps_an_hour():
+    from agent.dashboard.host import STALE_S, HostStore
+
+    now = [0.0]
+    store = HostStore(keep_s=3600, clock=lambda: now[0])
+    for _ in range(3):
+        store.add({"cpu": {"percent": 1}})
+        now[0] += 2000
+    assert len(store.points) == 2 and store.status()["stale"] is True
+    now[0] = store.received_at + STALE_S - 1
+    assert store.status()["stale"] is False

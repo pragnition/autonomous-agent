@@ -131,7 +131,7 @@ function Tiles({ h }: { h: HostTotals }) {
         sub={h.cpu ? `load ${h.cpu.load.map((l) => l.toFixed(1)).join(" · ")} · ${h.cpu.cores} cores` : undefined} />
       <StatTile label="Memory" value={h.memory ? fmtBytes(h.memory.used) : "—"}
         sub={h.memory ? `of ${fmtBytes(h.memory.total)} · swap ${fmtBytes(h.memory.swap_used)}` : undefined} />
-      <StatTile label="Network in" value={fmtRate(h.network?.rx_bps)} sub={`out ${fmtRate(h.network?.tx_bps)}`} />
+      <StatTile label="Agent network in" value={fmtRate(h.network?.rx_bps)} sub={`out ${fmtRate(h.network?.tx_bps)}`} />
       <StatTile label="Disk read" value={fmtRate(h.disk_io?.read_bps)} sub={`write ${fmtRate(h.disk_io?.write_bps)}`} />
       <StatTile label="Disk used" value={vol ? fmtBytes(vol.used) : "—"}
         sub={vol ? `of ${fmtBytes(vol.total)} · ${fmtBytes(vol.free)} free` : "measuring…"} />
@@ -192,7 +192,7 @@ function CategoryView({ tab, h, c }: { tab: Tab; h: HostTotals; c: HostConsumers
       return (
         <div className="grid gap-6 xl:grid-cols-[2fr_3fr]">
           <div className="space-y-6">
-            <ChartCard title="Network" desc={`the host's own interfaces, not bridges or loopback; ${desc}`}>
+            <ChartCard title="Network" desc={`the agent's network (the agent-docker container's interfaces), not bridges or loopback; ${desc}`}>
               <TimeSeries data={pairRows(points, "rx_bps", "tx_bps")} series={pair("rx_bps", "In", "tx_bps", "Out")}
                 xKey="t" xFormat={clock} yFormat={fmtRate} labelFormat={clockSeconds} stacked={false} />
             </ChartCard>

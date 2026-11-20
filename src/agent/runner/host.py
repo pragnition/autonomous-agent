@@ -3,22 +3,27 @@ containers and the ports something listens on. The dashboard shows it (see agent
 
 The sampler runs in the runner process, because only the agent container sees the sessions, the services and the
 browsers, and only it reaches the agent's own Docker daemon (on 127.0.0.1:2375, the network it shares with it).
-/proc/stat, /proc/meminfo and /proc/loadavg are the host's own, so the totals are the host's; the processes are the
-agent container's. Every few seconds it reads /proc and the Docker API and posts one snapshot to core with the
-runner token, and core keeps the last hour in memory, so the history outlives a runner restart.
+/proc/stat, /proc/meminfo, /proc/loadavg and /proc/diskstats are the host's own, so those totals are the host's; the
+processes are the agent container's, and the network is the agent's own (the agent-docker container's interfaces,
+which the runner shares): the apps it runs and everything the sessions fetch, not core's or the rest of the host's.
+Every few seconds it reads /proc and the Docker API and posts one snapshot to core with the runner token, and core
+keeps the last hour in memory, so the history outlives a runner restart.
 
 Each process is counted for one consumer:
 - a service the runner keeps (services.py): any process in the service's process session (run/<name>.pid);
 - a session: the runner sets AGENT_WORK_ITEM and AGENT_CONVERSATION in every session's environment, so the
   processes a session starts carry them, even a server it left running; a process without them takes its nearest
   ancestor's consumer (the process tree from the session's root);
-- a browser (Chromium, Firefox, WebKit) counts on its own, still linked to the session that started it;
+- a browser (Chromium, Firefox, WebKit) and the processes it starts count on their own, still linked to the
+  session that started them;
 - the runner itself (and the container's init); anything else is "other".
 A container is a consumer of its own, linked to the conversation whose folder its compose project is in.
 
 Folder sizes take a while to add up, so disk space is measured every 10 minutes in a thread, and a process's PSS
 (its fair share of memory, which the kernel works out by walking its page tables) once a minute; everything else is
-cheap enough for every sample, a few tens of milliseconds for a hundred processes. Nothing here can stop the runner: a sample that fails is logged and skipped.
+cheap enough for every sample, a few tens of milliseconds for a hundred processes. A process's CPU counts from its
+start, and a child that ended since the last sample counts through its parent's children's time once waited for.
+Nothing here can stop the runner: a sample that fails is logged and skipped.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import contextlib
 import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -47,8 +53,8 @@ MAX_ROWS = 200
 TOP_CONVERSATIONS = 20
 BROWSER = re.compile(r"chrom|headless_shell|firefox|webkit|msedge", re.I)
 SKIP_DISKS = re.compile(r"^(loop|ram|zram|dm-|md|sr|fd)")
-VIRTUAL_NET = re.compile(r"^(lo|br-|veth|docker\d|virbr|cni|flannel|cali|tailscale|tun|tap)")  # bridges and the like
-#   carry the same bytes as the interface they lead to, so the host's totals leave them out
+# bridges and the like carry the same bytes as the interface they lead to, so the totals leave them out
+VIRTUAL_NET = re.compile(r"^(lo|br-|veth|docker\d|virbr|cni|flannel|cali|tailscale|tun|tap)")
 MAX_INTERFACES = 12
 PARTITION = re.compile(r"^(sd|vd|xvd|hd)[a-z]+\d+$|^(nvme\d+n\d+|mmcblk\d+)p\d+$")
 CACHES = {".npm": "npm cache", ".cache/pip": "pip cache", ".cache/uv": "uv cache",
@@ -129,6 +135,7 @@ class Proc:
     start: int
     comm: str
     ticks: int
+    cticks: int = 0      # the ticks of the children it has waited for (a build tool's compilers, say)
     mem: int = 0
     io: tuple[int, int] = (0, 0)
     tag: tuple[str, str] | None = None  # (work item, conversation)
@@ -152,8 +159,9 @@ def read_proc(proc: Path, pid: int) -> Proc | None:
     f = tail.split()
     if len(f) < 20 or f[0] in ("Z", "X"):
         return None
-    # after the command: state ppid pgrp session ... utime(11) stime(12) ... starttime(19)
-    p = Proc(pid=pid, ppid=int(f[1]), sid=int(f[3]), start=int(f[19]), comm=comm, ticks=int(f[11]) + int(f[12]))
+    # after the command: state ppid pgrp session ... utime(11) stime(12) cutime(13) cstime(14) ... starttime(19)
+    p = Proc(pid=pid, ppid=int(f[1]), sid=int(f[3]), start=int(f[19]), comm=comm, ticks=int(f[11]) + int(f[12]),
+             cticks=int(f[13]) + int(f[14]))
     status = _read(proc / str(pid) / "status")
     m = re.search(rb"^VmRSS:\s+(\d+) kB", status or b"", re.M)
     p.mem = int(m.group(1)) * 1024 if m else 0
@@ -182,8 +190,10 @@ def read_tag(proc: Path, pid: int) -> tuple[tuple[str, str] | None, str]:
         item = vals.get(ITEM_VAR.encode())
         if item:
             tag = (item.decode(errors="replace"), vals.get(CONVO_VAR.encode(), b"").decode(errors="replace"))
-    cmd = _read(proc / str(pid) / "cmdline") or b""
-    return tag, os.path.basename(cmd.split(b"\0", 1)[0].decode(errors="replace"))
+    cmd = (_read(proc / str(pid) / "cmdline") or b"").split(b"\0", 1)[0].decode(errors="replace")
+    # a process that retitles itself (Firefox's "browser 8 tab", say) puts its whole title in the first field
+    first = cmd.split(" ", 1)[0] if cmd else ""
+    return tag, os.path.basename(first)
 
 
 def read_services(run_dir: Path) -> dict[int, str]:
@@ -286,6 +296,19 @@ def classify(procs: dict[int, Proc], services: dict[int, str], me: int) -> dict[
             own[p.pid] = ("session", p.tag[0], p.tag[0], p.tag[1] or None)
         elif p.pid in (me, 1):
             own[p.pid] = ("runner", "runner", None, None)
+    def browser(p: Proc) -> bool:
+        return bool(BROWSER.search(p.argv0) or BROWSER.search(p.comm))
+
+    def in_browser(p: Proc) -> bool:
+        """A browser, or a process a browser started (its tabs and helpers retitle themselves)."""
+        seen, cur = set(), p
+        while cur is not None and cur.pid not in seen:
+            if browser(cur):
+                return True
+            seen.add(cur.pid)
+            cur = procs.get(cur.ppid)
+        return False
+
     out = {}
     for p in procs.values():
         found, seen, cur = own.get(p.pid), set(), p
@@ -294,7 +317,7 @@ def classify(procs: dict[int, Proc], services: dict[int, str], me: int) -> dict[
             found = own.get(cur.ppid)
             cur = procs.get(cur.ppid)
         kind, name, item, convo = found or ("other", "other", None, None)
-        if kind != "service" and (BROWSER.search(p.argv0) or BROWSER.search(p.comm)):
+        if kind != "service" and in_browser(p):
             kind, name = "browser", item or "browser"
         out[p.pid] = (kind, name, item, convo)
     return out
@@ -319,9 +342,10 @@ def conversation_of(path: str | None, scratch: Path) -> str | None:
 
 # --- disk space ----------------------------------------------------------------------------------------------------
 
-def tree_bytes(path: Path, deadline: float) -> tuple[int, bool]:
+def tree_bytes(path: Path, deadline: float, stop: Callable[[], bool] = lambda: False) -> tuple[int, bool]:
     """The bytes the files under `path` take on disk, without following links or leaving its filesystem, and
-    whether the walk finished before `deadline`."""
+    whether the walk finished before `deadline` (or `stop()`, which ends it early: the runner is stopping). A file
+    with several hard links (a uv or pnpm cache) counts once."""
     try:
         st = os.lstat(path)
     except OSError:
@@ -329,8 +353,9 @@ def tree_bytes(path: Path, deadline: float) -> tuple[int, bool]:
     total, dev, stack = st.st_blocks * 512, st.st_dev, [str(path)]
     if not os.path.isdir(path) or os.path.islink(path):
         return total, True
+    linked: set[tuple[int, int]] = set()
     while stack:
-        if time.monotonic() > deadline:
+        if time.monotonic() > deadline or stop():
             return total, False
         try:
             entries = os.scandir(stack.pop())
@@ -342,6 +367,10 @@ def tree_bytes(path: Path, deadline: float) -> tuple[int, bool]:
                     s = e.stat(follow_symlinks=False)
                 except OSError:
                     continue
+                if s.st_nlink > 1 and not e.is_dir(follow_symlinks=False):
+                    if (s.st_dev, s.st_ino) in linked:
+                        continue
+                    linked.add((s.st_dev, s.st_ino))
                 total += s.st_blocks * 512
                 if e.is_dir(follow_symlinks=False) and s.st_dev == dev:
                     stack.append(e.path)
@@ -357,7 +386,8 @@ def volume(path: Path) -> dict | None:
     return {"path": str(path), "total": total, "used": total - s.f_bfree * s.f_frsize, "free": free}
 
 
-def measure_space(root: Path, tmp: Path, budget_s: float = SPACE_BUDGET_S) -> dict:
+def measure_space(root: Path, tmp: Path, budget_s: float = SPACE_BUDGET_S,
+                  stop: Callable[[], bool] = lambda: False) -> dict:
     """The volumes' use and what takes the space: each conversation's folder, the caches, the other folders."""
     deadline = time.monotonic() + budget_s
     complete = True
@@ -365,7 +395,7 @@ def measure_space(root: Path, tmp: Path, budget_s: float = SPACE_BUDGET_S) -> di
 
     def size(p: Path) -> int:
         nonlocal complete
-        n, done = tree_bytes(p, deadline)
+        n, done = tree_bytes(p, deadline, stop)
         complete = complete and done
         return n
 
@@ -456,7 +486,8 @@ class _Prev:
     cpu: dict = field(default_factory=dict)
     net: dict = field(default_factory=dict)
     disk: tuple[int, int] | None = None
-    procs: dict = field(default_factory=dict)        # (pid, start) -> (ticks, read, write)
+    uptime: float | None = None                      # seconds since boot, as process start times count
+    procs: dict = field(default_factory=dict)        # (pid, start) -> (ticks, read, write, ppid, cticks)
     containers: dict = field(default_factory=dict)   # id -> container_numbers
 
 
@@ -474,12 +505,17 @@ class HostSampler:
         self.clock, self.wall = clock, wall
         self.clk = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
         self.prev = _Prev()
-        self.tags: dict[tuple[int, int], tuple] = {}  # (pid, start) -> (tag, argv0): a process's env never changes
+        # (pid, start, comm) -> (tag, argv0): read again when the process execs, which changes its comm
+        self.tags: dict[tuple[int, int, str], tuple] = {}
         self.pss: dict[tuple[int, int], tuple] = {}   # (pid, start) -> (read at, PSS bytes or None)
         self.space: dict | None = None
         self.docker_df: list[dict] = []
         self._space_task: asyncio.Task | None = None
         self._space_at = -SPACE_EVERY_S
+        self._stopping = threading.Event()  # ends a folder walk early when the runner stops
+
+    def close(self) -> None:
+        self._stopping.set()
 
     # the /proc part, run in a thread
     def _procs(self) -> dict[int, Proc]:
@@ -490,10 +526,10 @@ class HostSampler:
             p = read_proc(self.proc, int(entry.name))
             if p is None:
                 continue
-            key = (p.pid, p.start)
-            if key not in self.tags:
-                self.tags[key] = read_tag(self.proc, p.pid)
-            p.tag, p.argv0 = self.tags[key]
+            key, tkey = (p.pid, p.start), (p.pid, p.start, p.comm)
+            if tkey not in self.tags:
+                self.tags[tkey] = read_tag(self.proc, p.pid)
+            p.tag, p.argv0 = self.tags[tkey]
             at, pss = self.pss.get(key, (None, None))
             if at is None or now - at >= PSS_EVERY_S:
                 at, pss = now, read_pss(self.proc, p.pid)
@@ -502,16 +538,24 @@ class HostSampler:
                 p.mem = pss
             procs[p.pid] = p
         alive = {(p.pid, p.start) for p in procs.values()}
-        for cache in (self.tags, self.pss):
-            for key in [k for k in cache if k not in alive]:
-                del cache[key]
+        for key in [k for k in self.pss if k not in alive]:
+            del self.pss[key]
+        for key in [k for k in self.tags if k[:2] not in alive or k[2] != procs[k[0]].comm]:
+            del self.tags[key]
         return procs
 
     def _read_host(self) -> dict:
+        procs = self._procs()
+        listening = read_listening(self.proc)
+        try:
+            uptime = float((self.proc / "uptime").read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            uptime = None
         return {"cpu": read_cpu(self.proc), "mem": read_meminfo(self.proc), "load": read_loadavg(self.proc),
                 "net": read_net_dev(self.proc), "disk": read_diskstats(self.proc, self.disks),
-                "procs": self._procs(), "services": read_services(self.run_dir),
-                "listening": read_listening(self.proc)}
+                "procs": procs, "services": read_services(self.run_dir), "listening": listening,
+                "owners": socket_owners(self.proc, list(procs), {inode for *_, inode in listening}),
+                "uptime": uptime}
 
     async def _docker(self) -> list[dict]:
         try:
@@ -537,7 +581,8 @@ class HostSampler:
 
         async def measure() -> None:
             try:
-                self.space = await asyncio.to_thread(measure_space, self.root, self.tmp)
+                self.space = await asyncio.to_thread(measure_space, self.root, self.tmp,
+                                                     stop=self._stopping.is_set)
             except Exception:
                 log.warning("measuring disk space failed", exc_info=True)
             try:
@@ -553,8 +598,9 @@ class HostSampler:
         self._start_space(now)
         host, containers = await asyncio.gather(asyncio.to_thread(self._read_host), self._docker())
         snap = None if self.prev.at is None else self._build(host, containers, now - self.prev.at)
-        self.prev = _Prev(at=now, cpu=host["cpu"], net=host["net"], disk=host["disk"],
-                          procs={(p.pid, p.start): (p.ticks, *p.io) for p in host["procs"].values()},
+        self.prev = _Prev(at=now, cpu=host["cpu"], net=host["net"], disk=host["disk"], uptime=host.get("uptime"),
+                          procs={(p.pid, p.start): (p.ticks, *p.io, p.ppid, p.cticks)
+                                 for p in host["procs"].values()},
                           containers={c["Id"]: c["_n"] for c in containers})
         return snap
 
@@ -581,15 +627,27 @@ class HostSampler:
         # processes -> consumers
         kinds = classify(host["procs"], host["services"], self.me)
         consumers: dict[str, Consumer] = {}
+        # A process that started since the last sample counts from zero. One that ended since then still shows in
+        # its parent's children's time once the parent has waited for it (a compiler a build tool started, say):
+        # what the parent's children's time grew by, less what the ended children had already been counted for.
+        since = prev.uptime * self.clk if prev.uptime is not None else None
+        alive = {(p.pid, p.start) for p in host["procs"].values()}
+        ended: dict[int, int] = {}
+        for key, (ticks, _r, _w, ppid, cticks) in prev.procs.items():
+            if key not in alive:
+                ended[ppid] = ended.get(ppid, 0) + ticks + cticks
         for p in host["procs"].values():
             kind, name, item, convo = kinds[p.pid]
             key = consumer_key(kind, name, item)
             c = consumers.get(key) or consumers.setdefault(key, Consumer(key, kind, name, item, convo))
             before = prev.procs.get((p.pid, p.start))
+            if before is None and since is not None and p.start >= since:
+                before = (0, 0, 0, p.ppid, 0)   # new since the last sample
             c.processes += 1
             c.mem += p.mem
             if before is not None:
-                c.cpu += 100 * max(p.ticks - before[0], 0) / self.clk / dt / ncpu
+                reaped = max(p.cticks - before[4] - ended.get(p.pid, 0), 0)
+                c.cpu += 100 * (max(p.ticks - before[0], 0) + reaped) / self.clk / dt / ncpu
                 c.read_bps += _rate(p.io[0], before[1], dt)
                 c.write_bps += _rate(p.io[1], before[2], dt)
 
@@ -615,7 +673,7 @@ class HostSampler:
 
         # ports
         listening = host["listening"]
-        owners = socket_owners(self.proc, list(host["procs"]), {inode for *_, inode in listening})
+        owners = host["owners"]
         ports, seen = [], set()
         for addr, port, proto, inode in listening:
             pid = owners.get(inode)
@@ -661,6 +719,15 @@ class HostSampler:
 async def report_forever(sampler: HostSampler, post: Callable[[dict], Awaitable[None]],
                          every_s: float = SAMPLE_S) -> None:
     """Sample and post every `every_s` until cancelled. A failed sample or post is logged once in a row."""
+    try:
+        await _report(sampler, post, every_s)
+    finally:
+        close = getattr(sampler, "close", None)
+        if close is not None:
+            close()
+
+
+async def _report(sampler, post, every_s: float) -> None:
     failing = False
     while True:
         started = time.monotonic()

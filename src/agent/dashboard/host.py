@@ -26,6 +26,33 @@ def _get(d, *path, default=None):
     return default if d is None else d
 
 
+def _dict(x) -> dict:
+    return x if isinstance(x, dict) else {}
+
+
+def _rows(x) -> list[dict]:
+    return [r for r in x if isinstance(r, dict)] if isinstance(x, list) else []
+
+
+def _str(x) -> str | None:
+    return x if isinstance(x, str) else None
+
+
+def clean(snap: dict) -> dict:
+    """The snapshot with every part the shape the views expect, so an odd one (an older or newer runner) can't
+    break the dashboard: objects are objects, lists are lists of objects, and the ids rows link by are strings."""
+    out = {**snap, **{k: _dict(snap.get(k)) or None for k in ("cpu", "memory", "network", "disk_io")}}
+    if out["network"]:
+        out["network"] = {**out["network"], "interfaces": _rows(out["network"].get("interfaces"))}
+    space = _dict(snap.get("disk_space"))
+    out["disk_space"] = {**space, "volumes": _rows(space.get("volumes")), "top": [
+        {**r, "conversation": _str(r.get("conversation"))} for r in _rows(space.get("top"))]} if space else None
+    for key in ("consumers", "containers", "ports"):
+        out[key] = [{**r, "item": _str(r.get("item")), "conversation": _str(r.get("conversation")),
+                     "kind": _str(r.get("kind")) or "other"} for r in _rows(snap.get(key))]
+    return out
+
+
 class HostStore:
     def __init__(self, keep_s: float = KEEP_S, clock: Callable[[], float] = time.time):
         self.keep_s, self.clock = keep_s, clock
@@ -35,10 +62,10 @@ class HostStore:
 
     def add(self, snap: dict) -> None:
         now = self.clock()
-        self.latest, self.received_at = snap, now
+        snap = clean(snap)
         by_kind: dict[str, dict[str, float]] = {k: {"cpu": 0.0, "mem": 0.0} for k in KINDS}
         for c in snap.get("consumers") or []:
-            if isinstance(c, dict) and c.get("kind") in by_kind:
+            if c["kind"] in by_kind:
                 by_kind[c["kind"]]["cpu"] += _num(c.get("cpu_percent"))
                 by_kind[c["kind"]]["mem"] += _num(c.get("mem_bytes"))
         # what the host total holds beyond what the agent container sees: core, its Docker daemon, everything else
@@ -56,6 +83,7 @@ class HostStore:
             "cpu_by_kind": {k: round(v["cpu"], 2) for k, v in by_kind.items()},
             "mem_by_kind": {k: v["mem"] for k, v in by_kind.items()},
         })
+        self.latest, self.received_at = snap, now
         while self.points and self.points[0]["ts"] < now - self.keep_s:
             self.points.popleft()
 
