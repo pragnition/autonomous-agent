@@ -64,17 +64,3 @@ export function fmtDateTime(iso: string | null | undefined): string {
 export function sumTokens(t: Tokens | null | undefined): number {
   return t ? t.in + t.out + t.cache_read + t.cache_write : 0
 }
-
-/** Bytes in binary units: 1.5 GiB, 320 MiB, 12 KiB. */
-export function fmtBytes(n: number | null | undefined): string {
-  if (n == null) return DASH
-  const abs = Math.abs(n)
-  for (const [unit, size] of [["TiB", 2 ** 40], ["GiB", 2 ** 30], ["MiB", 2 ** 20], ["KiB", 2 ** 10]] as const) {
-    if (abs >= size) return `${(n / size).toFixed(abs >= size * 100 ? 0 : 1).replace(/\.0$/, "")} ${unit}`
-  }
-  return `${Math.round(n)} B`
-}
-
-export function fmtRate(n: number | null | undefined): string {
-  return n == null ? DASH : `${fmtBytes(n)}/s`
-}

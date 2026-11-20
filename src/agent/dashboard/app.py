@@ -22,7 +22,6 @@ from agent.dashboard.access import access_middleware, viewer
 from agent.dashboard.accounts import HOURS, accounts_view, bucket_seconds, history_view
 from agent.dashboard.queries import (SessionFilter, conversation_row, get_conversation, get_session, kpi_view,
                                      list_conversations, list_events, list_sessions, overview_counts, paused_by)
-from agent.dashboard.host import HostStore, consumers_view, host_view
 from agent.dashboard.names import AccountNames
 from agent.dashboard.transcript import TranscriptCache, lines_before, read_from
 
@@ -66,10 +65,8 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
                        poll_s: float = 1.0, account_names: AccountNames | None = None,
                        person_name: Callable[[str], Awaitable[str | None]] | None = None,
                        llm_view: Callable[[], dict] | None = None,
-                       llm_set_caps: Callable[..., object] | None = None,
-                       host: HostStore | None = None) -> web.Application:
+                       llm_set_caps: Callable[..., object] | None = None) -> web.Application:
     queue = WorkQueue(conn)
-    host = host if host is not None else HostStore()  # core shares its store with the agent API, which fills it
     origins = config.dashboard.agent_origins
     history_cache: dict[int, tuple[float, dict]] = {}
     transcripts = TranscriptCache(scrub, recent=RECENT)
@@ -309,22 +306,6 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
                       actor=viewer(request).actor, data={"work_item": item_id, "via": "dashboard"})
         return web.json_response({"ok": True, "state": "cancelled"})
 
-    def session_of(item_id: str | None, conversation_id: str | None) -> dict | None:
-        """The dashboard session a host-monitor row links to: its own turn, else its conversation's newest."""
-        if not item_id and conversation_id:
-            r = conn.execute("SELECT id FROM work_items WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
-                             (conversation_id,)).fetchone()
-            # a turn with no conversation of its own has its folder under its own id
-            item_id = r[0] if r else conversation_id
-        row = get_session(conn, item_id) if item_id else None
-        return {"id": row["id"], "title": row["title"], "state": row["state"]} if row else None
-
-    async def host_totals(request: web.Request) -> web.Response:
-        return web.json_response(host_view(host))
-
-    async def host_consumers(request: web.Request) -> web.Response:
-        return web.json_response(consumers_view(host, session_of))
-
     root = static_dir.resolve() if static_dir is not None else None
 
     async def web_app(request: web.Request) -> web.StreamResponse:
@@ -353,6 +334,5 @@ def make_dashboard_app(*, conn: sqlite3.Connection, config: AgentConfig, proxy, 
         web.get("/api/accounts/history", history), web.get("/api/kpis", kpis), web.get("/api/events", event_log),
         web.post("/api/stop", stop), web.post("/api/resume", resume),
         web.get("/api/llm", llm), web.post("/api/llm/caps", llm_caps),
-        web.get("/api/host", host_totals), web.get("/api/host/consumers", host_consumers),
         web.get("/{tail:.*}", web_app)])
     return app

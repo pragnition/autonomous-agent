@@ -144,8 +144,6 @@ async def test_handle_builds_bypass_spec_and_reports(tmp_path):
     assert spec.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "claude")
     assert spec.env["SAMPLE_TEST_USER"] == "tester@example.com"
     assert spec.env["CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"] == "1"
-    # the host monitor counts the session's processes for it by these
-    assert spec.env["AGENT_WORK_ITEM"] == "W-V-1" and spec.env["AGENT_CONVERSATION"] == "V-1"
     assert [p.name for p in spec.plugins] == ["core", "effortless", "a", "b"] and spec.system_prompt == "SYS"
     assert link.results[-1]["text"] == "all done" and link.results[-1]["session_id"] == "sess-1"
     assert link.results[-1]["outcome"] == "done" and link.results[-1]["cost_usd_est"] == 0.5

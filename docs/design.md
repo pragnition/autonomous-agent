@@ -557,12 +557,6 @@ The dashboard has these pages:
 - **Foundry spend**: the model-call meter.
 - **KPIs**: the KPIs with daily series, per project.
 - **Activity**: the event log, with where each event came from and who.
-- **Host**: what the machine is doing (CPU, memory, network, disk I/O, disk space, the agent's containers and
-  listening ports), over the last hour and broken down by consumer. Those consumers are sessions, browsers, services,
-  containers, the runner, and what runs outside the agent container. The runner samples `/proc` and its Docker
-  daemon every 5 s (`agent/runner/host.py`) and posts to core's `/agent/host`. Core keeps the hour in memory
-  (`agent/dashboard/host.py`). A session's processes are found by the `AGENT_WORK_ITEM` and `AGENT_CONVERSATION`
-  variables the runner sets in its environment, or else by their nearest tagged ancestor.
 
 The kill switch on the dashboard stops the agent; resuming, like changing the meter's caps, needs an admin whose
 `tailscale` login is set in `[people]`.
