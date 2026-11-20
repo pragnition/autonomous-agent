@@ -556,18 +556,3 @@ async def test_pull_reaps_an_expired_claim_blocking_its_conversation(conn, parts
         assert item["id"] in (stale, followup) and item["conversation_id"] == "c1"
     finally:
         await client.close()
-
-
-async def test_host_samples_need_the_runner_token(conn, queue, parts):
-    got = []
-    client = await _client(conn, queue, parts, on_host=got.append)
-    try:
-        session = mint_token(conn, "session", ttl_s=3600)
-        assert (await client.post("/agent/host", json={"ts": 1}, headers=bearer(session))).status == 401
-        assert (await client.post("/agent/host", json={"ts": 1})).status == 401
-        runner = mint_token(conn, "runner", ttl_s=3600)
-        assert (await client.post("/agent/host", json=[1], headers=bearer(runner))).status == 400
-        assert (await client.post("/agent/host", json={"ts": 1}, headers=bearer(runner))).status == 200
-        assert got == [{"ts": 1}]
-    finally:
-        await client.close()

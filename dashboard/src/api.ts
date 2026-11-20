@@ -200,46 +200,6 @@ export type LlmMeter = {
 }
 export type LlmView = { installed: false } | LlmMeter
 
-export type HostSessionLink = { id: string; title: string; state: SessionState } | null
-export type ConsumerKind = "session" | "browser" | "service" | "container" | "runner" | "other" | "host"
-export type HostPoint = {
-  ts: number; cpu: number; mem_used: number; swap_used: number; rx_bps: number; tx_bps: number
-  read_bps: number; write_bps: number; containers: number; ports: number
-  cpu_by_kind: Record<string, number>; mem_by_kind: Record<string, number>
-}
-export type HostVolume = { path: string; total: number; used: number; free: number }
-export type HostTotals = {
-  available: boolean; stale: boolean; age_s: number | null; ts: number | null
-  cpu: { percent: number; per_core: number[]; cores: number; load: number[] } | null
-  memory: { total: number; available: number; used: number; swap_total: number; swap_used: number } | null
-  network: { rx_bps: number; tx_bps: number } | null
-  disk_io: { read_bps: number; write_bps: number } | null
-  disk_space: { volumes: HostVolume[]; at: number | null; complete: boolean } | null
-  containers: number; ports: number
-  history: HostPoint[]
-}
-export type HostConsumer = {
-  key: string; kind: ConsumerKind; name: string; item: string | null; conversation: string | null
-  cpu_percent: number; mem_bytes: number; read_bps: number | null; write_bps: number | null
-  rx_bps: number | null; tx_bps: number | null; processes: number | null; session: HostSessionLink
-}
-export type HostContainer = {
-  name: string; image: string | null; state: string | null; status: string | null; conversation: string | null
-  cpu_percent: number; mem_bytes: number; rx_bps: number | null; tx_bps: number | null
-  read_bps: number; write_bps: number; session: HostSessionLink
-}
-export type HostPort = {
-  port: number; address: string; proto: string; pid: number | null; process: string | null; consumer: string
-  kind: ConsumerKind; name: string; session: HostSessionLink
-}
-export type HostDiskRow = { name: string; kind: string; bytes: number; conversation?: string | null
-  session: HostSessionLink }
-export type HostConsumers = {
-  available: boolean; stale: boolean; age_s: number | null
-  consumers: HostConsumer[]; containers: HostContainer[]; ports: HostPort[]; disk: HostDiskRow[]
-  interfaces: { name: string; rx_bps: number; tx_bps: number }[]
-}
-
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message)
@@ -332,12 +292,6 @@ export const useEvents = (type?: string, before?: number) =>
     placeholderData: keepPreviousData,
     ...(before == null ? live : { staleTime: Infinity }),
   })
-
-export const useHost = () =>
-  useQuery({ queryKey: ["host"], queryFn: () => api.get<HostTotals>("/api/host"), ...live })
-
-export const useHostConsumers = () =>
-  useQuery({ queryKey: ["host-consumers"], queryFn: () => api.get<HostConsumers>("/api/host/consumers"), ...live })
 
 export const useLlm = () =>
   useQuery({ queryKey: ["llm"], queryFn: () => api.get<LlmView>("/api/llm"), ...live })

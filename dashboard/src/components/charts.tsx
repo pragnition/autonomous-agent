@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
 // Categorical slots in their fixed, validated order (src/index.css). A ninth series never gets a new hue: callers
 // fold the rest into "Other".
@@ -103,51 +103,6 @@ export function StackedColumns({ data, series, xKey, xFormat, yFormat, labelForm
                 radius={!stacked || i === series.length - 1 ? [4, 4, 0, 0] : 0} isAnimationActive={false} />
             ))}
           </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  )
-}
-
-/** Values over time on one axis: stacked areas (parts of a whole) or unstacked 2px lines over a light fill
- * (separate measures of the same unit), with a crosshair tooltip. */
-export function TimeSeries({ data, series, xKey, xFormat, yFormat, labelFormat, height = 180, stacked = true,
-  yMax }: {
-  data: Record<string, number>[]
-  series: Series[]
-  xKey: string
-  xFormat: (v: number) => string
-  yFormat: (v: number) => string
-  labelFormat?: (v: string | number) => ReactNode
-  height?: number
-  stacked?: boolean
-  yMax?: number
-}) {
-  return (
-    <div className="space-y-3">
-      <Legend series={series} />
-      <div style={{ height }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-            <XAxis dataKey={xKey} type="number" domain={["dataMin", "dataMax"]} tickFormatter={xFormat} {...axis}
-              minTickGap={32} />
-            <YAxis tickFormatter={yFormat} {...axis} width={64} domain={[0, yMax ?? "auto"]}
-              allowDataOverflow={yMax != null} />
-            <Tooltip
-              cursor={{ stroke: "var(--chart-axis)", strokeWidth: 1 }}
-              content={(p) => (
-                <ChartTooltip active={p.active} payload={p.payload as readonly TooltipItem[]} label={p.label}
-                  series={series} format={yFormat} labelFormat={labelFormat ?? ((v) => xFormat(Number(v)))}
-                  total={stacked} />
-              )}
-            />
-            {series.map((s) => (
-              <Area key={s.key} dataKey={s.key} stackId={stacked ? "stack" : undefined} type="monotone"
-                stroke={s.color} strokeWidth={2} fill={s.color} fillOpacity={stacked ? 0.55 : 0.12}
-                isAnimationActive={false} dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--card)" }} />
-            ))}
-          </AreaChart>
         </ResponsiveContainer>
       </div>
     </div>

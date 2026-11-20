@@ -7,8 +7,7 @@ stays down until core writes a new token, so nobody has to touch the laptop.
 
 Alongside it, from the moment the process starts and whether or not there is a token yet, the process keeps the
 agent's own services running (services.py). On SIGTERM it stops those services cleanly before it exits. Before
-any of that, it makes sure the agent's home folder and browsers are in place on the volume (home.py). It also
-reports what the machine is doing to core, for the dashboard's host monitor (host.py), once there is a token.
+any of that, it makes sure the agent's home folder and browsers are in place on the volume (home.py).
 """
 
 from __future__ import annotations
@@ -94,7 +93,6 @@ def main(argv: list[str] | None = None) -> int:
     from agent.core.runner_tokens import read_runner_token
     from agent.proxy import ProxyClient
     from agent.runner.claude import ClaudeRunner
-    from agent.runner.host import HostSampler, core_poster, report_forever
     from agent.runner.link import CoreLink
     from agent.runner.services import supervise
     from agent.runner.worker import Runner
@@ -115,9 +113,6 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.update(env)  # the git identity, for every commit the agent makes
     claude = ClaudeRunner(ProxyClient(args.proxy), args.proxy, root / "transcripts")
     token_file = Path(args.token_file)
-
-    def read_token() -> str:
-        return read_runner_token(token_file)
     shared = token_file.parent  # what core shares with the container: the token, linear.env, the projects' env files
 
     def make_runner(token: str) -> Runner:
@@ -129,13 +124,8 @@ def main(argv: list[str] | None = None) -> int:
         stopping = asyncio.Event()  # SIGTERM (docker stop, a redeploy): stop the services, then exit
         with contextlib.suppress(NotImplementedError, RuntimeError):
             asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stopping.set)
-        # what the machine is doing, for the dashboard's host monitor: posted to core, which keeps the history
-        host = asyncio.create_task(report_forever(HostSampler(root), core_poster(args.core, read_token)), name="host")
-        try:
-            await serve(RunnerKeeper(make_runner), read_token, args.check_s,
-                        supervise(root / "services.toml", root / "run"), stopping)
-        finally:
-            host.cancel()
+        await serve(RunnerKeeper(make_runner), lambda: read_runner_token(token_file), args.check_s,
+                    supervise(root / "services.toml", root / "run"), stopping)
 
     asyncio.run(run())
     return 0
