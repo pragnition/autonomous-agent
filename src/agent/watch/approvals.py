@@ -200,9 +200,11 @@ _FRESH = timedelta(hours=24)
 
 
 def _posted_in_last_day(state_root: Path, now: datetime) -> int:
-    """How many items were posted in the 24 hours before `now`."""
+    """How many items were posted in the 24 hours before `now`, leaving out withdrawn (`released`) proposals."""
     count = 0
     for record in _read_records(state_root):
+        if record.get("released"):
+            continue
         try:
             posted = datetime.strptime(str(record.get("posted")), FMT).replace(tzinfo=UTC)
         except ValueError:

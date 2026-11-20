@@ -1263,3 +1263,16 @@ def test_at_most_three_items_a_day(tmp_path):
     next_day = T0 + timedelta(hours=24, minutes=1)
     _evidence(tmp_path, (43, "2026-11-20T09:30:00Z"))   # seen again, so still worth proposing
     assert post_proposals(slack, gh, tmp_path, "C9", [{"issue": 43, "change": "e"}], REPO, next_day) == 1
+
+
+def test_withdrawn_proposals_dont_count_toward_the_day(tmp_path):
+    gh = FakeGh({n: set() for n in (31, 40, 41, 42)})
+    slack = FakeSlack()
+    post_proposals(slack, gh, tmp_path, "C9", [{"issue": 31, "change": "a"}, {"issue": 40, "change": "b"}], REPO, T0)
+    for path in (tmp_path / "proposals").glob("*.json"):
+        record = json.loads(path.read_text())
+        record["released"] = True
+        path.write_text(json.dumps(record))
+    later = T0 + timedelta(hours=1)
+    assert post_proposals(slack, gh, tmp_path, "C9", [{"issue": 41, "change": "c"}, {"issue": 42, "change": "d"}],
+                          REPO, later) == 2
