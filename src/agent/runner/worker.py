@@ -16,6 +16,7 @@ from pathlib import Path
 
 from agent.runner.base import RunResult, RunSpec
 from agent.runner.handoff import handoff_note
+from agent.runner.host import CONVO_VAR, ITEM_VAR
 from agent.runner.link import SessionRevoked
 from agent.runner.tools import remote_sdk_tools
 
@@ -291,7 +292,10 @@ class Runner:
                        # plugins/effortless/hooks) are forced last, so a pack's test secret or the container's
                        # extra env can never override them
                        env={**env, **(payload.get("test_secrets") or {}), "CLAUDE_CONFIG_DIR": str(self.claude_home),
-                            "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"},
+                            "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1",
+                            # every process the session starts carries these, so the dashboard's host monitor can
+                            # count it for this session (agent.runner.host)
+                            ITEM_VAR: item_id, CONVO_VAR: convo},
                        mcp_servers=expand_mcp(payload.get("mcp") or {}, env),
                        plugins=plugins, sdk_tools=tools, settings=settings,
                        resume_session_id=payload.get("resume_session_id"),
