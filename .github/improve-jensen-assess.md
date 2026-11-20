@@ -154,6 +154,30 @@ For each one you keep:
      terms only: it is also posted on the public issue. For a learned item, what Jensen will keep ("Make the
      <skill> skill a default in every project"); never the credit.
 
+## Before you propose: check it isn't already fixed
+A proposal a person reads must be real, current and not already done. Give each candidate, one at a time, to a fresh
+subagent in the foreground, with the issue number, its evidence lines (`grep -F '"issue": <N>,'
+"$STATE/evidence.jsonl"`) and this checklist. It reports PASS, or FIXED / DUPLICATE / REJECTED / WEAK with the reason
+and file:line or PR. Propose only a PASS.
+1. **Already handled in the code?** Find what governs this behaviour on `main`, which is what runs (the newest `ok`
+   record in `$STATE/deploys.jsonl` has its sha): `src/agent/defaults/system.md`, `src/agent/runner/`,
+   `src/agent/core/`, the core plugin's skills in `src/agent/plugins/core/skills/`, `compose.yaml`, `Dockerfile`;
+   and on the host, Jensen's own setup: `docker exec agent-runner ls /var/agent/claude/skills`,
+   `docker exec agent-runner claude plugin list`, `docker exec agent-runner cat /var/agent/memory/MEMORY.md`. Read the
+   code; don't go by names. A learned skill or rule that is already there is FIXED.
+2. **Changed recently?** `gh pr list --state merged --search "merged:>=<14 days ago>" --json number,title,body,mergedAt`
+   and `docker exec agent-runner cat /var/agent/feedback/CHANGES.md`. If a change targets this problem, the newest
+   evidence must be later than the deploy that shipped it (its `ok` record's `ts`); otherwise FIXED.
+3. **Asked and answered?** `gh issue list --state closed --search "<the problem's key words>" --json
+   number,title,stateReason,labels`, and the same with `--label rejected --state all`. A person rejected the same change
+   in the last 30 days: REJECTED. An open or closed issue covers the same problem: DUPLICATE (fold it, as above).
+4. **Real and worth a person's time?** The evidence is Jensen's own work, not improve-jensen's (`V-review-`, `V-smoke-`
+   turns), more than a single slip, and the change would make a noticeable difference to how Jensen works for people.
+   Otherwise WEAK.
+
+A FIXED issue: `gh issue close <N> --comment "Already fixed: <PR or file, in general terms>."`. A WEAK one stays open
+and unproposed. Record each verdict and its reason in `assessment.md` (the host only).
+
 ## Projects
 A project runs once a person approves it in Slack; from then on the workflow starts its runs one after another until
 it's done. Find the approved ones with
