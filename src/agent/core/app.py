@@ -293,7 +293,8 @@ class CoreApp:
     # results from the runner
 
     def _record_run(self, item: WorkItem, result: dict) -> None:
-        # The run's tokens count to its conversation's project, else its task's; a run on neither is general (NULL)
+        # The project the run ends on: its conversation's, else its task's (NULL: neither). The KPIs prefer the project
+        # of the task record its request is labeled into later (kpis.py), and fall back to this one.
         convo = self.conn.execute(
             "SELECT c.task_id, COALESCE(c.project, t.project) AS project FROM conversations c "
             "LEFT JOIN tasks t ON t.id = c.task_id WHERE c.id = ?",

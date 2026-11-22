@@ -14,7 +14,7 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from agent import db
-from agent.core.kpis import FMT, SOURCES, compute_kpis, usage_windows
+from agent.core.kpis import FMT, SOURCES, compute_kpis, daily_tokens, usage_windows
 
 STATES = {"queued": ("queued",), "running": ("claimed", "delivered"), "done": ("done",), "failed": ("failed",),
          "cancelled": ("cancelled",)}
@@ -336,6 +336,8 @@ def _plain(value):
         return dataclasses.asdict(value)
     if isinstance(value, dict):
         return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
     return value
 
 
@@ -352,8 +354,8 @@ TASK_LIST = 200  # the KPI page lists at most this many of the window's tasks
 
 
 def kpi_view(conn: sqlite3.Connection, days: int, now: datetime, tz: str) -> dict:
-    """The four KPIs, tasks per local day by source, the window's tasks, newest first, and token use by project
-    for today, 7 days and this month."""
+    """The four KPIs, tasks per local day by source, the window's tasks, newest first, token use by project for
+    today, 7 days and this month, and tokens per local day by project for the last 7 days."""
     zone = ZoneInfo(tz)
     today = now.astimezone(zone).date()
     dates = [today - timedelta(days=n) for n in range(days - 1, -1, -1)]
@@ -371,4 +373,4 @@ def kpi_view(conn: sqlite3.Connection, days: int, now: datetime, tz: str) -> dic
         "LIMIT ?", (since.astimezone(UTC).strftime(FMT), hi, TASK_LIST))]
     kpis = compute_kpis(conn, since=since, until=now)
     return {"kpis": _kpis_dict(kpis), "daily": list(daily.values()), "tasks": tasks,
-            "usage": _plain(usage_windows(conn, now, tz))}
+            "usage": _plain(usage_windows(conn, now, tz)), "daily_tokens": _plain(daily_tokens(conn, now, tz))}
