@@ -59,3 +59,23 @@ async def test_server_error_raises():
 
 def test_placeholder_token_constant():
     assert PLACEHOLDER_TOKEN == "sk-ant-oat01-container-via-host-proxy"
+
+
+async def test_serves_asks_anthropics_model_lookup_as_a_session():
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        if req.url.path == "/v1/models/claude-opus-5-5":
+            return httpx.Response(200, json={"type": "model", "id": "claude-opus-5-5"})
+        if req.url.path == "/v1/models/claude-broken-1":
+            return httpx.Response(401, json={})
+        return httpx.Response(404, json={"type": "error"})
+
+    proxy = client(handler)
+    assert await proxy.serves("claude-opus-5-5") is True
+    assert await proxy.serves("claude-nope-9") is False
+    with pytest.raises(ProxyUnavailable):
+        await proxy.serves("claude-broken-1")
+    assert seen[0].headers["authorization"] == f"Bearer {PLACEHOLDER_TOKEN}"
+    assert len({r.headers["x-claude-code-session-id"] for r in seen}) == 1

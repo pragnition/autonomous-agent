@@ -1,7 +1,8 @@
 """Client for the host's Claude account proxy (claude_proxy/), reached through this service's relay.
 
 Only the answered-locally /proxy/ API is used here: usage per account (by code name), a session's pin, and for the
-dashboard the raw usage reply and the 5-minute perf rows.
+dashboard the raw usage reply and the 5-minute perf rows. The one exception is doctor's check that the proxy serves a
+model, a free GET of Anthropic's /v1/models/<id>.
 
 The soft cap on each account's 5-hour window lives here too, so core's usage watch, the runner's watchdog and the
 dashboard read it the same way: an account counts as full at SOFT_CAP_5H of its window until SOFT_CAP_LIFT_S before
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -113,10 +115,11 @@ class ProxyClient:
         self.base_url = base_url.rstrip("/")
         self.http = http or httpx.AsyncClient(timeout=10)
         self.soft_cap = soft_cap or SoftCap.from_env()
+        self._sid = str(uuid.uuid4())  # the session id serves() asks with
 
-    async def _get(self, path: str, params: dict | None = None) -> httpx.Response:
+    async def _get(self, path: str, params: dict | None = None, headers: dict | None = None) -> httpx.Response:
         try:
-            resp = await self.http.get(f"{self.base_url}{path}", params=params)
+            resp = await self.http.get(f"{self.base_url}{path}", params=params, headers=headers)
         except httpx.HTTPError as e:
             raise ProxyUnavailable(f"proxy unreachable: {e}") from e
         if resp.status_code >= 500:
@@ -147,3 +150,15 @@ class ProxyClient:
             return None
         resp.raise_for_status()
         return resp.json().get("account")
+
+    async def serves(self, model: str) -> bool:
+        """Whether a session can use `model` through the proxy: Anthropic's model lookup, which spends nothing. The
+        proxy puts an account's token only on a request that carries a Claude Code session id, so it asks as one."""
+        resp = await self._get(f"/v1/models/{model}", headers={
+            "Authorization": f"Bearer {PLACEHOLDER_TOKEN}", "anthropic-version": "2023-06-01",
+            "anthropic-beta": "oauth-2025-04-20", "x-claude-code-session-id": self._sid})
+        if resp.status_code == 404:
+            return False
+        if resp.status_code != 200:
+            raise ProxyUnavailable(f"proxy answered {resp.status_code} for model {model}")
+        return True

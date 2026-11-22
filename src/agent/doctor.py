@@ -70,6 +70,12 @@ async def run_checks(*, config_dir: Path, secrets: dict[str, str], proxy=None, g
                                                         f"{'capacity available' if usage.has_capacity() else 'no capacity right now'}"))
         except ProxyUnavailable as e:
             checks.append(Check("proxy", False, str(e)))
+        for model in config.models.choices():  # every model a conversation may run on
+            try:
+                ok = await proxy.serves(model)
+                checks.append(Check(f"model:{model}", ok, "served" if ok else "the proxy doesn't serve it"))
+            except ProxyUnavailable as e:
+                checks.append(Check(f"model:{model}", False, str(e)))
     for name, pack in sorted(packs.items()):
         if github is not None:
             ok = await github.can_read(pack.project.repo)

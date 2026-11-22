@@ -66,6 +66,7 @@ def test_defaults(tmp_path):
     assert cfg.limits.max_concurrent_sessions == 10 and cfg.limits.max_tasks_per_day == 20
     assert cfg.limits.idle_minutes == 30 and cfg.limits.schedule_hours == 6
     assert cfg.models.default == "claude-opus-5-5" and cfg.models.hard == "claude-fable-5-1"
+    assert cfg.models.choices() == ["claude-opus-5-5", "claude-fable-5-1"]
     assert cfg.agent.uid == 1001
     assert cfg.cli == {}
 
@@ -191,3 +192,15 @@ def test_person_github_is_optional(tmp_path):
     path = tmp_path / "agent.toml"
     path.write_text('name = "agent"\n[people.ann]\nslack = "U1"\nlinear = "ann@example.com"\n')
     assert load_agent_config(path).people["ann"].github == ""
+
+
+def test_allowed_models_add_to_default_and_hard(tmp_path):
+    allowed = '[claude.models]\nallowed = ["claude-opus-4-6", "claude-opus-5-5"]\n'
+    cfg = load_agent_config(write_agent(tmp_path, allowed))
+    assert cfg.models.choices() == ["claude-opus-5-5", "claude-fable-5-1", "claude-opus-4-6"]
+
+
+@pytest.mark.parametrize("allowed", ['"claude-opus-4-6"', '["opus 4.6"]', "[4]"])
+def test_allowed_models_must_be_model_ids(tmp_path, allowed):
+    problems = problems_of(lambda: load_agent_config(write_agent(tmp_path, f"[claude.models]\nallowed = {allowed}\n")))
+    assert any("allowed" in p for p in problems)

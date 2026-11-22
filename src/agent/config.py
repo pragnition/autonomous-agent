@@ -70,6 +70,11 @@ class Limits:
 class Models:
     default: str = "claude-opus-5-5"
     hard: str = "claude-fable-5-1"
+    allowed: list[str] = field(default_factory=list)  # what "use <model>" may switch to, besides default and hard
+
+    def choices(self) -> list[str]:
+        """Every model a conversation may be switched to: default, hard and the allowed list, in that order."""
+        return list(dict.fromkeys([self.default, self.hard, *self.allowed]))
 
 
 @dataclass
@@ -310,6 +315,10 @@ def load_agent_config(path: Path) -> AgentConfig:
     for key in ("default", "hard"):
         if key in claude:
             setattr(models, key, _str(claude, key, f"{where} [claude.models]", problems))
+    if "allowed" in claude:
+        models.allowed = _str_list(claude, "allowed", f"{where} [claude.models]", problems)
+        if not all(re.fullmatch(r"claude-[a-z0-9][a-z0-9.-]*", m) for m in models.allowed):
+            problems.append(f"{where} [claude.models]: 'allowed' must list model ids like \"claude-opus-4-6\"")
 
     ag = data.get("agent") or {}
     aw = f"{where} [agent]"

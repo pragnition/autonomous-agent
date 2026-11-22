@@ -242,8 +242,15 @@ Routing picks the message's conversation (one row in `conversations`, one Claude
 - **New**: a mention outside any known thread starts a conversation for that thread. In a channel that is a pack's
   `slack_channel`, the conversation is bound to that project from the start.
 
-A message containing "use fable" switches its conversation to `[claude.models] hard` for the rest of the
-conversation; otherwise sessions use `default`.
+A message saying "use <model>" at the start of a sentence (after a "please" or "can you" at most) switches its
+conversation's model for the rest of the conversation; otherwise sessions use `[claude.models] default`. The model
+is a full id (`use claude-opus-4-6`), a family and version (`use opus 4.6`, `use haiku 4.5`), or a family alone when
+one allowed model has it; "use default" (at the end of a sentence) goes back to `default`, and "use fable" anywhere
+in a message is `[claude.models] hard`, as it always was. Only models in
+`[claude.models]` (`default`, `hard` and `allowed`) count: any other model-shaped name, or one that fits more than one
+allowed model, changes nothing, and core replies in the thread with the models it can switch to. The message's own
+turn runs on the new model; a turn already running keeps its model, so a message it takes in mid-turn applies from
+the conversation's next turn. `doctor` checks that the account proxy serves every one of these models.
 
 ### The who, where and link line
 
@@ -627,7 +634,7 @@ Linear app also `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` and `LINEAR_WEBHOOK_S
 | `name`, `github`, `timezone` | the agent's name (display name, Linear label), its GitHub login, the timezone for digests, caps and schedules |
 | `[people.<key>]` | `slack` user id and `linear` email (required), `github` login, `role` (`member` or `admin`), `tailscale` login |
 | `[limits]` | `max_concurrent_sessions` (10), `max_tasks_per_day` (20), `idle_minutes` (30): a turn with no progress for this long is stopped, `schedule_hours` (6): a scheduled run's time budget, 0 for none |
-| `[claude.models]` | `default` for every session, `hard` after "use fable" |
+| `[claude.models]` | `default` for every session, `hard` after "use fable", `allowed`: more model ids "use <model>" may switch a conversation to |
 | `[agent]` | `uid` of the agent container's user (1001) |
 | `[linear]` | `public_url`: the Funnel URL for Linear's webhook and OAuth callback; empty means no Linear app |
 | `[mcp.<name>]` | MCP servers every session gets: `type = "http"`, `url`, `headers` with `${VAR}` from the session's environment |
