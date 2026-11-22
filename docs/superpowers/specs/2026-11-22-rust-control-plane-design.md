@@ -60,7 +60,9 @@ Measured on the live install over 2026-11-14 to 11-20 (921 turns):
 
 - Changing what people or Jensen see. Same Slack app, Linear app, tool names and arguments, dashboard pages, meter
   URL, config files and database.
-- A new memory, credentials or skills service. Memory is 33 facts today and works; keys stay in `agent.env`.
+- A new memory, credentials or skills service. Memory is 33 facts today and works.
+- Credentials per person, per project or per thread. Every container gets all of Jensen's credentials, as every
+  session does today.
 - New helper-session tools. Jensen's helpers are Claude Code subagents inside its session; `spawn_agent` stays as
   it is.
 - More than one machine, network storage, or VM snapshots.
@@ -216,9 +218,15 @@ created from the agent image:
   So localhost, the apps Jensen tests and the shared demo ports behave as they do now.
 - **Private to each container:** its processes, `/tmp`, system files and anything installed with `sudo apt`, and
   its memory and CPU cap.
-- **Environment:** the same as a session gets today: `agent.env`, the git identity, the soft-cap and compaction
-  settings, `CLAUDE_CONFIG_DIR`, the project's test keys, with secret-looking variables that aren't meant for the
-  session blanked, as the runner does.
+- **Credentials:** every container mounts the same read-only credentials folder: the keys in `agent.env`, the
+  Linear app token, the projects' app env files and test keys, and the shared Azure login. The holder reads the key
+  files at the start of every turn and passes them to Claude Code as environment variables, so a changed key
+  reaches the next turn without restarting the container. The control plane's own secrets stay out of every
+  container: the Slack app token, the Linear app's client and webhook secrets, the GitHub tokens core uses today,
+  and the meter's upstream keys (so apps can't go around the meter's spending caps).
+- **Environment:** besides the keys, the same as a session gets today: the git identity, the soft-cap and
+  compaction settings, `CLAUDE_CONFIG_DIR`, with secret-looking variables that aren't meant for the session blanked,
+  as the runner does.
 - **Lifetime:** a container starts with its conversation's first turn and serves every later turn of that
   conversation. It stops once an hour has passed with no turn running and nothing else running in it (no process
   listening on a TCP port, no other process Jensen started). Whatever is still running, it is stopped 24 hours after
@@ -426,5 +434,5 @@ framework, workflow engine or third-party Claude Code wrapper.
 
 - A second machine, with the session-running part as a worker there.
 - A service for memory, credentials and skills, if memory grows or several agents need their own.
-- Keys kept outside the containers, added on the way out.
+- Keys kept outside the containers, added on the way out; credentials per person or per project.
 - The supervisors and improve-jensen in Rust.
