@@ -42,8 +42,8 @@ Measured on the live install over 2026-11-14 to 11-20 (921 turns):
 ## Goals
 
 1. Deploying or restarting the control plane costs no work: running turns carry on and it reconnects to them.
-2. A Claude Code crash, or a container running out of memory, resumes the conversation from its saved history
-   once, with a note to check what is already done, instead of failing the turn or losing the session.
+2. A Claude Code crash (including Claude Code being killed for memory) resumes the conversation from its saved
+   history once, with a note to check what is already done, instead of failing the turn or losing the session.
 3. A conversation never has two Claude Code processes at once.
 4. People's messages reach Jensen at its next step even while long work runs, and each is confirmed as read.
 5. Accounts move only when nothing is running inside the session, except as a last resort (see Rules).
