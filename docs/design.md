@@ -242,10 +242,11 @@ Routing picks the message's conversation (one row in `conversations`, one Claude
 - **New**: a mention outside any known thread starts a conversation for that thread. In a channel that is a pack's
   `slack_channel`, the conversation is bound to that project from the start.
 
-A message saying "use <model>" switches its conversation's model for the rest of the conversation; otherwise
-sessions use `[claude.models] default`. The model is a full id (`use claude-opus-4-6`), a family and version
-(`use opus 4.6`, `use haiku 4.5`), or a family alone when one allowed model has it; "use fable" is
-`[claude.models] hard`, and "use default" (at the end of a sentence) goes back to `default`. Only models in
+A message saying "use <model>" at the start of a sentence (after a "please" or "can you" at most) switches its
+conversation's model for the rest of the conversation; otherwise sessions use `[claude.models] default`. The model
+is a full id (`use claude-opus-4-6`), a family and version (`use opus 4.6`, `use haiku 4.5`), or a family alone when
+one allowed model has it; "use default" (at the end of a sentence) goes back to `default`, and "use fable" anywhere
+in a message is `[claude.models] hard`, as it always was. Only models in
 `[claude.models]` (`default`, `hard` and `allowed`) count: any other model-shaped name, or one that fits more than one
 allowed model, changes nothing, and core replies in the thread with the models it can switch to. The message's own
 turn runs on the new model; a turn already running keeps its model, so a message it takes in mid-turn applies from

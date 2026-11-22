@@ -40,12 +40,16 @@ RETRY_OUTCOMES, BUILD_RETRIES = {"error", "stalled"}, 3
 _LIMIT_ERROR = re.compile(r"^429\b|\baccount \S+ is (rejected|disabled)\b|rate.?limit", re.I)
 # A message's progress: seen -> working -> done or failed
 SEEN, WORKING, DONE, FAILED = "eyes", "hourglass_flowing_sand", "white_check_mark", "warning"
-# "use <model>" in a message switches its conversation's model (see model_named): a full id, a family with or without
-# a version ("opus 4.6", "sonnet"), or "default". Only model-shaped names count, so "use the API" switches nothing;
-# "default" only at the end of a sentence, so "use default settings" doesn't either.
-_USE_MODEL = re.compile(r"\buse\s+(?:the\s+)?(claude-[a-z0-9][a-z0-9.-]*[a-z0-9]"
-                        r"|(?:claude\s+)?(?:opus|sonnet|haiku|fable)(?:[\s-]*\d+(?:[.-]\d+)*)?\b"
-                        r"|default(?:\s+model)?(?=\s*(?:[.,!?;:]|$)))", re.I)
+# "use <model>" at the start of a sentence switches its conversation's model (see model_named): a full id, a family
+# with or without a version ("opus 4.6", "sonnet"), or "default". A few words of asking may come first ("please",
+# "can you"). Only model-shaped names count, so "use the API" switches nothing, and only at a sentence's start, so
+# "don't use opus" or "make the labeler use haiku 4.5" don't either; "default" only at the end of a sentence, so "use
+# default settings" doesn't. "use fable" anywhere still means [claude.models] hard, as it always did.
+_USE_MODEL = re.compile(r"(?:^|[.!?;]\s+)(?:(?:please|pls|ok|okay|now|and|then|so|can you|could you|would you)\s+)*"
+                        r"use\s+(?:the\s+)?(claude-[a-z]+-\d[a-z0-9.-]*[a-z0-9]"
+                        r"|(?:claude[\s-]+)?(?:opus|sonnet|haiku|fable)(?:[\s-]*\d+(?:[.-]\d+)*)?\b"
+                        r"|default(?:\s+model)?(?=\s*(?:[.,!?;:]|$)))", re.I | re.M)
+_FABLE = re.compile(r"\buse fable\b", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
 LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the line goes without it after that
 # A person's message with files attached arrives with this subtype; every other subtype (edits, joins, bot
@@ -367,6 +371,9 @@ class Conversations:
         changes, and the caller tells the person."""
         asked = _USE_MODEL.search(text)
         if asked is None:
+            if _FABLE.search(text):
+                self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?",
+                                  (self.config.models.hard, convo_id))
             return None
         ok, model = model_named(self.config.models, asked.group(1))
         if not ok:
