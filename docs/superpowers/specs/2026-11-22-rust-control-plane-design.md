@@ -185,7 +185,9 @@ Docker socket, the data directories core mounts today, and the `agentwork` volum
 - **Account usage.** Reading the proxy's usage every minute as core's usage watch does today (account states,
   holding scheduled runs when the pool is low, admin DMs), and moving sessions between accounts by the rules below.
 - **Capacity.** Starting a new turn only when fewer than `[limits] max_concurrent_sessions` turns are running and the
-  host has enough free memory for another container's cap plus a margin.
+  host has enough free memory for another container's cap plus a margin. When a turn is waiting only for memory, it
+  stops idle containers (no turn running) early, oldest first: those with nothing running, then those with leftover
+  processes, and last those serving on the shared demo ports.
 - **Tools for Jensen.** Every tool core offers today, called from Claude Code through the container's tool server.
   The tier comes from who sent the message, never from the call's arguments.
 - **Dashboard API.** The endpoints above, read from the database and from the control plane's live state (running
@@ -279,8 +281,11 @@ Linear events, schedule firings, park wake-ups and spawned-agent reports enter a
   never resumed on a different account from the one it last ran on, so a move always means a fresh Claude Code on
   another account that carries on from today's handoff note. Moves happen:
   - **at once** when the proxy rejects or disables the account;
-  - **at the next point where nothing is running** (no turn, no background agents) once the account is over its soft
-    cap and another account is under its own;
+  - **at the next quiet moment** once the account is over its soft cap and another account is under its own. A
+    quiet moment is one with no tool call, shell or helper running: between turns, or inside a turn while Claude
+    Code is only thinking or writing. Inside a turn, the control plane interrupts Claude Code at that moment and
+    carries the same turn on in a fresh session on another account with the handoff note, as today's runner does
+    when it moves a session, so no running work is lost;
   - **anyway, after 30 minutes** over the soft cap with no such point, so a busy session can't hold an account past
     its cap. This is the only case that can still cut off running work;
   - **at the start of a turn** when the conversation's account is already over its soft cap: the turn starts fresh
@@ -304,7 +309,7 @@ Linear events, schedule firings, park wake-ups and spawned-agent reports enter a
 |---|---|---|
 | Control plane deployed, crashed or restarted | (runner) every running turn dies | Turns keep running. It reads its database for the turns that were running, reconnects to each holder, reads each log from the last line it recorded and carries on. Messages that arrived meanwhile are delivered then |
 | Claude Code crashes mid-turn | the turn fails and the session is dropped | The holder reports the exit; the control plane starts Claude Code once more with the saved session and a note to check what's done; a second crash fails the turn and keeps the session |
-| A container hits its memory cap | Linux kills processes anywhere on the host | Only that container is stopped; the turn resumes once in a new container, with a note saying it ran out of memory |
+| A container hits its memory cap | Linux kills processes anywhere on the host | The kernel kills the biggest process inside that container only (often a browser); other conversations are unaffected. Claude Code sees the failed tool and carries on. Only if Claude Code itself was killed does the turn resume once, with a note saying it ran out of memory |
 | A holder or container disappears | n/a | Docker reports it; same as a crash |
 | Account reaches its soft cap | the turn is interrupted, helpers die | The move waits until nothing is running, for up to 30 minutes |
 | Slack connection drops | core reconnects | Same; events Slack retries are recorded once |
@@ -353,7 +358,7 @@ A result that fails to post to Slack is retried; the turn is never run again bec
   - every dashboard page, the kill switch, a meter call through `172.30.0.10:8087`;
   - restart the control plane during a turn: the turn finishes and the reply posts once;
   - send a message during a long helper call: it is answered within the next step;
-  - fill a container's memory: only that container stops and the turn resumes;
+  - fill a container's memory: only processes in that container are killed, and the turn carries on or resumes;
   - a demo server on a shared port: reachable, and its container isn't stopped while it serves.
 
 ## Proven first (a short spike)
@@ -370,7 +375,8 @@ Before the plan is written, confirm on the live host:
 6. How Claude Code reports a shell that a "now" message moved to the background.
 7. The Slack Socket Mode connection with the existing app token from the new service.
 
-If any of these fails, the design comes back for a decision before the plan.
+The plan's first stage is this spike. If any item fails, the plan stops there and the design comes back for a
+decision; the later stages are confirmed against the spike's results.
 
 ## Constraints
 
@@ -397,7 +403,10 @@ framework, workflow engine or third-party Claude Code wrapper.
   turn at the latest.
 - The services container runs today's Python services supervisor rather than a Rust rewrite.
 - Tools reach Claude Code through a stdio MCP relay in the container, so no key or token enters the container.
-- One automatic resume after a crash, a memory kill or a host reboot, then the turn fails with its session kept.
+- One automatic resume after Claude Code crashes, is killed for memory, or the host reboots, then the turn fails
+  with its session kept. A memory kill of any other process is left to Claude Code to handle.
+- Account moves happen at the next quiet moment, inside a turn or between turns, so no running work is lost.
+- Under memory pressure, idle containers are stopped early, demo servers last.
 - A session busy for 30 minutes past its account's soft cap moves anyway.
 - Apps in Jensen's Docker share one overall memory cap.
 - The database file, its tables, the dashboard API and the record formats stay as they are, so nothing downstream
