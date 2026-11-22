@@ -226,16 +226,17 @@ session token never enters the session's environment. With the holder in between
 
 ### Rules
 
-- **Accounts:** a session is never resumed on a different account from the one it last ran on, so a move always
-  means a fresh Claude Code on another account that carries on from today's handoff note, not the full
-  conversation. Moves happen only when nothing is running (step 0), and only for one of these reasons (TO CONFIRM):
-  - the proxy rejects or disables the account: move at once;
-  - the account passes a hard line above the soft cap (90% of its 5-hour window): move at the next point where
-    nothing is running.
-
-  The 65% soft cap keeps steering new conversations to other accounts, as the proxy's ranking and core's usage
-  watch do today, but it no longer moves a conversation that is already running. A turn that starts on an account
-  between 65% and 90% resumes there with its full conversation.
+- **Accounts:** the soft cap stays where it is (65% of an account's 5-hour window, lifting to 100% in the last 90
+  minutes before the window resets, as today), because people use the same accounts and need the rest. A session
+  is never resumed on a different account from the one it last ran on, so a move always means a fresh Claude Code
+  on another account that carries on from today's handoff note, not the full conversation. Moves happen:
+  - **at once** when the proxy rejects or disables the account;
+  - **at the next point where nothing is running** (no turn, no background agents) once the account is over its
+    soft cap and another account is under its own, as today's watchdog checks;
+  - **anyway, after 30 minutes** over the soft cap with no such point, so a session that keeps helpers running
+    can't hold an account past its cap indefinitely. This is the only case that can still cut off running work;
+  - **at the start of a turn**, when the conversation's account is already over its soft cap: the turn starts
+    fresh on another account with the handoff note, instead of resuming and moving mid-turn.
 - **Capacity:** the orchestrator pulls new work only when fewer than `[limits] max_concurrent_sessions` turns are
   running and the host has enough free memory for another box's cap plus a margin. Helpers run inside their
   session's box and count against its cap, so they are covered.
@@ -256,7 +257,7 @@ session token never enters the session's environment. With the holder in between
 | Restart takes longer than 90 seconds | the turn runs again from its saved history | Core hands the work out again; the old copy's next check-in is refused and it is stopped; the new claim resumes from saved history |
 | Claude Code crashes mid-turn | the turn fails and the session is dropped | The holder reports the exit; the orchestrator starts Claude Code once more with the saved session and a note to check what's done; a second crash fails the turn and keeps the session |
 | A box hits its memory cap | Linux kills processes anywhere on the host | Only that box is stopped; the turn resumes once in a new box, with a note saying it ran out of memory |
-| Account reaches its soft cap | the turn is interrupted, helpers die | No move at 65%; past the hard line, the move waits until nothing is running in the session |
+| Account reaches its soft cap | the turn is interrupted, helpers die | The move waits until nothing is running in the session, for up to 30 minutes |
 | Host reboots | every turn dies; claims run out and turns retry | The same, plus boxes are recreated on the next turn |
 | Kill switch | runner interrupts every turn | Same: check-ins return "stop" and each turn is interrupted |
 
@@ -346,6 +347,7 @@ wrapper.
 - The services box runs today's Python services supervisor rather than a Rust rewrite.
 - Core's tools reach Claude Code through a stdio MCP relay in the box, so the session token stays outside the box.
 - One automatic resume after a crash or a memory kill, then the turn fails with its session kept.
+- A session busy for 30 minutes past its account's soft cap moves anyway.
 - Rollout one channel first, with the Python runner kept for a week as the fallback.
 
 ## Left to the builder
