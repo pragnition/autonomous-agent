@@ -25,6 +25,7 @@ schedule_hours = 6               # a scheduled run's time budget; any other turn
 [claude.models]
 default = "claude-opus-5-5"      # every session
 hard = "claude-fable-5-1"        # when someone says "use fable" in a conversation
+allowed = ["claude-opus-4-6"]    # what "use <model>" may switch a conversation to, besides default and hard
 
 [agent]
 uid = 1001                       # the agent container's user; core hands it the Azure login and runner token

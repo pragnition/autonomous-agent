@@ -316,6 +316,66 @@ async def test_use_fable_sticks(convos, conn, queue):
     assert last_item(queue).payload["model"] == "claude-fable-5-1"
 
 
+ALLOWED = ["claude-opus-5-5", "claude-fable-5-1", "claude-opus-4-6", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]
+
+
+def aliases(model):
+    """The ways a person may name an allowed model: its id, and its family and version as words."""
+    family, *version = model.removeprefix("claude-").split("-")
+    words = [model, model.upper(), f"claude {family} {'.'.join(version)}", f"{family} {'.'.join(version)}"]
+    if version and len(version[-1]) == 8:  # a dated id: the version without its date
+        words.append(f"{family} {'.'.join(version[:-1])}")
+    return words
+
+
+@pytest.fixture
+def model_convos(conn, queue, slack, tmp_path):
+    config = make_config(tmp_path, f"\n[claude.models]\nallowed = {ALLOWED!r}\n".replace("'", '"'))
+    return Conversations(conn, config=config, packs={"sample": make_pack()}, queue=queue, slack=slack,
+                         payloads=FakePayloads(), notifier=FakeNotifier(), bot_user_id="UBOT")
+
+
+async def test_every_allowed_model_switches_by_id_or_alias(model_convos, conn, queue, slack):
+    asked = [(model, alias) for model in ALLOWED for alias in aliases(model)]
+    for i, (model, alias) in enumerate(asked):
+        await model_convos.handle_slack(mention(f"m{i}", f"use {alias} for this, please"))
+        assert convo(conn, f"m{i}")["model"] == model, alias
+        assert last_item(queue).payload["model"] == model, alias
+    assert slack.posts == []
+
+
+@pytest.mark.parametrize("asked", ["claude-opus-9-9", "sonnet 4.6", "opus", "fable 5.2"])
+async def test_a_model_not_allowed_changes_nothing_and_replies(model_convos, conn, queue, slack, asked):
+    await model_convos.handle_slack(mention("t1", "use fable"))
+    await model_convos.handle_slack(reply("t1", f"now use {asked}"))
+    assert convo(conn, "t1")["model"] == "claude-fable-5-1"
+    assert last_item(queue).payload["model"] == "claude-fable-5-1"  # the message is still a turn
+    [post] = slack.posts
+    assert post["thread_ts"] == "t1" and asked in post["text"]
+    assert all(f"`{m}`" in post["text"] for m in ALLOWED)
+
+
+async def test_use_default_goes_back_to_the_default(model_convos, conn, queue):
+    await model_convos.handle_slack(mention("t1", "use opus 4.6"))
+    await model_convos.handle_slack(reply("t1", "use default."))
+    assert convo(conn, "t1")["model"] is None  # payloads send [claude.models] default
+    await model_convos.handle_slack(reply("t1", "use sonnet 5.5"))
+    await model_convos.handle_slack(reply("t1", "Use the default model"))
+    assert convo(conn, "t1")["model"] is None
+
+
+@pytest.mark.parametrize("text", ["use the API for this", "use default settings", "we use pytest", "used opus 4.6"])
+async def test_ordinary_words_after_use_switch_nothing(model_convos, conn, slack, text):
+    await model_convos.handle_slack(mention("t1", text))
+    assert convo(conn, "t1")["model"] is None and slack.posts == []
+
+
+async def test_use_fable_is_hard_whatever_the_allowed_list(model_convos, convos, conn):
+    await model_convos.handle_slack(mention("t1", "Use Fable and fix x"))
+    await convos.handle_slack(mention("t2", "use fable"))  # no allowed list: just default and hard
+    assert convo(conn, "t1")["model"] == convo(conn, "t2")["model"] == "claude-fable-5-1"
+
+
 async def test_message_ts_recorded_for_reactions(convos, queue):
     await convos.handle_slack(mention("t7", "react please"))
     assert last_item(queue).payload["message_ts"] == "t7"

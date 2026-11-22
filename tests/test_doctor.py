@@ -19,8 +19,13 @@ from agent.proxy import AccountUsage, ProxyUnavailable, Usage
 
 
 class Proxy:
-    def __init__(self, verified=True, down=False):
-        self.verified, self.down = verified, down
+    def __init__(self, verified=True, down=False, unserved=()):
+        self.verified, self.down, self.unserved = verified, down, set(unserved)
+
+    async def serves(self, model):
+        if self.down:
+            raise ProxyUnavailable("down")
+        return model not in self.unserved
 
     async def usage(self):
         if self.down:
@@ -159,3 +164,11 @@ def test_proxy_check_uses_proxy_url(monkeypatch):
 
     monkeypatch.setenv("PROXY_URL", "http://p:1")
     assert _proxy_relay() == "http://p:1"
+
+
+async def test_doctor_flags_an_allowed_model_the_proxy_does_not_serve(tmp_path):
+    (tmp_path / "agent.toml").write_text((EXAMPLES / "agent.toml").read_text())
+    checks = by_name(await run_checks(config_dir=tmp_path, secrets=ALL_SECRETS,
+                                      proxy=Proxy(unserved={"claude-opus-4-6"}), github=None, linear=None))
+    assert checks["model:claude-opus-5-5"].ok and checks["model:claude-fable-5-1"].ok
+    assert not checks["model:claude-opus-4-6"].ok and "doesn't serve" in checks["model:claude-opus-4-6"].detail

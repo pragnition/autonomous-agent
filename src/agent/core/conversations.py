@@ -40,7 +40,12 @@ RETRY_OUTCOMES, BUILD_RETRIES = {"error", "stalled"}, 3
 _LIMIT_ERROR = re.compile(r"^429\b|\baccount \S+ is (rejected|disabled)\b|rate.?limit", re.I)
 # A message's progress: seen -> working -> done or failed
 SEEN, WORKING, DONE, FAILED = "eyes", "hourglass_flowing_sand", "white_check_mark", "warning"
-_FABLE = re.compile(r"\buse fable\b", re.I)
+# "use <model>" in a message switches its conversation's model (see model_named): a full id, a family with or without
+# a version ("opus 4.6", "sonnet"), or "default". Only model-shaped names count, so "use the API" switches nothing;
+# "default" only at the end of a sentence, so "use default settings" doesn't either.
+_USE_MODEL = re.compile(r"\buse\s+(?:the\s+)?(claude-[a-z0-9][a-z0-9.-]*[a-z0-9]"
+                        r"|(?:claude\s+)?(?:opus|sonnet|haiku|fable)(?:[\s-]*\d+(?:[.-]\d+)*)?\b"
+                        r"|default(?:\s+model)?(?=\s*(?:[.,!?;:]|$)))", re.I)
 _MENTION = re.compile(r"<@[A-Z0-9]+>\s*")
 LOOKUP_S = 3  # the longest a Slack lookup for a turn's first line may take; the line goes without it after that
 # A person's message with files attached arrives with this subtype; every other subtype (edits, joins, bot
@@ -64,6 +69,34 @@ def message_files(event: dict) -> list[dict]:
 def origin_line(where: str, *, who: str | None = None, link: str | None = None) -> str:
     """A turn's first line, e.g. [from Sam Taylor (sam) · DM · <permalink>] or [Linear SAM-7 · <url>]."""
     return "[" + " · ".join(p for p in (f"from {who}" if who else None, where, link) if p) + "]"
+
+
+def _model_key(name: str) -> str:
+    """A model name compared without "claude", case or separators: "Opus 4.6" and "claude-opus-4-6" are both
+    "opus-4-6"."""
+    return re.sub(r"^claude-", "", re.sub(r"[\s.-]+", "-", name.strip().lower()))
+
+
+def model_named(models, name: str) -> tuple[bool, str | None]:
+    """The model "use <name>" asks for: (True, the id) for an allowed model, (True, None) for "default", which puts
+    the conversation back on [claude.models] default, and (False, None) for a model that isn't allowed or a name that
+    fits more than one. "fable" alone is [claude.models] hard, as it always was. An exact id wins; otherwise the name
+    may leave out the rest of an id ("opus 4" for claude-opus-4-6, "haiku 4.5" for claude-haiku-4-5-20251001)."""
+    key = _model_key(name)
+    if key in ("default", "default-model"):
+        return True, None
+    if key == "fable":
+        return True, models.hard
+    choices = models.choices()
+    exact = [m for m in choices if _model_key(m) == key]
+    fits = exact or [m for m in choices if _model_key(m).startswith(key + "-")]
+    return (True, fits[0]) if len(fits) == 1 else (False, None)
+
+
+def unknown_model_reply(models, name: str) -> str:
+    listed = ", ".join(f"`{m}`" + (" (default)" if m == models.default else "") for m in models.choices())
+    return (f"I can't switch this conversation to {name.strip()}, so it stays on the model it has. Models I can "
+            f"switch to: {listed}. Say \"use <model>\" with one of them, or \"use default\".")
 
 
 def cut_by_limit(outcome: str, error: str | None) -> bool:
@@ -313,14 +346,33 @@ class Conversations:
         convo = await self._route(channel, thread_ts, is_dm)
         record_message(self.conn, channel, event["ts"], convo["id"])
         self._unpark(convo["id"], person.key)  # their message carries the conversation on now
-        if _FABLE.search(text):
-            self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (self.config.models.hard, convo["id"]))
-            convo = self._row(convo["id"])
+        not_allowed = self._switch_model(convo["id"], text)
+        convo = self._row(convo["id"])
         came_from = event.get("thread_ts")
         self._enqueue_turn(convo, text, person.key, origin=origin, source="slack", requester=person.key,
                            message_ts=event["ts"], files=message_files(event),
                            reply_thread_ts=came_from if came_from != convo["thread_ts"] else None)
         await self._react(channel, event["ts"], SEEN)  # the person sees it landed long before the session replies
+        if not_allowed:
+            try:
+                resp = await self.slack.chat_postMessage(channel=channel, thread_ts=thread_ts,
+                                                         text=unknown_model_reply(self.config.models, not_allowed))
+                record_message(self.conn, resp["channel"], resp["ts"], convo["id"])
+            except Exception:
+                log.warning("couldn't say that %r isn't an allowed model", not_allowed, exc_info=True)
+
+    def _switch_model(self, convo_id: str, text: str) -> str | None:
+        """A message saying "use <model>" switches its conversation to that model from this message's turn on (a
+        turn already running keeps its own). Returns the name asked for when that model isn't allowed: nothing
+        changes, and the caller tells the person."""
+        asked = _USE_MODEL.search(text)
+        if asked is None:
+            return None
+        ok, model = model_named(self.config.models, asked.group(1))
+        if not ok:
+            return asked.group(1)
+        self.conn.execute("UPDATE conversations SET model = ? WHERE id = ?", (model, convo_id))
+        return None
 
     async def _react(self, channel: str, ts: str, name: str, replaces: str | None = None) -> None:
         if replaces:
