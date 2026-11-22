@@ -230,8 +230,12 @@ created from the agent image:
 - **Lifetime:** a container starts with its conversation's first turn and serves every later turn of that
   conversation. It stops once an hour has passed with no turn running and nothing else running in it (no process
   listening on a TCP port, no other process Jensen started). Whatever is still running, it is stopped 24 hours after
-  its last turn; anything that must outlive that belongs in Jensen's services. A later message starts a fresh
-  container that resumes the conversation from its saved history.
+  its last turn; anything that must outlive that belongs in Jensen's services.
+- **Stopped, then restarted:** a stopped container is kept, not deleted. A message within 7 days starts the same
+  container again: same image, and the files it wrote outside the shared volume (system packages installed with
+  `sudo apt`, `/tmp`, local config) are still there. Running programs don't come back. A container stopped for 7
+  days is deleted; the next message gets a new container from the newest image, which resumes the conversation from
+  its saved history.
 - **Other containers' processes:** a container can't see or stop processes in another. That matches the existing
   rule in Jensen's prompt not to stop processes it didn't start. A port another container holds is taken, and
   Jensen picks another free one.
@@ -308,8 +312,9 @@ Linear events, schedule firings, park wake-ups and spawned-agent reports enter a
   hold the turn.
 - **Errors keep the session.** An error no longer clears the conversation's saved session; the next turn tries to
   resume it and falls back to a fresh session with a handoff note if that fails.
-- **Image updates:** a new agent image reaches a conversation when its container next starts. Running containers are
-  never restarted for an update.
+- **Image updates:** a new agent image reaches a conversation when it next gets a new container (after its old one
+  was deleted). Running and stopped containers are never changed by an update. When an image fix must reach every
+  conversation, a deploy marks existing containers to be replaced at their next start.
 
 ### When things go wrong
 
@@ -417,6 +422,7 @@ framework, workflow engine or third-party Claude Code wrapper.
 - Under memory pressure, idle containers are stopped early, demo servers last.
 - A session busy for 30 minutes past its account's soft cap moves anyway.
 - Apps in Jensen's Docker share one overall memory cap.
+- Stopped containers are kept for 7 days and restarted for the same conversation, then deleted.
 - The database file, its tables, the dashboard API and the record formats stay as they are, so nothing downstream
   changes and the Python stack remains a working rollback for a week.
 - Supervisors, the account proxy and improve-jensen stay in Python.
@@ -427,7 +433,7 @@ framework, workflow engine or third-party Claude Code wrapper.
 - The holder's socket message format and log file format.
 - How the control plane's own state (running containers, log positions) is stored, in new tables.
 - How the Host page shows containers.
-- Cleaning up stopped containers and old holder logs.
+- Deleting old holder logs, and a disk limit for stopped containers' files.
 - The order the parts are built and tested in.
 
 ## Later, not in this build
