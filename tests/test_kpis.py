@@ -203,3 +203,67 @@ def test_format_usage_windows_lists_projects_and_the_apps_meter(conn):
         "Tokens today: 100 in · 10 out · 1k cache read · 50 cache write",
         "  alpha: 100 in · 10 out · 1k cache read · 50 cache write",
         "  app meter, alpha-foundry: 1 call · 10 in · 3 out · 2 cache read · 0 cache write · $0.25 billed"]
+
+
+def turn(conn, wid, convo, hhmm, day=13):
+    conn.execute("INSERT OR IGNORE INTO conversations(id, channel, thread_ts, created_at, last_active_at) "
+                 "VALUES (?, 'D-1', ?, ?, ?)", (convo, convo, at(hhmm, day), at(hhmm, day)))
+    conn.execute("INSERT INTO work_items(id, conversation_id, kind, payload, status, result, created_at, updated_at) "
+                 "VALUES (?, ?, 'turn', ?, 'done', ?, ?, ?)",
+                 (wid, convo, json.dumps({"text": "hi", "source": "slack"}), json.dumps({"text": "ok"}),
+                  at(hhmm, day), at(hhmm, day)))
+    return conn.execute("SELECT * FROM work_items WHERE id = ?", (wid,)).fetchone()
+
+
+def label(conn, row, kind, project=None, task=None):
+    from agent.core.task_record import Label, apply_label
+    return apply_label(conn, row, Label(kind, task, "t" if kind == "new" else None, "done", True, project),
+                       source="slack", requester="ann", follows=None)
+
+
+def test_a_run_recorded_before_its_request_is_labeled_counts_to_the_labeled_task(conn):
+    from agent.core.kpis import Usage, tokens_by_project
+
+    first, follow_up, chat = turn(conn, "W1", "V-1", "10:00"), turn(conn, "W2", "V-1", "11:00"), \
+        turn(conn, "W3", "V-1", "12:00")
+    run(conn, "W1", None, "10:00", (1, 1, 1, 1))       # each run ends before the labeler gets to its request,
+    run(conn, "W2", None, "11:00", (2, 2, 2, 2))       # on a conversation bound to no project
+    run(conn, "W3", None, "12:00", (4, 4, 4, 4))
+    assert tokens_by_project(conn, since=SINCE, until=UNTIL) == {"general": Usage(3, 7, 7, 7, 7)}
+    tk = label(conn, first, "new", "alpha")
+    label(conn, follow_up, "same", None, tk)           # a follow-up with no project of its own: its task's
+    label(conn, chat, "chat")                          # chat has no task: the run's own project, here general
+    assert tokens_by_project(conn, since=SINCE, until=UNTIL) == {"alpha": Usage(2, 3, 3, 3, 3),
+                                                                 "general": Usage(1, 4, 4, 4, 4)}
+
+
+def test_a_runs_bound_project_is_the_fallback_and_the_labeled_task_wins(conn):
+    from agent.core.kpis import tokens_by_project
+
+    run(conn, "R1", "beta", "10:00", (1, 1, 1, 1))     # no request label (a run that isn't a labeled turn)
+    run(conn, "W1", "beta", "11:00", (2, 2, 2, 2))
+    label(conn, turn(conn, "W1", "V-1", "11:00"), "new", "alpha")
+    assert {p: u.runs for p, u in tokens_by_project(conn, since=SINCE, until=UNTIL).items()} == {"alpha": 1, "beta": 1}
+
+
+def test_daily_tokens_by_local_day_and_project(conn):
+    from agent.core.kpis import Usage, daily_tokens, format_daily_tokens
+
+    run(conn, "R1", "alpha", "02:00", (1, 10, 0, 0), day=13)   # 10:00 on the 13th in Singapore
+    run(conn, "R2", None, "17:00", (2, 20, 0, 0), day=12)      # 01:00 on the 13th in Singapore
+    run(conn, "R3", "beta", "02:00", (3, 30, 0, 0), day=7)     # the 7th: the first of the 7 days
+    run(conn, "R4", "beta", "02:00", (4, 40, 0, 0), day=6)     # outside
+    d = daily_tokens(conn, datetime(2026, 11, 13, 4, 0, tzinfo=UTC), "Asia/Singapore")
+    assert [x["date"] for x in d["days"]] == [f"2026-11-{n:02d}" for n in range(7, 14)]
+    assert d["projects"] == ["beta", "alpha", "general"]
+    assert d["days"][-1]["by_project"] == {"alpha": Usage(1, 1, 10, 0, 0), "general": Usage(1, 2, 20, 0, 0)}
+    assert d["days"][0]["by_project"] == {"beta": Usage(1, 3, 30, 0, 0)}
+    assert all(not x["by_project"] for x in d["days"][1:-1])
+    lines = format_daily_tokens(d).splitlines()
+    assert lines[0] == "Tokens per day, last 7 days:" and lines[1] == "  2026-11-07: 3 in · 30 out · 0 cache read · 0 cache write"
+    assert "  2026-11-08: none" in lines and lines[-1] == "    general: 2 in · 20 out · 0 cache read · 0 cache write"
+
+
+def test_format_tokens_billions():
+    from agent.core.kpis import format_tokens
+    assert format_tokens(6_580_000_000) == "6.58B" and format_tokens(2_000_000_000) == "2B"

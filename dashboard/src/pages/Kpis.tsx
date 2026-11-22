@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { Fragment, type KeyboardEvent, useState } from "react"
 import { Link } from "react-router"
-import { type AppUsage, type TaskRecord, type Usage, type UsageWindow, type UsageWindowName, useKpis, useMe } from "@/api"
+import { type AppUsage, type DailyTokens, type TaskRecord, type Usage, type UsageWindow, type UsageWindowName, useKpis, useMe } from "@/api"
 import { StackedColumns } from "@/components/charts"
 import { Page } from "@/components/Page"
 import { QueryState } from "@/components/QueryState"
@@ -222,7 +222,8 @@ function TokenUsage({ usage }: { usage: Record<UsageWindowName, UsageWindow> }) 
         <div className="space-y-1.5">
           <CardTitle className="text-sm font-medium">Tokens by project</CardTitle>
           <CardDescription className="text-xs">
-            Every run, counted to its conversation's project; general is work on none.
+            Every run, counted to the project of the task its request belongs to (else its conversation's);
+            general is work on none.
           </CardDescription>
         </div>
         <Select value={chosen} onValueChange={(v) => setChosen(v as UsageWindowName)}>
@@ -245,6 +246,47 @@ function TokenUsage({ usage }: { usage: Record<UsageWindowName, UsageWindow> }) 
   )
 }
 
+type TokenMetric = "output_tokens" | "input_tokens" | "cache_read_tokens" | "cache_write_tokens"
+const METRICS: { key: TokenMetric; label: string }[] = [
+  { key: "output_tokens", label: "Output" }, { key: "input_tokens", label: "Input" },
+  { key: "cache_read_tokens", label: "Cache read" }, { key: "cache_write_tokens", label: "Cache write" }]
+
+function DailyTokenChart({ daily }: { daily: DailyTokens }) {
+  const [metric, setMetric] = useState<TokenMetric>("output_tokens")
+  const named = daily.projects.filter((p) => p !== GENERAL)
+  // eight series colors; the projects past them, and general, share the neutral one
+  const series = daily.projects.map((p) => {
+    const i = named.indexOf(p)
+    return { key: p, label: p, color: i >= 0 && i < 8 ? `var(--series-${i + 1})` : "var(--series-other)" }
+  })
+  const data = daily.days.map((d) => ({
+    date: d.date as unknown as number,
+    ...Object.fromEntries(daily.projects.map((p) => [p, d.by_project[p]?.[metric] ?? 0])),
+  }))
+  return (
+    <Card className="mt-6 shadow-none">
+      <CardHeader className="flex flex-row items-start justify-between gap-2">
+        <div className="space-y-1.5">
+          <CardTitle className="text-sm font-medium">Tokens per day by project</CardTitle>
+          <CardDescription className="text-xs">the last 7 days, counted as in Tokens by project</CardDescription>
+        </div>
+        <Select value={metric} onValueChange={(v) => setMetric(v as TokenMetric)}>
+          <SelectTrigger size="sm" className="w-36" aria-label="Token kind"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {METRICS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </CardHeader>
+      <CardContent>
+        {series.length === 0
+          ? <div className="py-10 text-center text-sm text-muted-foreground">No runs in the last 7 days.</div>
+          : <StackedColumns data={data} xKey="date" xFormat={(v) => dayLabel(v)} labelFormat={dayLabel}
+              yFormat={(v) => fmtTokens(v)} series={series} />}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function Kpis() {
   const [days, setDays] = useState(7)
   const kpis = useKpis(days)
@@ -261,7 +303,7 @@ export function Kpis() {
         </Select>
       }>
       <QueryState query={kpis} rows={6}>
-        {({ kpis: k, daily, tasks, usage }) => (
+        {({ kpis: k, daily, tasks, usage, daily_tokens }) => (
           <>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <TasksDialog tasks={tasks} days={days} count={k.tasks}
@@ -288,6 +330,7 @@ export function Kpis() {
             </Card>
 
             <TokenUsage usage={usage} />
+            <DailyTokenChart daily={daily_tokens} />
           </>
         )}
       </QueryState>

@@ -354,6 +354,10 @@ def test_kpi_view_serves_tokens_by_project_without_claude_cost(conn, queue):
                     "cache_write_tokens": 40}}
     assert today["total"]["input_tokens"] == 30 and view["kpis"]["tokens_by_project"] == today["by_project"]
     assert "cost" not in json.dumps(view["usage"]["today"]["by_project"]) + json.dumps(view["kpis"])
+    daily = view["daily_tokens"]
+    assert daily["projects"] == ["sample", "general"] and len(daily["days"]) == 7
+    assert daily["days"][-1] == {"date": "2026-11-13", "by_project": today["by_project"]}
+    json.dumps(daily)
 
 
 def test_overview_counts_local_day(conn, queue):

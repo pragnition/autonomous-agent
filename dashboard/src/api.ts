@@ -163,6 +163,8 @@ export type AppUsage = Usage & { cost_usd: number }
 export type UsageWindow = { since: string; by_project: Record<string, Usage>; total: Usage
   apps_by_upstream: Record<string, AppUsage> }
 export type UsageWindowName = "today" | "7d" | "month"
+// Tokens per local day by project (src/agent/core/kpis.py daily_tokens): projects most output first, general last
+export type DailyTokens = { projects: string[]; days: { date: string; by_project: Record<string, Usage> }[] }
 
 export type KpiView = {
   kpis: {
@@ -174,6 +176,7 @@ export type KpiView = {
   daily: { date: string; slack: number; linear: number; schedule: number }[]
   tasks: TaskRecord[]
   usage: Record<UsageWindowName, UsageWindow>
+  daily_tokens: DailyTokens
 }
 
 export type EventSource = "slack" | "linear" | "dashboard" | "command line" | "agent" | "other"
