@@ -1,0 +1,1 @@
+{"mcpServers": {"echo": {"command": "python3", "args": ["/var/agent/rcp-spike/mcp_echo.py"]}}}
