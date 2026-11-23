@@ -3,7 +3,8 @@
 # agent-services), and back. Run from the live checkout, as the person who runs the stack (sudo is needed once, for
 # the data folders' owner):
 #
-#   deploy/cutover.sh check      .env for compose, the images, and what the switch will change; changes nothing live
+#   deploy/cutover.sh env        .env for compose (the Docker socket's group, the data folder's path); `just up` runs it
+#   deploy/cutover.sh check      env, the images, and what the switch will change; changes nothing live
 #   deploy/cutover.sh switch     pause, let running turns finish (CUTOVER_IDLE_S, default 600 s) or stop them, back up
 #                                the database, hand the data folders to the agent user, start agent-control and
 #                                agent-services in place of agent-core and agent-runner, resume, doctor, smoke
@@ -19,7 +20,7 @@ POLL_S="${CUTOVER_POLL_S:-15}"
 say() { printf '%s\n' "$*"; }
 fail() { printf 'cutover: %s\n' "$*" >&2; exit 1; }
 
-# DOCKER_GID and AGENTD_DATA_HOST in .env, keeping whatever else is there
+# One key in .env, keeping whatever else is there
 set_env() {
   local key=$1 value=$2
   touch .env
@@ -28,11 +29,15 @@ set_env() {
   mv .env.tmp .env
 }
 
+write_env() {
+  set_env DOCKER_GID "$(stat -c %g /var/run/docker.sock)"
+  set_env AGENTD_DATA_HOST "$(realpath "$DATA")"
+}
+
 check() {
   [ -f "$DATA/secrets/core.env" ] || fail "$DATA/secrets/core.env is missing"
   [ -f "$DATA/secrets/agent.env" ] || fail "$DATA/secrets/agent.env is missing"
-  set_env DOCKER_GID "$(stat -c %g /var/run/docker.sock)"
-  set_env AGENTD_DATA_HOST "$(realpath "$DATA")"
+  write_env
   docker compose config -q || fail "docker compose config failed"
   if docker run --rm --entrypoint sh autonomous-agent-agent -c 'command -v agentd agent-holder >/dev/null && test -f /app/web/index.html'; then
     say "ok    image: autonomous-agent-agent has agentd, agent-holder and the web app"
@@ -113,8 +118,9 @@ rollback() {
 }
 
 case "${1:-}" in
+  env) write_env ;;
   check) check ;;
   switch) switch ;;
   rollback) rollback ;;
-  *) fail "usage: deploy/cutover.sh check|switch|rollback" ;;
+  *) fail "usage: deploy/cutover.sh env|check|switch|rollback" ;;
 esac

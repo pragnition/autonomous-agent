@@ -16,6 +16,7 @@ rust-test *args:
 
 up:
     -just account-names
+    deploy/cutover.sh env
     docker compose up -d --build
 
 # Stop and remove the stack (data stays under ./data)

@@ -69,3 +69,9 @@ def test_rollback_steps_in_order(tmp_path):
     assert order == sorted(order), calls
     assert "SUPERVISE_CONTROL=\n" in env and env.count("SUPERVISE_CONTROL=") == 1  # the supervisors watch core again
     assert "DOCKER_GID=116\n" in env
+
+
+def test_env_writes_only_the_compose_settings(tmp_path):
+    calls, env = run(tmp_path, "env")
+    assert env == f"DOCKER_GID=116\nAGENTD_DATA_HOST={tmp_path / 'live' / 'data'}\n"
+    assert not any(c.startswith(("docker", "sudo")) for c in calls)
