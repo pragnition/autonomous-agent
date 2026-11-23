@@ -300,7 +300,7 @@ pub fn load(path: &Path) -> Result<Config, Vec<String>> {
         if !role.is_some_and(|r| PERSON_ROLES.contains(&r)) {
             c.problems.push(format!("{pw}: 'role' must be one of {}", PERSON_ROLES.join(", ")));
         }
-        let mut text = |field: &str, c: &mut Checker| match p.get(field) {
+        let text = |field: &str, c: &mut Checker| match p.get(field) {
             None => String::new(),
             Some(Value::String(s)) => s.clone(),
             Some(_) => {
