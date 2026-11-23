@@ -173,6 +173,10 @@ def test_agent_image():
         assert needle in target, needle
 
 
+def test_agent_image_serves_the_web_app():
+    assert "COPY --from=dashboard /dashboard/dist /app/web" in agent_target()  # agentd serves the dashboard
+
+
 def test_agent_service(compose):
     agent = compose["services"]["agent"]
     assert agent["build"]["target"] == "agent" and agent["restart"] == "unless-stopped"

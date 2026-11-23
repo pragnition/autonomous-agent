@@ -1,4 +1,4 @@
-"""python -m agent core|runner|kpis|schedules|supervisor|doctor|stop|resume"""
+"""python -m agent core|runner|services|kpis|schedules|supervisor|doctor|stop|resume"""
 
 from __future__ import annotations
 
@@ -17,10 +17,14 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["runner"]:  # the agent container's runner
         from agent.runner.main import main as run_runner
         return run_runner(argv[1:])
+    if argv[:1] == ["services"]:  # the agent's own long-running services, beside agentd's conversation containers
+        from agent.runner import main as runner_main
+        return runner_main.services_main(argv[1:])
     parser = argparse.ArgumentParser(prog="agent", description="Autonomous engineering agent")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("core", help="run the core service: Slack, the work queue and pollers")
     sub.add_parser("runner", help="run in the agent container: the runner that works on core's queue")
+    sub.add_parser("services", help="keep the agent's own long-running services going")
     sub.add_parser("kpis", help="show the KPIs: tasks, time per task, finished, shipped")
     sub.add_parser("schedules", help="check the schedules file and show when each schedule runs next")
     sub.add_parser("supervisor", help="run the health watchdog")

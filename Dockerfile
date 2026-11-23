@@ -98,6 +98,8 @@ ENV SHELL=/bin/bash AZURE_CONFIG_DIR=/data/cli/azure DOCKER_HOST=tcp://127.0.0.1
 # there survives a rebuild; `npm -g` goes to ~/.local.
 ENV NPM_CONFIG_PREFIX=/home/agent/.local PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"
 COPY --from=rust-build /out/agent-holder /out/agentd /usr/local/bin/
+# The dashboard's web app: agentd (agent-control runs this image) serves it
+COPY --from=dashboard /dashboard/dist /app/web
 USER agent
 CMD ["python", "-m", "agent", "runner"]
 
