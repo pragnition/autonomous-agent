@@ -17,6 +17,12 @@ fn need(v: &Value, key: &str) -> Option<Value> {
     v.get(key).cloned()
 }
 
+/// A text's lines as Python's str.splitlines() splits them (a \r\n pair leaves an empty piece between them, which
+/// callers that look for the first non-blank line don't see).
+pub fn py_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.split(['\n', '\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\u{85}', '\u{2028}', '\u{2029}'])
+}
+
 pub fn truthy(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Null) => false,

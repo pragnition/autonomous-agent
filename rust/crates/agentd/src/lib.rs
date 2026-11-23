@@ -6,6 +6,7 @@ pub mod azure_rates;
 pub mod cli_login;
 pub mod config;
 pub mod containers;
+pub mod dashboard;
 pub mod conversations;
 pub mod db;
 pub mod dispatch;
