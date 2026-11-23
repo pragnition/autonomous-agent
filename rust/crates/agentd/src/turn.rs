@@ -287,9 +287,14 @@ impl<E: Engine + 'static, P: Probe + 'static> TurnRunner<E, P> {
                                            accepting: tokio::sync::Mutex::new(false), stopped: AtomicBool::new(false),
                                            stop: Notify::new() });
                 self.live.lock().unwrap_or_else(|e| e.into_inner()).insert(work_item.to_string(), live.clone());
+                let conversation = spec.conversation.clone();
                 let mut turn = Turn::new(self, spec, progress, host, live, started_at, forwarded);
                 let result = turn.run().await.unwrap_or_else(failed);
                 self.live.lock().unwrap_or_else(|e| e.into_inner()).remove(work_item);
+                // the container's idle and 24-hour stops count from here
+                if let Err(e) = self.containers.turn_ended(&conversation, Utc::now()).await {
+                    tracing::warn!(work_item, "recording the end of the turn: {e:#}");
+                }
                 result
             }
             Err(e) => failed(e),

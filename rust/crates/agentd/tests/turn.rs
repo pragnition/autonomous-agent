@@ -335,6 +335,10 @@ async fn stalled_after_idle_s() {
     let runner = rig.runner(&[vec![init(), read_prompt(), json!({"wait_interrupt": true}), failed(None)]], |_| {});
     let r = runner.run(TurnSpec { idle_s: 1, ..rig.spec("W-1") }, rig.host.clone()).await;
     assert_eq!((r.outcome.as_str(), r.error.as_deref()), ("stalled", Some("no progress for 1 s")));
+    let (last_turn, ended): (String, String) = rig.db.lock().query_row(
+        "SELECT c.last_turn_at, t.ended_at FROM agentd_containers c, agentd_turns t \
+         WHERE c.conversation_id = 'V-1' AND t.work_item_id = 'W-1'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(last_turn[..19], ended[..19], "the container's idle time counts from the end of the turn");
 }
 
 #[tokio::test(flavor = "multi_thread")]
