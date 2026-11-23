@@ -6,3 +6,5 @@ claude_proxy
 **/__pycache__
 dashboard/node_modules
 dashboard/dist
+rust/target
+rust/.cargo-home
