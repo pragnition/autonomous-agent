@@ -89,5 +89,8 @@ ENV NPM_CONFIG_PREFIX=/home/agent/.local PATH="/home/agent/.local/bin:/home/agen
 USER agent
 CMD ["python", "-m", "agent", "runner"]
 
+# The Rust control plane's build and test image (just rust-test)
+FROM rust:1.100-bookworm AS rust-dev
+
 FROM alpine:3.20 AS relay
 RUN apk add --no-cache socat

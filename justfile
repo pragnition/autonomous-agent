@@ -1,6 +1,7 @@
 set shell := ["bash", "-cu"]
 
 dev_image := "autonomous-agent-dev"
+rust_image := "autonomous-agent-rust-dev"
 
 # Run the test suite in the Python 3.12 dev image (the host needs only Docker)
 test *args:
@@ -8,6 +9,11 @@ test *args:
     docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/app -w /app {{dev_image}} pytest -q {{args}}
 
 # Build and start the stack
+# The Rust workspace's tests, in the rust-dev image; cargo's caches stay in rust/ (git-ignored)
+rust-test *args:
+    docker build -q --target rust-dev -t {{rust_image}} . >/dev/null
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e CARGO_HOME=/rust/.cargo-home -v "$PWD/rust":/rust -w /rust {{rust_image}} cargo test --workspace {{args}}
+
 up:
     -just account-names
     docker compose up -d --build
