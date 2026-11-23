@@ -8,6 +8,7 @@ pub mod handoff;
 pub mod persona;
 pub mod prepare;
 pub mod proxy;
+pub mod queue;
 pub mod records;
 pub mod scrub;
 pub mod tasks;

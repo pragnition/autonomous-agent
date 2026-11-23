@@ -865,7 +865,7 @@ fn request_id() -> String {
     format!("req_{}", &uuid4()[..8])
 }
 
-fn uuid4() -> String {
+pub fn uuid4() -> String {
     let mut b = [0u8; 16];
     std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("random bytes");
     b[6] = (b[6] & 0x0f) | 0x40;
