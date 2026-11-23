@@ -66,21 +66,24 @@ def test_core_gets_only_its_own_secrets(compose):
 
 
 def test_schedules_folder_is_shared(compose):
-    for name in ("core", "agent"):
+    for name in ("core", "agent", "control", "services"):
         assert "${AGENT_DATA:-./data}/schedules:/data/schedules" in volumes(compose, name), name
 
 
 def test_services_and_core_published_on_loopback_only(compose):
-    assert set(compose["services"]) == {"core", "supervisor", "supervisor-standby", "relay", "agent", "docker"}
-    assert "ports" not in compose["services"]["agent"] and "ports" not in compose["services"]["docker"]
-    assert compose["services"]["core"]["ports"] == ["127.0.0.1:18085:8085", "127.0.0.1:18086:8086"]
+    assert set(compose["services"]) == {"core", "supervisor", "supervisor-standby", "relay", "agent", "docker", "control",
+                                        "services"}
+    for name in ("agent", "docker", "services"):
+        assert "ports" not in compose["services"][name], name
+    for name in ("core", "control"):  # never both at once: core only in the rollback profile
+        assert compose["services"][name]["ports"] == ["127.0.0.1:18085:8085", "127.0.0.1:18086:8086"], name
     assert "ports" not in compose["services"]["supervisor"]
     assert "ports" not in compose["services"]["supervisor-standby"]
 
 
 def test_no_env_file_and_no_secrets_in_environment(compose):
     for name, svc in compose["services"].items():
-        if name == "agent":  # the agent's own keys are plain environment variables
+        if name in ("agent", "services"):  # the agent's own keys are plain environment variables
             assert svc["env_file"] == ["${AGENT_DATA:-./data}/secrets/agent.env"]
         else:
             assert "env_file" not in svc, name
@@ -88,10 +91,10 @@ def test_no_env_file_and_no_secrets_in_environment(compose):
         assert not any(re.search(r"TOKEN|SECRET|KEY|PASSWORD", k) for k in env), name
 
 
-def test_only_supervisors_mount_docker_socket(compose):
+def test_only_supervisors_and_the_control_plane_mount_docker_socket(compose):
     for name in compose["services"]:
         mounted = any("docker.sock" in v for v in volumes(compose, name))
-        assert mounted == name.startswith("supervisor"), name
+        assert mounted == (name.startswith("supervisor") or name == "control"), name
 
 
 def test_supervisors_watch_each_other(compose):
@@ -101,9 +104,9 @@ def test_supervisors_watch_each_other(compose):
     for me, peer, peer_name in ((primary, standby, "supervisor-standby"), (standby, primary, "supervisor")):
         assert me["environment"]["PEER_CONTAINER"] == peer["container_name"]
         assert me["environment"]["PEER_HEALTH"] == f"http://{peer_name}:8090/health"
-        assert me["environment"]["CORE_CONTAINER"] == compose["services"]["core"]["container_name"]
-        assert me["environment"]["RUNNER_CONTAINER"] == compose["services"]["agent"]["container_name"]
-        assert me["environment"]["RUNNER_HEALTH"] == "http://core:8080/health/runner"
+        assert me["environment"]["CONTROL_CONTAINER"] == compose["services"]["control"]["container_name"]
+        # empty in .env for a rollback: the supervisors then watch core and the runner again
+        assert me["environment"]["CONTROL_HEALTH"] == "${SUPERVISE_CONTROL-http://control:8080/health}"
         assert "${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro" in [str(v) for v in me["volumes"]]
 
 
@@ -196,7 +199,8 @@ def test_agent_service(compose):
 
 
 def test_core_has_a_fixed_address_for_the_meter(compose):
-    assert compose["services"]["core"]["networks"]["agentnet"]["ipv4_address"] == "172.30.0.10"
+    for name in ("core", "control"):
+        assert compose["services"][name]["networks"]["agentnet"]["ipv4_address"] == "172.30.0.10", name
 
 
 def test_agent_docker_daemon(compose):
@@ -207,7 +211,8 @@ def test_agent_docker_daemon(compose):
     assert docker["command"][0] == "dockerd"  # otherwise the image adds a 0.0.0.0:2375 listener of its own
     assert "--host=tcp://127.0.0.1:2375" in docker["command"] and not any("0.0.0.0" in c for c in docker["command"])
     assert "agentwork:/var/agent" in volumes(compose, "docker") and "agentdocker" in compose["volumes"]
-    assert compose["services"]["agent"]["depends_on"] == ["docker"]
+    for name in ("agent", "control", "services"):
+        assert compose["services"][name]["depends_on"] == ["docker"], name
 
 
 def test_agent_image_can_run_and_drive_apps():
@@ -228,6 +233,44 @@ def test_the_agents_home_and_browsers_live_on_the_volume():
                    "NPM_CONFIG_PREFIX=/home/agent/.local", 'PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"'):
         assert needle in target, needle
     assert "ln -s /var/agent/claude /home/agent/.claude" not in target  # the runner makes that link, in the volume
+
+
+def test_control_service(compose):
+    control = compose["services"]["control"]
+    assert control["build"]["target"] == "agent" and control["container_name"] == "agent-control"
+    assert control["command"] == ["agentd", "serve"] and control["init"] is True
+    # the agent user, with the Docker socket's group (written to .env by deploy/cutover.sh)
+    assert control["user"] == "1001" and control["group_add"] == ["${DOCKER_GID:?run deploy/cutover.sh check first}"]
+    assert control["environment"]["AGENTD_DATA_HOST"] == "${AGENTD_DATA_HOST:?run deploy/cutover.sh check first}"
+    vols = volumes(compose, "control")
+    for mount in ("/var/run/docker.sock:/var/run/docker.sock", "agentwork:/var/agent",
+                  "${AGENT_DATA:-./data}/db:/data/db", "${AGENT_DATA:-./data}/runs:/data/runs",
+                  "${AGENT_DATA:-./data}/tasks:/data/tasks", "${AGENT_DATA:-./data}/runner:/data/runner",
+                  "${AGENT_DATA:-./data}/schedules:/data/schedules", "${AGENT_DATA:-./data}/cli:/data/cli",
+                  "${AGENT_DATA:-./data}/config:/data/config"):
+        assert mount in vols, mount
+
+
+def test_control_gets_only_its_own_secrets(compose):
+    vols = volumes(compose, "control")
+    assert "${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro" in vols
+    assert "${AGENT_DATA:-./data}/secrets/agent.env:/data/secrets/agent.env:ro" in vols  # handed to the sessions only
+    assert "${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro" in vols
+    assert not any("supervisor.env" in v for v in vols)
+
+
+def test_services_service(compose):
+    services = compose["services"]["services"]
+    assert services["build"]["target"] == "agent" and services["container_name"] == "agent-services"
+    assert services["network_mode"] == "service:docker" and services["init"] is True
+    assert services["stop_grace_period"] == "30s"  # time to stop the agent's services (10 s each at most)
+    assert services["command"][:4] == ["python", "-m", "agent", "services"]
+    assert "agentwork:/var/agent" in volumes(compose, "services")
+
+
+def test_python_services_only_in_the_rollback_profile(compose):
+    for name, svc in compose["services"].items():
+        assert svc.get("profiles") == (["python"] if name in ("core", "agent") else None), name
 
 
 def test_core_publishes_public_port(compose):
