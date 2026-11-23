@@ -12,7 +12,7 @@ test *args:
 # The Rust workspace's tests, in the rust-dev image; cargo's caches stay in rust/ (git-ignored)
 rust-test *args:
     docker build -q --target rust-dev -t {{rust_image}} . >/dev/null
-    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e CARGO_HOME=/rust/.cargo-home -v "$PWD/rust":/rust -w /rust {{rust_image}} cargo test --workspace {{args}}
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e CARGO_HOME=/repo/rust/.cargo-home -v "$PWD":/repo -w /repo/rust {{rust_image}} cargo test --workspace {{args}}
 
 up:
     -just account-names

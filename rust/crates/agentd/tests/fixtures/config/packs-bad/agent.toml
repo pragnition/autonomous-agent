@@ -1,0 +1,4 @@
+name = "jensen"
+[people.sam]
+slack = "U1"
+linear = "sam@example.com"

@@ -1,0 +1,177 @@
+{
+ "../../../examples/config/agent.toml": {
+  "config": {
+   "agent": {
+    "uid": 1001
+   },
+   "cli": {
+    "azure": {
+     "command": "az",
+     "env": {
+      "AZURE_CONFIG_DIR": "/data/cli/azure",
+      "AZURE_CORE_COLLECT_TELEMETRY": "false",
+      "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
+      "AZURE_CORE_OUTPUT": "json"
+     },
+     "login": [
+      "az",
+      "login",
+      "--use-device-code"
+     ],
+     "login_check": [
+      "az",
+      "account",
+      "show"
+     ]
+    }
+   },
+   "dashboard": {
+    "agent_origins": [
+     "agent-core",
+     "agent-sandbox"
+    ],
+    "port": 8086,
+    "trusted_peers": [
+     "172.30.0.1"
+    ]
+   },
+   "github": "jensen",
+   "limits": {
+    "idle_minutes": 30,
+    "max_concurrent_sessions": 10,
+    "max_tasks_per_day": 20,
+    "schedule_hours": 6
+   },
+   "linear": {
+    "public_url": ""
+   },
+   "llm_meter": {
+    "daily_usd": 10.0,
+    "monthly_usd": 100.0,
+    "port": 8087,
+    "prices": {
+     "default": {
+      "addon": 0.0,
+      "cache_write": null,
+      "cached_input": 0.5,
+      "input": 5.0,
+      "output": 30.0
+     },
+     "gpt-5.6-terra": {
+      "addon": 0.0,
+      "cache_write": null,
+      "cached_input": 0.2,
+      "input": 2.0,
+      "output": 12.0
+     }
+    },
+    "upstreams": {}
+   },
+   "mcp": {
+    "linear": {
+     "headers": {
+      "Authorization": "Bearer ${LINEAR_APP_TOKEN}"
+     },
+     "type": "http",
+     "url": "https://mcp.linear.app/mcp"
+    }
+   },
+   "models": {
+    "allowed": [
+     "claude-opus-4-6"
+    ],
+    "default": "claude-opus-5-5",
+    "hard": "claude-fable-5-1"
+   },
+   "name": "jensen",
+   "observability": {
+    "digest_channel": "",
+    "digest_time": "09:00"
+   },
+   "people": {
+    "alice": {
+     "github": "alice-example",
+     "key": "alice",
+     "linear": "alice@example.com",
+     "role": "member",
+     "slack": "U00000002",
+     "tailscale": ""
+    },
+    "sam": {
+     "github": "sam-example",
+     "key": "sam",
+     "linear": "sam@example.com",
+     "role": "admin",
+     "slack": "U00000001",
+     "tailscale": "sam@example.com"
+    }
+   },
+   "timezone": "Asia/Singapore"
+  }
+ },
+ "../../../examples/config/packs": {
+  "packs": [
+   "sample"
+  ]
+ },
+ "tests/fixtures/config/bad_fields.toml": {
+  "problems": [
+   "tests/fixtures/config/bad_fields.toml: 'name' is required and must be a non-empty string",
+   "tests/fixtures/config/bad_fields.toml: 'github' is required and must be a non-empty string",
+   "tests/fixtures/config/bad_fields.toml: 'timezone' is required and must be a non-empty string",
+   "tests/fixtures/config/bad_fields.toml [people.sam]: 'role' must be one of member, admin",
+   "tests/fixtures/config/bad_fields.toml [people.sam]: 'github' must be a string",
+   "tests/fixtures/config/bad_fields.toml [people.sam]: 'tailscale' must be a string",
+   "tests/fixtures/config/bad_fields.toml [people.sam]: 'slack' is required and must be a non-empty string",
+   "tests/fixtures/config/bad_fields.toml [limits]: 'max_concurrent_sessions' must be a non-negative integer",
+   "tests/fixtures/config/bad_fields.toml [limits]: 'schedule_hours' must be a non-negative integer",
+   "tests/fixtures/config/bad_fields.toml [limits]: 'idle_minutes' must be at least 1",
+   "tests/fixtures/config/bad_fields.toml [claude.models]: 'default' is required and must be a non-empty string",
+   "tests/fixtures/config/bad_fields.toml [claude.models]: 'allowed' must list model ids like \"claude-opus-4-6\"",
+   "tests/fixtures/config/bad_fields.toml [agent]: 'uid' must be a positive integer (the agent container's uid)",
+   "tests/fixtures/config/bad_fields.toml [observability]: 'digest_channel' must be a string",
+   "tests/fixtures/config/bad_fields.toml [observability]: 'digest_time' must be HH:MM (24-hour), got '9am'",
+   "tests/fixtures/config/bad_fields.toml [cli.azure]: 'env' must be a table of strings",
+   "tests/fixtures/config/bad_fields.toml [cli.azure]: 'command' is required and must be a non-empty string",
+   "tests/fixtures/config/bad_fields.toml [cli.azure]: 'login' must be a list of strings",
+   "tests/fixtures/config/bad_fields.toml [linear]: 'public_url' must be an https:// URL",
+   "tests/fixtures/config/bad_fields.toml [mcp.linear]: 'type' must be \"http\" (streamable HTTP), got 'sse'",
+   "tests/fixtures/config/bad_fields.toml [mcp.linear]: 'url' must be an https:// URL",
+   "tests/fixtures/config/bad_fields.toml [mcp.linear]: 'headers' must be a table of strings",
+   "tests/fixtures/config/bad_fields.toml [dashboard]: 'port' must be a non-negative integer",
+   "tests/fixtures/config/bad_fields.toml [dashboard]: 'trusted_peers' must be a list of strings",
+   "tests/fixtures/config/bad_fields.toml [llm_meter].upstreams.Bad_Name: the name goes in a URL path; use lowercase letters, digits and '-'",
+   "tests/fixtures/config/bad_fields.toml [llm_meter].upstreams.Bad_Name: 'base_url' must be an https:// URL",
+   "tests/fixtures/config/bad_fields.toml [llm_meter].upstreams.Bad_Name: 'header' must be \"api-key\" or \"Authorization\"",
+   "tests/fixtures/config/bad_fields.toml [llm_meter].upstreams.Bad_Name: 'key' is required and must be a non-empty string",
+   "tests/fixtures/config/bad_fields.toml [llm_meter].prices: 'gpt' must be [input, cached input, output] in USD per million tokens",
+   "tests/fixtures/config/bad_fields.toml [llm_meter].prices: add a 'default' price for models not listed, so every call is counted",
+   "tests/fixtures/config/bad_fields.toml [llm_meter]: 'daily_usd' must be a non-negative number (US dollars)"
+  ]
+ },
+ "tests/fixtures/config/invalid.toml": {
+  "problems": [
+   "tests/fixtures/config/invalid.toml: invalid TOML (Expected ']' at the end of a table declaration (at line 2, column 8))"
+  ]
+ },
+ "tests/fixtures/config/missing.toml": {
+  "problems": [
+   "tests/fixtures/config/missing.toml: file not found"
+  ]
+ },
+ "tests/fixtures/config/no_people.toml": {
+  "problems": [
+   "tests/fixtures/config/no_people.toml: at least one [people.<key>] entry is required"
+  ]
+ },
+ "tests/fixtures/config/packs-bad/packs": {
+  "problems": [
+   "tests/fixtures/config/packs-bad/packs/bad/project.toml [project]: 'slack_channel' is required and must be a non-empty string",
+   "tests/fixtures/config/packs-bad/packs/bad/project.toml [project]: 'linear_team' is required and must be a non-empty string",
+   "tests/fixtures/config/packs-bad/packs/bad/project.toml [secrets]: GITHUB_READ_TOKEN is the stack's own credential and cannot be given to a pack",
+   "tests/fixtures/config/packs-bad/packs/bad/project.toml [secrets]: SLACK_BOT_TOKEN is the stack's own credential and cannot be given to a pack",
+   "tests/fixtures/config/packs-bad/packs/bad/project.toml [project]: owner 'nobody' is not in agent.toml [people]",
+   "tests/fixtures/config/packs-bad/packs/bad/plugin: missing .claude-plugin/plugin.json"
+  ]
+ }
+}
