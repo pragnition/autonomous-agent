@@ -40,7 +40,7 @@ def test_core_python_pipes_file_and_raises_on_error(tmp_path):
     assert args == ["docker", "exec", "-i", "agent-control", "python", "-", "--since", "x"]
     assert kwargs["input"] == "print('hi')\n"
 
-    # A bare name resolves relative to src/agent/watch, where core_collect.py/core_ask.py actually live.
+    # A bare name resolves relative to src/agent/watch, where core_collect.py actually lives.
     calls2, run2 = _fake_run([_cp()])
     host2 = Host(run=run2, live=tmp_path)
     host2.core_python("state.py", [])

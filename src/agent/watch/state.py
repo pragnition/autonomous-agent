@@ -70,7 +70,7 @@ _PROPOSAL_CHANGE_MAX = 140
 _PROPOSAL_CREDIT_MAX = 60
 _LEARNED = "learned"
 
-# improve-jensen's own traffic: the turns it queues into Jensen (`core_ask.py` marks them with this source) and
+# improve-jensen's own traffic: the turns it queues into Jensen (`scripts/ask_jensen.py` marks them with this source) and
 # anything in the fresh `V-review-*` conversations it opens. Kept in the metrics and shown in the digest, but
 # never counted as evidence about Jensen -- improve-jensen must not grade its own reviews and live checks as
 # Jensen's work.

@@ -6,7 +6,7 @@ import pytest
 
 from agent import db
 from agent.core.sessions import WorkQueue
-from agent.watch import core_ask, core_collect
+from agent.watch import core_collect
 
 T0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=UTC)
 FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -113,42 +113,3 @@ def test_collect_window_is_half_open(conn):
     ids = {item["id"] for item in core_collect.collect(conn, since, until)["items"]}
     assert on_until in ids
     assert on_since not in ids
-
-
-# -- core_ask --
-
-
-def test_enqueue_into_existing_and_new_conversation(conn):
-    now = db.utcnow()
-    conn.execute("INSERT INTO conversations(id, channel, thread_ts, project, is_primary, created_at, "
-                 "last_active_at) VALUES ('V-abc', 'C1', '1.0', NULL, 1, ?, ?)", (now, now))
-    payloads = FakePayloads()
-
-    item_id = core_ask.enqueue_turn(conn, payloads, "V-abc", "hello")
-    item = WorkQueue(conn).get(item_id)
-    assert item.conversation_id == "V-abc"
-    assert item.payload == {"text": "hello", "source": "improve-jensen", "origin": "improve-jensen review"}
-    # payloads.turn(convo, text, actor, *, unattended) — queued as an unattended turn, with no actor.
-    _, call_text, call_actor, call_unattended = payloads.calls[-1]
-    assert call_text == "hello" and call_actor is None and call_unattended is True
-
-    new_item_id = core_ask.enqueue_turn(conn, payloads, None, "hi")
-    new_item = WorkQueue(conn).get(new_item_id)
-    assert new_item.conversation_id.startswith("V-review-")
-    row = conn.execute("SELECT channel FROM conversations WHERE id = ?", (new_item.conversation_id,)).fetchone()
-    assert row["channel"] is None
-
-    with pytest.raises(KeyError):
-        core_ask.enqueue_turn(conn, payloads, "V-missing", "x")
-
-
-def test_enqueue_rolls_back_new_conversation_when_turn_fails(conn):
-    class FailingPayloads:
-        def turn(self, convo, text, actor, *, unattended=False):
-            raise RuntimeError("boom")
-
-    with pytest.raises(RuntimeError, match="boom"):
-        core_ask.enqueue_turn(conn, FailingPayloads(), None, "hi")
-
-    rows = conn.execute("SELECT id FROM conversations WHERE id LIKE 'V-review-%'").fetchall()
-    assert rows == []  # no orphan conversation left behind by the failed turn
