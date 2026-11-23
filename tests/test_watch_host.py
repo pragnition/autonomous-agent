@@ -37,7 +37,7 @@ def test_core_python_pipes_file_and_raises_on_error(tmp_path):
 
     assert out == "ok\n"
     args, kwargs = calls[0]
-    assert args == ["docker", "exec", "-i", "agent-core", "python", "-", "--since", "x"]
+    assert args == ["docker", "exec", "-i", "agent-control", "python", "-", "--since", "x"]
     assert kwargs["input"] == "print('hi')\n"
 
     # A bare name resolves relative to src/agent/watch, where core_collect.py/core_ask.py actually live.
@@ -67,7 +67,7 @@ def test_core_and_runner_python_pass_a_timeout_only_when_given(tmp_path):
     host.runner_python(mod, [])
 
     assert [kwargs.get("timeout") for _, kwargs in calls[:2]] == [120, 120]
-    assert calls[1][0][:4] == ["docker", "exec", "-i", "agent-runner"]
+    assert calls[1][0][:4] == ["docker", "exec", "-i", "agent-control"]
     # No timeout asked for: the call is exactly what it was before the parameter existed.
     assert all("timeout" not in kwargs for _, kwargs in calls[2:])
 
@@ -129,8 +129,8 @@ def test_transcripts_skips_missing(tmp_path):
     assert set(result) == {"W-ok"}
     assert result["W-ok"].read_bytes() == b"line1\n"
     assert not (dest / "W-missing.jsonl").exists()
-    assert calls[0][0] == ["docker", "exec", "agent-runner", "cat", "/var/agent/transcripts/W-ok.jsonl"]
-    assert calls[1][0] == ["docker", "exec", "agent-runner", "cat", "/var/agent/transcripts/W-missing.jsonl"]
+    assert calls[0][0] == ["docker", "exec", "agent-control", "cat", "/var/agent/transcripts/W-ok.jsonl"]
+    assert calls[1][0] == ["docker", "exec", "agent-control", "cat", "/var/agent/transcripts/W-missing.jsonl"]
     # Captured as bytes, never decoded by `run`'s own kwargs.
     assert "text" not in calls[0][1]
 
@@ -268,7 +268,7 @@ def test_secret_values_reads_an_unreadable_runner_token_as_its_owner(tmp_path, m
     values = host.secret_values()
 
     assert {"agent-token-0001", "product-secret-0002", "runner-token-value-0003"} <= set(values)
-    assert calls[0][0] == ["docker", "exec", "agent-runner", "cat", "/run/agent/runner-token"]
+    assert calls[0][0] == ["docker", "exec", "agent-control", "cat", "/run/agent/runner-token"]
 
 
 def test_secret_values_never_raises_when_a_source_cannot_be_read(tmp_path, monkeypatch, capsys):

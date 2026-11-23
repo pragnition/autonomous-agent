@@ -26,8 +26,10 @@ from agent.watch.state import FMT
 # Where core_collect.py / core_ask.py actually live, so a caller can hand core_python() a bare file name.
 _WATCH_DIR = Path(__file__).parent
 
-CORE_CONTAINER = "agent-core"
-RUNNER_CONTAINER = "agent-runner"
+# agentd's container holds what core and the runner did: the database at /data/db, the work volume at /var/agent,
+# and the image's Python with the `agent` package for the helpers piped in here.
+CORE_CONTAINER = "agent-control"
+RUNNER_CONTAINER = "agent-control"
 
 # docker exec's own complaints about the container, as opposed to the command inside it failing (a missing
 # transcript file): seen verbatim in its stderr, lowercased for a case-insensitive match.

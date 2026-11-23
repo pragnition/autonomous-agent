@@ -1,6 +1,6 @@
 """`just deploy`: fetch `origin/main` into the live checkout, work out which Compose services the changed paths
-touch, rebuild only those, swap `agent` gracefully (pause, swap, resume), and check the stack is actually
-healthy live before calling the deploy done.
+touch, rebuild only those (a change to the stack's definition swapped gracefully: pause, swap, resume), and check the
+stack is actually healthy live before calling the deploy done.
 
 `services_for` maps changed paths to service names (the rules in `_services_for_one`). `deploy` runs the whole
 pipeline under a host-wide `fcntl.flock` on `<state>/deploy.lock`, so two jobs never deploy at once; `check` is
@@ -46,11 +46,13 @@ fast-forwards and logs `"ok"` -- `HEAD` and `target` stay level either way.
 
 The rebuild itself is two steps, not one: `docker compose build <services>` first (builds images while Jensen keeps
 working, touches no running container), then `docker compose up -d --no-build <services>` to recreate containers.
-When `agent` (or `*`) is among them, that swap is graceful: core's queue is paused (only if nobody had paused it on
-purpose), a running turn gets up to `wait_idle_s` to finish, the containers are swapped, and core resumes -- in a
-`finally`, retried while core comes back, so a deploy never leaves Jensen paused. A turn still running when its
-container goes is re-queued and picks its session up again once core resumes. Every Compose step's exit code is
-checked; a non-zero one is `check_failed: compose <step> exited N`, never silently treated as `ok`.
+Turns run in the conversations' own containers, so recreating agent-control or agent-services interrupts none of
+them. When `*` (a `compose.yaml` change) is among them, the network container the conversations share may be
+recreated, so that swap is graceful: the queue is paused (only if nobody had paused it on purpose), a running turn
+gets up to `wait_idle_s` to finish, the stack is swapped, the conversations' containers are restarted onto the new
+network if it changed, and the control plane resumes -- in a `finally`, retried while it comes back, so a deploy
+never leaves Jensen paused. Every Compose step's exit code is checked; a non-zero one is `check_failed: compose
+<step> exited N`, never silently treated as `ok`.
 
 A rebuild is "pending" (exit 3, retried by the next hourly run) only when the host-wide lock is held by another
 deploy for the whole `wait_idle_s` wait: `state.set_deploy_pending(True)` and a `"pending"` log record are both
@@ -76,33 +78,33 @@ from agent.watch.state import FMT, State
 
 # -- services_for --
 
-_RUNNER_PREFIX = "src/agent/runner/"
 _SUPERVISOR_PATH = "src/agent/supervisor.py"
-_CORE_PREFIXES = ("src/agent/core/", "src/agent/dashboard/", "src/agent/defaults/", "src/agent/plugins/",
-                   "src/agent/connectors/", "dashboard/")
-_CORE_EXTRA_PATHS = {"scripts/smoke.py"}
-_NOTHING_PREFIXES = ("src/agent/watch/", "docs/", "tests/", ".github/", "deploy/", "examples/", "scripts/")
+# Used only from the agent image, which agent-control (agentd, the dashboard's web app, the defaults and plugins it
+# hands the sessions, the Python it keeps for a rollback) and agent-services (the agent's own services) both run
+_AGENT_IMAGE_PREFIXES = ("src/agent/runner/", "src/agent/core/", "src/agent/dashboard/", "src/agent/defaults/",
+                         "src/agent/plugins/", "src/agent/connectors/", "rust/", "dashboard/")
+_NOTHING_PREFIXES = ("src/agent/watch/", "docs/", "tests/", ".github/", "deploy/", "examples/", "scripts/", "spike/")
 _NOTHING_EXTRA_PATHS = {"README.md", "justfile"}
 _DOCKERFILE_PATH = "Dockerfile"
 _PYPROJECT_PATH = "pyproject.toml"
 _COMPOSE_PATH = "compose.yaml"
 
-# core/agent/supervisor/supervisor-standby are all built from the same Dockerfile's Python base; relay has its
-# own stage in the same Dockerfile (see compose.yaml's comment on the `relay` service), so a Dockerfile change
-# touches it too, but a pyproject.toml change (Python dependencies) does not -- relay's stage never installs them.
-_SHARED_SERVICES = frozenset({"core", "agent", "supervisor", "supervisor-standby"})
-_DOCKERFILE_SERVICES = _SHARED_SERVICES | {"relay"}
+_AGENT_IMAGE_SERVICES = frozenset({"control", "services"})
 _SUPERVISOR_SERVICES = frozenset({"supervisor", "supervisor-standby"})
+# the Python base: the agent image and the supervisors; relay has its own Dockerfile stage
+_SHARED_SERVICES = _AGENT_IMAGE_SERVICES | _SUPERVISOR_SERVICES
+_DOCKERFILE_SERVICES = _SHARED_SERVICES | {"relay"}
 
 # Compose service name -> the container Compose gives it, for `check` and the health/smoke probes.
 CONTAINER_NAMES = {
-    "core": "agent-core",
-    "agent": "agent-runner",
+    "control": "agent-control",
+    "services": "agent-services",
     "supervisor": "agent-supervisor",
     "supervisor-standby": "agent-supervisor-standby",
     "relay": "agent-relay",
     "docker": "agent-docker",
 }
+NETWORK_CONTAINER = "agent-docker"  # the conversations' containers share its network
 
 _LOCK_POLL_S = 5
 _IDLE_POLL_S = 30
@@ -113,12 +115,10 @@ _CORE_DOWN_MIN_WAIT_S = 300
 
 
 def _services_for_one(path: str) -> frozenset[str]:
-    if path.startswith(_RUNNER_PREFIX):
-        return frozenset({"agent"})
     if path == _SUPERVISOR_PATH:
         return _SUPERVISOR_SERVICES
-    if path.startswith(_CORE_PREFIXES) or path in _CORE_EXTRA_PATHS:
-        return frozenset({"core"})
+    if path.startswith(_AGENT_IMAGE_PREFIXES):
+        return _AGENT_IMAGE_SERVICES
     if path == _COMPOSE_PATH:
         return frozenset({"*"})
     if path.startswith(_NOTHING_PREFIXES) or path in _NOTHING_EXTRA_PATHS:
@@ -127,7 +127,7 @@ def _services_for_one(path: str) -> frozenset[str]:
         return _DOCKERFILE_SERVICES
     if path.startswith("src/agent/") or path == _PYPROJECT_PATH:
         return _SHARED_SERVICES
-    return frozenset({"core"})
+    return frozenset({"control"})
 
 
 def services_for(paths: Iterable[str]) -> set[str]:
@@ -316,19 +316,18 @@ def _pause(host: Host) -> bool:
 
 
 def _resume(host: Host, sleep, tries: int = _RESUME_TRIES) -> bool:
-    """Let core start turns again, retrying while core comes back up. If it never answers, says so on stderr and
-    returns False: the paused marker stays, and the host listener resumes core once it answers."""
+    """Let the control plane start turns again, retrying while it comes back up. If it never answers, says so on
+    stderr and returns False: the paused marker stays, and the host listener resumes it once it answers."""
     for attempt in range(tries):
         try:
-            result = host.run(["docker", "exec", CORE_CONTAINER, "python", "-m", "agent", "resume"],
-                              capture_output=True, text=True)
+            result = host.run(["docker", "exec", CORE_CONTAINER, "agentd", "resume"], capture_output=True, text=True)
             if result.returncode == 0:
                 return True
         except Exception:
             pass
         if attempt < tries - 1:
             sleep(10)
-    print("deploy: couldn't resume core after the swap; the host listener keeps trying", file=sys.stderr)
+    print("deploy: couldn't resume the control plane after the swap; the host listener keeps trying", file=sys.stderr)
     return False
 
 
@@ -383,8 +382,24 @@ def _inspect(host: Host, container: str) -> tuple[bool, int] | None:
 def _health_probe(host: Host, path: str) -> bool:
     code = (f"import sys,urllib.request; sys.exit(0 if urllib.request.urlopen("
             f"'http://localhost:8080{path}', timeout=10).status == 200 else 1)")
-    result = host.run(["docker", "exec", "agent-core", "python", "-c", code], capture_output=True, text=True)
+    result = host.run(["docker", "exec", CORE_CONTAINER, "python", "-c", code], capture_output=True, text=True)
     return result.returncode == 0
+
+
+def _container_id(host: Host, container: str) -> str | None:
+    result = host.run(["docker", "inspect", container, "--format", "{{.Id}}"], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _rejoin_network(host: Host, before: str | None) -> None:
+    """A recreated network container leaves the conversations' containers on its old, gone network: restart them so
+    they join the new one (a turn running in one carries on from its saved session)."""
+    if before is None or _container_id(host, NETWORK_CONTAINER) == before:
+        return
+    listed = host.run(["docker", "ps", "-q", "--filter", "label=agent.conversation"], capture_output=True, text=True)
+    ids = (listed.stdout or "").split()
+    if ids:
+        host.run(["docker", "restart", *ids], capture_output=True, text=True)
 
 
 def check(host: Host, services: set[str], *, stable_s: int = 120, sleep=time.sleep,
@@ -394,16 +409,16 @@ def check(host: Host, services: set[str], *, stable_s: int = 120, sleep=time.sle
 
     - Every rebuilt container is `Running`, and its `RestartCount` doesn't move across a `stable_s` wait -- a
       container that is crash-looping can still show `Running` on one snapshot.
-    - core's `/health` and `/health/runner` both answer 200, read from inside `agent-core` itself (no port is
-      published to the host for either).
-    - `docker compose exec -T core python /app/scripts/smoke.py` prints `smoke ok` -- a real turn end to end.
+    - the control plane's `/health` answers 200, read from inside `agent-control` itself (no port is published to
+      the host for it).
+    - `docker compose exec -T control agentd smoke` prints `smoke ok` -- a real turn end to end.
 
     `"*"` in `services` (a `compose.yaml` change) checks every container named in `CONTAINER_NAMES`, since the
     stack definition itself changed and no single service name can be trusted to cover what else did.
 
     The smoke probe runs through `host.run` directly rather than `Host.compose` -- `compose()` never passes
     `capture_output` (it is meant for a build a person watches stream by), so reading its `stdout` here would
-    always see `None`; building the identical `docker compose exec -T core ...` argv through `host.run` instead
+    always see `None`; building the identical `docker compose exec -T control ...` argv through `host.run` instead
     gets the captured text this probe actually needs.
     """
     containers = (list(CONTAINER_NAMES.values()) if "*" in services
@@ -425,12 +440,11 @@ def check(host: Host, services: set[str], *, stable_s: int = 120, sleep=time.sle
         if info[1] != before[container]:
             return False, f"{container} restarted"
 
-    for path in ("/health", "/health/runner"):
-        if not _health_probe(host, path):
-            return False, f"{path} did not return 200"
+    if not _health_probe(host, "/health"):
+        return False, "/health did not return 200"
 
     if smoke:
-        result = host.run(["docker", "compose", "exec", "-T", "core", "python", "/app/scripts/smoke.py"],
+        result = host.run(["docker", "compose", "exec", "-T", "control", "agentd", "smoke"],
                           cwd=host.live, capture_output=True, text=True)
         if "smoke ok" not in (result.stdout or ""):
             return False, "smoke test did not print smoke ok"
@@ -549,16 +563,20 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
         reason = f"compose build exited {build_result.returncode}"
         return _log_check_failed(state, old_sha, new_sha, services, reason)
 
-    # Swapping the agent's container cuts whatever turn it is running, so the swap is graceful: core stops starting
-    # turns, a running one gets up to `wait_idle_s` to finish, then the containers are swapped and core resumes. A
-    # turn still running is re-queued and picks its session up again once core resumes. Jensen is never left paused
-    # by a deploy, and a pause someone set on purpose is left as it was.
-    paused_here = _pause(host) if services & {"agent", "*"} else False
+    # Turns run in the conversations' own containers, so recreating agent-control or agent-services interrupts
+    # none of them. Only a change to the stack's definition can recreate the network container those containers
+    # share, which cuts their network: then the swap is graceful -- the control plane stops starting turns, a running
+    # one gets up to `wait_idle_s` to finish, the stack is swapped, the conversations' containers rejoin the new
+    # network, and the control plane resumes. Jensen is never left paused by a deploy, and a pause someone set on
+    # purpose is left as it was.
+    graceful = "*" in services
+    paused_here = _pause(host) if graceful else False
     marker = state.root / _PAUSED_MARKER
     if paused_here:
         marker.write_text(f"{os.getpid()}\n")
     try:
-        if services & {"agent", "*"}:
+        network_before = _container_id(host, NETWORK_CONTAINER) if graceful else None
+        if graceful:
             _wait_for_idle(host, wait_idle_s, sleep, clock)
 
         up_args = (["up", "-d", "--no-build", "--remove-orphans"] if "*" in services
@@ -566,14 +584,16 @@ def _deploy_locked(host: Host, state: State, *, wait_idle_s: int, sleep, clock) 
         up_result = host.compose(up_args)
         if up_result.returncode != 0:
             return _log_check_failed(state, old_sha, new_sha, services, f"compose up exited {up_result.returncode}")
+        _rejoin_network(host, network_before)
 
-        # Resume before the check: its smoke test is a real turn through core's queue, which a paused core never
+        # Resume before the check: its smoke test is a real turn through the queue, which a paused control plane never
         # starts.
         if paused_here and _resume(host, sleep):
             marker.unlink(missing_ok=True)
             paused_here = False
 
-        # A core someone paused on purpose starts no turn, so the smoke turn is left out; the other probes still run.
+        # A control plane someone paused on purpose starts no turn, so the smoke turn is left out; the other probes
+        # still run.
         ok, reason = check(host, services, sleep=sleep, smoke=not _is_paused(host))
         result = "ok" if ok else f"check_failed: {reason}"
         state.log_deploy({"ts": _iso_now(), "from": old_sha, "to": new_sha, "services": sorted(services),
