@@ -17,6 +17,7 @@ pub mod notifier;
 pub mod parking;
 pub mod payloads;
 pub mod persona;
+pub mod pollers;
 pub mod prepare;
 pub mod projects;
 pub mod proxy;

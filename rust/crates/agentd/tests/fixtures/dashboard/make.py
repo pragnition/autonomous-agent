@@ -7,6 +7,8 @@ from pathlib import Path
 
 from agent import db
 from agent.core import kpis
+from agent.core.agent_prs import match_issue
+from agent.core.linear_issues import _iso
 from agent.dashboard import queries as q
 
 HERE = Path("tests/fixtures/dashboard")
@@ -164,6 +166,13 @@ out["overview_counts"] = q.overview_counts(conn, NOW, TZ)
 out["paused_by"] = q.paused_by(conn)
 out["list_events"] = [{"args": [t, n, b], "out": q.list_events(conn, t, n, b)}
                       for t, n, b in ((None, 100, None), ("stop_all", 100, None), (None, 3, None), (None, 5, 10))]
+
+ids = ["PRA-423", "PRA-42", "SAM-7", "SAM-70"]
+out["match_issue"] = [{"texts": t, "out": match_issue(t, ids)} for t in (
+    ["pra-423-x", "PRA-42 fix", None], ["xPRA-423", "PRA-4230", ""], [None, "Fix SAM-70 and SAM-7", "SAM-7"],
+    ["feature/sam-7", "title", "body SAM-70"], ["SAM-7_x", None, None], ["", "", ""], ["(PRA-42)", None, None])]
+out["iso"] = [[v, _iso(v)] for v in ("2026-11-20T01:00:00Z", "2026-11-20T01:00:00.123Z", "2026-11-20T09:00:00+08:00",
+                                     "2026-11-20T01:00:00.5+00:00", None, "")]
 
 (HERE / "seed.json").write_text(json.dumps(rows, indent=1) + "\n")
 (HERE / "expected.json").write_text(json.dumps(out, indent=1, default=str) + "\n")

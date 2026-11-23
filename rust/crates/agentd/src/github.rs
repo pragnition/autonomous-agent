@@ -33,6 +33,48 @@ impl GitHub {
         Ok(self.get(path).query(query).send().await?.error_for_status()?.json().await?)
     }
 
+    pub async fn pr(&self, repo: &str, n: i64) -> Result<Value> {
+        self.json(&format!("/repos/{repo}/pulls/{n}"), &[]).await
+    }
+
+    pub async fn search_prs(&self, query: &str) -> Result<Vec<Value>> {
+        let found = self.json("/search/issues", &[("q", query), ("sort", "created"), ("order", "desc"), ("per_page", "100")]).await?;
+        Ok(found["items"].as_array().cloned().unwrap_or_default())
+    }
+
+    async fn list(&self, path: &str, query: &[(&str, &str)]) -> Result<Vec<Value>> {
+        Ok(self.json(path, query).await?.as_array().cloned().unwrap_or_default())
+    }
+
+    pub async fn reviews(&self, repo: &str, n: i64) -> Result<Vec<Value>> {
+        self.list(&format!("/repos/{repo}/pulls/{n}/reviews"), &[("per_page", "100")]).await
+    }
+
+    /// The PR's commits, each with its line stats unless `skip_author` wrote it.
+    pub async fn pr_commits(&self, repo: &str, n: i64, skip_author: &str) -> Result<Vec<Value>> {
+        let mut commits = self.list(&format!("/repos/{repo}/pulls/{n}/commits"), &[("per_page", "100")]).await?;
+        for c in &mut commits {
+            if !skip_author.is_empty() && c["author"]["login"] == skip_author {
+                continue;
+            }
+            let sha = c["sha"].as_str().unwrap_or_default().to_string();
+            c["stats"] = self.json(&format!("/repos/{repo}/commits/{sha}"), &[]).await?["stats"].clone();
+        }
+        Ok(commits)
+    }
+
+    pub async fn issue_events(&self, repo: &str, n: i64) -> Result<Vec<Value>> {
+        self.list(&format!("/repos/{repo}/issues/{n}/events"), &[("per_page", "100")]).await
+    }
+
+    pub async fn commits_since(&self, repo: &str, branch: &str, since: &str) -> Result<Vec<Value>> {
+        self.list(&format!("/repos/{repo}/commits"), &[("sha", branch), ("since", since), ("per_page", "100")]).await
+    }
+
+    pub async fn can_read(&self, repo: &str) -> bool {
+        self.get(&format!("/repos/{repo}")).send().await.is_ok_and(|r| r.status() == reqwest::StatusCode::OK)
+    }
+
     pub async fn text(&self, path: &str, query: &[(&str, &str)], accept: Option<&str>) -> Result<String> {
         let mut req = self.get(path).query(query);
         if let Some(accept) = accept {

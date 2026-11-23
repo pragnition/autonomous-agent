@@ -99,6 +99,20 @@ impl Linear {
         Ok(body["data"].clone())
     }
 
+    /// An issue's state as Linear has it: (state type, completedAt, canceledAt).
+    pub async fn issue_state(&self, s: &Shared, issue_id: &str) -> Result<(Option<String>, Option<String>, Option<String>)> {
+        let node = &self.gql(s, "IssueState", ISSUE_STATE, json!({"id": issue_id})).await?["issue"];
+        let text = |v: &Value| v.as_str().map(str::to_string);
+        Ok((text(&node["state"]["type"]), text(&node["completedAt"]), text(&node["canceledAt"])))
+    }
+
+    /// The names of a team's workflow states.
+    pub async fn team_state_names(&self, s: &Shared, team: &str) -> Result<std::collections::BTreeSet<String>> {
+        self.state_id(s, team, "").await?;
+        Ok(self.client.states.lock().unwrap_or_else(|e| e.into_inner()).get(team)
+            .map(|m| m.keys().cloned().collect()).unwrap_or_default())
+    }
+
     async fn state_id(&self, s: &Shared, team: &str, name: &str) -> Result<Option<String>> {
         if !self.client.states.lock().unwrap_or_else(|e| e.into_inner()).contains_key(team) {
             let data = self.gql(s, "TeamStates", TEAM_STATES, json!({"team": team})).await?;
