@@ -71,6 +71,10 @@ pub trait TurnHost: Send + Sync {
     fn event<'a>(&'a self, work_item: &'a str, record: Value) -> BoxFuture<'a, ()>;
     /// Run one of agentd's tools for the turn; the text goes back to Claude Code.
     fn tool<'a>(&'a self, work_item: &'a str, name: &'a str, args: Value) -> BoxFuture<'a, String>;
+    /// A message delivered into the turn was read (Claude Code echoed it).
+    fn read<'a>(&'a self, _work_item: &'a str, _item_id: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
 }
 
 /// What a turn reports: the fields of the runner's result to core.
@@ -634,10 +638,14 @@ impl<'a, E: Engine + 'static, P: Probe + 'static> Turn<'a, E, P> {
             }
             self.last_line = Instant::now();
             let stopping = self.progress.reason.is_some();
+            let read_before = self.fold.read.len();
             match self.fold.apply(&line.entry, stopping) {
                 Seen::Frame { frame, first_assistant } => {
                     self.last_frame = Instant::now();
                     if line.seq > self.forwarded {
+                        for item in self.fold.read[read_before..].to_vec() {
+                            self.host.read(&self.spec.work_item, &item).await;
+                        }
                         self.forward(&frame, line.seq).await?;
                     }
                     if first_assistant && self.progress.account.is_none()

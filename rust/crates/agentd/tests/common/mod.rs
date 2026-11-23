@@ -108,9 +108,132 @@ pub async fn shared_with(dir: &std::path::Path, slack: &FakeSlack, usage: Value)
 pub fn shared_at(dir: &std::path::Path, slack: &FakeSlack, proxy_url: &str) -> Arc<agentd::shared::Shared> {
     let config_dir = PathBuf::from(REPO).join("examples/config");
     let paths = agentd::shared::Paths { config: config_dir, data: dir.join("data"), work: dir.join("work"),
-                                        defaults: PathBuf::from(REPO).join("src/agent/defaults") };
+                                        defaults: PathBuf::from(REPO).join("src/agent/defaults"),
+                                        plugins: PathBuf::from(REPO).join("src/agent/plugins") };
     let secrets = [("GH_TOKEN_CORE".to_string(), "core-secret-0123456789".to_string())].into();
     let proxy = agentd::proxy::ProxyClient::new(proxy_url, agentd::proxy::SoftCap::default());
     Arc::new(agentd::shared::Shared::open(paths, secrets, agentd::slack::Slack::new("xoxb-test", &format!("{}/api", slack.base)),
                                           Some("UBOT".into()), proxy, None).unwrap())
+}
+
+pub const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/fake_claude.py");
+
+/// Containers as holders on tasks in this process: `start` runs `agent-holder serve`.
+pub struct LocalEngine {
+    pub root: PathBuf,
+    pub holders: Mutex<HashMap<String, Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl agentd::containers::Engine for LocalEngine {
+    async fn inspect(&self, name: &str) -> anyhow::Result<Option<bool>> {
+        Ok(self.holders.lock().unwrap().get(name).map(|h| h.as_ref().is_some_and(|h| !h.is_finished())))
+    }
+    async fn create(&self, spec: &agentd::containers::ContainerSpec) -> anyhow::Result<()> {
+        self.holders.lock().unwrap().insert(spec.name.clone(), None);
+        Ok(())
+    }
+    async fn start(&self, name: &str) -> anyhow::Result<()> {
+        let (root, conversation) = (self.root.clone(), name.trim_start_matches("agent-conv-").to_string());
+        let task = tokio::spawn(async move { agent_holder::serve::serve(root, conversation).await.unwrap() });
+        self.holders.lock().unwrap().insert(name.into(), Some(task));
+        Ok(())
+    }
+    async fn stop(&self, name: &str) -> anyhow::Result<()> {
+        if let Some(task) = self.holders.lock().unwrap().get_mut(name).and_then(Option::take) {
+            task.abort();
+        }
+        Ok(())
+    }
+    async fn remove(&self, name: &str) -> anyhow::Result<()> {
+        self.stop(name).await?;
+        self.holders.lock().unwrap().remove(name);
+        Ok(())
+    }
+}
+
+pub type Local = agentd::dispatch::Dispatcher<LocalEngine, agentd::containers::HolderProbe>;
+
+/// Everything `agentd serve` puts together, on a temp folder, with Claude Code played by the fake from `attempts`.
+pub struct Rig {
+    pub dir: tempfile::TempDir,
+    pub slack: FakeSlack,
+    pub s: Arc<agentd::shared::Shared>,
+    pub containers: Arc<agentd::containers::Containers<LocalEngine, agentd::containers::HolderProbe>>,
+    pub proxy_url: String,
+}
+
+impl Rig {
+    pub async fn new(attempts: &[Vec<Value>]) -> Rig {
+        let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
+        let proxy_url = fake_proxy(usage(0.2)).await;
+        let s = shared_at(dir.path(), &slack, &proxy_url);
+        let run = s.paths.work.join("run");
+        let settings = agentd::config::Containers { image: "unused".into(), memory_gib: 1, cpus: 1.0, pids: 100,
+            idle_stop_minutes: 60, max_age_hours: 24, keep_stopped_days: 7, min_free_gib: 0 };
+        let host = agentd::containers::Host { data_dir: "/unused".into(), work_volume: "unused".into(),
+                                              network_container: "unused".into(), uid: 1001, run_root: run.clone() };
+        let engine = LocalEngine { root: run.clone(), holders: Mutex::default() };
+        let containers = Arc::new(agentd::containers::Containers::new(engine, agentd::containers::HolderProbe { run_root: run },
+                                                                      s.db.clone(), settings, host));
+        let scenario = dir.path().join("scenario");
+        for (k, steps) in attempts.iter().enumerate() {
+            std::fs::write(format!("{}.{k}", scenario.display()), steps.iter().map(|s| format!("{s}\n")).collect::<String>()).unwrap();
+        }
+        std::fs::write(&scenario, "").unwrap();
+        Rig { dir, slack, s, containers, proxy_url }
+    }
+
+    /// A dispatcher, as a freshly started agentd would make one.
+    pub fn dispatcher(&self) -> Arc<Local> {
+        let work = &self.s.paths.work;
+        let settings = agentd::turn::RunnerSettings {
+            claude: vec!["python3".into(), FAKE.into(), self.dir.path().join("scenario").display().to_string()],
+            proxy_url: self.proxy_url.clone(), claude_home: work.join("claude"), transcripts: work.join("transcripts"),
+            run_root: work.join("run"), env_files: vec![],
+            fixed_env: [("FAKE_RUN_ROOT".to_string(), work.join("run").display().to_string())].into(),
+            watchdog: std::time::Duration::from_millis(100), usage_every: std::time::Duration::from_millis(100),
+            soft_cap_grace: std::time::Duration::from_secs(1800), max_forks: 2 };
+        let proxy = agentd::proxy::ProxyClient::new(&self.proxy_url, agentd::proxy::SoftCap::default());
+        let runner = Arc::new(agentd::turn::TurnRunner::new(self.containers.clone(), self.s.db.clone(), proxy, settings));
+        let admission = agentd::admission::Admission { max_sessions: 10, min_free_gib: 0, meminfo: "/nonexistent".into() };
+        agentd::dispatch::Dispatcher::new(self.s.clone(), runner, self.containers.clone(), admission)
+    }
+
+    /// The fake Claude Code's starts so far.
+    pub fn starts(&self) -> usize {
+        std::fs::read_to_string(self.dir.path().join("scenario.starts")).unwrap_or_default().lines().count()
+    }
+
+    pub async fn until(&self, what: &str, cond: impl Fn(&Rig) -> bool) {
+        for _ in 0..400 {
+            if cond(self) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    pub fn posted(&self) -> Vec<String> {
+        self.slack.sent("chat.postMessage").iter().map(|p| p["text"].as_str().unwrap_or_default().to_string()).collect()
+    }
+}
+
+pub fn read_prompt() -> Value {
+    json!({"wait_stdin": 2})
+}
+
+pub fn init() -> Value {
+    json!({"emit": {"type": "system", "subtype": "init"}})
+}
+
+pub fn say(text: &str) -> Value {
+    json!({"emit": {"type": "assistant", "parent_tool_use_id": null,
+                    "message": {"role": "assistant", "model": "fake", "id": format!("msg-{text}"), "content": [{"type": "text", "text": text}]}}})
+}
+
+pub fn result(text: &str) -> Value {
+    json!({"emit": {"type": "result", "subtype": "success", "is_error": false, "duration_ms": 10, "duration_api_ms": 5, "num_turns": 1,
+                    "result": text, "total_cost_usd": 0.25, "usage": {"input_tokens": 10, "output_tokens": 5,
+                    "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20}}})
 }

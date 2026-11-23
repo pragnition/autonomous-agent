@@ -1,5 +1,6 @@
-//! agentd, the control plane. For now one command, `run-turn`: a turn end to end against Docker, Claude Code and the
-//! account proxy, for the live check. Started again with the same work item, it carries on the turn instead.
+//! agentd, the control plane: `serve` runs it; `schedules` checks the schedules file (the agent runs it after editing
+//! the file); `run-turn` runs one turn end to end without Slack, for a live check (started again with the same work
+//! item, it carries the turn on).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -13,7 +14,8 @@ use agentd::turn::{BoxFuture, RunnerSettings, TurnHost, TurnRunner};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-const USAGE: &str = "usage: agentd run-turn --conversation <id> --work-item <id> --prompt <text>";
+const USAGE: &str = "usage: agentd serve | agentd schedules [--file <path>] [--timezone <zone>] | \
+                     agentd run-turn --conversation <id> --work-item <id> --prompt <text>";
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -42,8 +44,11 @@ impl TurnHost for Print {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) != Some("run-turn") {
-        bail!(USAGE);
+    match args.first().map(String::as_str) {
+        Some("serve") => return agentd::serve::serve().await,
+        Some("schedules") => std::process::exit(schedules(&args)),
+        Some("run-turn") => {}
+        _ => bail!(USAGE),
     }
     let (Some(conversation), Some(work_item), Some(prompt)) =
         (flag(&args, "--conversation"), flag(&args, "--work-item"), flag(&args, "--prompt")) else { bail!(USAGE) };
@@ -91,4 +96,17 @@ async fn main() -> Result<()> {
     };
     println!("{work_item} result {}", serde_json::to_string(&result)?);
     runner.reported(&work_item).await
+}
+
+/// The schedules file's schedules with their next runs, and its problems; 1 when there are problems. The time zone is
+/// the config's where it's readable, else the copy agentd leaves for the containers, else UTC.
+fn schedules(args: &[String]) -> i32 {
+    let file = flag(args, "--file").unwrap_or_else(|| "/data/schedules/schedules.toml".into());
+    let zone = flag(args, "--timezone").or_else(|| agentd::config::load(std::path::Path::new("/data/config/agent.toml")).ok().map(|c| c.timezone))
+        .or_else(|| std::fs::read_to_string("/run/agent/timezone").ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()))
+        .unwrap_or_else(|| "UTC".into());
+    let tz: chrono_tz::Tz = zone.parse().unwrap_or(chrono_tz::UTC);
+    let (out, code) = agentd::schedules::check(std::path::Path::new(&file), tz, chrono::Utc::now().with_timezone(&tz));
+    print!("{out}");
+    code
 }

@@ -28,6 +28,8 @@ pub struct Paths {
     pub work: PathBuf,
     /// The shipped defaults: system.md and persona.toml.
     pub defaults: PathBuf,
+    /// The core and effortless plugins every session loads.
+    pub plugins: PathBuf,
 }
 
 #[derive(Default)]
