@@ -74,8 +74,13 @@ async fn handle(State(fake): State<FakeSlack>, Path(method): Path<String>, RawQu
 
 /// The account proxy: `usage` as given; every session is pinned to acct-a.
 pub async fn fake_proxy(usage: Value) -> String {
+    fake_proxy_live(Arc::new(Mutex::new(usage))).await
+}
+
+/// The same, with usage a test can change.
+pub async fn fake_proxy_live(usage: Arc<Mutex<Value>>) -> String {
     let app = axum::Router::new()
-        .route("/proxy/usage", axum::routing::get(move || { let u = usage.clone(); async move { axum::Json(u) } }))
+        .route("/proxy/usage", axum::routing::get(move || { let u = usage.lock().unwrap().clone(); async move { axum::Json(u) } }))
         .route("/proxy/whoami", axum::routing::get(|| async { axum::Json(json!({"account": "acct-a"})) }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -97,11 +102,15 @@ pub async fn shared(dir: &std::path::Path, slack: &FakeSlack) -> Arc<agentd::sha
 }
 
 pub async fn shared_with(dir: &std::path::Path, slack: &FakeSlack, usage: Value) -> Arc<agentd::shared::Shared> {
+    shared_at(dir, slack, &fake_proxy(usage).await)
+}
+
+pub fn shared_at(dir: &std::path::Path, slack: &FakeSlack, proxy_url: &str) -> Arc<agentd::shared::Shared> {
     let config_dir = PathBuf::from(REPO).join("examples/config");
     let paths = agentd::shared::Paths { config: config_dir, data: dir.join("data"), work: dir.join("work"),
                                         defaults: PathBuf::from(REPO).join("src/agent/defaults") };
     let secrets = [("GH_TOKEN_CORE".to_string(), "core-secret-0123456789".to_string())].into();
-    let proxy = agentd::proxy::ProxyClient::new(&fake_proxy(usage).await, agentd::proxy::SoftCap::default());
+    let proxy = agentd::proxy::ProxyClient::new(proxy_url, agentd::proxy::SoftCap::default());
     Arc::new(agentd::shared::Shared::open(paths, secrets, agentd::slack::Slack::new("xoxb-test", &format!("{}/api", slack.base)),
                                           Some("UBOT".into()), proxy, None).unwrap())
 }

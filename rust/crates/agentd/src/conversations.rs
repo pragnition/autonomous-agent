@@ -245,7 +245,7 @@ async fn answer<T>(lookup: impl std::future::Future<Output = T>) -> Option<T> {
 }
 
 /// A person as a turn's first line names them: `Sam Taylor (sam, GitHub @sam)`.
-async fn who(s: &Shared, key: &str) -> String {
+pub(crate) async fn who(s: &Shared, key: &str) -> String {
     let name = answer(s.person_name(key)).await.flatten();
     let github = s.config.people.get(key).map(|p| p.github.clone()).unwrap_or_default();
     let tags: Vec<String> = [name.as_ref().map(|_| key.to_string()), (!github.is_empty()).then(|| format!("GitHub @{github}"))]
@@ -265,7 +265,7 @@ async fn slack_origin(s: &Shared, key: &str, event: &Value, is_dm: bool, own: bo
     origin_line(&where_, Some(&who), link.flatten().as_deref())
 }
 
-async fn project_for_channel(s: &Shared, channel: &str) -> Option<String> {
+pub(crate) async fn project_for_channel(s: &Shared, channel: &str) -> Option<String> {
     if let Some((name, _)) = s.packs.iter().find(|(_, p)| p.project.slack_channel == channel) {
         return Some(name.clone());
     }

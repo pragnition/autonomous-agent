@@ -133,8 +133,13 @@ impl ProxyClient {
         Ok(resp)
     }
 
+    /// The proxy's answer as it gave it (the usage watch reads more of it than `Usage` keeps).
+    pub async fn raw_usage(&self) -> Result<Value> {
+        Ok(self.get("/proxy/usage", &[]).await?.error_for_status()?.json().await?)
+    }
+
     pub async fn usage(&self) -> Result<Usage> {
-        let raw: Value = self.get("/proxy/usage", &[]).await?.error_for_status()?.json().await?;
+        let raw = self.raw_usage().await?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs_f64();
         Ok(Usage::from_raw(&raw, self.soft_cap, now))
     }
