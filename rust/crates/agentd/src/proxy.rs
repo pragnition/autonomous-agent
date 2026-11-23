@@ -144,6 +144,12 @@ impl ProxyClient {
         Ok(Usage::from_raw(&raw, self.soft_cap, now))
     }
 
+    /// The proxy's 5-minute performance rows for the last `hours`.
+    pub async fn perf(&self, hours: i64) -> Result<Vec<Value>> {
+        let body: Value = self.get("/proxy/perf", &[("hours", &hours.to_string())]).await?.error_for_status()?.json().await?;
+        Ok(body["rows"].as_array().cloned().unwrap_or_default())
+    }
+
     /// The account the proxy has pinned the session to; None when it has no pin.
     pub async fn whoami(&self, sid: &str) -> Result<Option<String>> {
         let resp = self.get("/proxy/whoami", &[("sid", sid)]).await?;
