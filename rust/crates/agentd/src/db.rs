@@ -138,6 +138,22 @@ pub fn append_event(conn: &Connection, kind: &str, task_id: Option<&str>, actor:
     Ok(conn.last_insert_rowid())
 }
 
+/// A row as a JSON object, column by column.
+pub fn row_json(r: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+    use rusqlite::types::ValueRef;
+    let mut map = serde_json::Map::new();
+    for (i, name) in r.as_ref().column_names().iter().enumerate() {
+        let value = match r.get_ref(i)? {
+            ValueRef::Null => serde_json::Value::Null,
+            ValueRef::Integer(n) => n.into(),
+            ValueRef::Real(f) => f.into(),
+            ValueRef::Text(t) | ValueRef::Blob(t) => String::from_utf8_lossy(t).into_owned().into(),
+        };
+        map.insert(name.to_string(), value);
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
 /// Now, as core writes times: `2026-11-23T04:05:06Z`.
 pub fn utcnow() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
