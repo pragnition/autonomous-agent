@@ -1,1 +1,0 @@
-{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 /var/agent/rcp-spike/hook.py"}]}]}}

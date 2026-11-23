@@ -7,14 +7,14 @@ export const KINDS: { key: ConsumerKind; label: string; color: string }[] = [
   { key: "browser", label: "Browsers", color: "var(--series-2)" },
   { key: "service", label: "Services", color: "var(--series-3)" },
   { key: "container", label: "Containers", color: "var(--series-4)" },
-  { key: "runner", label: "Runner", color: "var(--series-5)" },
-  { key: "host", label: "Outside the agent", color: "var(--series-6)" },
+  { key: "runner", label: "Control plane", color: "var(--series-5)" },
+  { key: "host", label: "Rest of the machine", color: "var(--series-6)" },
   { key: "other", label: "Other", color: OTHER },
 ]
 
 export const KIND_LABEL: Record<ConsumerKind, string> = {
-  session: "Session", browser: "Browser", service: "Service", container: "Container", runner: "Runner",
-  other: "Other", host: "Outside the agent container",
+  session: "Session", browser: "Browser", service: "Service", container: "Container", runner: "Control plane",
+  other: "Other", host: "Rest of the machine",
 }
 
 export const kindSeries: Series[] = KINDS.map((k) => ({ key: k.key, label: k.label, color: k.color }))
@@ -41,7 +41,7 @@ export function rank(consumers: HostConsumer[], metric: (c: HostConsumer) => num
 export function consumerLabel(c: { kind: ConsumerKind; name: string; session: { title: string } | null }): string {
   if (c.kind === "session") return c.session?.title ?? c.name
   if (c.kind === "browser") return c.session ? `Browser · ${c.session.title}` : "Browser"
-  if (c.kind === "runner") return "Runner"
+  if (c.kind === "runner") return "Control plane"
   if (c.kind === "other") return "Other processes"
   if (c.kind === "host") return KIND_LABEL.host
   return c.name
