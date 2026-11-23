@@ -115,6 +115,29 @@ fn create_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// `f` in one `BEGIN IMMEDIATE` transaction, committed when it succeeds.
+pub fn immediate<T>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    match f(conn) {
+        Ok(value) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(value)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+
+/// One line of the append-only event log, the source of truth for metrics (events.py); data as Python wrote it.
+pub fn append_event(conn: &Connection, kind: &str, task_id: Option<&str>, actor: Option<&str>,
+                    data: Option<&serde_json::Value>) -> Result<i64> {
+    conn.execute("INSERT INTO events(ts, task_id, type, actor, data) VALUES (?, ?, ?, ?, ?)",
+                 params![utcnow(), task_id, kind, actor, data.map(crate::records::py_dumps)])?;
+    Ok(conn.last_insert_rowid())
+}
+
 /// Now, as core writes times: `2026-11-23T04:05:06Z`.
 pub fn utcnow() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
