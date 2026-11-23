@@ -2,6 +2,7 @@
 
 pub mod admission;
 pub mod ask;
+pub mod azure_rates;
 pub mod cli_login;
 pub mod config;
 pub mod containers;
@@ -13,6 +14,7 @@ pub mod handoff;
 pub mod kpis;
 pub mod labeler;
 pub mod linear;
+pub mod meter;
 pub mod notifier;
 pub mod parking;
 pub mod payloads;
