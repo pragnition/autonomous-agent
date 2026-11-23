@@ -90,3 +90,19 @@ from the release build), Docker 29, and the Claude Code the image bundles. The l
 | A container sees only its own conversation's run folder (no other holder's socket) | Pass |
 | One real turn through `agentd run-turn`: a session container on Jensen's network, Claude Code through the account proxy | Pass: `pong`, outcome `done`, account and tokens recorded |
 | agentd's own container restarted (`docker restart`) partway through a longer turn | Pass: the restarted agentd carried the turn on from the holder's log and reported one result; Claude Code started once and exited normally; 21 records forwarded across both runs, none twice |
+
+## Stage 3 live check
+
+Run on the live host on 2026-11-23 with `agentd serve` on a separate data folder (a copy of the config, an empty
+database, no Linear or GitHub keys, no schedules, Slack pointed at a stand-in), the real account proxy, Jensen's
+network and the shared volume. The live stack kept Slack and Linear throughout.
+
+| Check | Result |
+|---|---|
+| `agentd ask` queues a turn; `agentd serve` claims it, starts the conversation's container and runs it | Pass: `pong`, run and events recorded |
+| A turn calls one of agentd's tools (`status`) through the holder's MCP relay | Pass: it answered with the tool's first line |
+| agentd's container restarted (`docker restart`) partway through a turn | Pass: the turn finished once, Claude Code started once, 14 records forwarded, none twice |
+| Nothing reaches Slack from a turn without a thread | Pass: only the start-up sign-in check |
+
+Building the image on the host loaded it enough that the supervisor restarted the live core once (three failed health
+checks); it came back by itself. Builds for cutover should happen at a quiet time or off the host.
