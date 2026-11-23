@@ -8,6 +8,7 @@ pub mod conversations;
 pub mod db;
 pub mod github;
 pub mod handoff;
+pub mod linear;
 pub mod notifier;
 pub mod parking;
 pub mod payloads;

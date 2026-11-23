@@ -84,12 +84,12 @@ pub fn context_for(s: &Shared, work_item_id: &str) -> Result<ToolContext> {
                      channel: convo.as_ref().and_then(|c| c.channel.clone()), thread_ts: convo.and_then(|c| c.thread_ts) })
 }
 
-/// The tools this install offers: the catalogue's (the GitHub ones with a read token) and a device-code login per CLI
-/// that has one.
+/// The tools this install offers: the catalogue's (the GitHub ones with a read token, linear_install with the Linear
+/// app) and a device-code login per CLI that has one.
 fn offered(s: &Shared) -> Vec<Spec> {
     let mut specs: Vec<Spec> = catalogue().iter()
         .filter(|t| !t.name.starts_with("gh_") || s.github.is_some())
-        .filter(|t| t.name != "linear_install")
+        .filter(|t| t.name != "linear_install" || s.linear.as_ref().is_some_and(|l| l.app.is_some()))
         .cloned().collect();
     specs.extend(cli_login::tools(&s.config));
     specs
@@ -166,6 +166,10 @@ async fn run(s: &Shared, ctx: &ToolContext, name: &str, args: &Value) -> Result<
         "read_thread" => read_thread(s, ctx, args).await,
         "slack_read" => slack_read(s, args).await,
         "park" => parking::park(s, ctx, args).await,
+        "linear_install" => match s.linear.as_ref().and_then(|l| l.app.as_ref()) {
+            Some(app) => app.install_tool(s, ctx).await,
+            None => Ok(NOT_AVAILABLE.into()),
+        },
         "start_project" | "finish_project" | "tell_project" => projects::tool(s, ctx, name, args).await,
         n if n.starts_with("gh_") => github::tool(s, ctx, n, args).await,
         n if n.ends_with("_login") => cli_login::start(s, ctx, n).await,

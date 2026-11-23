@@ -56,7 +56,18 @@ fn record(s: &Shared, task: &Task, ts: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// A task changed: its Slack status message and reaction, and its Linear issue; one failing doesn't stop the other.
 pub async fn task_changed(s: &Shared, task: &Task) -> Result<()> {
+    if let Err(e) = slack_changed(s, task).await {
+        tracing::error!("Slack status of {} failed: {e:#}", task.id);
+    }
+    if let Some(linear) = &s.linear && let Err(e) = linear.sync(s, task).await {
+        tracing::error!("Linear status of {} failed: {e:#}", task.id);
+    }
+    Ok(())
+}
+
+async fn slack_changed(s: &Shared, task: &Task) -> Result<()> {
     let Some(channel) = task.slack_channel.clone() else { return Ok(()) };
     let mut task = task.clone();
     if let Some(ts) = &task.status_message_ts {
@@ -90,6 +101,12 @@ async fn react(s: &Shared, task: &Task) -> Result<()> {
 }
 
 pub async fn ask(s: &Shared, task: &Task, question: &str) -> Result<()> {
+    if let (Some(linear), Some(issue)) = (&s.linear, &task.linear_issue_id) {
+        let body = format!("I have a question; answer it in the Slack thread for {}: {question}", task.id);
+        if let Err(e) = linear.comment(s, issue, &body).await {
+            tracing::error!("Linear question on {} failed: {e:#}", task.id);
+        }
+    }
     let Some(channel) = &task.slack_channel else { return Ok(()) };
     let text = format!("Question about {}: {question}\nReply in this thread and I'll pick it back up.", task.id);
     let posted = s.slack.post_markdown(channel, task.slack_thread_ts.as_deref(), &text).await?;

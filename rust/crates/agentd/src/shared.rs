@@ -51,6 +51,8 @@ pub struct Shared {
     pub proxy: ProxyClient,
     /// GitHub, read-only, when core's read token is set.
     pub github: Option<GitHub>,
+    /// Linear, when a key or the agent's Linear app is set up.
+    pub linear: Option<crate::linear::Linear>,
     /// Notified whenever work is queued, cancelled or paused.
     pub wake: Notify,
     lookups: Mutex<Lookups>,
@@ -67,7 +69,7 @@ impl Shared {
                                              &config.name).context("the persona")?;
         let secret_values = secrets.values().filter(|v| !v.is_empty()).cloned().collect();
         Ok(Shared { db, config, packs, slack, bot_user_id, secrets, secret_values, persona, paths, proxy, github,
-                    wake: Notify::new(), lookups: Mutex::default() })
+                    linear: None, wake: Notify::new(), lookups: Mutex::default() })
     }
 
     /// The conversation's own folder on the shared volume, the same every turn; its clones live here.
