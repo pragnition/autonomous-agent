@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration as StdDuration;
 
 use anyhow::{Context, Result, bail};
-use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::models::{ContainerCreateBody, HostConfig, Mount, MountType, MountVolumeOptions};
 use bollard::query_parameters::{CreateContainerOptions, RemoveContainerOptions, StopContainerOptions};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use holder_proto::{Request, Response, Status};
@@ -22,6 +22,8 @@ use crate::db::Db;
 
 /// How long a started container's holder has to answer on its socket.
 const READY_WITHIN: StdDuration = StdDuration::from_secs(20);
+/// Where the shared volume is mounted in every container.
+const WORK_MOUNT: &str = "/var/agent";
 /// How long Docker waits for a container it is stopping before killing it.
 const STOP_GRACE_S: i32 = 10;
 const TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
@@ -39,6 +41,10 @@ pub struct ContainerSpec {
     pub nano_cpus: i64,
     pub pids: i64,
     pub binds: Vec<String>,
+    /// Paths covered by an empty tmpfs.
+    pub tmpfs: Vec<String>,
+    /// (volume, folder in it, where it's mounted): a part of a volume mounted on its own.
+    pub volume_subpaths: Vec<(String, String, String)>,
 }
 
 /// The Docker calls agentd makes: `Docker` for real, a fake in tests.
@@ -95,6 +101,8 @@ impl<E: Engine, P: Probe> Containers<E, P> {
 
     pub fn spec(&self, conversation: &str) -> Result<ContainerSpec> {
         let data = &self.host.data_dir;
+        let own_run = format!("{}/{conversation}", holder_proto::RUN_ROOT);
+        let subpath = own_run.trim_start_matches(WORK_MOUNT).trim_start_matches('/').to_string();
         Ok(ContainerSpec {
             name: container_name(conversation)?,
             image: self.settings.image.clone(),
@@ -110,7 +118,11 @@ impl<E: Engine, P: Probe> Containers<E, P> {
             // schedules file, the task record, and the shared volume
             binds: vec![format!("{data}/runner:/run/agent:ro"), format!("{data}/cli/azure:/data/cli/azure"),
                         format!("{data}/schedules:/data/schedules"), format!("{data}/tasks:/data/tasks:ro"),
-                        format!("{}:/var/agent", self.host.work_volume)],
+                        format!("{}:{WORK_MOUNT}", self.host.work_volume)],
+            // every holder's socket is on the shared volume, and a socket speaks for its conversation (its tools and
+            // their tier): a container sees only its own conversation's run folder
+            tmpfs: vec![holder_proto::RUN_ROOT.to_string()],
+            volume_subpaths: vec![(self.host.work_volume.clone(), subpath, own_run)],
         })
     }
 
@@ -128,6 +140,8 @@ impl<E: Engine, P: Probe> Containers<E, P> {
             self.engine.remove(&spec.name).await?;
             running = None;
         }
+        // Docker mounts the conversation's run folder only if it exists
+        std::fs::create_dir_all(self.host.run_root.join(conversation))?;
         // recorded before Docker is asked, so no container agentd makes goes unrecorded
         let (id, name, image, at, new) =
             (conversation.to_string(), spec.name.clone(), spec.image.clone(), fmt(now), running.is_none());
@@ -378,6 +392,14 @@ impl Engine for Docker {
                 memory_swap: Some(spec.memory_bytes),
                 nano_cpus: Some(spec.nano_cpus),
                 pids_limit: Some(spec.pids),
+                tmpfs: Some(spec.tmpfs.iter().map(|p| (p.clone(), String::new())).collect()),
+                mounts: Some(spec.volume_subpaths.iter().map(|(volume, subpath, target)| Mount {
+                    target: Some(target.clone()),
+                    source: Some(volume.clone()),
+                    typ: Some(MountType::VOLUME),
+                    volume_options: Some(MountVolumeOptions { subpath: Some(subpath.clone()), ..Default::default() }),
+                    ..Default::default()
+                }).collect()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -507,6 +529,10 @@ mod tests {
         assert_eq!(spec.binds, ["/srv/agent/data/runner:/run/agent:ro", "/srv/agent/data/cli/azure:/data/cli/azure",
                                 "/srv/agent/data/schedules:/data/schedules", "/srv/agent/data/tasks:/data/tasks:ro",
                                 "agentwork-vol:/var/agent"]);
+        // the holders' sockets: a container sees its own conversation's, never another's
+        assert_eq!(spec.tmpfs, ["/var/agent/run/containers"]);
+        assert_eq!(spec.volume_subpaths, [("agentwork-vol".to_string(), "run/containers/c1".to_string(),
+                                           "/var/agent/run/containers/c1".to_string())]);
         assert!(setup(dir.path()).spec("../x").is_err());
     }
 
@@ -517,6 +543,7 @@ mod tests {
         let now = Utc::now();
         c.ensure("c1", now).await.unwrap();
         assert_eq!((c.engine.creates.load(Ordering::SeqCst), running(&c, "agent-conv-c1")), (1, Some(true)));
+        assert!(dir.path().join("run/c1").is_dir(), "its run folder, mounted into it, exists first");
         c.ensure("c1", now).await.unwrap();
         assert_eq!(c.engine.creates.load(Ordering::SeqCst), 1);
         c.engine.stop("agent-conv-c1").await.unwrap();

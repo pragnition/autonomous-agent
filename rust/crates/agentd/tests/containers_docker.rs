@@ -1,6 +1,6 @@
-//! Containers against the real Docker daemon and agent image; run on the host in the live check, as root (the holder's
-//! socket belongs to the agent user) with the Docker socket and the `agentwork` volume mounted at /var/agent:
-//! `cargo test -p agentd --test containers_docker -- --ignored`. Settings come from AGENTD_TEST_IMAGE,
+//! Containers against the real Docker daemon and agent image; run on the host in the live check, as the agent user
+//! (the holders' sockets are its) with the Docker socket's group, the Docker socket and the `agentwork` volume mounted
+//! at /var/agent: `cargo test -p agentd --test containers_docker -- --ignored`. Settings come from AGENTD_TEST_IMAGE,
 //! AGENTD_TEST_DATA_DIR, AGENTD_TEST_WORK_VOLUME and AGENTD_TEST_NETWORK.
 
 use std::time::Duration as StdDuration;
@@ -92,4 +92,40 @@ async fn idle_stop_skips_container_with_listener() {
     assert_eq!(docker.inspect(name).await.unwrap(), Some(false), "24 hours: stopped");
     docker.remove(name).await.unwrap();
     std::fs::remove_dir_all(std::path::Path::new(RUN_ROOT).join(conversation)).ok();
+}
+
+#[tokio::test]
+#[ignore]
+async fn sees_only_its_own_run_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = setup(dir.path());
+    let docker = Docker::connect().unwrap();
+    let t0 = Utc::now();
+    for conversation in ["agentd-test-a", "agentd-test-b"] {
+        docker.remove(&format!("agent-conv-{conversation}")).await.unwrap();
+        c.ensure(conversation, t0).await.unwrap();
+    }
+    let socket = std::path::Path::new(RUN_ROOT).join("agentd-test-a").join("holder.sock");
+    let start = Request::Start { work_item: "W-ls".into(), argv: vec!["ls".into(), RUN_ROOT.into()],
+                                 env: Default::default(), cwd: "/tmp".into(), stdin: vec![], tools: vec![] };
+    agent_holder::client::request(&socket, &start).await.unwrap();
+    let log = std::path::Path::new(RUN_ROOT).join("agentd-test-a").join("W-ls.jsonl");
+    let mut seen = Vec::new();
+    for _ in 0..100 {
+        let lines: Vec<holder_proto::LogLine> = std::fs::read_to_string(&log).unwrap_or_default().lines()
+            .map(|l| serde_json::from_str(l).unwrap()).collect();
+        if lines.iter().any(|l| matches!(l.entry, holder_proto::Entry::Exit { .. })) {
+            seen = lines.into_iter().filter_map(|l| match l.entry {
+                holder_proto::Entry::Out { line } => Some(line),
+                _ => None,
+            }).collect();
+            break;
+        }
+        tokio::time::sleep(StdDuration::from_millis(100)).await;
+    }
+    assert_eq!(seen, ["agentd-test-a"], "another conversation's holder isn't visible");
+    for conversation in ["agentd-test-a", "agentd-test-b"] {
+        docker.remove(&format!("agent-conv-{conversation}")).await.unwrap();
+        std::fs::remove_dir_all(std::path::Path::new(RUN_ROOT).join(conversation)).ok();
+    }
 }
