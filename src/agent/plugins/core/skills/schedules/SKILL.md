@@ -30,7 +30,7 @@ paused = false                     # optional
 ## Every edit
 
 1. Edit the file: add a table, change one, set `paused = true` to pause, delete the table to stop it.
-2. Run `python -m agent schedules`. It prints each schedule with its next three run times, and any errors. Fix every error it reports.
+2. Run `agentd schedules`. It prints each schedule with its next three run times, and any errors. Fix every error it reports.
 3. Reply with what you set up and the next run times from the check.
 
 To list schedules, run the check and reply with its output. A schedule that is new or whose `cron` changed first runs at its next time, not straight away.

@@ -3,7 +3,7 @@
     python scripts/ask_jensen.py --conversation V-xyz --text-file prompt.md
     python scripts/ask_jensen.py --new --text-file -        # pipe the text on stdin
 
-Pipes `core_ask.py` into the live install's `agent-core` container (`agent.watch.host.Host.core_python`) and
+Pipes `core_ask.py` into the live install's `agent-control` container (`agent.watch.host.Host.core_python`) and
 prints the queued work item id.
 """
 

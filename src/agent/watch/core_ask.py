@@ -1,7 +1,7 @@
 """Queue one turn into core's work queue, for handing Jensen a question or a review note from the host.
 
-Self-contained on purpose: piped into the `agent-core` container's own Python on stdin
-(`docker exec -i agent-core python - <args>`, see `agent.watch.host.Host.core_python`), the same way
+Self-contained on purpose: piped into the `agent-control` container's own Python on stdin
+(`docker exec -i agent-control python - <args>`, see `agent.watch.host.Host.core_python`), the same way
 `core_collect.py` reads the queue. `main` builds the turn's `Payloads` exactly as `scripts/smoke.py` does, so a
 queued review turn gets the same system prompt, model and budgets as any other turn.
 """
