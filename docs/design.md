@@ -384,7 +384,7 @@ An admin installs the app with the `linear_install` tool: the control plane DMs 
 Work on a timer. People ask the agent for something on a schedule in plain language ("send me PR stats every
 morning at 9", "sweep the codebase every night at 10"); the agent writes it into the schedules file with its own
 tools (the `schedules` skill), and the control plane fires it. People can also edit the file by hand on the host:
-`data/schedules/schedules.toml`, mounted at `/data/schedules` in the control plane and the agent container.
+`data/schedules/schedules.toml`, mounted at `/data/schedules` in the control plane and every conversation's container.
 
 ```toml
 [nightly-sweep]
@@ -482,7 +482,7 @@ tier. Every reply is scrubbed of secrets.
   and cut at 20,000 characters with a note on paging.
 - `gh_*` and `linear_*` work on the conversation's project, with the control plane's tokens.
 - `az_login` runs `az login --use-device-code` in the control plane as the agent's uid; the code goes to the admin by DM, and
-  the login in `data/cli/azure` is shared with the agent container.
+  the login in `data/cli/azure` is shared with the conversations' containers.
 - `stop_all` pauses the agent and interrupts every running session; queued messages wait. Only an admin can
   resume.
 
@@ -600,14 +600,14 @@ Host data lives under `${AGENT_DATA:-./data}`.
 | `config/account-names.toml` | written by `just account-names`: proxy code name to account holder |
 | `secrets/core.env` | the control plane's credentials (below) |
 | `secrets/supervisor.env` | `SLACK_ALERT_WEBHOOK` (optional) |
-| `secrets/agent.env` | the agent container's environment: `GH_TOKEN` for its own `gh` login, its dev and test keys |
+| `secrets/agent.env` | every session's keys: `GH_TOKEN` for its own `gh` login, its dev and test keys |
 | `secrets/projects/<project>.env` | a project's app `.env` for local runs; the control plane copies it at start |
-| `runner/` | written by the control plane for the agent container: `runner-token`, `linear.env`, `projects/`, `timezone` |
+| `runner/` | written by the control plane for the conversations' containers: `linear.env`, `projects/`, `timezone` |
 | `schedules/schedules.toml` | the schedules; the agent edits it, the control plane fires it |
 | `db/agent.db` | the control plane's state |
 | `runs/` | each turn's session messages, for the dashboard |
 | `git/` | the bare mirrors behind the git endpoint |
-| `cli/azure/` | the Azure CLI login, shared with the agent container |
+| `cli/azure/` | the Azure CLI login, shared with the conversations' containers |
 
 Secrets files are `KEY=value` lines, mode 0600, and each service mounts only its own. `core.env` needs
 `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `LINEAR_API_KEY`, `GITHUB_READ_TOKEN` and `GITHUB_WRITE_TOKEN`; with the
@@ -622,7 +622,8 @@ Linear app also `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` and `LINEAR_WEBHOOK_S
 | `[people.<key>]` | `slack` user id and `linear` email (required), `github` login, `role` (`member` or `admin`), `tailscale` login |
 | `[limits]` | `max_concurrent_sessions` (10), `max_tasks_per_day` (20), `idle_minutes` (30): a turn with no progress for this long is stopped, `schedule_hours` (6): a scheduled run's time budget, 0 for none |
 | `[claude.models]` | `default` for every session, `hard` after "use fable", `allowed`: more model ids "use <model>" may switch a conversation to |
-| `[agent]` | `uid` of the agent container's user (1001) |
+| `[agent]` | `uid` of the agent's user in its containers (1001) |
+| `[containers]` | each conversation's container: `image` (`autonomous-agent-agent`), `memory_gib` (8), `cpus` (4), `pids` (4096), `idle_stop_minutes` (60), `max_age_hours` (24), `keep_stopped_days` (7), `min_free_gib` (3): the free memory a new container needs beyond its cap |
 | `[linear]` | `public_url`: the Funnel URL for Linear's webhook and OAuth callback; empty means no Linear app |
 | `[mcp.<name>]` | MCP servers every session gets: `type = "http"`, `url`, `headers` with `${VAR}` from the session's environment |
 | `[dashboard]` | `port` (8086), `trusted_peers` (`["172.30.0.1"]`), `agent_origins` (proxy origins that are the agent) |
