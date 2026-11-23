@@ -106,3 +106,25 @@ network and the shared volume. The live stack kept Slack and Linear throughout.
 
 Building the image on the host loaded it enough that the supervisor restarted the live core once (three failed health
 checks); it came back by itself. Builds for cutover should happen at a quiet time or off the host.
+
+## Stage 4 live check
+
+Run on the live host on 2026-11-23 with `agentd serve` on a copy of the live database (paused, so no turn could
+start), a copy of the config, Slack pointed at a stand-in, the real account proxy, and the live transcripts mounted
+read-only. The Python dashboard ran on the same copy for comparison. The live stack was untouched. The binary was
+built off the host, which was under heavy load.
+
+| Check | Result |
+|---|---|
+| Every dashboard read (115: overview, conversation pages and filters, sessions with their timelines from live transcripts, events, KPIs for 1 to 365 days, account history, the meter) from agentd and from Python | Pass: identical apart from the live fields (sample times) |
+| Accounts page from the real proxy | Pass: same accounts in the same order |
+| A session's live stream; the web app's files and its fallback for client routes | Pass |
+| One call through agentd's meter to the real Foundry upstream (12 tokens) | Pass: answered, usage and price recorded |
+| `agentd doctor` | Pass: config, packs, proxy, every model, Docker and the agent image; missing secrets reported as missing |
+| `agentd kpis` against Python's text | Pass: identical |
+| Host page from /proc and Docker | Pass: host totals, the apps' Docker as one consumer, the stack's containers, history |
+| The labeler relabelling through the real proxy | Pass: 2 requests labelled |
+| `agentd stop` and `agentd resume` from the command line | Pass |
+
+The Azure price read failed in the copy only because it had no `az` login; the cutover must mount the az config
+folder that `[cli.azure]` names.
