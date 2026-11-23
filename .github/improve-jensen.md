@@ -23,8 +23,8 @@ If your prompt says the engine is not switched on, open the PR and stop there: a
   maintained tool) over another line of prompt.
 - Read the issue and its evidence on the host: `python scripts/jensen_watch.py count <signal> --since <time>`, the
   digests in the state folder (`$IMPROVE_JENSEN_STATE`, default `~/.local/state/improve-jensen`), the transcripts
-  (`docker exec agent-runner cat /var/agent/transcripts/<item>.jsonl`), core's DB (`/data/db/agent.db` inside
-  `agent-core`) and Jensen's own notes behind the issue, if any (see Jensen's notes).
+  (`docker exec agent-control cat /var/agent/transcripts/<item>.jsonl`), the database (`/data/db/agent.db` inside
+  `agent-control`) and Jensen's own notes behind the issue, if any (see Jensen's notes).
 - Read the issue's comments and any earlier PRs for it.
 - The workflow adds `fixing` when a fix run starts and removes it when the run ends. Leave that label alone.
 
@@ -36,9 +36,9 @@ If your prompt says the engine is not switched on, open the PR and stop there: a
   backup next to the file (`cp -p <file> <file>.bak-<YYYYMMDD-HHMM>`), then restart what reads it
   (`docker compose restart core` in `~/autonomous-agent`) and check that `just smoke` prints `smoke ok`. Revert by
   restoring the backup. Never print or write a secret, and never edit `data/secrets/`.
-- **Jensen's Claude home,** inside `agent-runner` through `docker exec`: `/var/agent/claude` (settings, CLAUDE.md,
+- **Jensen's Claude home,** inside `agent-control` through `docker exec`: `/var/agent/claude` (settings, CLAUDE.md,
   skills, plugins) and `/var/agent/memory` (MEMORY.md and one file per fact).
-  - First a dated backup: `docker exec agent-runner cp -a <dir> <dir>.bak-<YYYYMMDD-HHMM>`. Revert by restoring it.
+  - First a dated backup: `docker exec agent-control cp -a <dir> <dir>.bak-<YYYYMMDD-HHMM>`. Revert by restoring it.
   - Follow Jensen's own memory format.
   - Install only maintained plugins and skills, after checking that their hooks and MCP servers are safe in a
     headless runner.
@@ -54,8 +54,8 @@ The admins are the `github` handles (for @-mentions) and `slack` ids (for DMs) o
 A `learned` issue makes something that worked part of Jensen's setup in every project:
 - **A third-party skill or plugin:** install it at user scope in Jensen's Claude home, as any Claude-home change
   (a dated backup first, its hooks and MCP servers checked as above), the way `deploy/agent-toolkit.sh` installs the
-  toolkit, through `docker exec agent-runner`. It's in place when `docker exec agent-runner claude plugin list` or
-  `docker exec agent-runner ls /var/agent/claude/skills` shows it and `just smoke` in `~/autonomous-agent` prints
+  toolkit, through `docker exec agent-control`. It's in place when `docker exec agent-control claude plugin list` or
+  `docker exec agent-control ls /var/agent/claude/skills` shows it and `just smoke` in `~/autonomous-agent` prints
   `smoke ok`.
 - **A tool** (a CLI or package): the `agent` stage of this repo's `Dockerfile`, so every rebuild has it.
 - **A way of driving Jensen, or an instruction people repeat:** a short skill in this repo's core plugin,
@@ -158,10 +158,10 @@ replies. In a short Python script that never prints the token, read `SLACK_BOT_T
 once per admin, with their `slack` id as `channel`. Say what was deployed, what failed and why, and the issue number.
 
 ## Jensen's notes
-Jensen writes short notes about what gets in its way to `/var/agent/feedback/` in `agent-runner`. The watch records
+Jensen writes short notes about what gets in its way to `/var/agent/feedback/` on the shared volume (inside `agent-control` and every conversation's container). The watch records
 each one on an issue with the ref `feedback/<name>`. Find an issue's notes with
 `grep -F '"issue": <N>, "ref": "feedback/' "${IMPROVE_JENSEN_STATE:-$HOME/.local/state/improve-jensen}/evidence.jsonl"`
-and read each with `docker exec agent-runner cat /var/agent/feedback/<name>`.
+and read each with `docker exec agent-control cat /var/agent/feedback/<name>`.
 - When an issue came from a Jensen note, answer the note once your change has shipped (deployed, or merged with its
   deploy pending): `python scripts/jensen_watch.py feedback-reply <name> "<status>"`, saying in plain words what
   changed, whether it's live yet, and the issue number. If nothing will change, say why. After a revert, say that

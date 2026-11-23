@@ -34,8 +34,8 @@ the `Assessed:` line at the top of the previous `$STATE/assessment.md`; with non
   `gh issue list --label jensen-watch --state open --limit 1000 --json number,title,labels,body`, and those closed in
   the last 14 days (fixed, stale or stuck), `gh issue list --label jensen-watch --state closed --search
   "closed:>=<the date 14 days ago, YYYY-MM-DD>" --limit 1000 --json number,title,labels,closedAt,body`.
-- Jensen's notes and the answers to them: `docker exec agent-runner ls -lt /var/agent/feedback/`, then
-  `docker exec agent-runner cat /var/agent/feedback/<name>`. `CHANGES.md` there is what improve-jensen told Jensen.
+- Jensen's notes and the answers to them: `docker exec agent-control ls -lt /var/agent/feedback/`, then
+  `docker exec agent-control cat /var/agent/feedback/<name>`. `CHANGES.md` there is what improve-jensen told Jensen.
 - The review findings since then: the lines of `$STATE/evidence.jsonl` whose `ref` is a PR URL, and the issues they
   went into.
 - Research and practice: lab engineering blogs, papers, and Claude Code and plugin release notes, only to understand
@@ -66,16 +66,16 @@ The second question: what worked that Jensen should keep? Read:
   memory, instructions or settings file Jensen wrote, with its conversation and turn id, then the skills used that
   hour) and their conversations;
 - the skills and instruction files in the repos Jensen works in, in its checkouts, then each with
-  `docker exec agent-runner ls <skills folder>` and `docker exec agent-runner cat <file>`:
+  `docker exec agent-control ls <skills folder>` and `docker exec agent-control cat <file>`:
 
   ```sh
-  docker exec agent-runner find /var/agent/scratch -maxdepth 4 \
+  docker exec agent-control find /var/agent/scratch -maxdepth 4 \
     \( -name CLAUDE.md -o -name AGENTS.md -o -path '*/.claude/skills' \)
   ```
 
-- what every project already gets, in Jensen's Claude home: `docker exec agent-runner ls /var/agent/claude/skills`
-  and `docker exec agent-runner claude plugin list`;
-- Jensen's memory: `docker exec agent-runner cat /var/agent/memory/MEMORY.md`, then the files it points to.
+- what every project already gets, in Jensen's Claude home: `docker exec agent-control ls /var/agent/claude/skills`
+  and `docker exec agent-control claude plugin list`;
+- Jensen's memory: `docker exec agent-control cat /var/agent/memory/MEMORY.md`, then the files it points to.
 
 Look for:
 1. **Ways people drove Jensen that worked:** how they asked, the steps or prompts they gave, the order of the work.
@@ -105,7 +105,7 @@ For each one you keep:
 - Find whose session it was. This prints the turn's first line, `[from <Slack name> (<person key>, ...) · ...]`:
 
   ```sh
-  docker exec agent-core python -c "import sqlite3, sys; print(sqlite3.connect('/data/db/agent.db').execute(
+  docker exec agent-control python -c "import sqlite3, sys; print(sqlite3.connect('/data/db/agent.db').execute(
     \"SELECT json_extract(payload, '$.origin') FROM work_items WHERE id = ?\", (sys.argv[1],)).fetchone())" <turn id>
   ```
 
@@ -143,7 +143,7 @@ For each one you keep:
      fixed by the same change (background work, waiting, setup, how it states facts, and so on). Keep the one with
      the most evidence, close the others with `gh issue close <N> --comment "Folded into #<kept>."`, and propose only
      the kept one, with a `change` that covers them all. Never propose two items about the same part of Jensen.
-   - Never propose something a change shipped in the last 7 days addresses (`docker exec agent-runner cat
+   - Never propose something a change shipped in the last 7 days addresses (`docker exec agent-control cat
      /var/agent/feedback/CHANGES.md`), unless it came back after that change.
    - Then: at most 2 items, best first. Problems first, from the top of the list, whose issues have none of
      `proposed`, `approved`, `rejected`, `stuck`, `needs-person` or `fixing`; a `learned` issue only when it is
@@ -162,11 +162,11 @@ and file:line or PR. Propose only a PASS.
 1. **Already handled in the code?** Find what governs this behaviour on `main`, which is what runs (the newest `ok`
    record in `$STATE/deploys.jsonl` has its sha): `src/agent/defaults/system.md`, `src/agent/runner/`,
    `src/agent/core/`, the core plugin's skills in `src/agent/plugins/core/skills/`, `compose.yaml`, `Dockerfile`;
-   and on the host, Jensen's own setup: `docker exec agent-runner ls /var/agent/claude/skills`,
-   `docker exec agent-runner claude plugin list`, `docker exec agent-runner cat /var/agent/memory/MEMORY.md`. Read the
+   and on the host, Jensen's own setup: `docker exec agent-control ls /var/agent/claude/skills`,
+   `docker exec agent-control claude plugin list`, `docker exec agent-control cat /var/agent/memory/MEMORY.md`. Read the
    code; don't go by names. A learned skill or rule that is already there is FIXED.
 2. **Changed recently?** `gh pr list --state merged --search "merged:>=<14 days ago>" --json number,title,body,mergedAt`
-   and `docker exec agent-runner cat /var/agent/feedback/CHANGES.md`. If a change targets this problem, the newest
+   and `docker exec agent-control cat /var/agent/feedback/CHANGES.md`. If a change targets this problem, the newest
    evidence must be later than the deploy that shipped it (its `ok` record's `ts`); otherwise FIXED.
 3. **Asked and answered?** `gh issue list --state closed --search "<the problem's key words>" --json
    number,title,stateReason,labels`, and the same with `--label rejected --state all`. A person rejected the same change
