@@ -10,6 +10,7 @@ pub mod dashboard;
 pub mod conversations;
 pub mod db;
 pub mod dispatch;
+pub mod doctor;
 pub mod github;
 pub mod handoff;
 pub mod host;

@@ -82,7 +82,11 @@ pub async fn fake_proxy_live(usage: Arc<Mutex<Value>>) -> String {
     let app = axum::Router::new()
         .route("/proxy/usage", axum::routing::get(move || { let u = usage.lock().unwrap().clone(); async move { axum::Json(u) } }))
         .route("/proxy/whoami", axum::routing::get(|| async { axum::Json(json!({"account": "acct-a"})) }))
-        .route("/proxy/perf", axum::routing::get(|| async { axum::Json(json!({"rows": []})) }));
+        .route("/proxy/perf", axum::routing::get(|| async { axum::Json(json!({"rows": []})) }))
+        // every Claude model is served; anything else isn't
+        .route("/v1/models/{model}", axum::routing::get(|Path(model): Path<String>| async move {
+            if model.starts_with("claude-") { (axum::http::StatusCode::OK, "{}") } else { (axum::http::StatusCode::NOT_FOUND, "{}") }
+        }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

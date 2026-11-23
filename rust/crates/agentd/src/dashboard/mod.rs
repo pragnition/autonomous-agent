@@ -27,7 +27,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 
 use crate::azure_rates::AzureRates;
-use crate::db::{append_event, get_setting, set_setting};
+use crate::db::{append_event, get_setting};
 use crate::host::{HostStore, consumers_view, host_view};
 use crate::queue;
 use crate::shared::Shared;
@@ -407,16 +407,7 @@ async fn cancel(State(d): D, UrlPath(id): UrlPath<String>, req: Request) -> Resp
 
 async fn stop(State(d): D, req: Request) -> Response {
     let v = viewer(req.extensions());
-    let stopped = (|| -> anyhow::Result<Vec<String>> {
-        let c = d.s.db.lock();
-        set_setting(&c, queue::PAUSED, "1")?;
-        let cancelled = queue::claimed(&c)?;
-        for item in &cancelled {
-            queue::cancel(&c, item)?;
-        }
-        append_event(&c, "stop_all", None, Some(&v.actor()), Some(&json!({"cancelled": cancelled, "via": "dashboard"})))?;
-        Ok(cancelled)
-    })();
+    let stopped = queue::stop_all(&d.s.db.lock(), &v.actor(), Some("dashboard"));
     match stopped {
         Ok(cancelled) => {
             d.s.wake.notify_one();
@@ -431,13 +422,7 @@ async fn resume(State(d): D, req: Request) -> Response {
     if !v.can_resume() {
         return error(StatusCode::FORBIDDEN, "only an admin can resume");
     }
-    let done = (|| -> anyhow::Result<()> {
-        let c = d.s.db.lock();
-        set_setting(&c, queue::PAUSED, "0")?;
-        append_event(&c, "resume_all", None, Some(&v.actor()), Some(&json!({"via": "dashboard"})))?;
-        Ok(())
-    })();
-    if let Err(e) = done {
+    if let Err(e) = queue::resume_all(&d.s.db.lock(), &v.actor(), Some("dashboard")) {
         return internal(e);
     }
     d.s.wake.notify_one();

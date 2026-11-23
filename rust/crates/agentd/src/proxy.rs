@@ -150,6 +150,21 @@ impl ProxyClient {
         Ok(body["rows"].as_array().cloned().unwrap_or_default())
     }
 
+    /// Whether a session can use `model` through the proxy: Anthropic's model lookup, which spends nothing. The proxy
+    /// puts an account's token only on a request that carries a Claude Code session id, so it asks as one.
+    pub async fn serves(&self, model: &str) -> Result<bool> {
+        let resp = self.http.get(format!("{}/v1/models/{model}", self.base_url))
+            .header("authorization", format!("Bearer {}", crate::prepare::PLACEHOLDER_TOKEN))
+            .header("anthropic-version", "2023-06-01").header("anthropic-beta", "oauth-2025-04-20")
+            .header("x-claude-code-session-id", crate::turn::uuid4())
+            .send().await.map_err(|e| anyhow!("proxy unreachable: {e}"))?;
+        match resp.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            other => bail!("proxy answered {other} for model {model}"),
+        }
+    }
+
     /// The account the proxy has pinned the session to; None when it has no pin.
     pub async fn whoami(&self, sid: &str) -> Result<Option<String>> {
         let resp = self.get("/proxy/whoami", &[("sid", sid)]).await?;

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -21,7 +21,10 @@ use crate::schedules::Scheduler;
 use crate::shared::{Paths, Shared};
 use crate::slack::{self, Slack};
 use crate::turn::{RunnerSettings, TurnRunner};
-use crate::{conversations, linear, parking, scrub, usage_watch};
+use crate::azure_rates::{self, AzureRates};
+use crate::host::{HostStore, Sampler, SamplerSettings};
+use crate::labeler::{self, Labeler};
+use crate::{conversations, dashboard, kpis, linear, meter, parking, pollers, scrub, task_record, usage_watch};
 
 const HEALTH_PORT: u16 = 8080;
 /// Linear's webhook and OAuth callback, the only thing Tailscale Funnel exposes.
@@ -102,6 +105,52 @@ pub async fn serve() -> Result<()> {
     });
     every(&s, 60, "container sweep", move |_| { let c = containers.clone(); async move { c.sweep(chrono::Utc::now()).await } });
 
+    // the task record: its files catch up with whatever was labeled before; Haiku labels what was answered since
+    if let Err(e) = task_record::export_all(&s.db.lock(), &data.join("tasks"), &s.config.timezone) {
+        tracing::warn!("writing the task files failed: {e:#}");
+    }
+    let own_proxy = env("AGENTD_PROXY", "http://172.30.0.1:28090");
+    let labeler = Arc::new(Labeler::new(labeler::haiku(&own_proxy), labeler::proxy_capacity(Arc::new(s.proxy.clone()))));
+    tokio::spawn(labeler.run(s.clone()));
+    every(&s, 300, "KPI digest", |s| async move { kpis::post_digest(&s, chrono::Utc::now()).await.map(drop) });
+    if s.github.is_some() {
+        every(&s, 300, "PR stats", |s| async move { pollers::pr_stats(&s, chrono::Utc::now()).await.map(drop) });
+        every(&s, 300, "agent PRs", |s| async move { pollers::agent_prs(&s).await.map(drop) });
+    }
+    if s.linear.is_some() {
+        every(&s, 300, "Linear issues", |s| async move { pollers::linear_issues(&s, chrono::Utc::now()).await.map(drop) });
+    }
+
+    // the meter, with Azure's billed prices when the az login is configured
+    let rates = match (s.config.llm_meter.upstreams.is_empty(), s.config.cli.get("azure")) {
+        (false, Some(rules)) => Some(Arc::new(AzureRates::load(&s.db.lock(), Some(rules.clone()))?)),
+        _ => None,
+    };
+    if let Some(r) = rates.clone() {
+        every(&s, azure_rates::CHECK_EVERY.as_secs(), "Azure rates", move |s| {
+            let r = r.clone();
+            async move { r.refresh(&s, chrono::Utc::now()).await }
+        });
+    }
+    if !s.config.llm_meter.upstreams.is_empty() {
+        listen(s.config.llm_meter.port as u16, meter::app(s.clone(), rates.clone())).await?;
+    }
+
+    // the dashboard and its Host page
+    let store = Arc::new(Mutex::new(HostStore::default()));
+    let sampler = Sampler::new(SamplerSettings {
+        proc: "/proc".into(), sys_block: "/sys/block".into(), work: s.paths.work.clone(), data: data.clone(),
+        project: env("AGENTD_COMPOSE_PROJECT", "autonomous-agent"), network_container: env("AGENTD_NETWORK", "agent-docker"),
+        apps_docker: std::env::var("AGENTD_APPS_DOCKER").ok().filter(|v| !v.is_empty()) });
+    match sampler {
+        Ok(sampler) => { tokio::spawn(sampler.run(s.clone(), store.clone())); }
+        Err(e) => tracing::warn!("the Host page has no sampler: {e:#}"),
+    }
+    let dash = dashboard::app(s.clone(), dashboard::Options {
+        static_dir: Some(PathBuf::from(env("AGENTD_DASHBOARD_STATIC", "/app/web"))), poll: Duration::from_secs(1),
+        host: store, rates });
+    listen(s.config.dashboard.port as u16, dash).await?;
+
     let health = axum::Router::new().route("/health", axum::routing::get(|| async { axum::Json(json!({"ok": true})) }));
     listen(HEALTH_PORT, health).await?;
     if s.linear.as_ref().is_some_and(|l| l.app.is_some()) {
@@ -136,8 +185,8 @@ where F: Fn(Arc<Shared>) -> Fut + Send + 'static, Fut: Future<Output = Result<()
 
 async fn listen(port: u16, app: axum::Router) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.with_context(|| format!("listening on {port}"))?;
-    tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+    tokio::spawn(async move { // with each request's peer address: the dashboard lets in only trusted peers
+        if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
             tracing::error!("the listener on {port} stopped: {e}");
         }
     });

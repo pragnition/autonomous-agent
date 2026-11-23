@@ -1,7 +1,8 @@
 //! agentd, the control plane: `serve` runs it; `ask` hands it a turn from the host without Slack (and can wait for
-//! the answer: the smoke check); `schedules` checks the schedules file (the agent runs it after editing the file);
-//! `run-turn` runs one turn end to end without the queue, for a live check (started again with the same work item, it
-//! carries the turn on).
+//! the answer); `smoke` is one such turn end to end; `schedules` checks the schedules file (the agent runs it after
+//! editing the file); `doctor` checks the install; `kpis` prints the KPIs; `stop` and `resume` pull and release the
+//! kill switch when Slack is not an option; `run-turn` runs one turn end to end without the queue, for a live check
+//! (started again with the same work item, it carries the turn on).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,6 +17,8 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 const USAGE: &str = "usage: agentd serve\n\
+    agentd doctor | smoke | stop | resume\n\
+    agentd kpis [--days <n>]\n\
     agentd ask [--conversation <id> | --new-prefix <prefix>] (--text <text> | --text-file <path or ->) [--source <s>] \
 [--origin <o>] [--wait <seconds>] [--expect <word>]\n\
     agentd schedules [--file <path>] [--timezone <zone>]\n\
@@ -52,6 +55,20 @@ async fn main() -> Result<()> {
         Some("serve") => return agentd::serve::serve().await,
         Some("schedules") => std::process::exit(schedules(&args)),
         Some("ask") => std::process::exit(ask(&args).await?),
+        Some("doctor") => std::process::exit(doctor().await),
+        Some("smoke") => std::process::exit(smoke().await?),
+        Some("kpis") => std::process::exit(kpis(&args)?),
+        Some("stop") => {
+            let s = agentd::serve::open_offline()?;
+            let cancelled = agentd::queue::stop_all(&s.db.lock(), "local", None)?;
+            println!("stopped; cancelled {}", if cancelled.is_empty() { "nothing".into() } else { cancelled.join(", ") });
+            return Ok(());
+        }
+        Some("resume") => {
+            agentd::queue::resume_all(&agentd::serve::open_offline()?.db.lock(), "local", None)?;
+            println!("resumed");
+            return Ok(());
+        }
         Some("run-turn") => {}
         _ => bail!(USAGE),
     }
@@ -137,4 +154,45 @@ async fn ask(args: &[String]) -> Result<i32> {
     println!("{}: {}", done.status, if answer.is_empty() { result["error"].as_str().unwrap_or_default() } else { answer });
     let expected = flag(args, "--expect").is_none_or(|w| answer.to_lowercase().contains(&w.to_lowercase()));
     Ok(if done.status == "done" && expected { 0 } else { 1 })
+}
+
+/// Every check of the install, one line each; 1 when any fails.
+async fn doctor() -> i32 {
+    let paths = agentd::serve::paths();
+    let secrets = agentd::scrub::load_secrets(std::path::Path::new(&env("AGENTD_SECRETS", "/run/agent/secrets.env")));
+    let proxy = ProxyClient::new(&env("AGENTD_PROXY", "http://172.30.0.1:28090"), SoftCap::from_env(|k| std::env::var(k).ok()));
+    let docker = bollard::Docker::connect_with_local_defaults().ok();
+    let checks = agentd::doctor::run(&paths, &secrets, Some(proxy), docker, "https://api.github.com",
+                                     "https://api.linear.app/graphql").await;
+    let (text, ok) = agentd::doctor::report(&checks);
+    print!("{text}");
+    if ok { 0 } else { 1 }
+}
+
+/// One unattended turn end to end (agentd, a container, the account proxy, Claude) with no Slack thread; prints
+/// `smoke ok`.
+async fn smoke() -> Result<i32> {
+    let s = agentd::serve::open_offline()?;
+    let item = agentd::ask::ask(&s, None, "V-smoke-", "Reply with the single word pong, and nothing else.", None, None)?;
+    println!("queued {item}; waiting for its container (up to 5 min)");
+    let done = agentd::ask::wait(&s, &item, Duration::from_secs(300)).await?;
+    let result = done.result.unwrap_or(Value::Null);
+    let text = result["text"].as_str().unwrap_or_default().trim().to_string();
+    if done.status == "done" && text.to_lowercase().contains("pong") {
+        println!("smoke ok");
+        return Ok(0);
+    }
+    let why = if text.is_empty() { result["error"].as_str().unwrap_or("no answer").to_string() } else { text.chars().take(500).collect() };
+    println!("smoke FAILED: {}: {why}", done.status);
+    Ok(1)
+}
+
+/// The KPIs over the last --days (7 by default).
+fn kpis(args: &[String]) -> Result<i32> {
+    let days: i64 = flag(args, "--days").map_or(Ok(7), |d| d.parse()).context("--days must be a whole number")?;
+    let s = agentd::serve::open_offline()?;
+    let now = chrono::Utc::now();
+    let k = agentd::kpis::compute_kpis(&s.db.lock(), now - chrono::Duration::days(days), now)?;
+    println!("{}", agentd::kpis::format_kpis(&k, &s.config.name));
+    Ok(0)
 }

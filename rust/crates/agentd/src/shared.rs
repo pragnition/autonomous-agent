@@ -19,6 +19,7 @@ use crate::slack::Slack;
 const LOOKUP_RETRY: Duration = Duration::from_secs(600);
 const PERMALINKS_KEPT: usize = 5000;
 
+#[derive(Clone, Debug)]
 pub struct Paths {
     /// agent.toml, persona.toml, agent/system.md and packs/.
     pub config: PathBuf,

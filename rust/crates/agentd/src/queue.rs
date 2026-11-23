@@ -158,6 +158,29 @@ pub fn claimed(c: &Connection) -> Result<Vec<String>> {
         .query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
+/// The kill switch: nothing new starts, and every running turn is cancelled (the dispatcher stops them). The
+/// cancelled items; `via` says where it was pulled ("dashboard").
+pub fn stop_all(c: &Connection, actor: &str, via: Option<&str>) -> Result<Vec<String>> {
+    crate::db::set_setting(c, PAUSED, "1")?;
+    let cancelled = claimed(c)?;
+    for item in &cancelled {
+        cancel(c, item)?; // each in its own transaction, as the stop tool does
+    }
+    let mut data = json!({"cancelled": cancelled});
+    if let Some(via) = via {
+        data["via"] = via.into();
+    }
+    crate::db::append_event(c, "stop_all", None, Some(actor), Some(&data))?;
+    Ok(cancelled)
+}
+
+pub fn resume_all(c: &Connection, actor: &str, via: Option<&str>) -> Result<()> {
+    crate::db::set_setting(c, PAUSED, "0")?;
+    let data = via.map(|v| json!({"via": v}));
+    crate::db::append_event(c, "resume_all", None, Some(actor), data.as_ref())?;
+    Ok(())
+}
+
 pub fn claimed_count(c: &Connection) -> Result<usize> {
     Ok(claimed(c)?.len())
 }
