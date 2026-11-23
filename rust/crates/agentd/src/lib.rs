@@ -1,6 +1,7 @@
 //! agentd: the control plane that replaces core and the runner.
 
 pub mod admission;
+pub mod ask;
 pub mod cli_login;
 pub mod config;
 pub mod containers;

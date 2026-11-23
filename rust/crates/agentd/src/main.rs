@@ -1,6 +1,7 @@
-//! agentd, the control plane: `serve` runs it; `schedules` checks the schedules file (the agent runs it after editing
-//! the file); `run-turn` runs one turn end to end without Slack, for a live check (started again with the same work
-//! item, it carries the turn on).
+//! agentd, the control plane: `serve` runs it; `ask` hands it a turn from the host without Slack (and can wait for
+//! the answer: the smoke check); `schedules` checks the schedules file (the agent runs it after editing the file);
+//! `run-turn` runs one turn end to end without the queue, for a live check (started again with the same work item, it
+//! carries the turn on).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -14,8 +15,11 @@ use agentd::turn::{BoxFuture, RunnerSettings, TurnHost, TurnRunner};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-const USAGE: &str = "usage: agentd serve | agentd schedules [--file <path>] [--timezone <zone>] | \
-                     agentd run-turn --conversation <id> --work-item <id> --prompt <text>";
+const USAGE: &str = "usage: agentd serve\n\
+    agentd ask [--conversation <id> | --new-prefix <prefix>] (--text <text> | --text-file <path or ->) [--source <s>] \
+[--origin <o>] [--wait <seconds>] [--expect <word>]\n\
+    agentd schedules [--file <path>] [--timezone <zone>]\n\
+    agentd run-turn --conversation <id> --work-item <id> --prompt <text>";
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
@@ -47,6 +51,7 @@ async fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("serve") => return agentd::serve::serve().await,
         Some("schedules") => std::process::exit(schedules(&args)),
+        Some("ask") => std::process::exit(ask(&args).await?),
         Some("run-turn") => {}
         _ => bail!(USAGE),
     }
@@ -109,4 +114,27 @@ fn schedules(args: &[String]) -> i32 {
     let (out, code) = agentd::schedules::check(std::path::Path::new(&file), tz, chrono::Utc::now().with_timezone(&tz));
     print!("{out}");
     code
+}
+
+/// Queue a turn; with --wait, wait for it and print its answer (exit 1 unless it's done, and contains --expect when
+/// given).
+async fn ask(args: &[String]) -> Result<i32> {
+    let text = match (flag(args, "--text"), flag(args, "--text-file")) {
+        (Some(t), _) => t,
+        (None, Some(path)) if path == "-" => std::io::read_to_string(std::io::stdin())?,
+        (None, Some(path)) => std::fs::read_to_string(path)?,
+        _ => bail!(USAGE),
+    };
+    let s = agentd::serve::open_offline()?;
+    let prefix = flag(args, "--new-prefix").unwrap_or_else(|| "V-ask-".into());
+    let item = agentd::ask::ask(&s, flag(args, "--conversation").as_deref(), &prefix, &text, flag(args, "--source").as_deref(),
+                                flag(args, "--origin").as_deref())?;
+    println!("{item}");
+    let Some(seconds) = flag(args, "--wait").and_then(|w| w.parse().ok()) else { return Ok(0) };
+    let done = agentd::ask::wait(&s, &item, Duration::from_secs(seconds)).await?;
+    let result = done.result.unwrap_or(Value::Null);
+    let answer = result["text"].as_str().unwrap_or_default().trim();
+    println!("{}: {}", done.status, if answer.is_empty() { result["error"].as_str().unwrap_or_default() } else { answer });
+    let expected = flag(args, "--expect").is_none_or(|w| answer.to_lowercase().contains(&w.to_lowercase()));
+    Ok(if done.status == "done" && expected { 0 } else { 1 })
 }

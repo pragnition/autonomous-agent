@@ -121,3 +121,19 @@ async fn restart_reattaches_and_reports_once() {
     assert_eq!((rig.starts(), status(&rig, &id).as_str()), (1, "done"));
     assert_eq!(runs_file(&rig, &id).matches("\"before\"").count(), 1, "nothing forwarded twice");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ask_queues_a_turn_without_slack() {
+    let rig = Rig::new(&[vec![init(), read_prompt(), say("pong"), result("pong")]]).await;
+    tokio::spawn(rig.dispatcher().run());
+    let id = agentd::ask::ask(&rig.s, None, "V-smoke-", "Reply with the single word pong.", Some("improve-jensen"),
+                              Some("improve-jensen review")).unwrap();
+    let item = agentd::queue::get(&rig.s.db.lock(), &id).unwrap().unwrap();
+    assert!(item.conversation_id.as_deref().unwrap().starts_with("V-smoke-"));
+    assert_eq!((item.payload["source"].as_str(), item.payload["origin"].as_str(), item.payload["unattended"].as_bool()),
+               (Some("improve-jensen"), Some("improve-jensen review"), Some(true)));
+    let done = agentd::ask::wait(&rig.s, &id, std::time::Duration::from_secs(20)).await.unwrap();
+    assert_eq!((done.status.as_str(), done.result.unwrap()["text"].as_str()), ("done", Some("pong")));
+    assert!(rig.posted().is_empty(), "nothing posted: no Slack thread");
+    assert!(agentd::ask::ask(&rig.s, Some("V-missing"), "V-", "x", None, None).is_err());
+}

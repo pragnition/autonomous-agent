@@ -31,14 +31,27 @@ fn env(name: &str, default: &str) -> String {
     std::env::var(name).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
 }
 
-pub async fn serve() -> Result<()> {
+/// The data folders, from the environment.
+pub fn paths() -> Paths {
     let data = PathBuf::from(env("AGENTD_DATA", "/data"));
-    let paths = Paths { config: data.join("config"), data: data.clone(), work: PathBuf::from(env("AGENTD_WORK", "/var/agent")),
+    Paths { config: data.join("config"), data: data.clone(), work: PathBuf::from(env("AGENTD_WORK", "/var/agent")),
                         defaults: PathBuf::from(env("AGENTD_DEFAULTS", "/app/src/agent/defaults")),
-                        plugins: PathBuf::from(env("AGENTD_PLUGINS", "/app/src/agent/plugins")) };
+                        plugins: PathBuf::from(env("AGENTD_PLUGINS", "/app/src/agent/plugins")) }
+}
+
+/// agentd's state for a command run beside `agentd serve` (no Slack calls, no Linear).
+pub fn open_offline() -> Result<Shared> {
+    Shared::open(paths(), BTreeMap::new(), Slack::new("", slack::API), None,
+                 ProxyClient::new(&env("AGENTD_PROXY", "http://172.30.0.1:28090"), SoftCap::default()), None)
+}
+
+pub async fn serve() -> Result<()> {
+    let paths = paths();
+    let data = paths.data.clone();
     let secrets = scrub::load_secrets(Path::new(&env("AGENTD_SECRETS", "/run/agent/secrets.env")));
     let secret = |k: &str| secrets.get(k).filter(|v| !v.is_empty()).cloned();
-    let slack = Slack::new(&secret("SLACK_BOT_TOKEN").context("SLACK_BOT_TOKEN is missing from core's secrets")?, slack::API);
+    let slack = Slack::new(&secret("SLACK_BOT_TOKEN").context("SLACK_BOT_TOKEN is missing from core's secrets")?,
+                           &env("AGENTD_SLACK_API", slack::API));
     let bot = slack.auth_test().await.context("Slack auth.test")?;
     let proxy = ProxyClient::new(&env("AGENTD_PROXY", "http://172.30.0.1:28090"), SoftCap::from_env(|k| std::env::var(k).ok()));
     let github = secret("GITHUB_READ_TOKEN").map(|t| GitHub::new(&t, "https://api.github.com"));
