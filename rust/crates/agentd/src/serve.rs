@@ -220,7 +220,7 @@ fn slack_intake(s: Arc<Shared>, app_token: String) {
 
 /// What the containers read from the data folder: the team's time zone for `agentd schedules`, and each project's app
 /// env file (secrets/projects/<project>.env) as runner/projects/<project>.env.
-fn prepare_dirs(s: &Shared) -> Result<()> {
+pub fn prepare_dirs(s: &Shared) -> Result<()> {
     for dir in ["cli", "runner", "schedules", "tasks"] {
         std::fs::create_dir_all(s.paths.data.join(dir))?;
     }
@@ -231,8 +231,15 @@ fn prepare_dirs(s: &Shared) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     for entry in entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "env")) {
         let name = entry.file_name().to_string_lossy().into_owned();
+        let data = match std::fs::read(entry.path()) {
+            Ok(data) => data,
+            Err(e) => { // agentd runs as the agent user: a file only its owner can read is left out, not fatal
+                tracing::warn!("can't read secrets/projects/{name} ({e}); the sessions won't get it");
+                continue;
+            }
+        };
         let tmp = dest.join(format!(".{name}.tmp"));
-        std::fs::write(&tmp, std::fs::read(entry.path())?)?;
+        std::fs::write(&tmp, data)?;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
         std::fs::rename(&tmp, dest.join(&name))?;
     }

@@ -23,8 +23,8 @@ def run(tmp_path: Path, command: str) -> tuple[list[str], str]:
     live = tmp_path / "live"
     (live / "deploy").mkdir(parents=True, exist_ok=True)
     shutil.copy(ROOT / "deploy" / "cutover.sh", live / "deploy" / "cutover.sh")
-    for name in ("core.env", "agent.env"):
-        (live / "data" / "secrets").mkdir(parents=True, exist_ok=True)
+    for name in ("core.env", "agent.env", "projects/app.env"):
+        (live / "data" / "secrets" / "projects").mkdir(parents=True, exist_ok=True)
         (live / "data" / "secrets" / name).write_text("K=v\n")
     stubs = tmp_path / "bin"
     stubs.mkdir(exist_ok=True)
@@ -55,6 +55,8 @@ def test_switch_steps_in_order(tmp_path):
                       "docker exec agent-control agentd resume", "docker exec agent-control agentd doctor",
                       "docker exec agent-control agentd smoke")
     assert order == sorted(order), calls
+    granted = [c.split()[-1] for c in calls if c.startswith("sudo setfacl")]
+    assert [Path(g).name for g in granted] == ["projects", "core.env", "agent.env", "app.env"]  # agentd reads them as uid 1001
     assert "DOCKER_GID=116\n" in env and f"AGENTD_DATA_HOST={tmp_path / 'live' / 'data'}\n" in env
     assert "SUPERVISE_CONTROL=http://control:8080/health\n" in env
 

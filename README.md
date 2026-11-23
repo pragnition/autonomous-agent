@@ -27,7 +27,8 @@ sessions across the team's Claude accounts and reports their usage. Put it at
 2. **Write the config and the secrets files.**
 
    ```sh
-   mkdir -p data/config/packs data/secrets/projects
+   mkdir -p data/config/packs data/secrets/projects data/db data/runs data/tasks data/runner data/cli data/schedules
+   sudo chown -R 1001:1001 data/db data/runs data/tasks data/runner data/cli   # the control plane runs as uid 1001
    cp examples/config/agent.toml data/config/
    cp -r examples/config/packs/sample data/config/packs/
    ```
@@ -36,7 +37,8 @@ sessions across the team's Claude accounts and reports their usage. Put it at
    the sample pack into one of your projects (`repo`, `owner`, `slack_channel`, `linear_team`), or start
    from `examples/pack-templates/`. `data/config/persona.toml` is optional.
 
-   The secrets are `KEY=value` files, mode 0600, and all three must exist:
+   The secrets are `KEY=value` files, mode 0600, and all three must exist. The control plane runs as uid 1001, so
+   give it read access to `core.env`, `agent.env` and each `projects/*.env` (`sudo setfacl -m u:1001:r <file>`):
 
    ```sh
    # data/secrets/core.env

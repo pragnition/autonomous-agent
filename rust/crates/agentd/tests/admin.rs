@@ -56,3 +56,20 @@ fn stop_and_resume_offline() {
     let actor: String = c.query_row("SELECT actor FROM events WHERE type = 'resume_all' ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
     assert_eq!(actor, "local");
 }
+
+#[tokio::test]
+async fn an_unreadable_project_env_file_is_skipped_not_fatal() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
+    let s = shared(dir.path(), &slack).await;
+    let projects = s.paths.data.join("secrets").join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::write(projects.join("ok.env"), "A=1\n").unwrap();
+    std::fs::write(projects.join("locked.env"), "B=2\n").unwrap();
+    std::fs::set_permissions(projects.join("locked.env"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    agentd::serve::prepare_dirs(&s).unwrap(); // agentd still starts
+    let copied = s.paths.data.join("runner").join("projects");
+    assert_eq!(std::fs::read_to_string(copied.join("ok.env")).unwrap(), "A=1\n");
+    assert!(!copied.join("locked.env").exists());
+    assert!(s.paths.data.join("runner").join("timezone").exists());
+}

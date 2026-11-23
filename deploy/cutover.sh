@@ -78,7 +78,11 @@ s.backup(d); d.close()"
   docker stop agent-core agent-runner
   # agentd runs as the agent user, where core ran as root
   sudo chown -R "$AGENT_UID:$AGENT_UID" "$DATA/db" "$DATA/runs" "$DATA/tasks" "$DATA/runner" "$DATA/cli"
-  for file in "$DATA/secrets/core.env" "$DATA/secrets/agent.env"; do
+  # and reads the secrets core read as root: its own, the sessions' keys and the projects' app env files
+  [ ! -d "$DATA/secrets/projects" ] || sudo setfacl -m "u:$AGENT_UID:rx" "$DATA/secrets/projects" 2>/dev/null \
+    || sudo chmod o+x "$DATA/secrets/projects"
+  for file in "$DATA/secrets/core.env" "$DATA/secrets/agent.env" "$DATA"/secrets/projects/*.env; do
+    [ -f "$file" ] || continue
     sudo setfacl -m "u:$AGENT_UID:r" "$file" 2>/dev/null \
       || { sudo chgrp "$AGENT_UID" "$file" && sudo chmod 0640 "$file"; }
   done
