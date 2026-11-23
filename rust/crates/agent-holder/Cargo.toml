@@ -1,0 +1,24 @@
+[package]
+name = "agent-holder"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent-holder"
+path = "src/main.rs"
+
+[dependencies]
+holder-proto = { path = "../holder-proto" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+nix = { version = "0.30", features = ["signal", "process"] }
+
+[dev-dependencies]
+tempfile = "3"

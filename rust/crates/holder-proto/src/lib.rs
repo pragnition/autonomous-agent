@@ -102,7 +102,7 @@ impl std::fmt::Display for BadName {
 impl std::error::Error for BadName {}
 
 /// A conversation or work item id as one path component. Ids come from the database, but are never trusted as paths.
-fn component(name: &str) -> Result<&str, BadName> {
+pub fn component(name: &str) -> Result<&str, BadName> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
         return Err(BadName(name.to_string()));
     }
