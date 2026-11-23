@@ -1,0 +1,1463 @@
+{
+ "seed": {
+  "conversations": [
+   {
+    "id": "C1",
+    "channel": "D1",
+    "thread_ts": null,
+    "project": null,
+    "task_id": null,
+    "session_id": null,
+    "session_account": null,
+    "is_primary": 1,
+    "waiting": 0,
+    "model": null,
+    "cwd": null,
+    "created_at": "2026-11-18T00:00:00Z",
+    "last_active_at": "2026-11-18T00:00:00Z"
+   },
+   {
+    "id": "C2",
+    "channel": "C2",
+    "thread_ts": null,
+    "project": "sample",
+    "task_id": null,
+    "session_id": null,
+    "session_account": null,
+    "is_primary": 1,
+    "waiting": 0,
+    "model": null,
+    "cwd": null,
+    "created_at": "2026-11-18T00:00:00Z",
+    "last_active_at": "2026-11-18T00:00:00Z"
+   },
+   {
+    "id": "C3",
+    "channel": null,
+    "thread_ts": null,
+    "project": null,
+    "task_id": null,
+    "session_id": null,
+    "session_account": null,
+    "is_primary": 1,
+    "waiting": 0,
+    "model": null,
+    "cwd": null,
+    "created_at": "2026-11-18T00:00:00Z",
+    "last_active_at": "2026-11-18T00:00:00Z"
+   },
+   {
+    "id": "V-smoke-1",
+    "channel": null,
+    "thread_ts": null,
+    "project": null,
+    "task_id": null,
+    "session_id": null,
+    "session_account": null,
+    "is_primary": 1,
+    "waiting": 0,
+    "model": null,
+    "cwd": null,
+    "created_at": "2026-11-18T00:00:00Z",
+    "last_active_at": "2026-11-18T00:00:00Z"
+   },
+   {
+    "id": "C4",
+    "channel": null,
+    "thread_ts": null,
+    "project": null,
+    "task_id": null,
+    "session_id": null,
+    "session_account": null,
+    "is_primary": 1,
+    "waiting": 0,
+    "model": null,
+    "cwd": null,
+    "created_at": "2026-11-18T00:00:00Z",
+    "last_active_at": "2026-11-18T00:00:00Z"
+   }
+  ],
+  "linear_issue_conversations": [
+   {
+    "issue_id": "i1",
+    "conversation_id": "C3"
+   }
+  ],
+  "work_items": [
+   {
+    "id": "W01",
+    "conversation_id": "C1",
+    "kind": "turn",
+    "payload": "{\"text\": \"hi\", \"source\": \"slack\", \"requester\": \"sam\", \"origin\": \"[DM from sam https://slack.example/p1]\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"hello\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T01:00:00Z",
+    "updated_at": "2026-11-18T01:01:00Z"
+   },
+   {
+    "id": "W02",
+    "conversation_id": "C1",
+    "kind": "turn",
+    "payload": "{\"text\": \"build the login page\", \"source\": \"slack\", \"requester\": \"sam\", \"origin\": \"[DM https://slack.example/p2 more https://slack.example/p3]\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"Opened https://github.com/example-org/agent-sample/pull/5 and https://linear.app/ex/issue/SAM-3/x\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T02:00:00Z",
+    "updated_at": "2026-11-18T02:30:00Z"
+   },
+   {
+    "id": "W03",
+    "conversation_id": "C1",
+    "kind": "turn",
+    "payload": "{\"text\": \"status?\", \"source\": \"slack\", \"requester\": \"sam\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"half done\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T02:20:00Z",
+    "updated_at": "2026-11-18T02:40:00Z"
+   },
+   {
+    "id": "W04",
+    "conversation_id": "C2",
+    "kind": "turn",
+    "payload": "{\"text\": \"fix SAM-12 crash in example-org/agent-sample\", \"actor\": \"alice\"}",
+    "status": "failed",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"\", \"outcome\": \"error\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T03:00:00Z",
+    "updated_at": "2026-11-18T03:05:00Z"
+   },
+   {
+    "id": "W05",
+    "conversation_id": "C3",
+    "kind": "turn",
+    "payload": "{\"text\": \"Linear agent session event:{\\\"action\\\": \\\"created\\\", \\\"agentSession\\\": {\\\"id\\\": \\\"s1\\\", \\\"creator\\\": {\\\"email\\\": \\\"alice@example.com\\\", \\\"name\\\": \\\"Alice\\\"}, \\\"issue\\\": {\\\"identifier\\\": \\\"SAM-7\\\", \\\"title\\\": \\\"Crash on save\\\"}, \\\"comment\\\": {\\\"body\\\": \\\"please look\\\"}}}\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"fixed it\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T04:00:00Z",
+    "updated_at": "2026-11-18T05:00:00Z"
+   },
+   {
+    "id": "W06",
+    "conversation_id": "C1",
+    "kind": "turn",
+    "payload": "{\"text\": \"carry on\", \"continuation\": true, \"actor\": \"sam\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"carried on\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T06:00:00Z",
+    "updated_at": "2026-11-18T06:10:00Z"
+   },
+   {
+    "id": "W07",
+    "conversation_id": "C4",
+    "kind": "turn",
+    "payload": "{\"text\": \"nightly report\", \"origin\": \"[schedule nightly]\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"report posted\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T07:00:00Z",
+    "updated_at": "2026-11-18T07:01:00Z"
+   },
+   {
+    "id": "W08",
+    "conversation_id": "V-smoke-1",
+    "kind": "turn",
+    "payload": "{\"text\": \"smoke\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"ok\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T08:00:00Z",
+    "updated_at": "2026-11-18T08:01:00Z"
+   },
+   {
+    "id": "W09",
+    "conversation_id": "C1",
+    "kind": "turn",
+    "payload": "{\"text\": \"also this\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"\", \"read_by\": \"W06\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T09:00:00Z",
+    "updated_at": "2026-11-18T09:00:00Z"
+   },
+   {
+    "id": "W10",
+    "conversation_id": "C1",
+    "kind": "turn",
+    "payload": "{\"text\": \"later\"}",
+    "status": "queued",
+    "lease_until": null,
+    "attempts": 0,
+    "result": null,
+    "delivered_into": null,
+    "created_at": "2026-11-18T10:00:00Z",
+    "updated_at": "2026-11-18T10:00:00Z"
+   },
+   {
+    "id": "W11",
+    "conversation_id": "C2",
+    "kind": "turn",
+    "payload": "{\"text\": \"never mind the sample thing\", \"source\": \"slack\", \"requester\": \"alice\"}",
+    "status": "cancelled",
+    "lease_until": null,
+    "attempts": 0,
+    "result": null,
+    "delivered_into": null,
+    "created_at": "2026-11-18T11:00:00Z",
+    "updated_at": "2026-11-18T11:00:00Z"
+   },
+   {
+    "id": "W12",
+    "conversation_id": "C3",
+    "kind": "turn",
+    "payload": "{\"text\": \"Linear agent session event:{\\\"action\\\": \\\"prompted\\\", \\\"agentActivity\\\": {\\\"user\\\": {\\\"email\\\": \\\"x@else.com\\\", \\\"name\\\": \\\"Xu\\\"}, \\\"content\\\": {\\\"body\\\": \\\"and now?\\\"}}, \\\"agentSession\\\": {\\\"id\\\": \\\"s2\\\", \\\"issue\\\": {\\\"identifier\\\": \\\"SAM-9\\\", \\\"title\\\": \\\"\\\"}}}\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"on it\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T12:00:00Z",
+    "updated_at": "2026-11-18T12:30:00Z"
+   },
+   {
+    "id": "W13",
+    "conversation_id": "C1",
+    "kind": "turn",
+    "payload": "{\"text\": \"garbled please\", \"source\": \"slack\", \"requester\": \"sam\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"?\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T13:00:00Z",
+    "updated_at": "2026-11-18T13:01:00Z"
+   },
+   {
+    "id": "W14",
+    "conversation_id": "C2",
+    "kind": "turn",
+    "payload": "{\"text\": \"handover\", \"source\": \"slack\", \"requester\": \"alice\", \"follows\": \"W04\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"picked up\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T14:00:00Z",
+    "updated_at": "2026-11-18T14:20:00Z"
+   },
+   {
+    "id": "W15",
+    "conversation_id": "C5",
+    "kind": "turn",
+    "payload": "{\"text\": \"boom\", \"source\": \"slack\", \"requester\": \"bob\"}",
+    "status": "done",
+    "lease_until": null,
+    "attempts": 0,
+    "result": "{\"text\": \"x\"}",
+    "delivered_into": null,
+    "created_at": "2026-11-18T15:00:00Z",
+    "updated_at": "2026-11-18T15:01:00Z"
+   }
+  ],
+  "events": [
+   {
+    "id": 1,
+    "ts": "2026-11-18T02:05:00Z",
+    "task_id": null,
+    "type": "session_started",
+    "actor": null,
+    "data": "{\"work_item\": \"W02\"}"
+   },
+   {
+    "id": 2,
+    "ts": "2026-11-18T02:10:00Z",
+    "task_id": null,
+    "type": "session_started",
+    "actor": null,
+    "data": "{\"work_item\": \"W02\"}"
+   },
+   {
+    "id": 3,
+    "ts": "2026-11-18T04:30:00Z",
+    "task_id": null,
+    "type": "session_started",
+    "actor": null,
+    "data": "{\"work_item\": \"W05\"}"
+   }
+  ]
+ },
+ "answers": {
+  "hi": "{\"label\": \"chat\"}",
+  "build the login page": "Sure: ```json\n{\"label\": \"new\", \"title\": \"Login page\", \"outcome\": \"PR opened\", \"finished\": true, \"project\": \"Sample\"}\n```",
+  "status?": "{\"label\": \"same\", \"task\": \"TK-0001\", \"outcome\": \"reported progress\", \"finished\": false}",
+  "fix SAM-12 crash in example-org/agent-sample": "{\"label\": \"new\", \"title\": \"\", \"outcome\": \"failed\", \"finished\": false, \"project\": \"nope\"}",
+  "SAM-7 Crash on save: please look": "{\"label\": \"new\", \"title\": \"Fix crash on save\", \"outcome\": \"fixed\", \"finished\": true, \"project\": null}",
+  "carry on": "{\"label\": \"new\", \"title\": \"ignored\", \"outcome\": \"kept going\", \"finished\": true}",
+  "nightly report": "{\"label\": \"same\", \"task\": \"TK-0999\", \"outcome\": \"posted\", \"finished\": true}",
+  "SAM-9: and now?": "{\"label\": \"new\", \"title\": \"Stranger work\", \"outcome\": \"started\", \"finished\": null, \"project\": \"sample\"}",
+  "garbled please": "no json here",
+  "handover": "{\"label\": \"chat\"}",
+  "never mind the sample thing": "{\"label\": \"chat\"}"
+ },
+ "pending": [
+  "W01",
+  "W02",
+  "W03",
+  "W04",
+  "W05",
+  "W06",
+  "W07",
+  "W11",
+  "W12",
+  "W13",
+  "W14",
+  "W15"
+ ],
+ "origins": {
+  "W01": [
+   "slack",
+   "sam",
+   null
+  ],
+  "W02": [
+   "slack",
+   "sam",
+   null
+  ],
+  "W03": [
+   "slack",
+   "sam",
+   null
+  ],
+  "W04": [
+   "slack",
+   "alice",
+   null
+  ],
+  "W05": [
+   "linear",
+   "alice",
+   null
+  ],
+  "W06": [
+   "slack",
+   "sam",
+   "W03"
+  ],
+  "W07": [
+   "schedule",
+   null,
+   null
+  ],
+  "W11": [
+   "slack",
+   "alice",
+   null
+  ],
+  "W12": [
+   "linear",
+   "Xu",
+   null
+  ],
+  "W13": [
+   "slack",
+   "sam",
+   null
+  ],
+  "W14": [
+   "slack",
+   "alice",
+   "W04"
+  ],
+  "W15": [
+   "slack",
+   "bob",
+   null
+  ]
+ },
+ "hints": {
+  "W01": [],
+  "W02": [
+   "sample"
+  ],
+  "W03": [],
+  "W04": [
+   "sample"
+  ],
+  "W05": [
+   "sample"
+  ],
+  "W06": [],
+  "W07": [],
+  "W11": [
+   "sample"
+  ],
+  "W12": [
+   "sample"
+  ],
+  "W13": [],
+  "W14": [
+   "sample"
+  ],
+  "W15": []
+ },
+ "sweeps": [
+  10,
+  0,
+  1,
+  0
+ ],
+ "calls": [
+  {
+   "asked": "hi",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from sam, via slack):\nhi\n\nThe agent's reply:\nhello"
+  },
+  {
+   "asked": "build the login page",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- [chat] hi\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from sam, via slack):\nbuild the login page\n\nThe agent's reply:\nOpened https://github.com/example-org/agent-sample/pull/5 and https://linear.app/ex/issue/SAM-3/x"
+  },
+  {
+   "asked": "status?",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- [chat] hi\n- [TK-0001 \"Login page\", sample] build the login page\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": TK-0001\n\nThe request (from sam, via slack):\nstatus?\n\nThe agent's reply:\nhalf done"
+  },
+  {
+   "asked": "carry on",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- [chat] hi\n- [TK-0001 \"Login page\", sample] build the login page\n- [TK-0001 \"Login page\"] status?\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": TK-0001\n\nThe request (from sam, via slack):\ncarry on\n\nThe agent's reply:\ncarried on"
+  },
+  {
+   "asked": "garbled please",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- [chat] hi\n- [TK-0001 \"Login page\", sample] build the login page\n- [TK-0001 \"Login page\"] status?\n- [TK-0001 \"Login page\"] carry on\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": TK-0001\n\nThe request (from sam, via slack):\ngarbled please\n\nThe agent's reply:\n?"
+  },
+  {
+   "asked": "fix SAM-12 crash in example-org/agent-sample",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from alice, via slack):\nfix SAM-12 crash in example-org/agent-sample\n\nThe agent's reply (the turn ended in an error):\n(no text)"
+  },
+  {
+   "asked": "SAM-7 Crash on save: please look",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- TK-0002 \"fix SAM-12 crash in example-org/agent-sample\" (sample; latest: failed)\nTask ids you may use for \"same\": TK-0002\n\nThe request (from alice, via linear):\nSAM-7 Crash on save: please look\n\nThe agent's reply:\nfixed it"
+  },
+  {
+   "asked": "never mind the sample thing",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- [TK-0002 \"fix SAM-12 crash in example-org/agent-sample\", sample] fix SAM-12 crash in example-org/agent-sample\nThis person's other tasks from the last 24 hours:\n- TK-0003 \"Fix crash on save\" (general; latest: fixed)\nTask ids you may use for \"same\": TK-0002, TK-0003\n\nThe request (from alice, via slack):\nnever mind the sample thing\n\nThe agent's reply (the turn ended in an error):\n(no text)"
+  },
+  {
+   "asked": "SAM-9: and now?",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- [TK-0003 \"Fix crash on save\"] SAM-7 Crash on save: please look\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": TK-0003\n\nThe request (from Xu, via linear):\nSAM-9: and now?\n\nThe agent's reply:\non it"
+  },
+  {
+   "asked": "handover",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- [TK-0002 \"fix SAM-12 crash in example-org/agent-sample\", sample] fix SAM-12 crash in example-org/agent-sample\n- [chat] never mind the sample thing\nThis person's other tasks from the last 24 hours:\n- TK-0003 \"Fix crash on save\" (general; latest: fixed)\nTask ids you may use for \"same\": TK-0002, TK-0003\n\nThe request (from alice, via slack):\nhandover\n\nThe agent's reply:\npicked up"
+  },
+  {
+   "asked": "nightly report",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from someone, via schedule):\nnightly report\n\nThe agent's reply:\nreport posted"
+  },
+  {
+   "asked": "boom",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from bob, via slack):\nboom\n\nThe agent's reply:\nx"
+  },
+  {
+   "asked": "garbled please",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- [chat] hi\n- [TK-0001 \"Login page\", sample] build the login page\n- [TK-0001 \"Login page\"] status?\n- [TK-0001 \"Login page\"] carry on\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": TK-0001\n\nThe request (from sam, via slack):\ngarbled please\n\nThe agent's reply:\n?"
+  },
+  {
+   "asked": "boom",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from bob, via slack):\nboom\n\nThe agent's reply:\nx"
+  },
+  {
+   "asked": "garbled please",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- [chat] hi\n- [TK-0001 \"Login page\", sample] build the login page\n- [TK-0001 \"Login page\"] status?\n- [TK-0001 \"Login page\"] carry on\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": TK-0001\n\nThe request (from sam, via slack):\ngarbled please\n\nThe agent's reply:\n?"
+  },
+  {
+   "asked": "boom",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from bob, via slack):\nboom\n\nThe agent's reply:\nx"
+  },
+  {
+   "asked": "boom",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from bob, via slack):\nboom\n\nThe agent's reply:\nx"
+  }
+ ],
+ "after_sweeps": {
+  "request_labels": [
+   {
+    "work_item_id": "W01",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "hi",
+    "link": "https://slack.example/p1",
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T01:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T01:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W02",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "build the login page",
+    "link": "https://slack.example/p3",
+    "label": "new",
+    "task_id": "TK-0001",
+    "title": "Login page",
+    "project": "sample",
+    "outcome": "PR opened",
+    "finished": 1,
+    "arrived_at": "2026-11-18T02:00:00Z",
+    "started_at": "2026-11-18T02:10:00Z",
+    "answered_at": "2026-11-18T02:30:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W03",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "status?",
+    "link": null,
+    "label": "same",
+    "task_id": "TK-0001",
+    "title": null,
+    "project": null,
+    "outcome": "reported progress",
+    "finished": 0,
+    "arrived_at": "2026-11-18T02:20:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T02:40:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W04",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": null,
+    "asked": "fix SAM-12 crash in example-org/agent-sample",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0002",
+    "title": "fix SAM-12 crash in example-org/agent-sample",
+    "project": "sample",
+    "outcome": "failed",
+    "finished": 0,
+    "arrived_at": "2026-11-18T03:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T03:05:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W05",
+    "conversation_id": "C3",
+    "source": "linear",
+    "requester": "alice",
+    "follows": null,
+    "asked": "SAM-7 Crash on save: please look",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0003",
+    "title": "Fix crash on save",
+    "project": null,
+    "outcome": "fixed",
+    "finished": 1,
+    "arrived_at": "2026-11-18T04:00:00Z",
+    "started_at": "2026-11-18T04:30:00Z",
+    "answered_at": "2026-11-18T05:00:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W06",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": "W03",
+    "asked": "carry on",
+    "link": null,
+    "label": "same",
+    "task_id": "TK-0001",
+    "title": null,
+    "project": null,
+    "outcome": "kept going",
+    "finished": 1,
+    "arrived_at": "2026-11-18T06:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T06:10:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W07",
+    "conversation_id": "C4",
+    "source": "schedule",
+    "requester": null,
+    "follows": null,
+    "asked": "nightly report",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0005",
+    "title": "nightly report",
+    "project": null,
+    "outcome": "posted",
+    "finished": 1,
+    "arrived_at": "2026-11-18T07:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T07:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W11",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": null,
+    "asked": "never mind the sample thing",
+    "link": null,
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T11:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T11:00:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W12",
+    "conversation_id": "C3",
+    "source": "linear",
+    "requester": "Xu",
+    "follows": null,
+    "asked": "SAM-9: and now?",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0004",
+    "title": "Stranger work",
+    "project": "sample",
+    "outcome": "started",
+    "finished": null,
+    "arrived_at": "2026-11-18T12:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T12:30:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W13",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "garbled please",
+    "link": null,
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T13:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T13:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W14",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": "W04",
+    "asked": "handover",
+    "link": null,
+    "label": "same",
+    "task_id": "TK-0002",
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T14:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T14:20:00Z",
+    "tries": 0,
+    "version": 2
+   }
+  ],
+  "task_records": [
+   {
+    "id": "TK-0001",
+    "source": "slack",
+    "project": "sample",
+    "requested_by": "sam",
+    "started_at": "2026-11-18T02:00:00Z",
+    "ended_at": "2026-11-18T06:10:00Z",
+    "work_time_s": 2400,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0001\", \"title\": \"Login page\", \"source\": \"slack\", \"project\": \"sample\", \"requested_by\": \"sam\", \"followed_up_by\": [], \"where\": [\"https://slack.example/p3\"], \"started_at\": \"2026-11-18T02:00:00Z\", \"ended_at\": \"2026-11-18T06:10:00Z\", \"work_time_s\": 2400, \"requests\": 3, \"finished\": true, \"outcome\": \"kept going\", \"links\": [\"https://github.com/example-org/agent-sample/pull/5\", \"https://linear.app/ex/issue/SAM-3/x\"], \"steps\": [{\"at\": \"2026-11-18T02:00:00Z\", \"by\": \"sam\", \"asked\": \"build the login page\", \"outcome\": \"PR opened\", \"finished\": true, \"work_item\": \"W02\", \"conversation\": \"C1\"}, {\"at\": \"2026-11-18T02:20:00Z\", \"by\": \"sam\", \"asked\": \"status?\", \"outcome\": \"reported progress\", \"finished\": false, \"work_item\": \"W03\", \"conversation\": \"C1\"}, {\"at\": \"2026-11-18T06:00:00Z\", \"by\": \"sam\", \"asked\": \"carry on\", \"outcome\": \"kept going\", \"finished\": true, \"work_item\": \"W06\", \"conversation\": \"C1\"}]}"
+   },
+   {
+    "id": "TK-0002",
+    "source": "slack",
+    "project": "sample",
+    "requested_by": "alice",
+    "started_at": "2026-11-18T03:00:00Z",
+    "ended_at": "2026-11-18T14:20:00Z",
+    "work_time_s": 1500,
+    "finished": 0,
+    "record": "{\"id\": \"TK-0002\", \"title\": \"fix SAM-12 crash in example-org/agent-sample\", \"source\": \"slack\", \"project\": \"sample\", \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T03:00:00Z\", \"ended_at\": \"2026-11-18T14:20:00Z\", \"work_time_s\": 1500, \"requests\": 2, \"finished\": false, \"outcome\": \"failed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T03:00:00Z\", \"by\": \"alice\", \"asked\": \"fix SAM-12 crash in example-org/agent-sample\", \"outcome\": \"failed\", \"finished\": false, \"work_item\": \"W04\", \"conversation\": \"C2\"}, {\"at\": \"2026-11-18T14:00:00Z\", \"by\": \"alice\", \"asked\": \"handover\", \"outcome\": null, \"finished\": null, \"work_item\": \"W14\", \"conversation\": \"C2\"}]}"
+   },
+   {
+    "id": "TK-0003",
+    "source": "linear",
+    "project": null,
+    "requested_by": "alice",
+    "started_at": "2026-11-18T04:00:00Z",
+    "ended_at": "2026-11-18T05:00:00Z",
+    "work_time_s": 1800,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0003\", \"title\": \"Fix crash on save\", \"source\": \"linear\", \"project\": null, \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T04:00:00Z\", \"ended_at\": \"2026-11-18T05:00:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": true, \"outcome\": \"fixed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T04:00:00Z\", \"by\": \"alice\", \"asked\": \"SAM-7 Crash on save: please look\", \"outcome\": \"fixed\", \"finished\": true, \"work_item\": \"W05\", \"conversation\": \"C3\"}]}"
+   },
+   {
+    "id": "TK-0004",
+    "source": "linear",
+    "project": "sample",
+    "requested_by": "Xu",
+    "started_at": "2026-11-18T12:00:00Z",
+    "ended_at": "2026-11-18T12:30:00Z",
+    "work_time_s": 1800,
+    "finished": null,
+    "record": "{\"id\": \"TK-0004\", \"title\": \"Stranger work\", \"source\": \"linear\", \"project\": \"sample\", \"requested_by\": \"Xu\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T12:00:00Z\", \"ended_at\": \"2026-11-18T12:30:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": null, \"outcome\": \"started\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T12:00:00Z\", \"by\": \"Xu\", \"asked\": \"SAM-9: and now?\", \"outcome\": \"started\", \"finished\": null, \"work_item\": \"W12\", \"conversation\": \"C3\"}]}"
+   },
+   {
+    "id": "TK-0005",
+    "source": "schedule",
+    "project": null,
+    "requested_by": null,
+    "started_at": "2026-11-18T07:00:00Z",
+    "ended_at": "2026-11-18T07:01:00Z",
+    "work_time_s": 60,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0005\", \"title\": \"nightly report\", \"source\": \"schedule\", \"project\": null, \"requested_by\": null, \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T07:00:00Z\", \"ended_at\": \"2026-11-18T07:01:00Z\", \"work_time_s\": 60, \"requests\": 1, \"finished\": true, \"outcome\": \"posted\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T07:00:00Z\", \"by\": null, \"asked\": \"nightly report\", \"outcome\": \"posted\", \"finished\": true, \"work_item\": \"W07\", \"conversation\": \"C4\"}]}"
+   }
+  ]
+ },
+ "files": {
+  "2026-11.jsonl": "{\"id\": \"TK-0004\", \"title\": \"Stranger work\", \"source\": \"linear\", \"project\": \"sample\", \"requested_by\": \"Xu\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T12:00:00Z\", \"ended_at\": \"2026-11-18T12:30:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": null, \"outcome\": \"started\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T12:00:00Z\", \"by\": \"Xu\", \"asked\": \"SAM-9: and now?\", \"outcome\": \"started\", \"finished\": null, \"work_item\": \"W12\", \"conversation\": \"C3\"}]}\n{\"id\": \"TK-0005\", \"title\": \"nightly report\", \"source\": \"schedule\", \"project\": null, \"requested_by\": null, \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T07:00:00Z\", \"ended_at\": \"2026-11-18T07:01:00Z\", \"work_time_s\": 60, \"requests\": 1, \"finished\": true, \"outcome\": \"posted\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T07:00:00Z\", \"by\": null, \"asked\": \"nightly report\", \"outcome\": \"posted\", \"finished\": true, \"work_item\": \"W07\", \"conversation\": \"C4\"}]}\n{\"id\": \"TK-0003\", \"title\": \"Fix crash on save\", \"source\": \"linear\", \"project\": null, \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T04:00:00Z\", \"ended_at\": \"2026-11-18T05:00:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": true, \"outcome\": \"fixed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T04:00:00Z\", \"by\": \"alice\", \"asked\": \"SAM-7 Crash on save: please look\", \"outcome\": \"fixed\", \"finished\": true, \"work_item\": \"W05\", \"conversation\": \"C3\"}]}\n{\"id\": \"TK-0002\", \"title\": \"fix SAM-12 crash in example-org/agent-sample\", \"source\": \"slack\", \"project\": \"sample\", \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T03:00:00Z\", \"ended_at\": \"2026-11-18T14:20:00Z\", \"work_time_s\": 1500, \"requests\": 2, \"finished\": false, \"outcome\": \"failed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T03:00:00Z\", \"by\": \"alice\", \"asked\": \"fix SAM-12 crash in example-org/agent-sample\", \"outcome\": \"failed\", \"finished\": false, \"work_item\": \"W04\", \"conversation\": \"C2\"}, {\"at\": \"2026-11-18T14:00:00Z\", \"by\": \"alice\", \"asked\": \"handover\", \"outcome\": null, \"finished\": null, \"work_item\": \"W14\", \"conversation\": \"C2\"}]}\n{\"id\": \"TK-0001\", \"title\": \"Login page\", \"source\": \"slack\", \"project\": \"sample\", \"requested_by\": \"sam\", \"followed_up_by\": [], \"where\": [\"https://slack.example/p3\"], \"started_at\": \"2026-11-18T02:00:00Z\", \"ended_at\": \"2026-11-18T06:10:00Z\", \"work_time_s\": 2400, \"requests\": 3, \"finished\": true, \"outcome\": \"kept going\", \"links\": [\"https://github.com/example-org/agent-sample/pull/5\", \"https://linear.app/ex/issue/SAM-3/x\"], \"steps\": [{\"at\": \"2026-11-18T02:00:00Z\", \"by\": \"sam\", \"asked\": \"build the login page\", \"outcome\": \"PR opened\", \"finished\": true, \"work_item\": \"W02\", \"conversation\": \"C1\"}, {\"at\": \"2026-11-18T02:20:00Z\", \"by\": \"sam\", \"asked\": \"status?\", \"outcome\": \"reported progress\", \"finished\": false, \"work_item\": \"W03\", \"conversation\": \"C1\"}, {\"at\": \"2026-11-18T06:00:00Z\", \"by\": \"sam\", \"asked\": \"carry on\", \"outcome\": \"kept going\", \"finished\": true, \"work_item\": \"W06\", \"conversation\": \"C1\"}]}\n"
+ },
+ "after_relabel": {
+  "request_labels": [
+   {
+    "work_item_id": "W01",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "hi",
+    "link": "https://slack.example/p1",
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T01:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T01:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W02",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "build the login page",
+    "link": "https://slack.example/p3",
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T02:00:00Z",
+    "started_at": "2026-11-18T02:10:00Z",
+    "answered_at": "2026-11-18T02:30:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W03",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "status?",
+    "link": null,
+    "label": null,
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": "reported progress",
+    "finished": 0,
+    "arrived_at": "2026-11-18T02:20:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T02:40:00Z",
+    "tries": 0,
+    "version": 0
+   },
+   {
+    "work_item_id": "W04",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": null,
+    "asked": "fix SAM-12 crash in example-org/agent-sample",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0002",
+    "title": "fix SAM-12 crash in example-org/agent-sample",
+    "project": "sample",
+    "outcome": "failed",
+    "finished": 0,
+    "arrived_at": "2026-11-18T03:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T03:05:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W05",
+    "conversation_id": "C3",
+    "source": "linear",
+    "requester": "alice",
+    "follows": null,
+    "asked": "SAM-7 Crash on save: please look",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0003",
+    "title": "Fix crash on save",
+    "project": null,
+    "outcome": "fixed",
+    "finished": 1,
+    "arrived_at": "2026-11-18T04:00:00Z",
+    "started_at": "2026-11-18T04:30:00Z",
+    "answered_at": "2026-11-18T05:00:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W06",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": "W03",
+    "asked": "carry on",
+    "link": null,
+    "label": null,
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": "kept going",
+    "finished": 1,
+    "arrived_at": "2026-11-18T06:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T06:10:00Z",
+    "tries": 0,
+    "version": 0
+   },
+   {
+    "work_item_id": "W07",
+    "conversation_id": "C4",
+    "source": "schedule",
+    "requester": null,
+    "follows": null,
+    "asked": "nightly report",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0005",
+    "title": "nightly report",
+    "project": null,
+    "outcome": "posted",
+    "finished": 1,
+    "arrived_at": "2026-11-18T07:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T07:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W11",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": null,
+    "asked": "never mind the sample thing",
+    "link": null,
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T11:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T11:00:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W12",
+    "conversation_id": "C3",
+    "source": "linear",
+    "requester": "Xu",
+    "follows": null,
+    "asked": "SAM-9: and now?",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0004",
+    "title": "Stranger work",
+    "project": "sample",
+    "outcome": "started",
+    "finished": null,
+    "arrived_at": "2026-11-18T12:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T12:30:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W13",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "garbled please",
+    "link": null,
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T13:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T13:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W14",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": "W04",
+    "asked": "handover",
+    "link": null,
+    "label": "same",
+    "task_id": "TK-0002",
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T14:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T14:20:00Z",
+    "tries": 0,
+    "version": 2
+   }
+  ],
+  "task_records": [
+   {
+    "id": "TK-0002",
+    "source": "slack",
+    "project": "sample",
+    "requested_by": "alice",
+    "started_at": "2026-11-18T03:00:00Z",
+    "ended_at": "2026-11-18T14:20:00Z",
+    "work_time_s": 1500,
+    "finished": 0,
+    "record": "{\"id\": \"TK-0002\", \"title\": \"fix SAM-12 crash in example-org/agent-sample\", \"source\": \"slack\", \"project\": \"sample\", \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T03:00:00Z\", \"ended_at\": \"2026-11-18T14:20:00Z\", \"work_time_s\": 1500, \"requests\": 2, \"finished\": false, \"outcome\": \"failed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T03:00:00Z\", \"by\": \"alice\", \"asked\": \"fix SAM-12 crash in example-org/agent-sample\", \"outcome\": \"failed\", \"finished\": false, \"work_item\": \"W04\", \"conversation\": \"C2\"}, {\"at\": \"2026-11-18T14:00:00Z\", \"by\": \"alice\", \"asked\": \"handover\", \"outcome\": null, \"finished\": null, \"work_item\": \"W14\", \"conversation\": \"C2\"}]}"
+   },
+   {
+    "id": "TK-0003",
+    "source": "linear",
+    "project": null,
+    "requested_by": "alice",
+    "started_at": "2026-11-18T04:00:00Z",
+    "ended_at": "2026-11-18T05:00:00Z",
+    "work_time_s": 1800,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0003\", \"title\": \"Fix crash on save\", \"source\": \"linear\", \"project\": null, \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T04:00:00Z\", \"ended_at\": \"2026-11-18T05:00:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": true, \"outcome\": \"fixed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T04:00:00Z\", \"by\": \"alice\", \"asked\": \"SAM-7 Crash on save: please look\", \"outcome\": \"fixed\", \"finished\": true, \"work_item\": \"W05\", \"conversation\": \"C3\"}]}"
+   },
+   {
+    "id": "TK-0004",
+    "source": "linear",
+    "project": "sample",
+    "requested_by": "Xu",
+    "started_at": "2026-11-18T12:00:00Z",
+    "ended_at": "2026-11-18T12:30:00Z",
+    "work_time_s": 1800,
+    "finished": null,
+    "record": "{\"id\": \"TK-0004\", \"title\": \"Stranger work\", \"source\": \"linear\", \"project\": \"sample\", \"requested_by\": \"Xu\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T12:00:00Z\", \"ended_at\": \"2026-11-18T12:30:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": null, \"outcome\": \"started\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T12:00:00Z\", \"by\": \"Xu\", \"asked\": \"SAM-9: and now?\", \"outcome\": \"started\", \"finished\": null, \"work_item\": \"W12\", \"conversation\": \"C3\"}]}"
+   },
+   {
+    "id": "TK-0005",
+    "source": "schedule",
+    "project": null,
+    "requested_by": null,
+    "started_at": "2026-11-18T07:00:00Z",
+    "ended_at": "2026-11-18T07:01:00Z",
+    "work_time_s": 60,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0005\", \"title\": \"nightly report\", \"source\": \"schedule\", \"project\": null, \"requested_by\": null, \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T07:00:00Z\", \"ended_at\": \"2026-11-18T07:01:00Z\", \"work_time_s\": 60, \"requests\": 1, \"finished\": true, \"outcome\": \"posted\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T07:00:00Z\", \"by\": null, \"asked\": \"nightly report\", \"outcome\": \"posted\", \"finished\": true, \"work_item\": \"W07\", \"conversation\": \"C4\"}]}"
+   }
+  ]
+ },
+ "pending_after_relabel": [
+  "W03",
+  "W06",
+  "W15"
+ ],
+ "relabel_sweeps": [
+  2,
+  0,
+  1
+ ],
+ "relabel_calls": [
+  {
+   "asked": "status?",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- [chat] hi\n- [chat] build the login page\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from sam, via slack):\nstatus?\n\nThe agent's reply:\nhalf done"
+  },
+  {
+   "asked": "carry on",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- [chat] hi\n- [chat] build the login page\n- [TK-0006 \"status?\"] status?\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": TK-0006\n\nThe request (from sam, via slack):\ncarry on\n\nThe agent's reply:\ncarried on"
+  },
+  {
+   "asked": "SAM-7 Crash on save: please look",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- TK-0002 \"fix SAM-12 crash in example-org/agent-sample\" (sample; latest: failed)\nTask ids you may use for \"same\": TK-0002\n\nThe request (from alice, via linear):\nSAM-7 Crash on save: please look\n\nThe agent's reply:\nfixed it"
+  },
+  {
+   "asked": "boom",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from bob, via slack):\nboom\n\nThe agent's reply:\nx"
+  },
+  {
+   "asked": "SAM-7 Crash on save: please look",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- TK-0002 \"fix SAM-12 crash in example-org/agent-sample\" (sample; latest: failed)\nTask ids you may use for \"same\": TK-0002\n\nThe request (from alice, via linear):\nSAM-7 Crash on save: please look\n\nThe agent's reply:\nfixed it"
+  },
+  {
+   "asked": "boom",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from bob, via slack):\nboom\n\nThe agent's reply:\nx"
+  },
+  {
+   "asked": "SAM-7 Crash on save: please look",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: sample\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- TK-0002 \"fix SAM-12 crash in example-org/agent-sample\" (sample; latest: failed)\nTask ids you may use for \"same\": TK-0002\n\nThe request (from alice, via linear):\nSAM-7 Crash on save: please look\n\nThe agent's reply:\nfixed it"
+  },
+  {
+   "asked": "boom",
+   "user": "Projects:\n- sample: repo example-org/agent-sample, Slack #jensen, Linear team SAM\nSignals core found for this request: none\nEarlier requests in this conversation (oldest first):\n- none\nThis person's other tasks from the last 24 hours:\n- none\nTask ids you may use for \"same\": none\n\nThe request (from bob, via slack):\nboom\n\nThe agent's reply:\nx"
+  }
+ ],
+ "after_relabel_sweeps": {
+  "request_labels": [
+   {
+    "work_item_id": "W01",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "hi",
+    "link": "https://slack.example/p1",
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T01:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T01:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W02",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "build the login page",
+    "link": "https://slack.example/p3",
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T02:00:00Z",
+    "started_at": "2026-11-18T02:10:00Z",
+    "answered_at": "2026-11-18T02:30:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W03",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "status?",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0006",
+    "title": "status?",
+    "project": null,
+    "outcome": "reported progress",
+    "finished": 0,
+    "arrived_at": "2026-11-18T02:20:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T02:40:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W04",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": null,
+    "asked": "fix SAM-12 crash in example-org/agent-sample",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0002",
+    "title": "fix SAM-12 crash in example-org/agent-sample",
+    "project": "sample",
+    "outcome": "failed",
+    "finished": 0,
+    "arrived_at": "2026-11-18T03:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T03:05:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W05",
+    "conversation_id": "C3",
+    "source": "linear",
+    "requester": "alice",
+    "follows": null,
+    "asked": "SAM-7 Crash on save: please look",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0003",
+    "title": "Fix crash on save",
+    "project": null,
+    "outcome": "fixed",
+    "finished": 1,
+    "arrived_at": "2026-11-18T04:00:00Z",
+    "started_at": "2026-11-18T04:30:00Z",
+    "answered_at": "2026-11-18T05:00:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W06",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": "W03",
+    "asked": "carry on",
+    "link": null,
+    "label": "same",
+    "task_id": "TK-0006",
+    "title": null,
+    "project": null,
+    "outcome": "kept going",
+    "finished": 1,
+    "arrived_at": "2026-11-18T06:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T06:10:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W07",
+    "conversation_id": "C4",
+    "source": "schedule",
+    "requester": null,
+    "follows": null,
+    "asked": "nightly report",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0005",
+    "title": "nightly report",
+    "project": null,
+    "outcome": "posted",
+    "finished": 1,
+    "arrived_at": "2026-11-18T07:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T07:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W11",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": null,
+    "asked": "never mind the sample thing",
+    "link": null,
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T11:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T11:00:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W12",
+    "conversation_id": "C3",
+    "source": "linear",
+    "requester": "Xu",
+    "follows": null,
+    "asked": "SAM-9: and now?",
+    "link": null,
+    "label": "new",
+    "task_id": "TK-0004",
+    "title": "Stranger work",
+    "project": "sample",
+    "outcome": "started",
+    "finished": null,
+    "arrived_at": "2026-11-18T12:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T12:30:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W13",
+    "conversation_id": "C1",
+    "source": "slack",
+    "requester": "sam",
+    "follows": null,
+    "asked": "garbled please",
+    "link": null,
+    "label": "chat",
+    "task_id": null,
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T13:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T13:01:00Z",
+    "tries": 0,
+    "version": 2
+   },
+   {
+    "work_item_id": "W14",
+    "conversation_id": "C2",
+    "source": "slack",
+    "requester": "alice",
+    "follows": "W04",
+    "asked": "handover",
+    "link": null,
+    "label": "same",
+    "task_id": "TK-0002",
+    "title": null,
+    "project": null,
+    "outcome": null,
+    "finished": null,
+    "arrived_at": "2026-11-18T14:00:00Z",
+    "started_at": null,
+    "answered_at": "2026-11-18T14:20:00Z",
+    "tries": 0,
+    "version": 2
+   }
+  ],
+  "task_records": [
+   {
+    "id": "TK-0002",
+    "source": "slack",
+    "project": "sample",
+    "requested_by": "alice",
+    "started_at": "2026-11-18T03:00:00Z",
+    "ended_at": "2026-11-18T14:20:00Z",
+    "work_time_s": 1500,
+    "finished": 0,
+    "record": "{\"id\": \"TK-0002\", \"title\": \"fix SAM-12 crash in example-org/agent-sample\", \"source\": \"slack\", \"project\": \"sample\", \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T03:00:00Z\", \"ended_at\": \"2026-11-18T14:20:00Z\", \"work_time_s\": 1500, \"requests\": 2, \"finished\": false, \"outcome\": \"failed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T03:00:00Z\", \"by\": \"alice\", \"asked\": \"fix SAM-12 crash in example-org/agent-sample\", \"outcome\": \"failed\", \"finished\": false, \"work_item\": \"W04\", \"conversation\": \"C2\"}, {\"at\": \"2026-11-18T14:00:00Z\", \"by\": \"alice\", \"asked\": \"handover\", \"outcome\": null, \"finished\": null, \"work_item\": \"W14\", \"conversation\": \"C2\"}]}"
+   },
+   {
+    "id": "TK-0003",
+    "source": "linear",
+    "project": null,
+    "requested_by": "alice",
+    "started_at": "2026-11-18T04:00:00Z",
+    "ended_at": "2026-11-18T05:00:00Z",
+    "work_time_s": 1800,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0003\", \"title\": \"Fix crash on save\", \"source\": \"linear\", \"project\": null, \"requested_by\": \"alice\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T04:00:00Z\", \"ended_at\": \"2026-11-18T05:00:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": true, \"outcome\": \"fixed\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T04:00:00Z\", \"by\": \"alice\", \"asked\": \"SAM-7 Crash on save: please look\", \"outcome\": \"fixed\", \"finished\": true, \"work_item\": \"W05\", \"conversation\": \"C3\"}]}"
+   },
+   {
+    "id": "TK-0004",
+    "source": "linear",
+    "project": "sample",
+    "requested_by": "Xu",
+    "started_at": "2026-11-18T12:00:00Z",
+    "ended_at": "2026-11-18T12:30:00Z",
+    "work_time_s": 1800,
+    "finished": null,
+    "record": "{\"id\": \"TK-0004\", \"title\": \"Stranger work\", \"source\": \"linear\", \"project\": \"sample\", \"requested_by\": \"Xu\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T12:00:00Z\", \"ended_at\": \"2026-11-18T12:30:00Z\", \"work_time_s\": 1800, \"requests\": 1, \"finished\": null, \"outcome\": \"started\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T12:00:00Z\", \"by\": \"Xu\", \"asked\": \"SAM-9: and now?\", \"outcome\": \"started\", \"finished\": null, \"work_item\": \"W12\", \"conversation\": \"C3\"}]}"
+   },
+   {
+    "id": "TK-0005",
+    "source": "schedule",
+    "project": null,
+    "requested_by": null,
+    "started_at": "2026-11-18T07:00:00Z",
+    "ended_at": "2026-11-18T07:01:00Z",
+    "work_time_s": 60,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0005\", \"title\": \"nightly report\", \"source\": \"schedule\", \"project\": null, \"requested_by\": null, \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T07:00:00Z\", \"ended_at\": \"2026-11-18T07:01:00Z\", \"work_time_s\": 60, \"requests\": 1, \"finished\": true, \"outcome\": \"posted\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T07:00:00Z\", \"by\": null, \"asked\": \"nightly report\", \"outcome\": \"posted\", \"finished\": true, \"work_item\": \"W07\", \"conversation\": \"C4\"}]}"
+   },
+   {
+    "id": "TK-0006",
+    "source": "slack",
+    "project": null,
+    "requested_by": "sam",
+    "started_at": "2026-11-18T02:20:00Z",
+    "ended_at": "2026-11-18T06:10:00Z",
+    "work_time_s": 1800,
+    "finished": 1,
+    "record": "{\"id\": \"TK-0006\", \"title\": \"status?\", \"source\": \"slack\", \"project\": null, \"requested_by\": \"sam\", \"followed_up_by\": [], \"where\": [], \"started_at\": \"2026-11-18T02:20:00Z\", \"ended_at\": \"2026-11-18T06:10:00Z\", \"work_time_s\": 1800, \"requests\": 2, \"finished\": true, \"outcome\": \"kept going\", \"links\": [], \"steps\": [{\"at\": \"2026-11-18T02:20:00Z\", \"by\": \"sam\", \"asked\": \"status?\", \"outcome\": \"reported progress\", \"finished\": false, \"work_item\": \"W03\", \"conversation\": \"C1\"}, {\"at\": \"2026-11-18T06:00:00Z\", \"by\": \"sam\", \"asked\": \"carry on\", \"outcome\": \"kept going\", \"finished\": true, \"work_item\": \"W06\", \"conversation\": \"C1\"}]}"
+   }
+  ]
+ },
+ "parse_label": [
+  {
+   "text": "{\"label\": \"new\", \"title\": \" T \", \"finished\": \"yes\"}",
+   "out": [
+    "new",
+    null,
+    "T",
+    null,
+    null,
+    null
+   ]
+  },
+  {
+   "text": "x {\"label\": \"same\"} y",
+   "out": [
+    "same",
+    null,
+    null,
+    null,
+    null,
+    null
+   ]
+  },
+  {
+   "text": "{\"label\": \"other\"}",
+   "out": null
+  },
+  {
+   "text": "{",
+   "out": null
+  },
+  {
+   "text": "",
+   "out": null
+  },
+  {
+   "text": "[1]",
+   "out": null
+  },
+  {
+   "text": "{\"label\": \"chat\", \"task\": \"  \"}",
+   "out": [
+    "chat",
+    null,
+    null,
+    null,
+    null,
+    null
+   ]
+  }
+ ],
+ "prompt": "You sort the requests a team sends their AI engineer into a record of the work it did. You get one\nrequest, the agent's reply to it, and what came before. Answer with one JSON object and nothing else:\n\n{\"label\": \"chat\" | \"new\" | \"same\", \"task\": \"<id>\" | null, \"title\": \"<3-8 words>\" | null,\n \"outcome\": \"<one sentence>\" | null, \"finished\": true | false | null, \"project\": \"<name>\" | null}\n\nlabel:\n- \"chat\": the request asks for no work at all. Only greetings (\"hi\", \"yo\"), thanks, small talk, \"you alive?\", \"how's\n  it going?\", or a question about the agent itself that it answers from what it already knows. When in doubt, it is\n  not chat.\n- \"new\": the request asks the agent to do something: build, fix, run, test, check, find out, install, set up, report,\n  investigate, or message someone (\"ask Sam what's up\", \"tell the channel\"). A different piece of work is \"new\" even\n  in the same conversation and even about the same project. Whether the agent managed it doesn't change the label:\n  work it couldn't or wouldn't do is still a task, with finished false.\n- \"same\": the request is about one of the earlier tasks listed below and asks for no different piece of work: a\n  follow-up on its progress or result (\"so what are the findings??\"), a correction, a nudge (\"bro I logged you in\n  already\"), an answer to the agent's question, approval or edits of the agent's draft, or \"done\" after the person\n  did a step the agent asked for. A task from another conversation is \"same\" only when the request clearly refers\n  back to it; a request for different work is \"new\" even when it is on a similar subject.\ntask: for \"same\", the id of that earlier task. Use only an id listed below; if none fits, answer \"new\".\ntitle: for \"new\", 3-8 words naming the work, e.g. \"Debloat study of the web app codebase\".\noutcome: for \"new\" and \"same\", one sentence on what the agent did or delivered in this reply.\nfinished: for \"new\" and \"same\", whether the agent delivered what was asked. A PR opened, a deploy to staging, a\nmessage sent or a report posted counts as finished even while it waits for review or merge. Not finished: it couldn't\ndo it, got stuck, gave up, stopped mid-work, or is waiting on input it needs to go on.\nproject: for \"new\" and \"same\", the name of the listed project when the work is on that product itself: its code,\nbuilds, deployments, tests, Linear issues, bugs, users or roadmap. null for general work that belongs to no project,\neven when a project is mentioned: messaging or introducing the agent to teammates, the agent's own access, setup,\ntools and plugins, questions about the agent, and research or reports about agents or the team rather than the\nproduct. The signals core found point at a project but don't decide it. The project never changes the label: a\ngeneral task is still \"new\" or \"same\", and installing or setting something up for the agent is a task, not chat.\nFor \"chat\", task, title, outcome, finished and project are null.",
+ "work_seconds": [
+  {
+   "in": [
+    [
+     "2026-11-18T01:00:00Z",
+     "2026-11-18T02:00:00Z"
+    ],
+    [
+     "2026-11-18T01:30:00Z",
+     "2026-11-18T03:00:00Z"
+    ],
+    [
+     "2026-11-18T05:00:00Z",
+     "2026-11-18T05:00:30Z"
+    ],
+    [
+     null,
+     "2026-11-18T06:00:00Z"
+    ],
+    [
+     "2026-11-18T07:00:00Z",
+     "2026-11-18T06:00:00Z"
+    ]
+   ],
+   "out": 7230
+  },
+  {
+   "in": [],
+   "out": 0
+  }
+ ]
+}

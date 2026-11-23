@@ -253,6 +253,7 @@ impl<E: Engine + 'static, P: Probe + 'static> Dispatcher<E, P> {
         if let Err(e) = handled.await {
             tracing::error!(work_item, "handling the result failed: {e:#}"); // the item is done either way
         }
+        self.s.labels.notify_one(); // only a wake: labeling runs in the background and never touches the turn
         if let Err(e) = self.runner.reported(work_item).await {
             tracing::error!(work_item, "marking the result handled: {e:#}");
         }

@@ -57,6 +57,8 @@ pub struct Shared {
     pub linear: Option<crate::linear::Linear>,
     /// Notified whenever work is queued, cancelled or paused.
     pub wake: Notify,
+    /// Notified when a request is answered, so the labeler sweeps.
+    pub labels: Notify,
     lookups: Mutex<Lookups>,
 }
 
@@ -71,7 +73,7 @@ impl Shared {
                                              &config.name).context("the persona")?;
         let secret_values = secrets.values().filter(|v| !v.is_empty()).cloned().collect();
         Ok(Shared { db, config, packs, slack, bot_user_id, secrets, secret_values, persona, paths, proxy, github,
-                    linear: None, wake: Notify::new(), lookups: Mutex::default() })
+                    linear: None, wake: Notify::new(), labels: Notify::new(), lookups: Mutex::default() })
     }
 
     /// The conversation's own folder on the shared volume, the same every turn; its clones live here.

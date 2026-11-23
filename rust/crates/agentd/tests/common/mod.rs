@@ -123,9 +123,12 @@ pub fn shared_plain(dir: &std::path::Path, slack: &FakeSlack, proxy_url: &str) -
 
 /// The stage 4 fixture: its rows inserted into `conn` (tests/fixtures/dashboard/make.py wrote both files).
 pub fn seed(conn: &rusqlite::Connection) {
-    let rows: serde_json::Map<String, Value> =
-        serde_json::from_str(&std::fs::read_to_string("tests/fixtures/dashboard/seed.json").unwrap()).unwrap();
-    for (table, list) in rows {
+    seed_rows(conn, &serde_json::from_str(&std::fs::read_to_string("tests/fixtures/dashboard/seed.json").unwrap()).unwrap());
+}
+
+/// Rows given as {table: [{column: value}]} inserted into `conn`.
+pub fn seed_rows(conn: &rusqlite::Connection, rows: &Value) {
+    for (table, list) in rows.as_object().unwrap() {
         for row in list.as_array().unwrap() {
             let row = row.as_object().unwrap();
             let cols: Vec<&str> = row.keys().map(String::as_str).collect();

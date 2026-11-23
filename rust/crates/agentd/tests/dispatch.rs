@@ -49,6 +49,8 @@ async fn dm_to_reply_end_to_end() {
     assert!(events.contains("\"AssistantMessage\"") && events.contains("\"_ts\""), "{events}");
     let started: i64 = rig.s.db.lock().query_row("SELECT COUNT(*) FROM events WHERE type = 'session_started'", [], |r| r.get(0)).unwrap();
     assert_eq!(started, 1);
+    let woken = tokio::time::timeout(std::time::Duration::from_millis(50), rig.s.labels.notified()).await;
+    assert!(woken.is_ok(), "the answered request wakes the labeler");
 }
 
 #[tokio::test(flavor = "multi_thread")]
