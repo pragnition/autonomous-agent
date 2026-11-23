@@ -1,0 +1,969 @@
+{
+ "snapshots": [
+  {
+   "ts": 1000.0,
+   "interval_s": 5.0,
+   "cpu": {
+    "percent": 40.0,
+    "per_core": [
+     30.0,
+     50.0
+    ],
+    "cores": 2,
+    "load": [
+     1.0,
+     0.5,
+     0.2
+    ]
+   },
+   "memory": {
+    "total": 32000000000.0,
+    "available": 20000000000.0,
+    "used": 12000000000.0,
+    "swap_total": 4000000000.0,
+    "swap_used": 1000000000.0
+   },
+   "network": {
+    "rx_bps": 1000,
+    "tx_bps": 500,
+    "interfaces": [
+     {
+      "name": "eth0",
+      "rx_bps": 1000,
+      "tx_bps": 500
+     },
+     "junk"
+    ]
+   },
+   "disk_io": {
+    "read_bps": 10,
+    "write_bps": 20
+   },
+   "disk_space": {
+    "at": 990.0,
+    "complete": true,
+    "volumes": [
+     {
+      "path": "/var/agent",
+      "total": 100,
+      "used": 60,
+      "free": 40
+     }
+    ],
+    "top": [
+     {
+      "name": "C1",
+      "kind": "conversation",
+      "bytes": 30,
+      "conversation": "C1"
+     },
+     {
+      "name": "npm cache",
+      "kind": "cache",
+      "bytes": 5,
+      "conversation": 7
+     }
+    ]
+   },
+   "consumers": [
+    {
+     "key": "session:C1",
+     "kind": "session",
+     "name": "C1",
+     "item": "W1",
+     "conversation": "C1",
+     "cpu_percent": 20.0,
+     "mem_bytes": 4000000000.0,
+     "read_bps": 1,
+     "write_bps": 2,
+     "rx_bps": null,
+     "tx_bps": null,
+     "processes": 3
+    },
+    {
+     "key": "runner",
+     "kind": "runner",
+     "name": "runner",
+     "item": null,
+     "conversation": null,
+     "cpu_percent": 5.0,
+     "mem_bytes": 1000000000.0
+    },
+    {
+     "key": "weird",
+     "kind": null,
+     "name": "x",
+     "item": 5,
+     "conversation": [
+      "no"
+     ],
+     "cpu_percent": "a",
+     "mem_bytes": true
+    },
+    "not a row"
+   ],
+   "containers": [
+    {
+     "name": "demo-web-1",
+     "image": "demo",
+     "state": "running",
+     "status": "Up",
+     "conversation": "C1",
+     "cpu_percent": 3.0,
+     "mem_bytes": 200000000.0,
+     "rx_bps": 1,
+     "tx_bps": 1,
+     "read_bps": 0,
+     "write_bps": 0
+    }
+   ],
+   "ports": [
+    {
+     "port": 3000,
+     "address": "0.0.0.0",
+     "proto": "tcp",
+     "pid": null,
+     "process": null,
+     "consumer": "session:C1",
+     "kind": "session",
+     "name": "C1",
+     "item": "W1",
+     "conversation": "C1"
+    },
+    {
+     "port": 8080,
+     "kind": null,
+     "item": null,
+     "conversation": null
+    }
+   ]
+  },
+  {
+   "ts": 1005.0,
+   "interval_s": 5.0,
+   "cpu": {
+    "percent": 10.0
+   },
+   "memory": {
+    "used": 1000000000.0
+   },
+   "network": null,
+   "disk_io": {
+    "read_bps": 10,
+    "write_bps": 20
+   },
+   "disk_space": null,
+   "consumers": [],
+   "containers": "nope",
+   "ports": null
+  }
+ ],
+ "links": [
+  [
+   "W1",
+   "C1",
+   {
+    "id": "W1",
+    "title": "Build the demo",
+    "state": "running"
+   }
+  ],
+  [
+   null,
+   "C1",
+   {
+    "id": "W9",
+    "title": "Older",
+    "state": "done"
+   }
+  ]
+ ],
+ "empty": {
+  "host": {
+   "available": false,
+   "age_s": null,
+   "stale": true,
+   "ts": null,
+   "cpu": null,
+   "memory": null,
+   "network": null,
+   "disk_io": null,
+   "disk_space": null,
+   "containers": 0,
+   "ports": 0,
+   "history": []
+  },
+  "consumers": {
+   "available": false,
+   "age_s": null,
+   "stale": true,
+   "ts": null,
+   "consumers": [],
+   "containers": [],
+   "ports": [],
+   "disk": [],
+   "interfaces": []
+  }
+ },
+ "steps": [
+  {
+   "add": 0,
+   "at": 1000.0
+  },
+  {
+   "view": {
+    "host": {
+     "available": true,
+     "age_s": 5,
+     "stale": false,
+     "ts": 1000.0,
+     "cpu": {
+      "percent": 40.0,
+      "per_core": [
+       30.0,
+       50.0
+      ],
+      "cores": 2,
+      "load": [
+       1.0,
+       0.5,
+       0.2
+      ]
+     },
+     "memory": {
+      "total": 32000000000.0,
+      "available": 20000000000.0,
+      "used": 12000000000.0,
+      "swap_total": 4000000000.0,
+      "swap_used": 1000000000.0
+     },
+     "network": {
+      "rx_bps": 1000,
+      "tx_bps": 500,
+      "interfaces": [
+       {
+        "name": "eth0",
+        "rx_bps": 1000,
+        "tx_bps": 500
+       }
+      ]
+     },
+     "disk_io": {
+      "read_bps": 10,
+      "write_bps": 20
+     },
+     "disk_space": {
+      "volumes": [
+       {
+        "path": "/var/agent",
+        "total": 100,
+        "used": 60,
+        "free": 40
+       }
+      ],
+      "at": 990.0,
+      "complete": true
+     },
+     "containers": 1,
+     "ports": 2,
+     "history": [
+      {
+       "ts": 1000.0,
+       "cpu": 40.0,
+       "mem_used": 12000000000.0,
+       "swap_used": 1000000000.0,
+       "rx_bps": 1000,
+       "tx_bps": 500,
+       "read_bps": 10,
+       "write_bps": 20,
+       "containers": 1,
+       "ports": 2,
+       "cpu_by_kind": {
+        "session": 20.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 5.0,
+        "other": 0.0,
+        "host": 15.0
+       },
+       "mem_by_kind": {
+        "session": 4000000000.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 1000000000.0,
+        "other": 0.0,
+        "host": 7000000000.0
+       }
+      }
+     ]
+    },
+    "consumers": {
+     "available": true,
+     "age_s": 5,
+     "stale": false,
+     "ts": 1000.0,
+     "consumers": [
+      {
+       "key": "session:C1",
+       "kind": "session",
+       "name": "C1",
+       "item": "W1",
+       "conversation": "C1",
+       "cpu_percent": 20.0,
+       "mem_bytes": 4000000000.0,
+       "read_bps": 1,
+       "write_bps": 2,
+       "rx_bps": null,
+       "tx_bps": null,
+       "processes": 3,
+       "session": {
+        "id": "W1",
+        "title": "Build the demo",
+        "state": "running"
+       }
+      },
+      {
+       "key": "runner",
+       "kind": "runner",
+       "name": "runner",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": 5.0,
+       "mem_bytes": 1000000000.0,
+       "session": null
+      },
+      {
+       "key": "weird",
+       "kind": "other",
+       "name": "x",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": "a",
+       "mem_bytes": true,
+       "session": null
+      },
+      {
+       "key": "host",
+       "kind": "host",
+       "name": "outside the agent container",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": 15.0,
+       "mem_bytes": 7000000000.0,
+       "read_bps": null,
+       "write_bps": null,
+       "rx_bps": null,
+       "tx_bps": null,
+       "processes": null,
+       "session": null
+      }
+     ],
+     "containers": [
+      {
+       "name": "demo-web-1",
+       "image": "demo",
+       "state": "running",
+       "status": "Up",
+       "conversation": "C1",
+       "cpu_percent": 3.0,
+       "mem_bytes": 200000000.0,
+       "rx_bps": 1,
+       "tx_bps": 1,
+       "read_bps": 0,
+       "write_bps": 0,
+       "item": null,
+       "kind": "other",
+       "session": {
+        "id": "W9",
+        "title": "Older",
+        "state": "done"
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 3000,
+       "address": "0.0.0.0",
+       "proto": "tcp",
+       "pid": null,
+       "process": null,
+       "consumer": "session:C1",
+       "kind": "session",
+       "name": "C1",
+       "item": "W1",
+       "conversation": "C1",
+       "session": {
+        "id": "W1",
+        "title": "Build the demo",
+        "state": "running"
+       }
+      },
+      {
+       "port": 8080,
+       "kind": "other",
+       "item": null,
+       "conversation": null,
+       "session": null
+      }
+     ],
+     "disk": [
+      {
+       "name": "C1",
+       "kind": "conversation",
+       "bytes": 30,
+       "conversation": "C1",
+       "session": {
+        "id": "W9",
+        "title": "Older",
+        "state": "done"
+       }
+      },
+      {
+       "name": "npm cache",
+       "kind": "cache",
+       "bytes": 5,
+       "conversation": null,
+       "session": null
+      }
+     ],
+     "interfaces": [
+      {
+       "name": "eth0",
+       "rx_bps": 1000,
+       "tx_bps": 500
+      }
+     ]
+    }
+   },
+   "at": 1005.0
+  },
+  {
+   "add": 1,
+   "at": 1007.0
+  },
+  {
+   "add": 0,
+   "at": 4601.0
+  },
+  {
+   "view": {
+    "host": {
+     "available": true,
+     "age_s": 1,
+     "stale": false,
+     "ts": 1000.0,
+     "cpu": {
+      "percent": 40.0,
+      "per_core": [
+       30.0,
+       50.0
+      ],
+      "cores": 2,
+      "load": [
+       1.0,
+       0.5,
+       0.2
+      ]
+     },
+     "memory": {
+      "total": 32000000000.0,
+      "available": 20000000000.0,
+      "used": 12000000000.0,
+      "swap_total": 4000000000.0,
+      "swap_used": 1000000000.0
+     },
+     "network": {
+      "rx_bps": 1000,
+      "tx_bps": 500,
+      "interfaces": [
+       {
+        "name": "eth0",
+        "rx_bps": 1000,
+        "tx_bps": 500
+       }
+      ]
+     },
+     "disk_io": {
+      "read_bps": 10,
+      "write_bps": 20
+     },
+     "disk_space": {
+      "volumes": [
+       {
+        "path": "/var/agent",
+        "total": 100,
+        "used": 60,
+        "free": 40
+       }
+      ],
+      "at": 990.0,
+      "complete": true
+     },
+     "containers": 1,
+     "ports": 2,
+     "history": [
+      {
+       "ts": 1007.0,
+       "cpu": 10.0,
+       "mem_used": 1000000000.0,
+       "swap_used": 0.0,
+       "rx_bps": 0.0,
+       "tx_bps": 0.0,
+       "read_bps": 10,
+       "write_bps": 20,
+       "containers": 0,
+       "ports": 0,
+       "cpu_by_kind": {
+        "session": 0.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 0.0,
+        "other": 0.0,
+        "host": 10.0
+       },
+       "mem_by_kind": {
+        "session": 0.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 0.0,
+        "other": 0.0,
+        "host": 1000000000.0
+       }
+      },
+      {
+       "ts": 4601.0,
+       "cpu": 40.0,
+       "mem_used": 12000000000.0,
+       "swap_used": 1000000000.0,
+       "rx_bps": 1000,
+       "tx_bps": 500,
+       "read_bps": 10,
+       "write_bps": 20,
+       "containers": 1,
+       "ports": 2,
+       "cpu_by_kind": {
+        "session": 20.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 5.0,
+        "other": 0.0,
+        "host": 15.0
+       },
+       "mem_by_kind": {
+        "session": 4000000000.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 1000000000.0,
+        "other": 0.0,
+        "host": 7000000000.0
+       }
+      }
+     ]
+    },
+    "consumers": {
+     "available": true,
+     "age_s": 1,
+     "stale": false,
+     "ts": 1000.0,
+     "consumers": [
+      {
+       "key": "session:C1",
+       "kind": "session",
+       "name": "C1",
+       "item": "W1",
+       "conversation": "C1",
+       "cpu_percent": 20.0,
+       "mem_bytes": 4000000000.0,
+       "read_bps": 1,
+       "write_bps": 2,
+       "rx_bps": null,
+       "tx_bps": null,
+       "processes": 3,
+       "session": {
+        "id": "W1",
+        "title": "Build the demo",
+        "state": "running"
+       }
+      },
+      {
+       "key": "runner",
+       "kind": "runner",
+       "name": "runner",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": 5.0,
+       "mem_bytes": 1000000000.0,
+       "session": null
+      },
+      {
+       "key": "weird",
+       "kind": "other",
+       "name": "x",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": "a",
+       "mem_bytes": true,
+       "session": null
+      },
+      {
+       "key": "host",
+       "kind": "host",
+       "name": "outside the agent container",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": 15.0,
+       "mem_bytes": 7000000000.0,
+       "read_bps": null,
+       "write_bps": null,
+       "rx_bps": null,
+       "tx_bps": null,
+       "processes": null,
+       "session": null
+      }
+     ],
+     "containers": [
+      {
+       "name": "demo-web-1",
+       "image": "demo",
+       "state": "running",
+       "status": "Up",
+       "conversation": "C1",
+       "cpu_percent": 3.0,
+       "mem_bytes": 200000000.0,
+       "rx_bps": 1,
+       "tx_bps": 1,
+       "read_bps": 0,
+       "write_bps": 0,
+       "item": null,
+       "kind": "other",
+       "session": {
+        "id": "W9",
+        "title": "Older",
+        "state": "done"
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 3000,
+       "address": "0.0.0.0",
+       "proto": "tcp",
+       "pid": null,
+       "process": null,
+       "consumer": "session:C1",
+       "kind": "session",
+       "name": "C1",
+       "item": "W1",
+       "conversation": "C1",
+       "session": {
+        "id": "W1",
+        "title": "Build the demo",
+        "state": "running"
+       }
+      },
+      {
+       "port": 8080,
+       "kind": "other",
+       "item": null,
+       "conversation": null,
+       "session": null
+      }
+     ],
+     "disk": [
+      {
+       "name": "C1",
+       "kind": "conversation",
+       "bytes": 30,
+       "conversation": "C1",
+       "session": {
+        "id": "W9",
+        "title": "Older",
+        "state": "done"
+       }
+      },
+      {
+       "name": "npm cache",
+       "kind": "cache",
+       "bytes": 5,
+       "conversation": null,
+       "session": null
+      }
+     ],
+     "interfaces": [
+      {
+       "name": "eth0",
+       "rx_bps": 1000,
+       "tx_bps": 500
+      }
+     ]
+    }
+   },
+   "at": 4602.0
+  },
+  {
+   "view": {
+    "host": {
+     "available": true,
+     "age_s": 99,
+     "stale": true,
+     "ts": 1000.0,
+     "cpu": {
+      "percent": 40.0,
+      "per_core": [
+       30.0,
+       50.0
+      ],
+      "cores": 2,
+      "load": [
+       1.0,
+       0.5,
+       0.2
+      ]
+     },
+     "memory": {
+      "total": 32000000000.0,
+      "available": 20000000000.0,
+      "used": 12000000000.0,
+      "swap_total": 4000000000.0,
+      "swap_used": 1000000000.0
+     },
+     "network": {
+      "rx_bps": 1000,
+      "tx_bps": 500,
+      "interfaces": [
+       {
+        "name": "eth0",
+        "rx_bps": 1000,
+        "tx_bps": 500
+       }
+      ]
+     },
+     "disk_io": {
+      "read_bps": 10,
+      "write_bps": 20
+     },
+     "disk_space": {
+      "volumes": [
+       {
+        "path": "/var/agent",
+        "total": 100,
+        "used": 60,
+        "free": 40
+       }
+      ],
+      "at": 990.0,
+      "complete": true
+     },
+     "containers": 1,
+     "ports": 2,
+     "history": [
+      {
+       "ts": 1007.0,
+       "cpu": 10.0,
+       "mem_used": 1000000000.0,
+       "swap_used": 0.0,
+       "rx_bps": 0.0,
+       "tx_bps": 0.0,
+       "read_bps": 10,
+       "write_bps": 20,
+       "containers": 0,
+       "ports": 0,
+       "cpu_by_kind": {
+        "session": 0.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 0.0,
+        "other": 0.0,
+        "host": 10.0
+       },
+       "mem_by_kind": {
+        "session": 0.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 0.0,
+        "other": 0.0,
+        "host": 1000000000.0
+       }
+      },
+      {
+       "ts": 4601.0,
+       "cpu": 40.0,
+       "mem_used": 12000000000.0,
+       "swap_used": 1000000000.0,
+       "rx_bps": 1000,
+       "tx_bps": 500,
+       "read_bps": 10,
+       "write_bps": 20,
+       "containers": 1,
+       "ports": 2,
+       "cpu_by_kind": {
+        "session": 20.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 5.0,
+        "other": 0.0,
+        "host": 15.0
+       },
+       "mem_by_kind": {
+        "session": 4000000000.0,
+        "browser": 0.0,
+        "service": 0.0,
+        "container": 0.0,
+        "runner": 1000000000.0,
+        "other": 0.0,
+        "host": 7000000000.0
+       }
+      }
+     ]
+    },
+    "consumers": {
+     "available": true,
+     "age_s": 99,
+     "stale": true,
+     "ts": 1000.0,
+     "consumers": [
+      {
+       "key": "session:C1",
+       "kind": "session",
+       "name": "C1",
+       "item": "W1",
+       "conversation": "C1",
+       "cpu_percent": 20.0,
+       "mem_bytes": 4000000000.0,
+       "read_bps": 1,
+       "write_bps": 2,
+       "rx_bps": null,
+       "tx_bps": null,
+       "processes": 3,
+       "session": {
+        "id": "W1",
+        "title": "Build the demo",
+        "state": "running"
+       }
+      },
+      {
+       "key": "runner",
+       "kind": "runner",
+       "name": "runner",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": 5.0,
+       "mem_bytes": 1000000000.0,
+       "session": null
+      },
+      {
+       "key": "weird",
+       "kind": "other",
+       "name": "x",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": "a",
+       "mem_bytes": true,
+       "session": null
+      },
+      {
+       "key": "host",
+       "kind": "host",
+       "name": "outside the agent container",
+       "item": null,
+       "conversation": null,
+       "cpu_percent": 15.0,
+       "mem_bytes": 7000000000.0,
+       "read_bps": null,
+       "write_bps": null,
+       "rx_bps": null,
+       "tx_bps": null,
+       "processes": null,
+       "session": null
+      }
+     ],
+     "containers": [
+      {
+       "name": "demo-web-1",
+       "image": "demo",
+       "state": "running",
+       "status": "Up",
+       "conversation": "C1",
+       "cpu_percent": 3.0,
+       "mem_bytes": 200000000.0,
+       "rx_bps": 1,
+       "tx_bps": 1,
+       "read_bps": 0,
+       "write_bps": 0,
+       "item": null,
+       "kind": "other",
+       "session": {
+        "id": "W9",
+        "title": "Older",
+        "state": "done"
+       }
+      }
+     ],
+     "ports": [
+      {
+       "port": 3000,
+       "address": "0.0.0.0",
+       "proto": "tcp",
+       "pid": null,
+       "process": null,
+       "consumer": "session:C1",
+       "kind": "session",
+       "name": "C1",
+       "item": "W1",
+       "conversation": "C1",
+       "session": {
+        "id": "W1",
+        "title": "Build the demo",
+        "state": "running"
+       }
+      },
+      {
+       "port": 8080,
+       "kind": "other",
+       "item": null,
+       "conversation": null,
+       "session": null
+      }
+     ],
+     "disk": [
+      {
+       "name": "C1",
+       "kind": "conversation",
+       "bytes": 30,
+       "conversation": "C1",
+       "session": {
+        "id": "W9",
+        "title": "Older",
+        "state": "done"
+       }
+      },
+      {
+       "name": "npm cache",
+       "kind": "cache",
+       "bytes": 5,
+       "conversation": null,
+       "session": null
+      }
+     ],
+     "interfaces": [
+      {
+       "name": "eth0",
+       "rx_bps": 1000,
+       "tx_bps": 500
+      }
+     ]
+    }
+   },
+   "at": 4700.0
+  }
+ ]
+}

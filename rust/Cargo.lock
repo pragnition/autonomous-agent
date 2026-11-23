@@ -30,6 +30,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "holder-proto",
+ "libc",
  "regex",
  "reqwest",
  "rusqlite",

@@ -12,6 +12,7 @@ pub mod db;
 pub mod dispatch;
 pub mod github;
 pub mod handoff;
+pub mod host;
 pub mod kpis;
 pub mod labeler;
 pub mod linear;
