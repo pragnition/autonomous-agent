@@ -10,6 +10,7 @@ pub mod db;
 pub mod dispatch;
 pub mod github;
 pub mod handoff;
+pub mod kpis;
 pub mod linear;
 pub mod notifier;
 pub mod parking;

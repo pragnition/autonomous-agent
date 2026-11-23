@@ -106,14 +106,79 @@ pub async fn shared_with(dir: &std::path::Path, slack: &FakeSlack, usage: Value)
 }
 
 pub fn shared_at(dir: &std::path::Path, slack: &FakeSlack, proxy_url: &str) -> Arc<agentd::shared::Shared> {
+    Arc::new(shared_plain(dir, slack, proxy_url))
+}
+
+/// The shared state before it is shared, for a test that changes its config.
+pub fn shared_plain(dir: &std::path::Path, slack: &FakeSlack, proxy_url: &str) -> agentd::shared::Shared {
     let config_dir = PathBuf::from(REPO).join("examples/config");
     let paths = agentd::shared::Paths { config: config_dir, data: dir.join("data"), work: dir.join("work"),
                                         defaults: PathBuf::from(REPO).join("src/agent/defaults"),
                                         plugins: PathBuf::from(REPO).join("src/agent/plugins") };
     let secrets = [("GH_TOKEN_CORE".to_string(), "core-secret-0123456789".to_string())].into();
     let proxy = agentd::proxy::ProxyClient::new(proxy_url, agentd::proxy::SoftCap::default());
-    Arc::new(agentd::shared::Shared::open(paths, secrets, agentd::slack::Slack::new("xoxb-test", &format!("{}/api", slack.base)),
-                                          Some("UBOT".into()), proxy, None).unwrap())
+    agentd::shared::Shared::open(paths, secrets, agentd::slack::Slack::new("xoxb-test", &format!("{}/api", slack.base)),
+                                 Some("UBOT".into()), proxy, None).unwrap()
+}
+
+/// The stage 4 fixture: its rows inserted into `conn` (tests/fixtures/dashboard/make.py wrote both files).
+pub fn seed(conn: &rusqlite::Connection) {
+    let rows: serde_json::Map<String, Value> =
+        serde_json::from_str(&std::fs::read_to_string("tests/fixtures/dashboard/seed.json").unwrap()).unwrap();
+    for (table, list) in rows {
+        for row in list.as_array().unwrap() {
+            let row = row.as_object().unwrap();
+            let cols: Vec<&str> = row.keys().map(String::as_str).collect();
+            let marks = vec!["?"; cols.len()].join(", ");
+            let values: Vec<rusqlite::types::Value> = row.values().map(|v| match v {
+                Value::Null => rusqlite::types::Value::Null,
+                Value::Number(n) if n.is_i64() => rusqlite::types::Value::Integer(n.as_i64().unwrap()),
+                Value::Number(n) => rusqlite::types::Value::Real(n.as_f64().unwrap()),
+                Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+                other => panic!("{other} in seed.json"),
+            }).collect();
+            conn.execute(&format!("INSERT INTO {table}({}) VALUES ({marks})", cols.join(", ")),
+                         rusqlite::params_from_iter(values)).unwrap();
+        }
+    }
+}
+
+pub fn expected() -> Value {
+    serde_json::from_str(&std::fs::read_to_string("tests/fixtures/dashboard/expected.json").unwrap()).unwrap()
+}
+
+pub fn fixture_now() -> chrono::DateTime<chrono::Utc> {
+    expected()["now"].as_str().unwrap().parse().unwrap()
+}
+
+/// Equal as JSON, numbers by value (Python writes 20.0 where Rust writes 20) and keys in the same order (the web app
+/// shows maps in their order); panics with the path of the first difference.
+pub fn assert_json(got: &Value, want: &Value, what: &str) {
+    fn diff(got: &Value, want: &Value, path: String) -> Option<String> {
+        match (got, want) {
+            (Value::Number(a), Value::Number(b)) => {
+                let (a, b) = (a.as_f64().unwrap(), b.as_f64().unwrap());
+                ((a - b).abs() > 1e-9 * b.abs().max(1.0)).then(|| format!("{path}: {a} != {b}"))
+            }
+            (Value::Object(a), Value::Object(b)) => {
+                if !a.keys().eq(b.keys()) && a.len() == b.len() && a.keys().all(|k| b.contains_key(k)) {
+                    return Some(format!("{path}: keys in another order: {:?} != {:?}", a.keys().collect::<Vec<_>>(),
+                                        b.keys().collect::<Vec<_>>()));
+                }
+                let keys: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+                keys.into_iter().find_map(|k| match (a.get(k), b.get(k)) {
+                    (Some(x), Some(y)) => diff(x, y, format!("{path}.{k}")),
+                    (x, y) => Some(format!("{path}.{k}: {x:?} != {y:?}")),
+                })
+            }
+            (Value::Array(a), Value::Array(b)) if a.len() == b.len() =>
+                a.iter().zip(b).enumerate().find_map(|(i, (x, y))| diff(x, y, format!("{path}[{i}]"))),
+            _ => (got != want).then(|| format!("{path}: {got} != {want}")),
+        }
+    }
+    if let Some(d) = diff(got, want, String::new()) {
+        panic!("{what}: {d}");
+    }
 }
 
 pub const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/fake_claude.py");

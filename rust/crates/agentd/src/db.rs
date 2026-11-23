@@ -99,7 +99,7 @@ impl Db {
 }
 
 /// Create every table and index that doesn't exist yet, and add the columns older tables lack. Run on every start.
-fn create_schema(conn: &Connection) -> Result<()> {
+pub fn create_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
     for (table, column, kind) in ADDED_COLUMNS {
         let columns: Vec<String> = conn.prepare(&format!("PRAGMA table_info({table})"))?

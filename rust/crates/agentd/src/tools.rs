@@ -51,7 +51,7 @@ fn tier_rank(tier: &str) -> u8 {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ToolContext {
     pub work_item_id: String,
     pub conversation_id: Option<String>,
@@ -154,6 +154,7 @@ async fn run(s: &Shared, ctx: &ToolContext, name: &str, args: &Value) -> Result<
             Ok(lines.join("\n"))
         }
         "cancel_task" => cancel_task(s, ctx, arg(args, "task_id")).await,
+        "kpis" => crate::kpis::tool_text(&s.db.lock(), args.get("days"), chrono::Utc::now(), &s.config.name, &s.config.timezone),
         "stop_all" => stop_all(s, ctx).await,
         "resume_all" => {
             let c = s.db.lock();

@@ -351,6 +351,20 @@
   "tier": "read"
  },
  {
+  "name": "kpis",
+  "description": "The agent's own KPIs over the last `days` days (default 7): tasks by project, time per task, the share finished, PRs merged and Linear issues closed, and its tokens by project (also today, 7 days and this month, with the apps' metered model calls by upstream).",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "days": {
+     "type": "integer"
+    }
+   },
+   "required": []
+  },
+  "tier": "read"
+ },
+ {
   "name": "start_project",
   "description": "Register this conversation as the build of a long project, so every session sees it and can pass it changes.",
   "input_schema": {
