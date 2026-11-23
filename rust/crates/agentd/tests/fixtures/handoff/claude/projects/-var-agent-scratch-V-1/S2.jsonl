@@ -1,0 +1,4 @@
+{"type": "user", "message": {"content": "hi"}}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "from the log"}, {"type": "tool_use", "name": "Write", "input": {"file_path": "/w/c.md"}}]}}
+{"type": "assistant", "isSidechain": true, "message": {"content": [{"type": "text", "text": "sidechain"}]}}
+{"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "x", "text": "not text type"}, {"type": "text", "text": "second"}]}}

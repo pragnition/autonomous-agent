@@ -9,8 +9,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 /// Core's schema, verbatim from src/agent/db.py.
 const SCHEMA: &str = include_str!("schema.sql");
 
-/// agentd's own tables: the container of each conversation, each turn it is running, and the tool results it has
-/// already sent, so a tool call replayed after a restart runs once.
+/// agentd's own tables: the container of each conversation, each turn it runs (what it was asked to do, how far it
+/// got, and its result until the caller has handled it), and the tool results it has already sent, so a tool call
+/// replayed after a restart runs once.
 const AGENTD_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS agentd_containers (
     conversation_id TEXT PRIMARY KEY,
@@ -24,7 +25,9 @@ CREATE TABLE IF NOT EXISTS agentd_containers (
 CREATE TABLE IF NOT EXISTS agentd_turns (
     work_item_id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL,
-    state TEXT NOT NULL,
+    state TEXT NOT NULL,                    -- running | finished | reported
+    spec TEXT NOT NULL,                     -- the TurnSpec, JSON
+    progress TEXT NOT NULL DEFAULT '{}',    -- attempts, forks, the current session and prompt, JSON
     forwarded_seq INTEGER NOT NULL DEFAULT 0,
     result TEXT,
     started_at TEXT NOT NULL,
@@ -32,7 +35,7 @@ CREATE TABLE IF NOT EXISTS agentd_turns (
 );
 CREATE TABLE IF NOT EXISTS agentd_tool_calls (
     work_item_id TEXT NOT NULL,
-    call_id INTEGER NOT NULL,
+    call_id INTEGER NOT NULL,               -- the call's line number in the turn's log
     result TEXT NOT NULL,
     PRIMARY KEY(work_item_id, call_id)
 );

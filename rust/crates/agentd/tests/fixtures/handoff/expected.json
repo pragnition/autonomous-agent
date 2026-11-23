@@ -1,0 +1,42 @@
+[
+ {
+  "case": [
+   "S1",
+   "tests/fixtures/handoff/claude",
+   "tests/fixtures/handoff/transcript.jsonl"
+  ],
+  "note": "(This is a fresh session. Your earlier session in this conversation, S1, ran on another Claude account, and a session is never resumed on a different account, so you don't have its history. Here is a short digest of it.\n\nIts last messages, oldest first:\n\n[1] editing now\n\n[2] Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd Änderung, Prüfung ünd…\n\n[3] last one\n\nFiles it edited or wrote: /repo/b.py, /repo/n.ipynb, /repo/a.py\n\nCatch up with read_thread and from the conversation folder's own state (git status, your notes there), then carry on with the task. Don't resume the earlier session (no /resume, no --resume) and don't read or load its record whole. If you need one specific detail from it, look it up in tests/fixtures/handoff/transcript.jsonl or tests/fixtures/handoff/claude/projects/*/S1.jsonl with grep or tail.)\n\n"
+ },
+ {
+  "case": [
+   "S2",
+   "tests/fixtures/handoff/claude",
+   null
+  ],
+  "note": "(This is a fresh session. Your earlier session in this conversation, S2, ran on another Claude account, and a session is never resumed on a different account, so you don't have its history. Here is a short digest of it.\n\nIts last messages, oldest first:\n\n[1] from the log\n\n[2] second\n\nFiles it edited or wrote: /w/c.md\n\nCatch up with read_thread and from the conversation folder's own state (git status, your notes there), then carry on with the task. Don't resume the earlier session (no /resume, no --resume) and don't read or load its record whole. If you need one specific detail from it, look it up in tests/fixtures/handoff/claude/projects/-var-agent-scratch-V-1/S2.jsonl with grep or tail.)\n\n"
+ },
+ {
+  "case": [
+   "S2",
+   "tests/fixtures/handoff/claude",
+   "tests/fixtures/handoff/transcript.jsonl"
+  ],
+  "note": "(This is a fresh session. Your earlier session in this conversation, S2, ran on another Claude account, and a session is never resumed on a different account, so you don't have its history. Here is a short digest of it.\n\nIts last messages, oldest first:\n\n[1] last one\n\nCatch up with read_thread and from the conversation folder's own state (git status, your notes there), then carry on with the task. Don't resume the earlier session (no /resume, no --resume) and don't read or load its record whole. If you need one specific detail from it, look it up in tests/fixtures/handoff/transcript.jsonl or tests/fixtures/handoff/claude/projects/-var-agent-scratch-V-1/S2.jsonl with grep or tail.)\n\n"
+ },
+ {
+  "case": [
+   "S3",
+   "tests/fixtures/handoff/claude",
+   null
+  ],
+  "note": "(This is a fresh session. Your earlier session in this conversation, S3, ran on another Claude account, and a session is never resumed on a different account, so you don't have its history. Here is a short digest of it.\n\nThere is no digest of its messages (its record wasn't found or had none).\n\nCatch up with read_thread and from the conversation folder's own state (git status, your notes there), then carry on with the task. Don't resume the earlier session (no /resume, no --resume) and don't read or load its record whole. If you need one specific detail from it, look it up in tests/fixtures/handoff/claude/projects/*/S3.jsonl with grep or tail.)\n\n"
+ },
+ {
+  "case": [
+   "S4",
+   null,
+   null
+  ],
+  "note": "(This is a fresh session. Your earlier session in this conversation, S4, ran on another Claude account, and a session is never resumed on a different account, so you don't have its history. Here is a short digest of it.\n\nThere is no digest of its messages (its record wasn't found or had none).\n\nCatch up with read_thread and from the conversation folder's own state (git status, your notes there), then carry on with the task. Don't resume the earlier session (no /resume, no --resume) and don't read or load its record whole. If you need one specific detail from it, look it up in <CLAUDE_CONFIG_DIR>/projects/*/S4.jsonl with grep or tail.)\n\n"
+ }
+]

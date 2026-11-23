@@ -36,11 +36,12 @@ Your memory is the folder {dir}, shared by all your sessions. Its index, MEMORY.
 "#;
 
 /// What one turn is run with.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TurnSpec {
     pub work_item: String,
     pub conversation: String,
-    /// The first message: the origin line, any note, then the text and its attachments.
+    /// The first message: the origin line, then the text and its attachments. The runner adds its notes (a restart,
+    /// a handoff) after the origin line.
     pub prompt: String,
     /// Who sent it, where, and its link, as the prompt's first line; "" for a turn without one.
     pub origin: String,
