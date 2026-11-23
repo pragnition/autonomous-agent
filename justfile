@@ -51,7 +51,11 @@ schedules:
 smoke:
     docker compose exec control agentd smoke
 
-# Fetch main, rebuild whatever changed, wait for an idle runner first, then check the stack live (see deploy.py)
+# The switch to agentd and back (see deploy/cutover.md): just cutover check|switch|rollback
+cutover step:
+    deploy/cutover.sh {{step}}
+
+# Fetch main, rebuild whatever changed (pausing only for a change to compose.yaml), then check the stack live
 deploy *args:
     PYTHONPATH=src python3 scripts/deploy.py {{args}}
 
