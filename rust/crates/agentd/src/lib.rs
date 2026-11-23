@@ -11,6 +11,7 @@ pub mod proxy;
 pub mod queue;
 pub mod records;
 pub mod scrub;
+pub mod slack;
 pub mod tasks;
 pub mod turn;
 pub mod usage;
