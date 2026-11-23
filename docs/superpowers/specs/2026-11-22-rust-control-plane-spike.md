@@ -77,3 +77,16 @@ retries any event sent to it to core's own connection.
   server; interrupts as control requests.
 - Turn-end rule: wait for background agents (as today) and for shells moved by a `now` message; accept the extra
   turn Claude Code starts when one finishes.
+
+## Stage 2 live check
+
+Run on the live host on 2026-11-23 with the agent image built from the branch (`agent-holder` and `agentd` copied in
+from the release build), Docker 29, and the Claude Code the image bundles. The live stack kept running throughout.
+
+| Check | Result |
+|---|---|
+| Docker tests, as the agent user with the Docker socket's group: create, reuse, stop when idle, start the same container again, delete after 7 days with its run folder | Pass |
+| A container with a server listening isn't stopped when idle, and is stopped 24 hours after its last turn | Pass |
+| A container sees only its own conversation's run folder (no other holder's socket) | Pass |
+| One real turn through `agentd run-turn`: a session container on Jensen's network, Claude Code through the account proxy | Pass: `pong`, outcome `done`, account and tokens recorded |
+| agentd's own container restarted (`docker restart`) partway through a longer turn | Pass: the restarted agentd carried the turn on from the holder's log and reported one result; Claude Code started once and exited normally; 21 records forwarded across both runs, none twice |
