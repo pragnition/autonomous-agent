@@ -113,10 +113,27 @@ impl Holder {
             Request::Start { work_item, argv, env, cwd, stdin, tools } => {
                 self.start(work_item, argv, env, cwd, stdin, tools).await
             }
-            Request::Send { line } => {
+            Request::Send { line, tag } => {
                 let mut inner = self.inner.lock().await;
                 let turn = inner.turn.as_mut().filter(|t| t.alive).ok_or_else(|| anyhow!("no turn is running"))?;
-                write_line(turn, line).await?;
+                write_line(turn, line, tag).await?;
+                Ok(Response::Ok)
+            }
+            Request::Close { grace_s } => {
+                let mut inner = self.inner.lock().await;
+                if let Some(turn) = inner.turn.as_mut().filter(|t| t.alive) {
+                    turn.stdin = None;
+                    let (holder, pid) = (self.clone(), turn.pid);
+                    tokio::spawn(async move {
+                        for signal in [Signal::SIGTERM, Signal::SIGKILL] {
+                            tokio::time::sleep(Duration::from_secs(grace_s)).await;
+                            if !holder.inner.lock().await.turn.as_ref().is_some_and(|t| t.alive && t.pid == pid) {
+                                return;
+                            }
+                            let _ = nix::sys::signal::kill(Pid::from_raw(pid as i32), signal);
+                        }
+                    });
+                }
                 Ok(Response::Ok)
             }
             Request::Stop { grace_s } => {
@@ -200,7 +217,7 @@ impl Holder {
         };
         let mut turn = Turn { work_item: work_item.clone(), pid, alive: true, stdin: child.stdin.take(), log: log.clone() };
         for line in stdin {
-            write_line(&mut turn, line).await?;
+            write_line(&mut turn, line, None).await?;
         }
         inner.turn = Some(turn);
         inner.tools = tools;
@@ -245,11 +262,11 @@ impl Holder {
 }
 
 /// Log the line as `Sent`, then write it to Claude Code's input: the log always shows a line before its echo.
-async fn write_line(turn: &mut Turn, line: serde_json::Value) -> Result<()> {
+async fn write_line(turn: &mut Turn, line: serde_json::Value, tag: Option<String>) -> Result<()> {
     let stdin = turn.stdin.as_mut().ok_or_else(|| anyhow!("Claude Code's input is closed"))?;
     let mut bytes = serde_json::to_vec(&line)?;
     bytes.push(b'\n');
-    turn.log.append(Entry::Sent { line }).await?;
+    turn.log.append(Entry::Sent { line, tag }).await?;
     stdin.write_all(&bytes).await?;
     stdin.flush().await?;
     Ok(())

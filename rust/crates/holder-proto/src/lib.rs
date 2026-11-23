@@ -31,10 +31,17 @@ pub enum Request {
         stdin: Vec<Value>,
         tools: Vec<ToolSpec>,
     },
-    /// Write one line to Claude Code's input (logged as `Sent` first).
-    Send { line: Value },
+    /// Write one line to Claude Code's input (logged as `Sent` first, with `tag`: the work item a message carries).
+    Send {
+        line: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
     /// End the running Claude Code: its process group gets SIGTERM, then SIGKILL after `grace_s`.
     Stop { grace_s: u64 },
+    /// Close Claude Code's input so it finishes and exits, as the Agent SDK ends a session: SIGTERM after `grace_s`
+    /// if it is still running, then SIGKILL after `grace_s` more.
+    Close { grace_s: u64 },
     Status,
     /// `agentd`'s answer to a `Tool` entry in the log.
     ToolResult { id: u64, text: String },
@@ -76,7 +83,11 @@ pub enum Entry {
     /// A line Claude Code printed, as it printed it.
     Out { line: String },
     /// A line written to Claude Code's input.
-    Sent { line: Value },
+    Sent {
+        line: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
     /// A tool call from the MCP relay, waiting for `agentd`.
     Tool { id: u64, name: String, args: Value },
     Exit { code: Option<i32>, signal: Option<i32> },
@@ -128,7 +139,7 @@ mod tests {
 
     #[test]
     fn request_round_trips_as_tagged_json() {
-        let req = Request::Send { line: json!({"type": "user", "uuid": "u1"}) };
+        let req = Request::Send { line: json!({"type": "user", "uuid": "u1"}), tag: None };
         let text = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap(),
                    json!({"op": "send", "line": {"type": "user", "uuid": "u1"}}));
@@ -142,7 +153,7 @@ mod tests {
         let entries = vec![
             Entry::Started { pid: 7 },
             Entry::Out { line: r#"{"type":"result"}"#.into() },
-            Entry::Sent { line: json!({"type": "user"}) },
+            Entry::Sent { line: json!({"type": "user"}), tag: Some("item-2".into()) },
             Entry::Tool { id: 3, name: "post_update".into(), args: json!({"text": "hi"}) },
             Entry::Exit { code: Some(0), signal: None },
         ];

@@ -33,11 +33,34 @@ fn send_is_logged_before_written() {
     let init = json!({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}});
     h.request(&start(dir.path(), "W-1", &s, vec![init], vec![]));
     let msg = json!({"type": "user", "uuid": "u1", "message": {"role": "user", "content": "hi"}});
-    assert_eq!(h.request(&Request::Send { line: msg }), Response::Ok);
+    assert_eq!(h.request(&Request::Send { line: msg, tag: Some("item-2".into()) }), Response::Ok);
     let log = h.wait_exit("W-1");
-    let sent = log.iter().position(|l| matches!(&l.entry, Entry::Sent { line } if line["uuid"] == "u1")).unwrap();
+    let sent = log.iter().position(|l| matches!(&l.entry, Entry::Sent { line, tag }
+                                                 if line["uuid"] == "u1" && tag.as_deref() == Some("item-2"))).unwrap();
     let echo = log.iter().position(|l| matches!(&l.entry, Entry::Out { line } if line.contains("\"u1\""))).unwrap();
     assert!(sent < echo, "Sent {sent} after echo {echo}");
+}
+
+#[test]
+fn close_ends_input_and_claude_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = Holder::start(dir.path());
+    let s = scenario(dir.path(), "s", &[json!({"emit": {"type": "result"}})]); // then waits for its input to close
+    h.request(&start(dir.path(), "W-1", &s, vec![], vec![]));
+    wait_for(|| !outs(&h.log("W-1")).is_empty());
+    assert_eq!(h.request(&Request::Close { grace_s: 5 }), Response::Ok);
+    assert_eq!(h.wait_exit("W-1").last().unwrap().entry, Entry::Exit { code: Some(0), signal: None });
+}
+
+#[test]
+fn close_terminates_claude_that_keeps_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = Holder::start(dir.path());
+    let s = scenario(dir.path(), "s", &[json!({"emit": {"type": "busy"}}), json!({"sleep_ms": 60000})]);
+    h.request(&start(dir.path(), "W-1", &s, vec![], vec![]));
+    wait_for(|| !outs(&h.log("W-1")).is_empty());
+    h.request(&Request::Close { grace_s: 1 });
+    assert_eq!(h.wait_exit("W-1").last().unwrap().entry, Entry::Exit { code: None, signal: Some(15) });
 }
 
 #[test]
