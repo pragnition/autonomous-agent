@@ -238,6 +238,8 @@ def test_the_agents_home_and_browsers_live_on_the_volume():
 def test_control_service(compose):
     control = compose["services"]["control"]
     assert control["build"]["target"] == "agent" and control["container_name"] == "agent-control"
+    # the tag agentd starts every conversation's container from ([containers] image)
+    assert control["image"] == compose["services"]["services"]["image"] == "autonomous-agent-agent"
     assert control["command"] == ["agentd", "serve"] and control["init"] is True
     # the agent user, with the Docker socket's group (written to .env by deploy/cutover.sh)
     assert control["user"] == "1001" and control["group_add"] == ["${DOCKER_GID:?run deploy/cutover.sh check first}"]

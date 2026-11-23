@@ -3,7 +3,7 @@
 Self-contained on purpose: piped into the `agent-control` container's own `python3` on stdin
 (`docker exec -i agent-control python3 - <args>`, see `agent.watch.host.Host.runner_python`) rather than imported
 there, so improve-jensen can change how it reads or answers notes without ever rebuilding or redeploying the
-runner's image. `agent-runner`'s `python3` is 3.12 and can import only the standard library -- nothing from
+agent image. `agent-control`'s `python3` is 3.12 and can import only the standard library -- nothing from
 `agent.*` here, not even the rest of this package.
 
 Notes live at `/var/agent/feedback/<YYYY-MM-DD>-<slug>.md`, one per thing that got in Jensen's way; `CHANGES.md`

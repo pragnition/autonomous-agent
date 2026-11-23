@@ -23,6 +23,7 @@ services:
   # interrupts none of them.
   control:
     build: {context: ., target: agent}
+    image: autonomous-agent-agent   # also the image of every conversation's container ([containers] image)
     container_name: agent-control
     restart: unless-stopped
     init: true                  # reaps what agentd starts (az reads)
@@ -62,6 +63,7 @@ services:
   # browsers on the volume, which the runner used to keep.
   services:
     build: {context: ., target: agent}
+    image: autonomous-agent-agent
     container_name: agent-services
     restart: unless-stopped
     init: true
