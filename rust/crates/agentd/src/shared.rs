@@ -11,6 +11,8 @@ use tokio::sync::Notify;
 
 use crate::config::{self, Config, Pack};
 use crate::db::Db;
+use crate::github::GitHub;
+use crate::proxy::ProxyClient;
 use crate::slack::Slack;
 
 /// How long a failed Slack lookup is remembered, and how many permalinks are kept.
@@ -22,6 +24,8 @@ pub struct Paths {
     pub config: PathBuf,
     /// The data folder: db/, runs/, runner/, schedules/, tasks/, secrets/.
     pub data: PathBuf,
+    /// The shared volume every container mounts at /var/agent, as agentd sees it.
+    pub work: PathBuf,
     /// The shipped defaults: system.md and persona.toml.
     pub defaults: PathBuf,
 }
@@ -44,13 +48,17 @@ pub struct Shared {
     pub secret_values: Vec<String>,
     pub persona: String,
     pub paths: Paths,
-    /// Notified whenever work is queued.
+    pub proxy: ProxyClient,
+    /// GitHub, read-only, when core's read token is set.
+    pub github: Option<GitHub>,
+    /// Notified whenever work is queued, cancelled or paused.
     pub wake: Notify,
     lookups: Mutex<Lookups>,
 }
 
 impl Shared {
-    pub fn open(paths: Paths, secrets: BTreeMap<String, String>, slack: Slack, bot_user_id: Option<String>) -> Result<Shared> {
+    pub fn open(paths: Paths, secrets: BTreeMap<String, String>, slack: Slack, bot_user_id: Option<String>, proxy: ProxyClient,
+                github: Option<GitHub>) -> Result<Shared> {
         let config = config::load(&paths.config.join("agent.toml")).map_err(|p| anyhow!("agent.toml: {}", p.join("; ")))?;
         let packs = config::load_packs(&paths.config, &config).map_err(|p| anyhow!("packs: {}", p.join("; ")))?;
         std::fs::create_dir_all(paths.data.join("db"))?;
@@ -58,8 +66,13 @@ impl Shared {
         let persona = crate::persona::render(&crate::persona::load(Some(&paths.config.join("persona.toml")), &paths.defaults)?,
                                              &config.name).context("the persona")?;
         let secret_values = secrets.values().filter(|v| !v.is_empty()).cloned().collect();
-        Ok(Shared { db, config, packs, slack, bot_user_id, secrets, secret_values, persona, paths, wake: Notify::new(),
-                    lookups: Mutex::default() })
+        Ok(Shared { db, config, packs, slack, bot_user_id, secrets, secret_values, persona, paths, proxy, github,
+                    wake: Notify::new(), lookups: Mutex::default() })
+    }
+
+    /// The conversation's own folder on the shared volume, the same every turn; its clones live here.
+    pub fn conversation_dir(&self, conversation_id: &str) -> PathBuf {
+        self.paths.work.join("scratch").join(conversation_id)
     }
 
     pub fn scrub(&self, text: &str) -> String {

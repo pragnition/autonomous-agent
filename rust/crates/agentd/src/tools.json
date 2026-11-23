@@ -1,0 +1,436 @@
+[
+ {
+  "name": "post_update",
+  "description": "Post a short progress update in this conversation's Slack thread.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "text": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "text"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "ask",
+  "description": "Ask the person a question when the request itself is unclear. Their reply arrives as your next message, so end your turn after asking.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "question": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "question"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "react",
+  "description": "Add an emoji reaction to the message you are answering.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "emoji": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "emoji"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "post_files",
+  "description": "Post files from your session folder (screenshots, videos, reports) to this conversation's Slack thread, with one line of text.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "paths": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "text": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "paths",
+    "text"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "track_task",
+  "description": "Record that this conversation is now a piece of work (for status, Linear and metrics). kind: feature, bug or chore.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "project": {
+     "type": "string"
+    },
+    "title": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "project",
+    "title",
+    "kind"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "finish_task",
+  "description": "Mark this conversation's task done, with its outcome (a PR link, say).",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "outcome": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "outcome"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "start_task",
+  "description": "Start a separate session for a piece of work, with a self-contained brief, to split one request into parallel tasks.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "project": {
+     "type": "string"
+    },
+    "title": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "brief": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "project",
+    "title",
+    "kind",
+    "brief"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "spawn_agent",
+  "description": "Start a spawned agent: a separate session that works on its own after your turn and reports back later in a new turn here. Returns its id at once. When it finishes, its final message arrives in this conversation as an <agent-notification> and starts a new turn here if you've ended yours, so don't wait for it. Background agents (the Agent tool with run_in_background) keep your session open instead, and your reply posts when they finish. The brief must be self-contained: the agent doesn't see this conversation. At most 3 per conversation and 4 overall run at once, and one that fails isn't retried. cwd: the directory it works in (relative to your folder, or absolute); by default its own new folder. A cwd in your folder (a clone of yours) shares that checkout with you: only do that when you want it to work on your checkout, and don't change the same files meanwhile.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "prompt": {
+     "type": "string"
+    },
+    "cwd": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "prompt"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "status",
+  "description": "What is running and queued, whether the agent is paused, and how much of its 5-hour window this session's account has used.",
+  "input_schema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  },
+  "tier": "read"
+ },
+ {
+  "name": "list_tasks",
+  "description": "List tasks, optionally by status or project.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "status": {
+     "type": "string"
+    },
+    "project": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "tier": "read"
+ },
+ {
+  "name": "get_task",
+  "description": "Show one task.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "task_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "task_id"
+   ]
+  },
+  "tier": "read"
+ },
+ {
+  "name": "cancel_task",
+  "description": "Cancel a task and anything running for it.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "task_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "task_id"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "stop_all",
+  "description": "Stop everything: pause new work and cancel what is running. Only an admin can resume.",
+  "input_schema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  },
+  "tier": "act"
+ },
+ {
+  "name": "resume_all",
+  "description": "Resume after stop_all.",
+  "input_schema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  },
+  "tier": "admin"
+ },
+ {
+  "name": "read_thread",
+  "description": "Read this conversation's Slack thread, or in a DM chat its messages so far (oldest first).",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "limit": {
+     "type": "integer"
+    }
+   },
+   "required": []
+  },
+  "tier": "read"
+ },
+ {
+  "name": "slack_read",
+  "description": "Read from Slack with core's bot token: one Web API call, with params as Slack documents them. Methods: conversations.history, conversations.replies, conversations.list, conversations.info, users.info, users.list, pins.list, bookmarks.list. Replies over 20000 characters are cut; page with limit and cursor.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "method": {
+     "type": "string"
+    },
+    "params": {
+     "type": "object"
+    }
+   },
+   "required": [
+    "method"
+   ]
+  },
+  "tier": "read"
+ },
+ {
+  "name": "gh_prs",
+  "description": "List the project's pull requests (state: open, closed or all).",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "state": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "tier": "read"
+ },
+ {
+  "name": "gh_checks",
+  "description": "CI check runs for a commit or branch.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "ref": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ref"
+   ]
+  },
+  "tier": "read"
+ },
+ {
+  "name": "gh_ci_log",
+  "description": "The tail of a GitHub Actions job's log.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "job_id": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "job_id"
+   ]
+  },
+  "tier": "read"
+ },
+ {
+  "name": "gh_issue",
+  "description": "A GitHub issue with its comments.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "number": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "number"
+   ]
+  },
+  "tier": "read"
+ },
+ {
+  "name": "gh_file",
+  "description": "A file from the GitHub repo at a ref (default: the default branch).",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "ref": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ]
+  },
+  "tier": "read"
+ },
+ {
+  "name": "start_project",
+  "description": "Register this conversation as the build of a long project, so every session sees it and can pass it changes.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string"
+    },
+    "repo": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "repo"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "finish_project",
+  "description": "Mark a long project done.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "tell_project",
+  "description": "Pass a change or a question to a project's build. It arrives as a message from the person you're talking to.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string"
+    },
+    "message": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name",
+    "message"
+   ]
+  },
+  "tier": "act"
+ },
+ {
+  "name": "linear_install",
+  "description": "Send yourself the link that installs the agent as a Linear app, so people can delegate issues to it.",
+  "input_schema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  },
+  "tier": "admin"
+ },
+ {
+  "name": "park",
+  "description": "Park this conversation until a time, then end your turn: core carries it on by itself at that time, in a new turn of this same conversation with your note, and a person's reply in the thread resumes it earlier. Use it to wait out the 5-hour soft cap when every account is over it (see status) or when someone asks you to pause until a time, instead of keeping the turn alive. until: HH:MM in the team's timezone (the next one), or an ISO date-time; leave it out to wait until an account has room again (it refuses while one is under its cap). note: what you were doing and what's next, for the turn that carries on. Core posts nothing: tell the thread yourself if it should know.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "until": {
+     "type": "string"
+    },
+    "note": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "tier": "act"
+ }
+]

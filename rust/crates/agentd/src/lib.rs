@@ -1,12 +1,15 @@
 //! agentd: the control plane that replaces core and the runner.
 
 pub mod admission;
+pub mod cli_login;
 pub mod config;
 pub mod containers;
 pub mod conversations;
 pub mod db;
+pub mod github;
 pub mod handoff;
 pub mod notifier;
+pub mod parking;
 pub mod payloads;
 pub mod persona;
 pub mod prepare;
@@ -19,5 +22,6 @@ pub mod shared;
 pub mod slack;
 pub mod spawned;
 pub mod tasks;
+pub mod tools;
 pub mod turn;
 pub mod usage;

@@ -38,12 +38,12 @@ impl SoftCap {
                   lift_s: num("SOFT_CAP_LIFT_S", default.lift_s).max(0.0) }
     }
 
-    fn cap(&self, reset_5h: Option<f64>, now: f64) -> f64 {
+    pub fn cap(&self, reset_5h: Option<f64>, now: f64) -> f64 {
         if reset_5h.is_some_and(|r| r - now <= self.lift_s) { 1.0 } else { self.limit }
     }
 
     /// Unknown use is not over: the proxy's rank decides.
-    fn over(&self, used_5h: Option<f64>, reset_5h: Option<f64>, now: f64) -> bool {
+    pub fn over(&self, used_5h: Option<f64>, reset_5h: Option<f64>, now: f64) -> bool {
         used_5h.is_some_and(|u| u >= self.cap(reset_5h, now))
     }
 }

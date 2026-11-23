@@ -19,6 +19,7 @@ pub struct FakeSlack {
     /// What conversations.replies and conversations.history answer with.
     pub messages: Arc<Mutex<Vec<Value>>>,
     ts: Arc<AtomicU64>,
+    url: Arc<std::sync::OnceLock<String>>,
 }
 
 impl FakeSlack {
@@ -26,9 +27,11 @@ impl FakeSlack {
         let mut fake = FakeSlack::default();
         let app = axum::Router::new()
             .route("/api/{method}", axum::routing::any(handle))
+            .route("/upload/{id}", axum::routing::post(|| async { "OK" }))
             .with_state(fake.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         fake.base = format!("http://{}", listener.local_addr().unwrap());
+        fake.url.set(fake.base.clone()).unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         fake
     }
@@ -63,16 +66,42 @@ async fn handle(State(fake): State<FakeSlack>, Path(method): Path<String>, RawQu
         "conversations.info" => json!({"ok": true, "channel": {"name": "general"}}),
         "conversations.replies" | "conversations.history" => json!({"ok": true, "messages": *fake.messages.lock().unwrap()}),
         "auth.test" => json!({"ok": true, "user_id": "UBOT"}),
+        "files.getUploadURLExternal" => json!({"ok": true, "upload_url": format!("{}/upload/F{n}", fake.url.get().unwrap()),
+                                              "file_id": format!("F{n}")}),
         _ => json!({"ok": true}),
     })
 }
 
-/// agentd's shared state over a temp folder: the example config and pack, the fake Slack, bot user UBOT.
-pub fn shared(dir: &std::path::Path, slack: &FakeSlack) -> Arc<agentd::shared::Shared> {
+/// The account proxy: `usage` as given; every session is pinned to acct-a.
+pub async fn fake_proxy(usage: Value) -> String {
+    let app = axum::Router::new()
+        .route("/proxy/usage", axum::routing::get(move || { let u = usage.clone(); async move { axum::Json(u) } }))
+        .route("/proxy/whoami", axum::routing::get(|| async { axum::Json(json!({"account": "acct-a"})) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    url
+}
+
+/// acct-a used `a_used` of its window (resetting in 4 hours), acct-b 10%; acct-b ranks first.
+pub fn usage(a_used: f64) -> Value {
+    let reset = chrono::Utc::now().timestamp() as f64 + 4.0 * 3600.0;
+    json!({"acct-a": {"status": "ok", "rank": 1, "verified": true, "5h": [a_used, reset]},
+           "acct-b": {"status": "ok", "rank": 0, "verified": true, "5h": [0.10, reset]}})
+}
+
+/// agentd's shared state over a temp folder: the example config and pack, the fake Slack, bot user UBOT, and a
+/// proxy where both accounts have room.
+pub async fn shared(dir: &std::path::Path, slack: &FakeSlack) -> Arc<agentd::shared::Shared> {
+    shared_with(dir, slack, usage(0.2)).await
+}
+
+pub async fn shared_with(dir: &std::path::Path, slack: &FakeSlack, usage: Value) -> Arc<agentd::shared::Shared> {
     let config_dir = PathBuf::from(REPO).join("examples/config");
-    let paths = agentd::shared::Paths { config: config_dir, data: dir.to_path_buf(),
+    let paths = agentd::shared::Paths { config: config_dir, data: dir.join("data"), work: dir.join("work"),
                                         defaults: PathBuf::from(REPO).join("src/agent/defaults") };
     let secrets = [("GH_TOKEN_CORE".to_string(), "core-secret-0123456789".to_string())].into();
+    let proxy = agentd::proxy::ProxyClient::new(&fake_proxy(usage).await, agentd::proxy::SoftCap::default());
     Arc::new(agentd::shared::Shared::open(paths, secrets, agentd::slack::Slack::new("xoxb-test", &format!("{}/api", slack.base)),
-                                          Some("UBOT".into())).unwrap())
+                                          Some("UBOT".into()), proxy, None).unwrap())
 }

@@ -26,7 +26,7 @@ fn convo(s: &agentd::shared::Shared, id: &str) -> cv::Convo {
 #[tokio::test]
 async fn dm_starts_conversation_and_reacts() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     cv::handle_slack(&s, dm("hi there", "100.1")).await.unwrap();
     let items = items(&s);
     assert_eq!(items.len(), 1);
@@ -43,7 +43,7 @@ async fn dm_starts_conversation_and_reacts() {
 #[tokio::test]
 async fn thread_reply_goes_to_waiting_conversation() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     let task = {
         let c = s.db.lock();
         let t = agentd::tasks::create(&c, agentd::tasks::NewTask { project: "sample".into(), title: "t".into(),
@@ -68,7 +68,7 @@ async fn thread_reply_goes_to_waiting_conversation() {
 #[tokio::test]
 async fn reply_in_own_thread_starts_new() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     // the agent posted a top-level message itself: its own event notes the thread
     cv::handle_slack(&s, json!({"type": "message", "channel": "C2", "user": "UBOT", "text": "heads up", "ts": "70.0"})).await.unwrap();
     cv::handle_slack(&s, json!({"type": "message", "channel": "C2", "user": "U00000001", "text": "why?", "ts": "71.0",
@@ -82,7 +82,7 @@ async fn reply_in_own_thread_starts_new() {
 #[tokio::test]
 async fn stranger_gets_ephemeral() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     cv::handle_slack(&s, json!({"type": "message", "channel": "D9", "channel_type": "im", "user": "U99", "text": "hi", "ts": "1.0"})).await.unwrap();
     assert!(items(&s).is_empty());
     assert_eq!(slack.sent("chat.postEphemeral")[0]["text"], cv::NOT_AUTHORISED);
@@ -95,8 +95,9 @@ async fn stranger_gets_ephemeral() {
 async fn retried_event_handled_once() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
     let event = dm("hello", "100.2");
-    cv::handle_slack(&shared(dir.path(), &slack), event.clone()).await.unwrap();
-    let after_restart = shared(dir.path(), &slack);
+    let first = shared(dir.path(), &slack).await;
+    cv::handle_slack(&first, event.clone()).await.unwrap();
+    let after_restart = shared(dir.path(), &slack).await;
     cv::handle_slack(&after_restart, event.clone()).await.unwrap();
     cv::handle_slack(&after_restart, json!({"type": "app_mention", "channel": "D1", "user": "U00000001", "text": "<@UBOT> hello",
                                            "ts": "100.2"})).await.unwrap();
@@ -106,7 +107,7 @@ async fn retried_event_handled_once() {
 #[tokio::test]
 async fn use_model_switches_or_explains() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     cv::handle_slack(&s, dm("please use opus 4.6 for this", "1.0")).await.unwrap();
     let id = items(&s)[0].conversation_id.clone().unwrap();
     assert_eq!(convo(&s, &id).model.as_deref(), Some("claude-opus-4-6"));
@@ -133,7 +134,7 @@ async fn finish(s: &agentd::shared::Shared, item: &queue::WorkItem, result: Valu
 #[tokio::test]
 async fn result_posts_reply_and_ticks() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     let item = ran(&s, dm("hi", "1.0")).await;
     finish(&s, &item, json!({"outcome": "done", "text": " **pong** core-secret-0123456789 ", "session_id": "S1", "account_code": "a"})).await;
     let posts = slack.sent("chat.postMessage");
@@ -146,7 +147,7 @@ async fn result_posts_reply_and_ticks() {
 #[tokio::test]
 async fn error_keeps_session() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     let item = ran(&s, dm("hi", "1.0")).await;
     finish(&s, &item, json!({"outcome": "done", "text": "ok", "session_id": "S1", "account_code": "a"})).await;
     let item = ran(&s, json!({"type": "message", "channel": "D1", "channel_type": "im", "user": "U00000001", "text": "more",
@@ -162,7 +163,7 @@ async fn error_keeps_session() {
 #[tokio::test]
 async fn limit_cut_waits_and_resumes_once() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     let item = ran(&s, dm("hi", "1.0")).await;
     finish(&s, &item, json!({"outcome": "error", "text": "", "error": "429 ['rate limited']", "session_id": "S1"})).await;
     assert!(slack.sent("chat.postMessage")[0]["text"].as_str().unwrap().starts_with("A usage limit cut me off"));
@@ -177,7 +178,7 @@ async fn limit_cut_waits_and_resumes_once() {
 #[tokio::test]
 async fn build_retries_three_times() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     let mut item = ran(&s, dm("build it", "1.0")).await;
     let id = item.conversation_id.clone().unwrap();
     s.db.lock().execute("INSERT INTO projects(name, repo, conversation_id, status, created_at, updated_at) \
@@ -196,7 +197,7 @@ async fn build_retries_three_times() {
 #[tokio::test]
 async fn spawned_agent_reports_to_parent() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     let parent = ran(&s, dm("research", "1.0")).await;
     let parent_convo = parent.conversation_id.clone().unwrap();
     let child = cv::create_conversation(&s.db.lock(), None, None, None, None, false, None).unwrap();
@@ -218,7 +219,7 @@ async fn spawned_agent_reports_to_parent() {
 #[tokio::test]
 async fn scheduled_failure_reports_in_channel() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let s = shared(dir.path(), &slack);
+    let s = shared(dir.path(), &slack).await;
     let id = cv::create_conversation(&s.db.lock(), None, None, None, None, true, None).unwrap();
     let mut payload = agentd::payloads::turn(&s, &convo(&s, &id), "nightly report", None, true).unwrap();
     payload["source"] = json!("schedule");
