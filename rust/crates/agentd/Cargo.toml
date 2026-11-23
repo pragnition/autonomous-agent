@@ -18,6 +18,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 toml = { version = "0.9", features = ["preserve_order"] }
 regex = "1"
 chrono = "0.4"
+bollard = "0.21"
 
 [dev-dependencies]
 tempfile = "3"
