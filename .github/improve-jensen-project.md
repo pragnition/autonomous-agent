@@ -47,7 +47,7 @@ steps, which are done, the decisions and why, and what's next. It is public: wri
 - When the project, or its current stage, is built: the PR, the review before merge, the merge, `just deploy` and the
   check, all as the charter says. The PR body says `Refs #N` and carries the design note.
 - Stages ship back to back. On exit 0 comment `Deployed <merge sha> at <YYYY-MM-DDTHH:MM:SSZ>. Stage <k> of <n>.`, on
-  exit 3 the charter's `Merged <merge sha>; deploy pending` comment (the hourly watch deploys it), and go on to the
+  exit 3 the charter's `Merged <merge sha>; deploy pending` comment (the watch deploys it), and go on to the
   next stage either way.
 - A stage whose deploy check fails (exit 1) is reverted as the charter says. Record why in the progress file and
   rework it. If the reworked stage fails again, add `stuck`, @-mention the admins with what was tried, and end.
