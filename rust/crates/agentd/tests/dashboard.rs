@@ -41,7 +41,7 @@ async fn rig(trusted: &str, static_dir: Option<std::path::PathBuf>, upstreams: b
         .unwrap();
     let app = dashboard::app(s.clone(), dashboard::Options { static_dir, poll: std::time::Duration::from_millis(50),
                                                             host: Arc::new(Mutex::new(agentd::host::HostStore::default())),
-                                                            rates: None });
+                                                            rates: None, workloads: None });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await });

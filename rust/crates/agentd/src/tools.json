@@ -446,5 +446,42 @@
    "required": []
   },
   "tier": "act"
+ },
+ {
+  "name": "keep_running",
+  "description": "Keep something you run up past its usual stop, or set when it stops. Without this, your container for this conversation stops 24 hours after the conversation's last message (an hour after it, if nothing runs in it), and every server in it stops with it; a service in services.toml runs until it is removed; a stack in your own Docker runs until someone stops it. what: \"container\" (this conversation's), \"server\" (the one listening on `port` in this conversation's container: it holds the container up, and once the container is past its usual stop everything else in it is stopped), \"service\" (`name` in services.toml: removed from the file then), \"stack\" (`name`, a compose project in your own Docker: stopped then). Give `hours` from now, `forever` (until someone changes it), or `clear` (back to the usual rules). Use it when someone asks for a demo or server to stay up, and say until when. People see and change all of these on the dashboard's Containers page.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "what": {
+     "type": "string",
+     "enum": [
+      "container",
+      "server",
+      "service",
+      "stack"
+     ]
+    },
+    "port": {
+     "type": "integer"
+    },
+    "name": {
+     "type": "string"
+    },
+    "hours": {
+     "type": "number"
+    },
+    "forever": {
+     "type": "boolean"
+    },
+    "clear": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "what"
+   ]
+  },
+  "tier": "act"
  }
 ]

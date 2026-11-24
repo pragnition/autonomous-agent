@@ -19,6 +19,7 @@ use tokio::sync::OwnedMutexGuard;
 
 use crate::config;
 use crate::db::Db;
+use crate::keeps;
 
 /// How long a started container's holder has to answer on its socket.
 const READY_WITHIN: StdDuration = StdDuration::from_secs(20);
@@ -85,6 +86,16 @@ pub struct Containers<E, P> {
     /// One lock per conversation. Never removed: a lock taken away while someone waits on it would let a third caller
     /// in beside them.
     locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+/// A container agentd keeps, as its table records it.
+#[derive(Clone, Debug)]
+pub struct ContainerRow {
+    pub conversation: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub last_turn_at: Option<DateTime<Utc>>,
+    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 struct Row {
@@ -228,19 +239,38 @@ impl<E: Engine, P: Probe> Containers<E, P> {
                 Some(_) => Ok(()),
             },
             Some(true) => {
-                let unused = now - row.last_turn_at.unwrap_or(row.created_at);
-                let past_max_age = unused >= Duration::hours(self.settings.max_age_hours);
-                let stop = match self.probe.status(conversation).await {
-                    Some(s) if s.alive => false,
-                    Some(s) => past_max_age || (unused >= Duration::minutes(self.settings.idle_stop_minutes)
-                                                && s.listeners.is_empty() && s.other_processes == 0),
-                    // the holder isn't answering: only the 24-hour stop
-                    None => past_max_age,
+                let status = self.probe.status(conversation).await;
+                if status.as_ref().is_some_and(|s| s.alive) {
+                    return Ok(());
+                }
+                // a person's expiry overrides the usual rules: kept while it holds, stopped once it has passed
+                let (id, at) = (conversation.to_string(), now);
+                let (own, servers_hold) = self.db.call(move |c| {
+                    Ok((keeps::get(c, "container", &id)?, keeps::servers(c, &id)?.iter().any(|(_, k)| k.holds(at))))
+                }).await?;
+                let stop = match &own {
+                    Some(k) if k.holds(now) => false,
+                    Some(_) => true,
+                    None => {
+                        let unused = now - row.last_turn_at.unwrap_or(row.created_at);
+                        let past_max_age = unused >= Duration::hours(self.settings.max_age_hours);
+                        match &status {
+                            Some(s) => past_max_age || (unused >= Duration::minutes(self.settings.idle_stop_minutes)
+                                                        && s.listeners.is_empty() && s.other_processes == 0),
+                            // the holder isn't answering: only the 24-hour stop
+                            None => past_max_age,
+                        }
+                    }
                 };
-                if !stop {
+                // a kept server holds its container (what else runs in it is trimmed by the workloads sweep)
+                if !stop || servers_hold {
                     return Ok(());
                 }
                 self.engine.stop(&name).await?;
+                if own.is_some() {
+                    let id = conversation.to_string();
+                    self.db.call(move |c| keeps::clear(c, "container", &id)).await?;
+                }
                 self.set_stopped(conversation, now).await
             }
         }
@@ -258,6 +288,10 @@ impl<E: Engine, P: Probe> Containers<E, P> {
         }).await?;
         let mut idle = Vec::new();
         for (conversation, last_turn) in rows.into_iter().filter(|(c, _)| c != except) {
+            let id = conversation.clone();
+            if self.db.call(move |c| keeps::holds_container(c, &id, now)).await? {
+                continue; // someone asked for it to stay up
+            }
             if let Some(s) = self.probe.status(&conversation).await.filter(|s| !s.alive) {
                 let rank = if !s.listeners.is_empty() { 2 } else if s.other_processes > 0 { 1 } else { 0 };
                 idle.push((rank, last_turn, conversation));
@@ -276,6 +310,70 @@ impl<E: Engine, P: Probe> Containers<E, P> {
             }
         }
         Ok(false)
+    }
+
+    pub fn settings(&self) -> &config::Containers {
+        &self.settings
+    }
+
+    /// Every container agentd keeps.
+    pub async fn rows(&self) -> Result<Vec<ContainerRow>> {
+        self.db.call(|c| {
+            Ok(c.prepare("SELECT conversation_id, name, created_at, last_turn_at, stopped_at FROM agentd_containers")?
+                .query_map([], |r| Ok(ContainerRow {
+                    conversation: r.get(0)?, name: r.get(1)?, created_at: parse(&r.get::<_, String>(2)?),
+                    last_turn_at: r.get::<_, Option<String>>(3)?.map(|t| parse(&t)),
+                    stopped_at: r.get::<_, Option<String>>(4)?.map(|t| parse(&t)) }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        }).await
+    }
+
+    /// Stop a conversation's container by hand; refused while a turn runs in it.
+    pub async fn stop_by_hand(&self, conversation: &str, now: DateTime<Utc>) -> Result<()> {
+        let _held = self.lock(conversation).lock_owned().await;
+        if self.probe.status(conversation).await.is_some_and(|s| s.alive) {
+            bail!("a turn is running in it: cancel the turn first");
+        }
+        self.engine.stop(&container_name(conversation)?).await?;
+        let id = conversation.to_string();
+        self.db.call(move |c| keeps::clear(c, "container", &id)).await?;
+        self.set_stopped(conversation, now).await
+    }
+
+    /// Start a stopped container by hand (its servers don't come back), kept for an hour unless kept longer already.
+    pub async fn start_by_hand(&self, conversation: &str, by: &str, now: DateTime<Utc>) -> Result<()> {
+        let _held = self.lock(conversation).lock_owned().await;
+        let name = container_name(conversation)?;
+        if self.engine.inspect(&name).await?.is_none() {
+            bail!("it has no container: the conversation's next message makes one");
+        }
+        let (id, by) = (conversation.to_string(), by.to_string());
+        self.db.call(move |c| {
+            let hour = now + Duration::hours(1);
+            if !keeps::get(c, "container", &id)?.is_some_and(|k| k.until.is_none_or(|t| t >= hour)) {
+                keeps::set(c, "container", &id, Some(hour), &by, now)?;
+            }
+            c.execute("UPDATE agentd_containers SET stopped_at = NULL WHERE conversation_id = ?", [&id])?;
+            Ok(())
+        }).await?;
+        self.engine.start(&name).await
+    }
+
+    /// Delete a conversation's container by hand: its next message gets a new one from the newest image, which
+    /// resumes the conversation from its saved history. Refused while a turn runs in it.
+    pub async fn remove_by_hand(&self, conversation: &str) -> Result<()> {
+        let _held = self.lock(conversation).lock_owned().await;
+        if self.probe.status(conversation).await.is_some_and(|s| s.alive) {
+            bail!("a turn is running in it: cancel the turn first");
+        }
+        self.engine.remove(&container_name(conversation)?).await?;
+        let id = conversation.to_string();
+        self.db.call(move |c| {
+            keeps::clear(c, "container", &id)?;
+            c.execute("DELETE FROM agentd_keeps WHERE kind = 'server' AND target LIKE ? || ':%'", [&id])?;
+            Ok(())
+        }).await?;
+        self.forget(conversation).await
     }
 
     fn lock(&self, conversation: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -311,7 +409,7 @@ impl<E: Engine, P: Probe> Containers<E, P> {
 }
 
 /// `agent-conv-<conversation>`; the conversation id must be a valid Docker name (core's are `V-…` and `A-…`).
-fn container_name(conversation: &str) -> Result<String> {
+pub fn container_name(conversation: &str) -> Result<String> {
     let mut chars = conversation.chars();
     let valid = chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
         && chars.all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c));
@@ -622,6 +720,57 @@ mod tests {
         c.sweep(t0 + Duration::hours(30)).await.unwrap();
         assert_eq!(running(&c, "agent-conv-busy"), Some(true));
         assert!(logs.join("W-new.jsonl").exists() && !logs.join("W-old.jsonl").exists());
+    }
+
+    #[tokio::test]
+    async fn a_keep_holds_a_container_past_the_usual_stops_and_its_expiry_stops_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = setup(dir.path());
+        let t0 = Utc::now();
+        for convo in ["kept", "until", "server"] {
+            c.ensure(convo, t0).await.unwrap();
+            c.turn_ended(convo, t0).await.unwrap();
+        }
+        {
+            let db = c.db.lock();
+            keeps::set(&db, "container", "kept", None, "sam", t0).unwrap();
+            keeps::set(&db, "container", "until", Some(t0 + Duration::hours(30)), "sam", t0).unwrap();
+            keeps::set(&db, "server", "server:18098", Some(t0 + Duration::hours(40)), "sam", t0).unwrap();
+        }
+        c.sweep(t0 + Duration::hours(25)).await.unwrap();
+        for convo in ["kept", "until", "server"] {
+            assert_eq!(running(&c, &format!("agent-conv-{convo}")), Some(true), "{convo}: held past 24 hours");
+        }
+        assert!(!c.stop_one_idle("", t0 + Duration::hours(25)).await.unwrap(), "kept ones aren't stopped for memory");
+        c.sweep(t0 + Duration::hours(31)).await.unwrap();
+        assert_eq!(running(&c, "agent-conv-until"), Some(false), "its expiry passed: stopped");
+        assert!(keeps::get(&c.db.lock(), "container", "until").unwrap().is_none(), "and the expiry is gone");
+        c.sweep(t0 + Duration::hours(41)).await.unwrap();
+        assert_eq!(running(&c, "agent-conv-server"), Some(false), "its kept server expired: the usual rules");
+        assert_eq!(running(&c, "agent-conv-kept"), Some(true));
+    }
+
+    #[tokio::test]
+    async fn by_hand_stop_and_remove_wait_for_the_turn_and_start_keeps_an_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = setup(dir.path());
+        let t0 = Utc::now();
+        c.ensure("c1", t0).await.unwrap();
+        c.probe.0.lock().unwrap().insert("c1".into(), holder_proto::Status { alive: true, ..Default::default() });
+        assert!(c.stop_by_hand("c1", t0).await.is_err(), "a turn is running");
+        assert!(c.remove_by_hand("c1").await.is_err());
+        c.probe.0.lock().unwrap().clear();
+        c.stop_by_hand("c1", t0).await.unwrap();
+        assert_eq!(running(&c, "agent-conv-c1"), Some(false));
+        c.start_by_hand("c1", "sam", t0 + Duration::hours(30)).await.unwrap();
+        assert_eq!(running(&c, "agent-conv-c1"), Some(true));
+        c.sweep(t0 + Duration::hours(30) + Duration::minutes(30)).await.unwrap();
+        assert_eq!(running(&c, "agent-conv-c1"), Some(true), "started by hand: kept an hour");
+        c.sweep(t0 + Duration::hours(31) + Duration::minutes(1)).await.unwrap();
+        assert_eq!(running(&c, "agent-conv-c1"), Some(false));
+        c.remove_by_hand("c1").await.unwrap();
+        assert_eq!(running(&c, "agent-conv-c1"), None);
+        assert!(c.rows().await.unwrap().is_empty());
     }
 
     #[tokio::test]

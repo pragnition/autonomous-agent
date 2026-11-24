@@ -103,7 +103,8 @@ pub async fn serve() -> Result<()> {
             None => Ok(()),
         }
     });
-    every(&s, 60, "container sweep", move |_| { let c = containers.clone(); async move { c.sweep(chrono::Utc::now()).await } });
+    let swept = containers.clone();
+    every(&s, 60, "container sweep", move |_| { let c = swept.clone(); async move { c.sweep(chrono::Utc::now()).await } });
 
     // the task record: its files catch up with whatever was labeled before; Haiku labels what was answered since
     if let Err(e) = task_record::export_all(&s.db.lock(), &data.join("tasks"), &s.config.timezone) {
@@ -146,9 +147,25 @@ pub async fn serve() -> Result<()> {
         Ok(sampler) => { tokio::spawn(sampler.run(s.clone(), store.clone())); }
         Err(e) => tracing::warn!("the Host page has no sampler: {e:#}"),
     }
+    let workloads = match crate::workloads::Workloads::new(s.clone(), containers.clone(), store.clone(), crate::workloads::Settings {
+        apps: env("AGENTD_NETWORK", "agent-docker"), services: env("AGENTD_SERVICES", "agent-services"),
+        project: env("AGENTD_COMPOSE_PROJECT", "autonomous-agent") }) {
+        Ok(w) => {
+            let w = Arc::new(w);
+            let sweeper = w.clone();
+            every(&s, 60, "workloads sweep", move |_| { let w = sweeper.clone(); async move { w.sweep(chrono::Utc::now()).await } });
+            let reader = w.clone();
+            every(&s, 10, "stacks", move |_| { let w = reader.clone(); async move { w.refresh_stacks().await } });
+            Some(w)
+        }
+        Err(e) => {
+            tracing::warn!("the Containers page has no Docker: {e:#}");
+            None
+        }
+    };
     let dash = dashboard::app(s.clone(), dashboard::Options {
         static_dir: Some(PathBuf::from(env("AGENTD_DASHBOARD_STATIC", "/app/web"))), poll: Duration::from_secs(1),
-        host: store, rates });
+        host: store, rates, workloads });
     listen(s.config.dashboard.port as u16, dash).await?;
 
     let health = axum::Router::new().route("/health", axum::routing::get(|| async { axum::Json(json!({"ok": true})) }));

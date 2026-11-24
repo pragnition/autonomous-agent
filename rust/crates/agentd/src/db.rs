@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS agentd_tool_calls (
     result TEXT NOT NULL,
     PRIMARY KEY(work_item_id, call_id)
 );
+CREATE TABLE IF NOT EXISTS agentd_keeps (
+    kind TEXT NOT NULL,                     -- container | server | service | stack
+    target TEXT NOT NULL,                   -- a conversation, conversation:port, a service's name, a stack's name
+    until TEXT,                             -- when it stops; NULL: kept until someone changes it
+    set_by TEXT,
+    set_at TEXT NOT NULL,
+    PRIMARY KEY(kind, target)
+);
 ";
 
 /// Columns added to tables a live install already has; CREATE TABLE IF NOT EXISTS leaves those tables as they were.

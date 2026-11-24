@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router"
 import { Layout } from "@/components/Layout"
 import { Accounts } from "@/pages/Accounts"
 import { Activity } from "@/pages/Activity"
+import { Containers } from "@/pages/Containers"
 import { Foundry } from "@/pages/Foundry"
 import { Host } from "@/pages/Host"
 import { Kpis } from "@/pages/Kpis"
@@ -21,6 +22,7 @@ export function App() {
         <Route path="foundry" element={<Foundry />} />
         <Route path="kpis" element={<Kpis />} />
         <Route path="activity" element={<Activity />} />
+        <Route path="containers" element={<Containers />} />
         <Route path="host" element={<Host />} />
         <Route path="*" element={<NotFound />} />
       </Route>

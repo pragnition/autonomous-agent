@@ -292,3 +292,20 @@ fn parse_until_and_device_code_match_python() {
         the code ABCD-1234 to authenticate.", "nothing here"].iter().map(|t| agentd::cli_login::parse_device_code(t)).collect();
     assert_eq!(json!(got), e["device_code"]);
 }
+
+#[tokio::test]
+async fn keep_running_sets_an_expiry_for_the_person_who_asked() {
+    let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
+    let s = shared(dir.path(), &slack).await;
+    let (convo, item) = turn(&s, Some("alice"), false, Some("C1"), Some("1.0"));
+    assert!(call(&s, &item, "keep_running", json!({"what": "server", "port": 18098, "hours": 48})).await.contains("kept until"));
+    let k = agentd::keeps::get(&s.db.lock(), "server", &format!("{convo}:18098")).unwrap().unwrap();
+    assert_eq!(k.set_by.as_deref(), Some("alice"));
+    assert!(k.until.is_some_and(|t| t > chrono::Utc::now() + chrono::Duration::hours(47)));
+    call(&s, &item, "keep_running", json!({"what": "container", "forever": true})).await;
+    assert!(agentd::keeps::get(&s.db.lock(), "container", &convo).unwrap().unwrap().until.is_none());
+    call(&s, &item, "keep_running", json!({"what": "container", "clear": true})).await;
+    assert!(agentd::keeps::get(&s.db.lock(), "container", &convo).unwrap().is_none());
+    assert!(call(&s, &item, "keep_running", json!({"what": "service", "name": "nope"})).await.contains("no service"));
+    assert!(call(&s, &item, "keep_running", json!({"what": "stack", "name": "../x", "hours": 1})).await.contains("name"));
+}
