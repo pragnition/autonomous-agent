@@ -36,6 +36,14 @@ order:
 
 Within a tier, rank by how often it happens and what it costs.
 
+Standing decisions, which no item proposes to undo:
+- Jensen merges its own PRs, in any repo, without waiting to be asked.
+- No gates or guards on Jensen in the control plane or its hooks. A quality gate belongs in a product repo's CI,
+  which Jensen sets up.
+
+When Jensen broke what a person or a repo's own rules told it (a "don't merge" note, a hold it promised), the item
+is about Jensen following that instruction, never about taking the ability away from it everywhere.
+
 ## What you read
 The state folder is `$IMPROVE_JENSEN_STATE`, default `~/.local/state/improve-jensen`. `$STATE` below stands for
 `${IMPROVE_JENSEN_STATE:-$HOME/.local/state/improve-jensen}`: write it out, or set it at the start of each Bash call,
