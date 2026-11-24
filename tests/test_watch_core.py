@@ -100,3 +100,31 @@ def test_collect_window_is_half_open(conn):
     ids = {item["id"] for item in core_collect.collect(conn, since, until)["items"]}
     assert on_until in ids
     assert on_since not in ids
+
+
+_AGENTD_TURNS = """CREATE TABLE agentd_turns (work_item_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+    state TEXT NOT NULL, spec TEXT NOT NULL, progress TEXT NOT NULL DEFAULT '{}', forwarded_seq INTEGER NOT NULL
+    DEFAULT 0, result TEXT, started_at TEXT NOT NULL, ended_at TEXT)"""
+
+
+def test_collect_adds_how_agentd_ran_each_turn(conn):
+    # agentd's own record of a turn: how often its session had to start again, and its moves to another account.
+    conn.execute(_AGENTD_TURNS)
+    since, until = _iso(T0), _iso(T0 + timedelta(hours=1))
+    moved = _insert_item(conn, conversation_id="V-a", status="done", updated_at=_iso(T0 + timedelta(minutes=10)))
+    plain = _insert_item(conn, conversation_id="V-b", status="done", updated_at=_iso(T0 + timedelta(minutes=20)))
+    conn.execute("INSERT INTO agentd_turns(work_item_id, conversation_id, state, spec, progress, started_at) "
+                 "VALUES (?, 'V-a', 'reported', '{}', ?, 'x')",
+                 (moved, json.dumps({"attempts": 3, "forks": 1, "crash_resumed": True, "fresh_retried": False,
+                                     "prompt": "never copied", "session_id": "s"})))
+
+    items = {item["id"]: item for item in core_collect.collect(conn, since, until)["items"]}
+
+    assert items[moved]["agentd"] == {"attempts": 3, "forks": 1, "crash_resumed": True, "fresh_retried": False}
+    assert "agentd" not in items[plain]
+
+
+def test_collect_without_agentd_tables(conn):
+    since, until = _iso(T0), _iso(T0 + timedelta(hours=1))
+    item = _insert_item(conn, conversation_id="V-a", status="done", updated_at=_iso(T0 + timedelta(minutes=10)))
+    assert [i["id"] for i in core_collect.collect(conn, since, until)["items"]] == [item]

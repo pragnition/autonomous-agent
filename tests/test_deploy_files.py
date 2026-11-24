@@ -269,7 +269,7 @@ def test_ci_runs_tests_on_github_hosted_runners_only(ci):
     on = ci[True]  # YAML 1.1 parses the unquoted `on:` key as the boolean True
     assert on["push"]["branches"] == ["main"]
     assert "pull_request" in on
-    assert set(ci["jobs"]) == {"python", "dashboard"}
+    assert set(ci["jobs"]) == {"python", "rust", "dashboard"}
     assert ci["permissions"] == {"contents": "read"}
     for name, job in ci["jobs"].items():
         assert "self-hosted" not in _runs_on_labels(job), name
@@ -413,7 +413,7 @@ def test_instructions_carry_the_key_rules():
     anchors = {
         ".github/improve-jensen-watch.md": (
             "jensen_watch.py note", "jensen_watch.py count", "plan.json", "fixing",
-            "core is unreachable", "not_deployable", "ci_unknown", "A behaviour-changing deploy landed",
+            "control plane is unreachable", "not_deployable", "ci_unknown", "A behaviour-changing deploy landed",
             "You propose nothing", "Never revert anything yourself"),
         ".github/improve-jensen-review.md": ("ask_jensen.py", "provable", "pr-review-toolkit", "/status"),
         ".github/improve-jensen.md": ("just deploy", "gh pr checks --watch", "12 KB", "150 lines", "Refs #",

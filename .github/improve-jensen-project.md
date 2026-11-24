@@ -36,7 +36,8 @@ Branch from `main` as `improve-jensen/project-<N>` and keep `docs/improve-jensen
 steps, which are done, the decisions and why, and what's next. It is public: write it in general terms.
 
 ## Building
-- Small steps. For each one, a test written first and seen to fail, then the change, then `pytest -q` passing.
+- Small steps. For each one, a test written first and seen to fail, then the change, then `pytest -q` passing (and
+  `just rust-test`, for a step under `rust/`).
 - Give steps to subagents with a clear brief. A fresh subagent that didn't write a step reviews its diff before the
   next one starts; fix what it can prove.
 - Commit each step with the progress file updated and push the branch (`git push origin improve-jensen/project-<N>`),

@@ -59,6 +59,7 @@ _MIDTURN_NUMERIC = {"midturn_wait_s"}
 _LIST_VALUED = {"tool_errors", "missing_tools"}
 _COUNTED = _LIST_VALUED | {
     "lost_background", "still_running", "turn_failed", "no_delegation", "big_start_small_ask", "reclone",
+    "session_restarted", "account_moved",
 }
 
 _MAX_PLAN_REVIEWS = 10
@@ -242,7 +243,7 @@ def summarize(records: list[dict], signal: str, label: str) -> str:
     Numeric signals (`context_first`, `context_peak`, `inline_code_chars` from `kind == "turn"` records;
     `midturn_wait_s` from `kind == "midturn"` records) print `n`, `median`, `p90` and `max` (see `_stat`).
     Counted signals (`lost_background`, `still_running`, `turn_failed`, `no_delegation`, `big_start_small_ask`,
-    `reclone`, `tool_errors`, `missing_tools`, all from `kind == "turn"` records) print `total` (the sum -- for
+    `reclone`, `session_restarted`, `account_moved`, `tool_errors`, `missing_tools`, all from `kind == "turn"` records) print `total` (the sum -- for
     `tool_errors`/`missing_tools`, the sum of each record's list length) and `turns` (records greater than zero,
     or with a non-empty list). `pr` (from `kind == "pr"` records, only the newest record of each PR URL) prints
     `prs`, `merged_without_passing_ci` (`open_to_merge_s` is not null and `ci` is neither `passed` nor

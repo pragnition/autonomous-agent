@@ -1,5 +1,6 @@
-# ci: this repo's own checks, on GitHub-hosted runners. `python` runs the Python test suite; `dashboard` builds
-# and tests the dashboard frontend. Both are required checks on PRs, including the ones improve-jensen opens.
+# ci: this repo's own checks, on GitHub-hosted runners. `python` runs the Python test suite; `rust` runs the Rust
+# workspace's tests (agentd and agent-holder), on the same toolchain as the Dockerfile's `rust-dev` stage;
+# `dashboard` builds and tests the dashboard frontend. They run on every PR, including the ones improve-jensen opens.
 name: ci
 
 on:
@@ -20,6 +21,23 @@ jobs:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
       - run: pytest -q
+
+  rust:
+    runs-on: ubuntu-latest   # not as root (a container's default): some tests rely on unreadable files
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.100 --profile minimal && rustup default 1.100
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            rust/target
+          key: rust-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-
+      - run: cargo test --workspace --locked
 
   dashboard:
     runs-on: ubuntu-latest
