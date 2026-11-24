@@ -5,8 +5,8 @@
 #   secrets/projects/<project>.env   (a project's app .env; agentd hands it to the sessions as runner/projects/)
 # The control plane (agentd, in `control`) runs each conversation in a Docker container of its own, from the agent
 # image, sharing the `docker` service's network. The Claude account proxy runs on the host; the relay lets the
-# control plane read its usage and the sessions reach it. deploy/cutover.sh writes DOCKER_GID and AGENTD_DATA_HOST
-# to .env. `core` and `agent` (the Python control plane) stay in the `python` profile for a rollback.
+# control plane read its usage and the sessions reach it. deploy/env.sh writes DOCKER_GID and AGENTD_DATA_HOST to
+# .env (`just up` runs it).
 name: autonomous-agent
 
 networks:
@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
     init: true                  # reaps what agentd starts (az reads)
     user: "1001"
-    group_add: ["${DOCKER_GID:?run deploy/cutover.sh check first}"]
+    group_add: ["${DOCKER_GID:?run deploy/env.sh first}"]
     command: [agentd, serve]
     depends_on: [docker]
     networks:
@@ -38,7 +38,7 @@ services:
       - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port
       - "127.0.0.1:18086:8086"    # the dashboard; `just dashboard-serve` puts it on the tailnet only, never Funnel
     environment:
-      AGENTD_DATA_HOST: ${AGENTD_DATA_HOST:?run deploy/cutover.sh check first}  # for the conversations' mounts
+      AGENTD_DATA_HOST: ${AGENTD_DATA_HOST:?run deploy/env.sh first}  # for the conversations' mounts
       AGENT_NAME: ${AGENT_NAME:-agent}
       AGENT_GIT_EMAIL: ${AGENT_GIT_EMAIL:-}
       SOFT_CAP_5H: ${SOFT_CAP_5H:-0.65}            # an account counts as full at this share of its 5-hour window...
@@ -60,7 +60,7 @@ services:
       - ${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro
 
   # The agent's own long-running services (a bridge, a poller: /var/agent/services.toml) and its home folder and
-  # browsers on the volume, which the runner used to keep.
+  # browsers on the volume.
   services:
     build: {context: ., target: agent}
     image: autonomous-agent-agent
@@ -79,35 +79,6 @@ services:
       - ${AGENT_DATA:-./data}/schedules:/data/schedules
       - ${AGENT_DATA:-./data}/tasks:/data/tasks:ro
       - agentwork:/var/agent
-
-  # The Python control plane, kept for a rollback: `deploy/cutover.sh rollback` starts it again.
-  core:
-    profiles: [python]
-    build: {context: ., target: core}
-    container_name: agent-core
-    restart: unless-stopped
-    networks:
-      agentnet:
-        ipv4_address: 172.30.0.10   # fixed: apps in the agent's own Docker reach the model-call meter by address,
-                                    # since they can't resolve the name `core`
-    ports:
-      - "127.0.0.1:18085:8085"    # Linear's webhook and OAuth callback only; Tailscale Funnel exposes this port
-      - "127.0.0.1:18086:8086"    # the dashboard; `just dashboard-serve` puts it on the tailnet only, never Funnel
-    environment:
-      PROXY_URL: http://172.30.0.1:28090
-      SOFT_CAP_5H: ${SOFT_CAP_5H:-0.65}            # an account counts as full at this share of its 5-hour window...
-      SOFT_CAP_LIFT_S: ${SOFT_CAP_LIFT_S:-5400}    # ...until this many seconds before the window resets
-    volumes:
-      - ${AGENT_DATA:-./data}/config:/data/config
-      - ${AGENT_DATA:-./data}/db:/data/db
-      - ${AGENT_DATA:-./data}/runs:/data/runs
-      - ${AGENT_DATA:-./data}/git:/data/git
-      - ${AGENT_DATA:-./data}/cli:/data/cli
-      - ${AGENT_DATA:-./data}/runner:/data/runner
-      - ${AGENT_DATA:-./data}/schedules:/data/schedules     # the schedules file the agent edits; core fires it
-      - ${AGENT_DATA:-./data}/tasks:/data/tasks             # the task record, one file per month, for the agent
-      - ${AGENT_DATA:-./data}/secrets/core.env:/run/agent/secrets.env:ro
-      - ${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro   # apps' own .env files, passed to the agent
 
   # The agent's own Docker daemon: the apps it runs to test its work start here, never on the laptop's Docker.
   # Its API listens only on 127.0.0.1 of this container's network, which the agent container shares (below), so an
@@ -128,41 +99,9 @@ services:
       - agentdocker:/var/lib/docker
       - agentwork:/var/agent
 
-  # Claude Code sessions with a full development environment. It pulls work from core, reads its runner token
-  # from data/runner and shares core's Azure login in data/cli/azure. It runs in the docker service's network
-  # namespace: same stack network, and the apps it starts are on its localhost.
-  agent:
-    profiles: [python]
-    build: {context: ., target: agent}
-    container_name: agent-runner
-    restart: unless-stopped
-    init: true                  # an init process as PID 1 reaps the orphans the agent's sessions leave behind
-    stop_grace_period: 30s      # time for the runner to stop the agent's services (10 s each at most)
-    network_mode: service:docker
-    depends_on: [docker]
-    command: [python, -m, agent, runner, --token-file, /run/agent/runner-token, --core, "http://core:8080",
-              --proxy, "http://172.30.0.1:28091", --root, /var/agent, --agent-name, "${AGENT_NAME:-agent}",
-              --git-email, "${AGENT_GIT_EMAIL:-}"]
-    # The agent's own keys (GH_TOKEN, dev and test keys) as plain environment variables. Compose reads
-    # the file as the laptop user, so it can stay 0600, and `docker compose exec agent` shells see the keys too.
-    env_file: ["${AGENT_DATA:-./data}/secrets/agent.env"]
-    environment:                                   # the watchdog's soft cap, the same as core's
-      SOFT_CAP_5H: ${SOFT_CAP_5H:-0.65}
-      SOFT_CAP_LIFT_S: ${SOFT_CAP_LIFT_S:-5400}
-      # Sessions and their subagents compact near this many tokens of context instead of near the model's 1M window,
-      # past which every request re-reads the whole conversation from cache
-      CLAUDE_CODE_AUTO_COMPACT_WINDOW: ${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-200000}
-    volumes:
-      - ${AGENT_DATA:-./data}/runner:/run/agent:ro
-      - ${AGENT_DATA:-./data}/cli/azure:/data/cli/azure
-      - ${AGENT_DATA:-./data}/schedules:/data/schedules     # the agent edits the schedules file here
-      - ${AGENT_DATA:-./data}/tasks:/data/tasks:ro          # the task record core keeps; the agent only reads it
-      - agentwork:/var/agent
-
   # Two supervisors that watch the control plane and each other. Each restarts the other when it is down or its loop
   # has stalled; only the primary acts on the control plane, and the standby takes it over only while the primary is
-  # down. Down again within 30 minutes of a restart: an alert, no restart. With SUPERVISE_CONTROL empty (a rollback)
-  # they watch core and the runner's heartbeat instead.
+  # down. Down again within 30 minutes of a restart: an alert, no restart.
   supervisor:
     build: {context: ., target: supervisor}
     container_name: agent-supervisor
@@ -170,7 +109,7 @@ services:
     networks: [agentnet]
     environment:
       SUPERVISOR_ROLE: primary
-      CONTROL_HEALTH: ${SUPERVISE_CONTROL-http://control:8080/health}
+      CONTROL_HEALTH: http://control:8080/health
       CONTROL_CONTAINER: agent-control
       PEER_HEALTH: http://supervisor-standby:8090/health
       PEER_CONTAINER: agent-supervisor-standby
@@ -185,7 +124,7 @@ services:
     networks: [agentnet]
     environment:
       SUPERVISOR_ROLE: standby
-      CONTROL_HEALTH: ${SUPERVISE_CONTROL-http://control:8080/health}
+      CONTROL_HEALTH: http://control:8080/health
       CONTROL_CONTAINER: agent-control
       PEER_HEALTH: http://supervisor:8090/health
       PEER_CONTAINER: agent-supervisor

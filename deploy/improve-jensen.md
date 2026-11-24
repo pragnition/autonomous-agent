@@ -170,7 +170,7 @@ A bare `sleep` would be moved to the background by Claude Code and end the turn 
 `V-review-*` one with no Slack thread, so nothing is posted. Read the item's state with:
 
 ```sh
-docker exec agent-core python -c "import sqlite3, sys; print(sqlite3.connect('/data/db/agent.db').execute(
+docker exec agent-control python -c "import sqlite3, sys; print(sqlite3.connect('/data/db/agent.db').execute(
   \"SELECT status, attempts, json_extract(result, '$.text') FROM work_items WHERE id = ?\",
   (sys.argv[1],)).fetchone())" <item id>
 ```
@@ -179,9 +179,9 @@ Once it shows `claimed`, note core's start time and restart core. Compose doesn'
 hasn't changed, so force it:
 
 ```sh
-docker inspect -f '{{.State.StartedAt}}' agent-core
+docker inspect -f '{{.State.StartedAt}}' agent-control
 cd ~/autonomous-agent && docker compose up -d --force-recreate core
-docker inspect -f '{{.State.StartedAt}}' agent-core   # must be later than the first; else core never restarted
+docker inspect -f '{{.State.StartedAt}}' agent-control   # must be later than the first; else the control plane never restarted
 ```
 
 Within about five minutes the item must end `done` with the text `done`. If the turn doesn't survive, stop here: core
@@ -194,11 +194,11 @@ cd ~/improve-jensen-setup
 python3 scripts/deploy.py   # deploys main into ~/autonomous-agent, the same as `just deploy` run there
 python3 scripts/jensen_watch.py seed deploy/improve-jensen-seed.json --repo pragnition/autonomous-agent
 python3 scripts/jensen_watch.py gh api 'repos/<a repo Jensen works in>/actions/runs?per_page=1'
-docker exec agent-runner mkdir -p /var/agent/feedback
+docker exec agent-control mkdir -p /var/agent/feedback
 cd && rm -rf ~/improve-jensen-setup
 ```
 
-`/var/agent/feedback` in `agent-runner` is where Jensen writes its notes about what gets in its way, and where
+`/var/agent/feedback` on the shared volume is where Jensen writes its notes about what gets in its way, and where
 improve-jensen answers them and keeps `CHANGES.md`, the list of what changed for Jensen.
 
 The `gh api` line must answer with JSON, not a 403. If it still 403s, give Jensen a classic token with the `repo` scope

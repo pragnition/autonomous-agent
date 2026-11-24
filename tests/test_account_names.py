@@ -1,6 +1,11 @@
 import tomllib
 
-from agent.dashboard.names import name_from_email, write_account_names
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+from account_names import name_from_email, write_account_names  # noqa: E402
 
 PROXY = """port = 18088
 

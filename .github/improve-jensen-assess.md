@@ -160,8 +160,8 @@ subagent in the foreground, with the issue number, its evidence lines (`grep -F 
 "$STATE/evidence.jsonl"`) and this checklist. It reports PASS, or FIXED / DUPLICATE / REJECTED / WEAK with the reason
 and file:line or PR. Propose only a PASS.
 1. **Already handled in the code?** Find what governs this behaviour on `main`, which is what runs (the newest `ok`
-   record in `$STATE/deploys.jsonl` has its sha): `src/agent/defaults/system.md`, `src/agent/runner/`,
-   `src/agent/core/`, the core plugin's skills in `src/agent/plugins/core/skills/`, `compose.yaml`, `Dockerfile`;
+   record in `$STATE/deploys.jsonl` has its sha): `src/agent/defaults/system.md`, `rust/crates/agentd/`,
+   `rust/crates/agent-holder/`, the core plugin's skills in `src/agent/plugins/core/skills/`, `compose.yaml`, `Dockerfile`;
    and on the host, Jensen's own setup: `docker exec agent-control ls /var/agent/claude/skills`,
    `docker exec agent-control claude plugin list`, `docker exec agent-control cat /var/agent/memory/MEMORY.md`. Read the
    code; don't go by names. A learned skill or rule that is already there is FIXED.

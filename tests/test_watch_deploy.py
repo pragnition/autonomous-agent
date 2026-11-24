@@ -184,8 +184,7 @@ class FakeClock:
 
 def test_services_for_table():
     image = {"control", "services"}  # what runs the agent image
-    for path in ("src/agent/runner/foo.py", "src/agent/core/app.py", "src/agent/dashboard/app.py",
-                 "src/agent/defaults/agent.toml", "src/agent/plugins/x.py", "src/agent/connectors/x.py",
+    for path in ("src/agent/services/supervise.py", "src/agent/defaults/agent.toml", "src/agent/plugins/x.py",
                  "dashboard/src/App.tsx", "rust/crates/agentd/src/serve.rs"):
         assert services_for([path]) == image, path
     assert services_for(["src/agent/supervisor.py"]) == {"supervisor", "supervisor-standby"}
@@ -198,7 +197,7 @@ def test_services_for_table():
     assert services_for(["scripts/ask_jensen.py"]) == set()
     assert services_for(["README.md"]) == set()
     assert services_for(["justfile"]) == set()
-    assert services_for(["src/agent/config.py"]) == image | {"supervisor", "supervisor-standby"}
+    assert services_for(["src/agent/db.py"]) == image | {"supervisor", "supervisor-standby"}
     assert services_for(["src/agent/sandbox/run.py"]) == image | {"supervisor", "supervisor-standby"}
     # Dockerfile has its own build stage for `relay` too (see compose.yaml); pyproject.toml (Python deps) does not.
     assert services_for(["Dockerfile"]) == image | {"supervisor", "supervisor-standby", "relay"}
@@ -207,7 +206,7 @@ def test_services_for_table():
     assert services_for(["LICENSE"]) == {"control"}
 
     # A mix of rows unions the services.
-    mixed = services_for(["src/agent/runner/foo.py", "src/agent/supervisor.py", "docs/plan.md"])
+    mixed = services_for(["src/agent/services/foo.py", "src/agent/supervisor.py", "docs/plan.md"])
     assert mixed == {"control", "services", "supervisor", "supervisor-standby"}
 
 
@@ -285,7 +284,7 @@ def test_failed_ff_merge_returns_2_and_is_logged(tmp_path):
     success -- `fail_git` forces this exit code directly since a real tmp repo won't produce this failure on
     its own once the ancestor check has already passed."""
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "x\n"}, "control plane change")
 
     fake = FakeDocker()
     fake.fail_git = {"merge": "simulated merge failure"}
@@ -472,7 +471,7 @@ def _claim_during_build(fake: FakeDocker):
 
 def test_core_change_deploys_without_waiting(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "x\n"}, "control plane change")
 
     fake = FakeDocker()
     host = Host(run=fake, live=live)
@@ -495,12 +494,12 @@ def test_core_change_deploys_without_waiting(tmp_path):
 def test_rename_from_runner_to_watch_still_rebuilds_the_agent_image(tmp_path):
     """`--no-renames` matters: a plain rename line carries only the new path, which alone maps to nothing."""
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "identical content\n"}, "add runner file")
+    _commit(origin, {"src/agent/services/foo.py": "identical content\n"}, "add services file")
     _run(["git", "pull", "origin", "main"], cwd=live)  # `live`'s HEAD (the diff base) now has the old path
 
     # `git mv` in this git version doesn't auto-create the destination directory; move it by hand instead.
-    (origin / "src/agent/runner/foo.py").unlink()
-    _run(["git", "add", "src/agent/runner/foo.py"], cwd=origin)
+    (origin / "src/agent/services/foo.py").unlink()
+    _run(["git", "add", "src/agent/services/foo.py"], cwd=origin)
     _commit(origin, {"src/agent/watch/foo.py": "identical content\n"}, "move runner file to watch")
 
     fake = FakeDocker()
@@ -519,7 +518,7 @@ def test_a_failed_build_is_retried_from_the_last_ok_sha_not_head(tmp_path):
     `HEAD` already sits at the new commit -- the base for "what changed" is the last *successful* deploy's `to`
     sha, not whatever `HEAD` happens to be right now."""
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "v1\n"}, "core change 1")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "v1\n"}, "control plane change 1")
 
     fake = FakeDocker()
     host = Host(run=fake, live=live)
@@ -531,7 +530,7 @@ def test_a_failed_build_is_retried_from_the_last_ok_sha_not_head(tmp_path):
     assert _deploys(tmp_path)[0]["result"] == "ok"
 
     # A second core change whose build fails -- HEAD still gets fast-forwarded onto it.
-    _commit(origin, {"src/agent/core/app.py": "v2\n"}, "core change 2")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "v2\n"}, "control plane change 2")
     fake.build_fails = True
     failed = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
     assert failed == 1
@@ -539,7 +538,7 @@ def test_a_failed_build_is_retried_from_the_last_ok_sha_not_head(tmp_path):
     assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()  # ff'd anyway
 
     # No further commits on origin; a HEAD-based diff would now see nothing to do, since HEAD already sits at
-    # "core change 2". The base must still be the last *ok* sha ("core change 1"), so the retry rebuilds.
+    # "control plane change 2". The base must still be the last *ok* sha ("control plane change 1"), so the retry rebuilds.
     fake.build_fails = False
     fake.calls.clear()
     retried = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
@@ -555,7 +554,7 @@ def test_revert_after_check_failed_redeploys_and_logs(tmp_path):
     sha, `diff(last_ok, revert)` is empty -- the revert's tree matches the last-ok tree exactly -- so the broken
     container would stay up forever. The union must also diff from `HEAD` (the broken commit) to catch it."""
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "good\n"}, "core change 1")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "good\n"}, "control plane change 1")
 
     fake = FakeDocker()
     host = Host(run=fake, live=live)
@@ -565,15 +564,15 @@ def test_revert_after_check_failed_redeploys_and_logs(tmp_path):
     assert baseline == 0
     assert _deploys(tmp_path)[0]["result"] == "ok"
 
-    _commit(origin, {"src/agent/core/app.py": "bad\n"}, "core change 2 (breaks smoke)")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "bad\n"}, "control plane change 2 (breaks smoke)")
     fake.smoke_ok = False
     broken = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
     assert broken == 1
     assert _deploys(tmp_path)[1]["result"].startswith("check_failed")
     assert ["docker", "compose", "up", "-d", "--no-build", "control", "services"] in fake.calls  # it did recreate, just failed
 
-    # Revert: a new commit whose tree matches "core change 1" exactly.
-    _commit(origin, {"src/agent/core/app.py": "good\n"}, "revert to core change 1")
+    # Revert: a new commit whose tree matches "control plane change 1" exactly.
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "good\n"}, "revert to control plane change 1")
     fake.smoke_ok = True
     fake.calls.clear()
     reverted = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
@@ -592,7 +591,7 @@ def test_revert_after_check_failed_redeploys_and_logs(tmp_path):
 
 def test_compose_build_failure_returns_1_and_is_logged(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "x\n"}, "control plane change")
 
     fake = FakeDocker()
     fake.build_fails = True
@@ -611,7 +610,7 @@ def test_compose_build_failure_returns_1_and_is_logged(tmp_path):
 
 def test_compose_up_failure_returns_1_and_is_logged(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "x\n"}, "control plane change")
 
     fake = FakeDocker()
     fake.up_fails = True
@@ -627,7 +626,7 @@ def test_compose_up_failure_returns_1_and_is_logged(tmp_path):
 
 def test_failed_check_returns_1_and_is_logged(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "x\n"}, "control plane change")
 
     fake = FakeDocker()
     fake.smoke_ok = False
@@ -649,7 +648,7 @@ def test_failed_check_returns_1_and_is_logged(tmp_path):
 
 def test_if_pending_without_flag_does_nothing(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"src/agent/services/foo.py": "x\n"}, "services change")
 
     fake = FakeDocker()
     host = Host(run=fake, live=live)
@@ -749,7 +748,7 @@ def test_check_star_covers_every_container_in_the_map():
 
 def test_dry_run_prints_services_and_changes_nothing(tmp_path, capsys):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/core/app.py": "x\n"}, "core change")
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "x\n"}, "control plane change")
     head_before = _head(live)
 
     fake = FakeDocker()
@@ -763,8 +762,8 @@ def test_dry_run_prints_services_and_changes_nothing(tmp_path, capsys):
     assert not any(c[0] == "docker" for c in fake.calls)
     assert state.deploy_pending() is False
     out = capsys.readouterr().out
-    assert "core" in out
-    assert "src/agent/core/app.py" in out
+    assert "control" in out
+    assert "rust/crates/agentd/src/serve.rs" in out
 
 
 def test_cli_wires_if_pending(tmp_path):

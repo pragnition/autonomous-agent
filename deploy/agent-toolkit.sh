@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install the agent's off-the-shelf skills and plugins into its persistent Claude home (CLAUDE_CONFIG_DIR, on the
 # agentwork volume), so every session loads them. Safe to run again; run it whenever this list changes:
-#   docker exec -i agent-runner bash < deploy/agent-toolkit.sh
+#   docker exec -i agent-services bash < deploy/agent-toolkit.sh
 # Spec: docs/superpowers/specs/2026-11-17-off-the-shelf-toolkit-design.md
 set -u
 failed=()
