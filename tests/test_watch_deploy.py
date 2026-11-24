@@ -120,7 +120,7 @@ class FakeDocker:
             self.paused = "1"
             self.swaps.append("pause")
             return subprocess.CompletedProcess([], 0, was + "\n", "")
-        if args[1] == "exec" and args[3:] == ["python", "-m", "agent", "resume"]:
+        if args[1] == "exec" and args[3:] == ["agentd", "resume"]:
             if self.resume_failures:
                 self.resume_failures -= 1
                 return subprocess.CompletedProcess([], 1, "", "Error: container is restarting")
@@ -154,7 +154,7 @@ class FakeDocker:
 
     def _core_collect(self):
         if self.core_unreachable:
-            return subprocess.CompletedProcess([], 1, "", "Error: No such container: agent-core")
+            return subprocess.CompletedProcess([], 1, "", "Error: No such container: agent-control")
         return subprocess.CompletedProcess([], 0, json.dumps({"claimed": self.claimed}), "")
 
     def _health(self, args):
@@ -183,15 +183,12 @@ class FakeClock:
 
 
 def test_services_for_table():
-    assert services_for(["src/agent/runner/foo.py"]) == {"agent"}
+    image = {"control", "services"}  # what runs the agent image
+    for path in ("src/agent/runner/foo.py", "src/agent/core/app.py", "src/agent/dashboard/app.py",
+                 "src/agent/defaults/agent.toml", "src/agent/plugins/x.py", "src/agent/connectors/x.py",
+                 "dashboard/src/App.tsx", "rust/crates/agentd/src/serve.rs"):
+        assert services_for([path]) == image, path
     assert services_for(["src/agent/supervisor.py"]) == {"supervisor", "supervisor-standby"}
-    assert services_for(["src/agent/core/app.py"]) == {"core"}
-    assert services_for(["src/agent/dashboard/app.py"]) == {"core"}
-    assert services_for(["src/agent/defaults/agent.toml"]) == {"core"}
-    assert services_for(["src/agent/plugins/x.py"]) == {"core"}
-    assert services_for(["src/agent/connectors/x.py"]) == {"core"}
-    assert services_for(["dashboard/src/App.tsx"]) == {"core"}
-    assert services_for(["scripts/smoke.py"]) == {"core"}
     assert services_for(["src/agent/watch/host.py"]) == set()
     assert services_for(["docs/plan.md"]) == set()
     assert services_for(["tests/test_x.py"]) == set()
@@ -201,17 +198,17 @@ def test_services_for_table():
     assert services_for(["scripts/ask_jensen.py"]) == set()
     assert services_for(["README.md"]) == set()
     assert services_for(["justfile"]) == set()
-    assert services_for(["src/agent/config.py"]) == {"core", "agent", "supervisor", "supervisor-standby"}
-    assert services_for(["src/agent/sandbox/run.py"]) == {"core", "agent", "supervisor", "supervisor-standby"}
+    assert services_for(["src/agent/config.py"]) == image | {"supervisor", "supervisor-standby"}
+    assert services_for(["src/agent/sandbox/run.py"]) == image | {"supervisor", "supervisor-standby"}
     # Dockerfile has its own build stage for `relay` too (see compose.yaml); pyproject.toml (Python deps) does not.
-    assert services_for(["Dockerfile"]) == {"core", "agent", "supervisor", "supervisor-standby", "relay"}
-    assert services_for(["pyproject.toml"]) == {"core", "agent", "supervisor", "supervisor-standby"}
+    assert services_for(["Dockerfile"]) == image | {"supervisor", "supervisor-standby", "relay"}
+    assert services_for(["pyproject.toml"]) == image | {"supervisor", "supervisor-standby"}
     assert services_for(["compose.yaml"]) == {"*"}
-    assert services_for(["LICENSE"]) == {"core"}
+    assert services_for(["LICENSE"]) == {"control"}
 
     # A mix of rows unions the services.
     mixed = services_for(["src/agent/runner/foo.py", "src/agent/supervisor.py", "docs/plan.md"])
-    assert mixed == {"agent", "supervisor", "supervisor-standby"}
+    assert mixed == {"control", "services", "supervisor", "supervisor-standby"}
 
 
 # -- deploy: nothing to deploy / not deployable --
@@ -303,14 +300,28 @@ def test_failed_ff_merge_returns_2_and_is_logged(tmp_path):
     assert records[-1]["result"].startswith("not_deployable: merge --ff-only failed")
 
 
-# -- deploy: the idle-runner wait --
+# -- deploy: the graceful swap, for a change to the stack's definition --
+
+
+def test_an_image_change_never_pauses(tmp_path):
+    """Turns run in the conversations' own containers: rebuilding the control plane interrupts none of them."""
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"rust/crates/agentd/src/serve.rs": "x\n"}, "control plane change")
+
+    fake = FakeDocker()
+    fake.claimed = 1  # Jensen busy
+    host = Host(run=fake, live=live)
+
+    assert deploy(host, State(tmp_path / "state"), wait_idle_s=1800, sleep=lambda s: None, clock=lambda: 0.0) == 0
+    assert fake.swaps == ["up control services", "smoke"]
+    assert ["docker", "compose", "build", "control", "services"] in fake.calls
 
 
 def test_a_busy_runner_change_pauses_core_swaps_and_resumes(tmp_path):
     """Jensen busy the whole time: the deploy still lands -- core stops starting turns, the running turn gets the
     grace period, the container is swapped and core resumes. Nothing goes pending."""
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
 
     fake = FakeDocker()
     fake.claimed = 1  # never drops to 0
@@ -321,7 +332,7 @@ def test_a_busy_runner_change_pauses_core_swaps_and_resumes(tmp_path):
     result = deploy(host, state, wait_idle_s=120, sleep=clock.sleep, clock=clock.time)
 
     assert result == 0
-    assert fake.swaps == ["pause", "up agent", "resume", "smoke"]  # resumed before the smoke turn
+    assert fake.swaps == ["pause", "up --remove-orphans", "resume", "smoke"]  # resumed before the smoke turn
     assert fake.paused == "0"
     assert state.deploy_pending() is False
     assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()
@@ -331,31 +342,31 @@ def test_a_busy_runner_change_pauses_core_swaps_and_resumes(tmp_path):
 
 def test_an_idle_runner_change_still_pauses_around_the_swap(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
 
     fake = FakeDocker()
     host = Host(run=fake, live=live)
 
     assert deploy(host, State(tmp_path / "state"), wait_idle_s=120, sleep=lambda s: None, clock=lambda: 0.0) == 0
-    assert fake.swaps == ["pause", "up agent", "resume", "smoke"]
+    assert fake.swaps == ["pause", "up --remove-orphans", "resume", "smoke"]
 
 
 def test_a_pause_someone_set_on_purpose_is_left_in_place(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
 
     fake = FakeDocker()
     fake.paused = "1"
     host = Host(run=fake, live=live)
 
     assert deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0) == 0
-    assert fake.swaps == ["pause", "up agent"]  # no resume, and no smoke turn a paused core would never start
+    assert fake.swaps == ["pause", "up --remove-orphans"]  # no resume, and no smoke turn a paused core would never start
     assert fake.paused == "1"
 
 
 def test_resume_is_retried_while_core_comes_back(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
 
     fake = FakeDocker()
     fake.resume_failures = 3
@@ -369,7 +380,7 @@ def test_resume_is_retried_while_core_comes_back(tmp_path):
 
 def test_core_that_never_answers_resume_is_reported(tmp_path, capsys):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
 
     fake = FakeDocker()
     fake.resume_failures = 100
@@ -377,19 +388,19 @@ def test_core_that_never_answers_resume_is_reported(tmp_path, capsys):
 
     deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0)
 
-    assert "couldn't resume core" in capsys.readouterr().err
+    assert "couldn't resume the control plane" in capsys.readouterr().err
 
 
 def test_a_failed_swap_still_resumes(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
 
     fake = FakeDocker()
     fake.up_fails = True
     host = Host(run=fake, live=live)
 
     assert deploy(host, State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None, clock=lambda: 0.0) == 1
-    assert fake.swaps == ["pause", "up agent", "resume"]
+    assert fake.swaps == ["pause", "up --remove-orphans", "resume"]
     assert fake.paused == "0"
 
 
@@ -397,7 +408,7 @@ def test_core_down_for_whole_wait_still_deploys(tmp_path):
     """core being unreachable for the *entire* idle wait must not be treated as "still busy forever" -- nothing
     can have been dispatched with core down, and a revert that fixes core must be able to land."""
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
 
     fake = FakeDocker()
     fake.core_unreachable = True  # every claimed probe raises, for the whole wait
@@ -408,9 +419,33 @@ def test_core_down_for_whole_wait_still_deploys(tmp_path):
     result = deploy(host, state, wait_idle_s=1800, sleep=clock.sleep, clock=clock.time)
 
     assert result == 0
-    assert ["docker", "compose", "build", "agent"] in fake.calls
-    assert ["docker", "compose", "up", "-d", "--no-build", "agent"] in fake.calls
+    assert ["docker", "compose", "build"] in fake.calls
+    assert ["docker", "compose", "up", "-d", "--no-build", "--remove-orphans"] in fake.calls
     assert state.deploy_pending() is False
+
+
+def test_a_recreated_network_container_moves_the_conversations_onto_it(tmp_path):
+    """A conversation's container shares the network container's network: when a stack change recreates that one,
+    the conversations' containers are restarted so they join the new network."""
+    origin, live = _repo_pair(tmp_path)
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
+    fake, ids, restarted = FakeDocker(), iter(["old-id", "new-id"]), []
+
+    def run(args, **kwargs):
+        if args[:2] == ["docker", "inspect"] and args[-1] == "{{.Id}}":
+            return subprocess.CompletedProcess(args, 0, next(ids) + "\n", "")
+        if args[:3] == ["docker", "ps", "-q"]:
+            assert "label=agent.conversation" in args
+            return subprocess.CompletedProcess(args, 0, "c1\nc2\n", "")
+        if args[:2] == ["docker", "restart"]:
+            restarted.append(args[2:])
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return fake(args, **kwargs)
+
+    assert deploy(Host(run=run, live=live), State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None,
+                  clock=lambda: 0.0) == 0
+    assert restarted == [["c1", "c2"]]
+    assert fake.swaps == ["pause", "up --remove-orphans", "resume", "smoke"]
 
 
 # -- deploy: the second idle wait, after the build and before the recreate --
@@ -446,18 +481,18 @@ def test_core_change_deploys_without_waiting(tmp_path):
     result = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
 
     assert result == 0
-    assert ["docker", "compose", "build", "core"] in fake.calls
-    assert ["docker", "compose", "up", "-d", "--no-build", "core"] in fake.calls
+    assert ["docker", "compose", "build", "control", "services"] in fake.calls
+    assert ["docker", "compose", "up", "-d", "--no-build", "control", "services"] in fake.calls
     assert not any(c[:3] == ["docker", "compose", "up"] and "--build" in c for c in fake.calls)
     records = _deploys(tmp_path)
     assert len(records) == 1
-    assert records[0]["services"] == ["core"]
+    assert records[0]["services"] == ["control", "services"]
     assert records[0]["result"] == "ok"
     assert state.deploy_pending() is False
-    assert fake.swaps == ["up core", "smoke"]  # a core-only swap never pauses
+    assert fake.swaps == ["up control services", "smoke"]  # an image swap never pauses
 
 
-def test_rename_from_runner_to_watch_still_rebuilds_agent(tmp_path):
+def test_rename_from_runner_to_watch_still_rebuilds_the_agent_image(tmp_path):
     """`--no-renames` matters: a plain rename line carries only the new path, which alone maps to nothing."""
     origin, live = _repo_pair(tmp_path)
     _commit(origin, {"src/agent/runner/foo.py": "identical content\n"}, "add runner file")
@@ -475,8 +510,8 @@ def test_rename_from_runner_to_watch_still_rebuilds_agent(tmp_path):
     result = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
 
     assert result == 0
-    assert ["docker", "compose", "build", "agent"] in fake.calls
-    assert ["docker", "compose", "up", "-d", "--no-build", "agent"] in fake.calls
+    assert ["docker", "compose", "build", "control", "services"] in fake.calls
+    assert ["docker", "compose", "up", "-d", "--no-build", "control", "services"] in fake.calls
 
 
 def test_a_failed_build_is_retried_from_the_last_ok_sha_not_head(tmp_path):
@@ -510,7 +545,7 @@ def test_a_failed_build_is_retried_from_the_last_ok_sha_not_head(tmp_path):
     retried = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
 
     assert retried == 0
-    assert ["docker", "compose", "build", "core"] in fake.calls
+    assert ["docker", "compose", "build", "control", "services"] in fake.calls
     assert _deploys(tmp_path)[2]["result"] == "ok"
 
 
@@ -535,7 +570,7 @@ def test_revert_after_check_failed_redeploys_and_logs(tmp_path):
     broken = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
     assert broken == 1
     assert _deploys(tmp_path)[1]["result"].startswith("check_failed")
-    assert ["docker", "compose", "up", "-d", "--no-build", "core"] in fake.calls  # it did recreate, just failed
+    assert ["docker", "compose", "up", "-d", "--no-build", "control", "services"] in fake.calls  # it did recreate, just failed
 
     # Revert: a new commit whose tree matches "core change 1" exactly.
     _commit(origin, {"src/agent/core/app.py": "good\n"}, "revert to core change 1")
@@ -544,8 +579,8 @@ def test_revert_after_check_failed_redeploys_and_logs(tmp_path):
     reverted = deploy(host, state, sleep=lambda s: None, clock=lambda: 0.0)
 
     assert reverted == 0
-    assert ["docker", "compose", "build", "core"] in fake.calls
-    assert ["docker", "compose", "up", "-d", "--no-build", "core"] in fake.calls
+    assert ["docker", "compose", "build", "control", "services"] in fake.calls
+    assert ["docker", "compose", "up", "-d", "--no-build", "control", "services"] in fake.calls
     assert _head(live) == _run(["git", "rev-parse", "origin/main"], cwd=live).stdout.strip()
     records = _deploys(tmp_path)
     assert len(records) == 3
@@ -678,20 +713,20 @@ def test_lock_released_after_locked_body_raises(tmp_path):
 
 def test_check_detects_a_not_running_container():
     fake = FakeDocker()
-    fake.unhealthy = {"agent-core"}
+    fake.unhealthy = {"agent-control"}
     host = Host(run=fake, live=Path("/nonexistent"))
 
-    ok, reason = check(host, {"core"}, sleep=lambda s: None)
+    ok, reason = check(host, {"control"}, sleep=lambda s: None)
 
     assert ok is False
-    assert "agent-core" in reason
+    assert "agent-control" in reason
 
 
 def test_check_passes_when_everything_is_healthy():
     fake = FakeDocker()
     host = Host(run=fake, live=Path("/nonexistent"))
 
-    ok, reason = check(host, {"core"}, sleep=lambda s: None)
+    ok, reason = check(host, {"control"}, sleep=lambda s: None)
 
     assert ok is True
     assert reason == ""
@@ -705,7 +740,7 @@ def test_check_star_covers_every_container_in_the_map():
 
     assert ok is True
     inspected = {c[2] for c in fake.calls if c[:2] == ["docker", "inspect"]}
-    assert inspected == {"agent-core", "agent-runner", "agent-supervisor", "agent-supervisor-standby",
+    assert inspected == {"agent-control", "agent-services", "agent-supervisor", "agent-supervisor-standby",
                           "agent-relay", "agent-docker"}
 
 
@@ -749,7 +784,7 @@ def test_cli_wires_if_pending(tmp_path):
 
 def test_the_paused_marker_is_there_during_the_swap_and_gone_after(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
     fake = FakeDocker()
     state = State(tmp_path / "state")
     seen = []
@@ -768,7 +803,7 @@ def test_the_paused_marker_is_there_during_the_swap_and_gone_after(tmp_path):
 
 def test_a_resume_that_fails_leaves_the_marker_for_the_listener(tmp_path):
     origin, live = _repo_pair(tmp_path)
-    _commit(origin, {"src/agent/runner/foo.py": "x\n"}, "runner change")
+    _commit(origin, {"compose.yaml": "x\n"}, "stack change")
     fake = FakeDocker()
     fake.resume_failures = 100
     state = State(tmp_path / "state")

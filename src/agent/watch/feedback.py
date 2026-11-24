@@ -1,8 +1,8 @@
-"""The host side of Jensen's notes: letting improve-jensen read `/var/agent/feedback/` inside `agent-runner`,
+"""The host side of Jensen's notes: letting improve-jensen read `/var/agent/feedback/` inside `agent-control`,
 answer a note, and record what changed for Jensen to read back.
 
-Every call pipes `runner_feedback.py`'s own text into `agent-runner`'s `python3` on stdin
-(`Host.runner_python`), the same way `core_python` pipes `core_collect.py` into `agent-core` -- `agent-runner`'s
+Every call pipes `runner_feedback.py`'s own text into `agent-control`'s `python3` on stdin
+(`Host.runner_python`), the same way `core_python` pipes `core_collect.py` into `agent-control` -- `agent-control`'s
 `python3` is 3.12 and can import only the standard library, so the actual file reading and writing lives there,
 never here. A note's text or improve-jensen's own reply crosses that `docker exec` boundary base64-encoded
 (`--status-b64`, `--text-b64`): either one can hold a newline, a quote or a shell metacharacter that would
@@ -30,7 +30,7 @@ def _iso(value: datetime) -> str:
 
 
 def collect(host: Host, since: datetime, until: datetime) -> list[dict]:
-    """Notes from `/var/agent/feedback/` inside `agent-runner`, modified in `(since, until]`, excluding
+    """Notes from `/var/agent/feedback/` inside `agent-control`, modified in `(since, until]`, excluding
     `CHANGES.md`. Each is `{name, text, modified}`. A missing folder gives `[]`."""
     raw = host.runner_python(_MODULE, ["collect", "--since", _iso(since), "--until", _iso(until)])
     data = json.loads(raw)
@@ -38,7 +38,7 @@ def collect(host: Host, since: datetime, until: datetime) -> list[dict]:
 
 
 def reply(host: Host, name: str, status: str, now: datetime) -> None:
-    """Append a `Status (<ISO now>): <status>` line to the note `name` inside `agent-runner`. Raises `ValueError`
+    """Append a `Status (<ISO now>): <status>` line to the note `name` inside `agent-control`. Raises `ValueError`
     for a name containing `/` or `..`, or one not ending in `.md` -- checked here first, so a bad name never
     costs a `docker exec` round trip."""
     if "/" in name or ".." in name or not name.endswith(".md"):
@@ -50,6 +50,6 @@ def reply(host: Host, name: str, status: str, now: datetime) -> None:
 
 
 def add_change(host: Host, text: str, now: datetime) -> None:
-    """Prepend a changelog entry for `text` to `CHANGES.md` inside `agent-runner`, keeping the newest 30."""
+    """Prepend a changelog entry for `text` to `CHANGES.md` inside `agent-control`, keeping the newest 30."""
     text_b64 = base64.b64encode(text.encode()).decode()
     host.runner_python(_MODULE, ["change", "--text-b64", text_b64, "--now", _iso(now)])

@@ -1,5 +1,5 @@
-"""The supervisors' watchdog: health-checks core, the runner and the other supervisor, and speaks up, independently
-of core.
+"""The supervisors' watchdog: health-checks the control plane (or, before it, core and the runner) and the other
+supervisor, and speaks up, independently of them.
 
 Two supervisors run, `primary` and `standby`, and each watches core, the runner's heartbeat (as core sees it) and the
 other (its peer). Each answers its own `/health`, which turns unhealthy when its watch loop stops ticking, so a hung
@@ -123,11 +123,17 @@ def webhook_alert(url: str, who: str) -> Callable[[str], Awaitable[None]]:
     return alert
 
 
+CONTROL = "control plane"  # agentd, in place of core and the runner
+
+
 def health_targets(environ) -> dict[str, str]:
-    """What to watch: core, the runner's heartbeat as core sees it, and the other supervisor when PEER_HEALTH is
-    set."""
-    targets = {"core": environ.get("CORE_HEALTH", "http://core:8080/health"),
-               "runner": environ.get("RUNNER_HEALTH", "http://core:8080/health/runner")}
+    """What to watch: the control plane when CONTROL_HEALTH is set, else core and the runner's heartbeat as core sees
+    it; and the other supervisor when PEER_HEALTH is set."""
+    if environ.get("CONTROL_HEALTH"):
+        targets = {CONTROL: environ["CONTROL_HEALTH"]}
+    else:
+        targets = {"core": environ.get("CORE_HEALTH", "http://core:8080/health"),
+                   "runner": environ.get("RUNNER_HEALTH", "http://core:8080/health/runner")}
     if environ.get("PEER_HEALTH"):
         targets["peer"] = environ["PEER_HEALTH"]
     return targets
@@ -135,8 +141,11 @@ def health_targets(environ) -> dict[str, str]:
 
 def restartable(environ) -> dict[str, str]:
     """Target name to container: the only containers a supervisor restarts."""
-    containers = {"core": environ.get("CORE_CONTAINER", "agent-core"),
-                  "runner": environ.get("RUNNER_CONTAINER", "agent-runner")}
+    if environ.get("CONTROL_HEALTH"):
+        containers = {CONTROL: environ.get("CONTROL_CONTAINER", "agent-control")}
+    else:
+        containers = {"core": environ.get("CORE_CONTAINER", "agent-core"),
+                      "runner": environ.get("RUNNER_CONTAINER", "agent-runner")}
     if environ.get("PEER_HEALTH") and environ.get("PEER_CONTAINER"):
         containers["peer"] = environ["PEER_CONTAINER"]
     return containers
@@ -146,9 +155,10 @@ DEPENDS_ON = {"runner": "core"}  # the runner's heartbeat is read from core
 
 
 def deferrals(environ, targets: dict[str, str]) -> dict[str, str]:
-    """The standby leaves core and the runner to the primary while the primary (its peer) is up."""
+    """The standby leaves the control plane (or core and the runner) to the primary while the primary (its peer) is
+    up."""
     if environ.get("SUPERVISOR_ROLE", "primary") == "standby" and "peer" in targets:
-        return {name: "peer" for name in ("core", "runner") if name in targets}
+        return {name: "peer" for name in ("core", "runner", CONTROL) if name in targets}
     return {}
 
 

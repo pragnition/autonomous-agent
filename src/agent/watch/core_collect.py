@@ -1,7 +1,7 @@
 """A read-only snapshot of core's work queue, for the hourly watch running on the host.
 
-Self-contained on purpose: piped into the `agent-core` container's own Python on stdin
-(`docker exec -i agent-core python - <args>`, see `agent.watch.host.Host.core_python`) rather than imported there,
+Self-contained on purpose: piped into the `agent-control` container's own Python on stdin
+(`docker exec -i agent-control python - <args>`, see `agent.watch.host.Host.core_python`) rather than imported there,
 so improve-jensen can change what it watches without ever rebuilding or redeploying core's image. It only imports
 `agent.db`, which already ships in every core image. It's also plain enough to import directly in tests, against a
 tmp DB built with `agent.db.create_schema`.

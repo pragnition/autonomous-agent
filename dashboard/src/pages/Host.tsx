@@ -42,7 +42,7 @@ function ConsumerCell({ c }: { c: HostConsumer }) {
           <SessionLink session={c.session}>{consumerLabel(c)}</SessionLink>
         </div>
         <div className="text-xs text-muted-foreground">
-          {c.kind === "host" ? "core, the agent's Docker daemon and the rest of the machine" : KIND_LABEL[c.kind]}
+          {c.kind === "host" ? "everything on the machine besides the containers above" : KIND_LABEL[c.kind]}
           {c.session && c.kind !== "session" && c.kind !== "browser" && <> · <SessionLink session={c.session}>
             {c.session.title}</SessionLink></>}
           {c.processes != null && c.processes > 0 && ` · ${c.processes} process${c.processes === 1 ? "" : "es"}`}
@@ -351,10 +351,10 @@ export function Host() {
     <Page title="Host" subtitle="What the machine the agent runs on is doing, and who is using it.">
       <QueryState query={host} rows={6}>
         {(h) => !h.available ? (
-          <ErrorNote error="No samples from the runner yet. It sends one every 5 seconds once it's running." />
+          <ErrorNote error="No samples yet. The control plane takes one every 5 seconds once it's running." />
         ) : (
           <div className="space-y-6">
-            {h.stale && <ErrorNote error={`The runner hasn't sent a sample for ${fmtDuration(h.age_s)}: these numbers are old.`} />}
+            {h.stale && <ErrorNote error={`No sample for ${fmtDuration(h.age_s)}: these numbers are old.`} />}
             <Tiles h={h} />
             <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
               <TabsList className="flex-wrap">

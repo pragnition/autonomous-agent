@@ -23,11 +23,13 @@ from typing import Callable
 from agent.secrets import load_secrets
 from agent.watch.state import FMT
 
-# Where core_collect.py / core_ask.py actually live, so a caller can hand core_python() a bare file name.
+# Where core_collect.py actually lives, so a caller can hand core_python() a bare file name.
 _WATCH_DIR = Path(__file__).parent
 
-CORE_CONTAINER = "agent-core"
-RUNNER_CONTAINER = "agent-runner"
+# agentd's container holds what core and the runner did: the database at /data/db, the work volume at /var/agent,
+# and the image's Python with the `agent` package for the helpers piped in here.
+CORE_CONTAINER = "agent-control"
+RUNNER_CONTAINER = "agent-control"
 
 # docker exec's own complaints about the container, as opposed to the command inside it failing (a missing
 # transcript file): seen verbatim in its stderr, lowercased for a case-insensitive match.
@@ -70,16 +72,16 @@ class Host:
         return cls(live=live)
 
     def core_python(self, module_file: str | Path, args: list[str], *, timeout: float | None = None) -> str:
-        """Run `module_file`'s text inside `agent-core` (`docker exec -i agent-core python - <args>`), the file
-        piped on stdin so core never needs to carry or import it. A bare name (no directory) resolves relative to
-        `src/agent/watch/`, where `core_collect.py` and `core_ask.py` live; an absolute path is used as given.
+        """Run `module_file`'s text inside `agent-control` (`docker exec -i agent-control python - <args>`), the file
+        piped on stdin so the image never needs to carry or import it. A bare name (no directory) resolves relative
+        to `src/agent/watch/`, where `core_collect.py` lives; an absolute path is used as given.
         With `timeout` (seconds), an exec that outlives it raises `subprocess.TimeoutExpired`; without one it
         waits as long as the command runs."""
         return self._python(CORE_CONTAINER, "python", module_file, args, timeout)
 
     def runner_python(self, module_file: str | Path, args: list[str], *, timeout: float | None = None) -> str:
-        """Run `module_file`'s text inside `agent-runner` (`docker exec -i agent-runner python3 - <args>`), the
-        file piped on stdin so the runner never needs to carry or import it. Same contract as `core_python`
+        """Run `module_file`'s text inside `agent-control` (`docker exec -i agent-control python3 - <args>`), the
+        file piped on stdin so the image never needs to carry or import it. Same contract as `core_python`
         (a bare name resolves relative to `src/agent/watch/`, where `runner_feedback.py` lives), except it runs
         `python3` rather than `python`: the runner's own interpreter is 3.12, invoked by that name there."""
         return self._python(RUNNER_CONTAINER, "python3", module_file, args, timeout)

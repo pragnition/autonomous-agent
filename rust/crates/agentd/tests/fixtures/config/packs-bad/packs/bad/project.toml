@@ -1,0 +1,7 @@
+[project]
+name = "bad"
+repo = "org/bad"
+owner = "nobody"
+slack_channel = ""
+[secrets]
+worker = ["SLACK_BOT_TOKEN", "MY_KEY", "GITHUB_READ_TOKEN"]

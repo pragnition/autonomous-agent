@@ -1,0 +1,969 @@
+{
+ "scrub": [
+  {
+   "text": "token s3cret-value-0123456789 and sk-ant-api03-abcdefghijklmnop and ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "out": "token [redacted] and [redacted] and [redacted]"
+  },
+  {
+   "text": "github_pat_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb xoxb-1234567890-abcdef lin_api_cccccccccccccccccccccccccccccc AKIAABCDEFGHIJKLMNOP",
+   "out": "[redacted] [redacted] [redacted] [redacted]"
+  },
+  {
+   "text": "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY----- short stays",
+   "out": "[redacted] short stays"
+  }
+ ],
+ "secrets": {
+  "A": "1",
+  "B": "two words",
+  "C": "x",
+  "D": "plain",
+  "E": "a#b",
+  "F": "spaced"
+ },
+ "transitions": [
+  [
+   "queued",
+   "queued",
+   false
+  ],
+  [
+   "queued",
+   "working",
+   true
+  ],
+  [
+   "queued",
+   "needs_input",
+   false
+  ],
+  [
+   "queued",
+   "ready_for_review",
+   false
+  ],
+  [
+   "queued",
+   "done",
+   false
+  ],
+  [
+   "queued",
+   "merged",
+   false
+  ],
+  [
+   "queued",
+   "closed",
+   false
+  ],
+  [
+   "queued",
+   "failed",
+   false
+  ],
+  [
+   "queued",
+   "cancelled",
+   true
+  ],
+  [
+   "working",
+   "queued",
+   true
+  ],
+  [
+   "working",
+   "working",
+   false
+  ],
+  [
+   "working",
+   "needs_input",
+   true
+  ],
+  [
+   "working",
+   "ready_for_review",
+   true
+  ],
+  [
+   "working",
+   "done",
+   true
+  ],
+  [
+   "working",
+   "merged",
+   false
+  ],
+  [
+   "working",
+   "closed",
+   false
+  ],
+  [
+   "working",
+   "failed",
+   true
+  ],
+  [
+   "working",
+   "cancelled",
+   true
+  ],
+  [
+   "needs_input",
+   "queued",
+   true
+  ],
+  [
+   "needs_input",
+   "working",
+   true
+  ],
+  [
+   "needs_input",
+   "needs_input",
+   false
+  ],
+  [
+   "needs_input",
+   "ready_for_review",
+   false
+  ],
+  [
+   "needs_input",
+   "done",
+   false
+  ],
+  [
+   "needs_input",
+   "merged",
+   false
+  ],
+  [
+   "needs_input",
+   "closed",
+   false
+  ],
+  [
+   "needs_input",
+   "failed",
+   false
+  ],
+  [
+   "needs_input",
+   "cancelled",
+   true
+  ],
+  [
+   "ready_for_review",
+   "queued",
+   false
+  ],
+  [
+   "ready_for_review",
+   "working",
+   true
+  ],
+  [
+   "ready_for_review",
+   "needs_input",
+   false
+  ],
+  [
+   "ready_for_review",
+   "ready_for_review",
+   false
+  ],
+  [
+   "ready_for_review",
+   "done",
+   false
+  ],
+  [
+   "ready_for_review",
+   "merged",
+   true
+  ],
+  [
+   "ready_for_review",
+   "closed",
+   true
+  ],
+  [
+   "ready_for_review",
+   "failed",
+   false
+  ],
+  [
+   "ready_for_review",
+   "cancelled",
+   true
+  ],
+  [
+   "done",
+   "queued",
+   false
+  ],
+  [
+   "done",
+   "working",
+   false
+  ],
+  [
+   "done",
+   "needs_input",
+   false
+  ],
+  [
+   "done",
+   "ready_for_review",
+   false
+  ],
+  [
+   "done",
+   "done",
+   false
+  ],
+  [
+   "done",
+   "merged",
+   false
+  ],
+  [
+   "done",
+   "closed",
+   false
+  ],
+  [
+   "done",
+   "failed",
+   false
+  ],
+  [
+   "done",
+   "cancelled",
+   false
+  ],
+  [
+   "merged",
+   "queued",
+   false
+  ],
+  [
+   "merged",
+   "working",
+   false
+  ],
+  [
+   "merged",
+   "needs_input",
+   false
+  ],
+  [
+   "merged",
+   "ready_for_review",
+   false
+  ],
+  [
+   "merged",
+   "done",
+   false
+  ],
+  [
+   "merged",
+   "merged",
+   false
+  ],
+  [
+   "merged",
+   "closed",
+   false
+  ],
+  [
+   "merged",
+   "failed",
+   false
+  ],
+  [
+   "merged",
+   "cancelled",
+   false
+  ],
+  [
+   "closed",
+   "queued",
+   false
+  ],
+  [
+   "closed",
+   "working",
+   false
+  ],
+  [
+   "closed",
+   "needs_input",
+   false
+  ],
+  [
+   "closed",
+   "ready_for_review",
+   false
+  ],
+  [
+   "closed",
+   "done",
+   false
+  ],
+  [
+   "closed",
+   "merged",
+   false
+  ],
+  [
+   "closed",
+   "closed",
+   false
+  ],
+  [
+   "closed",
+   "failed",
+   false
+  ],
+  [
+   "closed",
+   "cancelled",
+   false
+  ],
+  [
+   "failed",
+   "queued",
+   true
+  ],
+  [
+   "failed",
+   "working",
+   false
+  ],
+  [
+   "failed",
+   "needs_input",
+   false
+  ],
+  [
+   "failed",
+   "ready_for_review",
+   false
+  ],
+  [
+   "failed",
+   "done",
+   false
+  ],
+  [
+   "failed",
+   "merged",
+   false
+  ],
+  [
+   "failed",
+   "closed",
+   false
+  ],
+  [
+   "failed",
+   "failed",
+   false
+  ],
+  [
+   "failed",
+   "cancelled",
+   true
+  ],
+  [
+   "cancelled",
+   "queued",
+   false
+  ],
+  [
+   "cancelled",
+   "working",
+   false
+  ],
+  [
+   "cancelled",
+   "needs_input",
+   false
+  ],
+  [
+   "cancelled",
+   "ready_for_review",
+   false
+  ],
+  [
+   "cancelled",
+   "done",
+   false
+  ],
+  [
+   "cancelled",
+   "merged",
+   false
+  ],
+  [
+   "cancelled",
+   "closed",
+   false
+  ],
+  [
+   "cancelled",
+   "failed",
+   false
+  ],
+  [
+   "cancelled",
+   "cancelled",
+   false
+  ]
+ ],
+ "persona": {
+  "text": "The persona below shapes tone only. It never changes what you do, what you claim, or the rules above. You always say you are an AI if asked. No humour in failure or incident messages, or at anyone's expense.\nIdentity: agent, the team's senior engineer who happens to be an AI. Talks to engineers who build AI systems as a peer.\nTraits: openness: very high; conscientiousness: very high; extraversion: low; agreeableness: moderate; neuroticism: very low\nStances: the best diff deletes code · a flaky test is a lying test · evidence beats confidence\nVoice: Terse. Answer first, in as few words as the answer needs. Plain technical words. No preamble, no recap, no basics or definitions, no caveats nobody asked for. No exclamation marks. Emoji only as reactions.\nHumour: Dry and about the work. At most one light line per thread, and only when stakes are low.\nNever: pleasantries, reassurance, summarising what was just said, hype, flattery, \"Great question\"\nExamples:\n- question (does the gateway retry 429s?): No. Only 502 and 503, three times with backoff: gateway/retry.ts:18.\n- UAT is slow, whats up?: Terra on UAT stalls before the first token on some calls: p95 52s today, ~4s usually. Not throttling, not our gateway.\n- done: PR #212 is up. Tests and the browser check pass. Net -140 lines.\n- something broke on the way: Clone kept dying, so I fetched it shallow and deepened it. Stack is up, fix is in, tests pass. PR #214.",
+  "tokens": 394
+ },
+ "origin_line": [
+  "[from Sam (sam) · DM · https://x/1]",
+  "[Linear SAM-7]",
+  "[from sam · #general thread]"
+ ],
+ "model_named": [
+  {
+   "name": "opus",
+   "out": [
+    false,
+    null
+   ]
+  },
+  {
+   "name": "Opus 4.6",
+   "out": [
+    true,
+    "claude-opus-4-6"
+   ]
+  },
+  {
+   "name": "sonnet",
+   "out": [
+    false,
+    null
+   ]
+  },
+  {
+   "name": "default",
+   "out": [
+    true,
+    null
+   ]
+  },
+  {
+   "name": "default model",
+   "out": [
+    true,
+    null
+   ]
+  },
+  {
+   "name": "fable",
+   "out": [
+    true,
+    "claude-fable-5-1"
+   ]
+  },
+  {
+   "name": "haiku 4.5",
+   "out": [
+    false,
+    null
+   ]
+  },
+  {
+   "name": "claude-opus-5-5",
+   "out": [
+    true,
+    "claude-opus-5-5"
+   ]
+  },
+  {
+   "name": "gpt-4",
+   "out": [
+    false,
+    null
+   ]
+  },
+  {
+   "name": "claude",
+   "out": [
+    false,
+    null
+   ]
+  }
+ ],
+ "use_model": [
+  {
+   "text": "use opus",
+   "match": "opus",
+   "fable": false
+  },
+  {
+   "text": "please use sonnet 4.5 for this",
+   "match": "sonnet 4.5",
+   "fable": false
+  },
+  {
+   "text": "Thanks. Use the API",
+   "match": null,
+   "fable": false
+  },
+  {
+   "text": "don't use opus",
+   "match": null,
+   "fable": false
+  },
+  {
+   "text": "ok, now use default.",
+   "match": null,
+   "fable": false
+  },
+  {
+   "text": "use default settings",
+   "match": null,
+   "fable": false
+  },
+  {
+   "text": "can you use claude-opus-4-6",
+   "match": "claude-opus-4-6",
+   "fable": false
+  },
+  {
+   "text": "I said use fable!",
+   "match": null,
+   "fable": true
+  },
+  {
+   "text": "make the labeler use haiku 4.5",
+   "match": null,
+   "fable": false
+  }
+ ],
+ "unknown_model_reply": "I can't switch this conversation to gpt-4, so it stays on the model it has. Models I can switch to: `claude-opus-5-5` (default), `claude-fable-5-1`, `claude-opus-4-6`. Say \"use <model>\" with one of them, or \"use default\".",
+ "failure_reply": [
+  {
+   "outcome": "timeout",
+   "error": "no result within 3600 s",
+   "out": "I ran out of time before finishing that (no result within 3600 s)."
+  },
+  {
+   "outcome": "timeout",
+   "error": null,
+   "out": "I ran out of time before finishing that."
+  },
+  {
+   "outcome": "stalled",
+   "error": "no progress for 1800 s",
+   "out": "I got stuck before finishing that (no progress for 1800 s)."
+  },
+  {
+   "outcome": "interrupted",
+   "error": "interrupted",
+   "out": "That was stopped before I finished it."
+  },
+  {
+   "outcome": "error",
+   "error": null,
+   "out": "That failed before I could finish it, and the runner didn't say why."
+  },
+  {
+   "outcome": "error",
+   "error": "  boom\n",
+   "out": "That failed before I could finish it:\n```\nboom\n```"
+  }
+ ],
+ "limit": [
+  {
+   "error": "429 ['rate limited']",
+   "cut": true,
+   "reply": "A usage limit cut me off (429 ['rate limited']). I'll carry on from where I stopped once an account has capacity again."
+  },
+  {
+   "error": "account lotus is rejected",
+   "cut": true,
+   "reply": "A usage limit cut me off (account lotus is rejected). I'll carry on from where I stopped once an account has capacity again."
+  },
+  {
+   "error": "Rate-limit hit",
+   "cut": true,
+   "reply": "A usage limit cut me off (Rate-limit hit). I'll carry on from where I stopped once an account has capacity again."
+  },
+  {
+   "error": "None ['boom']",
+   "cut": false,
+   "reply": "A usage limit cut me off (None ['boom']). I'll carry on from where I stopped once an account has capacity again."
+  },
+  {
+   "error": null,
+   "cut": false,
+   "reply": "A usage limit cut me off (). I'll carry on from where I stopped once an account has capacity again."
+  }
+ ],
+ "message_files": [
+  {
+   "id": "F1",
+   "name": "a.png",
+   "mimetype": "image/png",
+   "size": 10
+  },
+  {
+   "id": "F3",
+   "name": "F3",
+   "mimetype": "",
+   "size": 7
+  }
+ ],
+ "markdown_chunks": [
+  {
+   "limit": 120,
+   "out": [
+    "intro line\nline 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+    "line 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+    "line 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+    "line 6 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 7 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+    "line 8 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 9 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+    "line 10 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 11 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n```",
+    "```\ncode 0 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 1 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```",
+    "```\ncode 2 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 3 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```",
+    "```\ncode 4 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 5 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```",
+    "```\ncode 6 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 7 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```",
+    "```\ncode 8 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 9 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```\nafter\n",
+    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\nend"
+   ]
+  },
+  {
+   "limit": 400,
+   "out": [
+    "intro line\nline 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 6 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 7 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 8 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 9 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+    "line 10 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 11 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\ncode 0 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 1 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 2 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 3 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 4 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 5 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 6 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 7 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```",
+    "```\ncode 8 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 9 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```\nafter\nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n",
+    "end"
+   ]
+  },
+  {
+   "limit": 12000,
+   "out": [
+    "intro line\nline 0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 6 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 7 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 8 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 9 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 10 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 11 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\ncode 0 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 1 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 2 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 3 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 4 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 5 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 6 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 7 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 8 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\ncode 9 yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n```\nafter\nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\nend"
+   ]
+  }
+ ],
+ "parse_until": {
+  "now": 1795417200.0,
+  "cases": [
+   {
+    "text": "14:30",
+    "out": 1795501800.0
+   },
+   {
+    "text": "15:00",
+    "out": 1795503600.0
+   },
+   {
+    "text": "15:01",
+    "out": 1795417260.0
+   },
+   {
+    "text": "0:05",
+    "out": 1795449900.0
+   },
+   {
+    "text": "25:00",
+    "out": null
+   },
+   {
+    "text": "12:60",
+    "out": null
+   },
+   {
+    "text": "2026-11-25T10:00",
+    "out": 1795572000.0
+   },
+   {
+    "text": "2026-11-25T10:00:00+00:00",
+    "out": 1795600800.0
+   },
+   {
+    "text": "tomorrow",
+    "out": null
+   },
+   {
+    "text": " 09:15 ",
+    "out": 1795482900.0
+   }
+  ]
+ },
+ "park_span": [
+  "0m",
+  "1m",
+  "59m",
+  "1h00m",
+  "1h01m",
+  "25h01m",
+  "0m"
+ ],
+ "schedules": {
+  "valid": [
+   {
+    "name": "daily-report",
+    "cron": "0 9 * * 1-5",
+    "channel": "#general",
+    "prompt": "Report",
+    "by": "sam",
+    "link": null,
+    "paused": false
+   },
+   {
+    "name": "ok-paused",
+    "cron": "*/15 * * * *",
+    "channel": "sam",
+    "prompt": "p",
+    "by": "b",
+    "link": null,
+    "paused": true
+   }
+  ],
+  "errors": [
+   "Bad_Name: a name is lowercase letters, digits and dashes, at most 40 characters",
+   "missing: 'prompt' is required and must be text",
+   "never: '0 0 30 2 *' never runs (no date matches it)",
+   "six-fields: '0 0 9 * * *' isn't a five-field cron expression",
+   "extra: unknown keys color",
+   "typed: 'paused' must be true or false"
+  ],
+  "bad_toml": [
+   "not valid TOML: Expected ']' at the end of a table declaration (at line 1, column 3)"
+  ]
+ },
+ "cron": [
+  {
+   "cron": "0 9 * * 1-5",
+   "latest": "2026-11-23T09:00:00+08:00",
+   "next": [
+    "2026-11-24T09:00:00+08:00",
+    "2026-11-25T09:00:00+08:00",
+    "2026-11-26T09:00:00+08:00"
+   ]
+  },
+  {
+   "cron": "*/15 * * * *",
+   "latest": "2026-11-23T09:00:00+08:00",
+   "next": [
+    "2026-11-23T09:15:00+08:00",
+    "2026-11-23T09:30:00+08:00",
+    "2026-11-23T09:45:00+08:00"
+   ]
+  },
+  {
+   "cron": "0 0 1 * 1",
+   "latest": "2026-11-23T00:00:00+08:00",
+   "next": [
+    "2026-11-30T00:00:00+08:00",
+    "2026-12-01T00:00:00+08:00",
+    "2026-12-07T00:00:00+08:00"
+   ]
+  },
+  {
+   "cron": "30 8 * * *",
+   "latest": "2026-11-23T08:30:00+08:00",
+   "next": [
+    "2026-11-24T08:30:00+08:00",
+    "2026-11-25T08:30:00+08:00",
+    "2026-11-26T08:30:00+08:00"
+   ]
+  },
+  {
+   "cron": "7 9 23 11 *",
+   "latest": "2026-11-23T09:07:00+08:00",
+   "next": [
+    "2027-11-23T09:07:00+08:00",
+    "2028-11-23T09:07:00+08:00",
+    "2029-11-23T09:07:00+08:00"
+   ]
+  },
+  {
+   "cron": "0 12 * * 0",
+   "latest": "2026-11-22T12:00:00+08:00",
+   "next": [
+    "2026-11-29T12:00:00+08:00",
+    "2026-12-06T12:00:00+08:00",
+    "2026-12-13T12:00:00+08:00"
+   ]
+  }
+ ],
+ "account_state": [
+  {
+   "rec": {
+    "rank": null
+   },
+   "previous": null,
+   "out": "out"
+  },
+  {
+   "rec": {
+    "rank": 0,
+    "5h": [
+     0.7,
+     1014400.0
+    ]
+   },
+   "previous": null,
+   "out": "hot"
+  },
+  {
+   "rec": {
+    "rank": 0,
+    "5h": [
+     0.7,
+     1003600.0
+    ]
+   },
+   "previous": null,
+   "out": "ok"
+  },
+  {
+   "rec": {
+    "rank": 0,
+    "5h": [
+     0.6,
+     1014400.0
+    ]
+   },
+   "previous": "hot",
+   "out": "hot"
+  },
+  {
+   "rec": {
+    "rank": 0,
+    "5h": [
+     0.5,
+     1014400.0
+    ]
+   },
+   "previous": "hot",
+   "out": "ok"
+  },
+  {
+   "rec": {
+    "rank": 0,
+    "5h": [
+     0.2,
+     1014400.0
+    ],
+    "pace_delta": 0.06
+   },
+   "previous": null,
+   "out": "hot"
+  },
+  {
+   "rec": {
+    "rank": 0,
+    "5h": [
+     0.2,
+     1014400.0
+    ],
+    "pace_delta": 0.01
+   },
+   "previous": "hot",
+   "out": "hot"
+  },
+  {
+   "rec": {
+    "rank": 0,
+    "5h": [
+     0.2,
+     null
+    ]
+   },
+   "previous": null,
+   "out": "ok"
+  },
+  {
+   "rec": {
+    "rank": 1,
+    "5h": [
+     0.9,
+     1001000.0
+    ]
+   },
+   "previous": "hot",
+   "out": "ok"
+  }
+ ],
+ "next_reset": [
+  20,
+  10,
+  null
+ ],
+ "pool_level": [
+  [
+   0,
+   3,
+   "empty"
+  ],
+  [
+   1,
+   1,
+   "normal"
+  ],
+  [
+   1,
+   3,
+   "hold_scheduled"
+  ],
+  [
+   2,
+   3,
+   "normal"
+  ],
+  [
+   1,
+   0,
+   "normal"
+  ]
+ ],
+ "report_text": [
+  "<agent-notification>\nAgent A-1234abcd, which you spawned with spawn_agent, finished.\nIts brief: Look into the flaky test ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp…\nIts report:\nfound it\n</agent-notification>\nAct on it: carry on with the work it was part of, and tell the thread what it found when that matters to them. Agents you spawned that are still running report back the same way.",
+  "<agent-notification>\nAgent A-1234abcd, which you spawned with spawn_agent, failed (stalled). It won't be retried: spawn it again if the work still needs it.\nIts brief: Look into the flaky test ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp…\nIts report:\n(it ended without a final message)\n</agent-notification>\nAct on it: carry on with the work it was part of, and tell the thread what it found when that matters to them. Agents you spawned that are still running report back the same way.",
+  "<agent-notification>\nAgent A-1234abcd, which you spawned with spawn_agent, finished.\nIts brief: Look into the flaky test ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp…\nIts report:\nrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\n[cut: 20005 characters in all]\n</agent-notification>\nAct on it: carry on with the work it was part of, and tell the thread what it found when that matters to them. Agents you spawned that are still running report back the same way."
+ ],
+ "status_text": [
+  "T-0007 · Fix it — draft PR ready for review\nhttps://github.com/o/r/pull/1",
+  "T-0007 · Fix it — merged"
+ ],
+ "issue_link": [
+  "https://linear.app/x/issue/SAM-7",
+  null,
+  null
+ ],
+ "linear_requester": [
+  "Pat",
+  "Robin",
+  null
+ ],
+ "device_code": [
+  [
+   "https://microsoft.com/devicelogin",
+   "ABCD-1234"
+  ],
+  null
+ ]
+}

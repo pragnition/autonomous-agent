@@ -1,7 +1,5 @@
 import importlib.util
-import json
 import re
-import shutil
 import tomllib
 from pathlib import Path
 
@@ -58,33 +56,13 @@ def test_chilliclaw_setup_writes_env_from_the_team_file(tmp_path, monkeypatch):
     assert len(env["CREDENTIAL_ENCRYPTION_KEY"]) == 64 and env["AGENT_LLM_KEY"] == "metered"
 
 
-def test_smoke_script_queues_its_turn(tmp_path, monkeypatch, capsys):
-    """`just smoke` gets as far as queueing its turn; with no agent container to answer, it times out at once."""
-    from agent import db, paths
-
-    (tmp_path / "db").mkdir()
-    db.create_schema(db.connect(tmp_path / "db" / "agent.db"))
-    shutil.copytree(EXAMPLES, tmp_path / "config")
-    monkeypatch.setattr(paths, "DB_DIR", tmp_path / "db")
-    monkeypatch.setattr(paths, "CONFIG_DIR", tmp_path / "config")
-    monkeypatch.setattr(paths, "SECRETS_FILE", tmp_path / "core.env")
-    spec = importlib.util.spec_from_file_location("smoke", ROOT / "scripts" / "smoke.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    monkeypatch.setattr(module, "TIMEOUT_S", 0)
-    assert module.main() == 1 and "timed out" in capsys.readouterr().out
-    [payload] = [json.loads(r[0]) for r in db.connect(tmp_path / "db" / "agent.db").execute(
-        "SELECT payload FROM work_items WHERE kind = 'turn'")]
-    assert payload["text"] == module.PROMPT and payload["system_prompt"]
-
-
 def test_nothing_imports_agent_memory():
     """Sessions keep what they learn in Claude Code's own memory; core has no memory store of its own."""
     assert importlib.util.find_spec("agent.memory") is None
     imports = re.compile(r"^\s*(from\s+agent\.memory\b|import\s+agent\.memory\b|from\s+agent\s+import\s+.*\bmemory\b)",
                          re.M)
     sources = [*ROOT.glob("src/**/*.py"), *ROOT.glob("scripts/*.py"), *ROOT.glob("tests/*.py")]
-    assert ROOT / "scripts" / "smoke.py" in sources
+    assert ROOT / "scripts" / "ask_jensen.py" in sources
     assert [str(p.relative_to(ROOT)) for p in sources if imports.search(p.read_text())] == []
 
 

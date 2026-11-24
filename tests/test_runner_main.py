@@ -92,3 +92,47 @@ def test_main_prepares_the_home_folder_before_anything_runs(tmp_path, monkeypatc
     runner_main.main(["--root", str(tmp_path), "--token-file", str(tmp_path / "token")])
 
     assert calls == [("prepare", tmp_path), ("run",)]
+
+
+def test_services_command_prepares_home_then_keeps_the_services(tmp_path, monkeypatch):
+    from agent.runner import main as runner_main
+
+    calls = []
+    monkeypatch.setattr(runner_main, "prepare_home", lambda root: calls.append(("prepare", root)))
+    monkeypatch.setattr(runner_main.asyncio, "run", lambda coro: (calls.append(("run",)), coro.close()))
+    monkeypatch.setattr(runner_main.os, "environ", {})
+
+    assert runner_main.services_main(["--root", str(tmp_path), "--agent-name", "jensen"]) == 0
+
+    assert calls == [("prepare", tmp_path), ("run",)]
+    assert runner_main.os.environ["GIT_AUTHOR_NAME"] == "jensen"  # services run with the agent's git identity
+
+
+async def test_services_stop_before_the_process_exits():
+    from agent.runner.main import keep_services
+
+    stopped = asyncio.Event()
+
+    async def services():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    stopping = asyncio.Event()
+    kept = asyncio.create_task(keep_services(services(), stopping))
+    await asyncio.sleep(0)
+    assert not stopped.is_set()
+    stopping.set()  # SIGTERM
+    await kept
+    assert stopped.is_set()
+
+
+def test_python_m_agent_services(monkeypatch):
+    import agent.__main__ as entry
+    from agent.runner import main as runner_main
+
+    seen = []
+    monkeypatch.setattr(runner_main, "services_main", lambda argv: seen.append(argv) or 0)
+    assert entry.main(["services", "--root", "/x"]) == 0
+    assert seen == [["--root", "/x"]]

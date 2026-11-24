@@ -1,6 +1,7 @@
 set shell := ["bash", "-cu"]
 
 dev_image := "autonomous-agent-dev"
+rust_image := "autonomous-agent-rust-dev"
 
 # Run the test suite in the Python 3.12 dev image (the host needs only Docker)
 test *args:
@@ -8,8 +9,14 @@ test *args:
     docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/app -w /app {{dev_image}} pytest -q {{args}}
 
 # Build and start the stack
+# The Rust workspace's tests, in the rust-dev image; cargo's caches stay in rust/ (git-ignored)
+rust-test *args:
+    docker build -q --target rust-dev -t {{rust_image}} . >/dev/null
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e CARGO_HOME=/repo/rust/.cargo-home -v "$PWD":/repo -w /repo/rust {{rust_image}} cargo test --workspace {{args}}
+
 up:
     -just account-names
+    deploy/cutover.sh env
     docker compose up -d --build
 
 # Stop and remove the stack (data stays under ./data)
@@ -20,32 +27,36 @@ down:
 logs *service:
     docker compose logs -f {{service}}
 
-# Check config, secrets, the proxy, GitHub and Linear, and the agent container's own gh and az logins
+# Check config, secrets, the proxy, every model, Docker and the agent image, and the agent's own gh and az logins
 doctor:
-    docker compose exec core python -m agent doctor
-    docker compose exec agent bash -lc 'gh auth status && az account show -o none && echo "ok    agent: gh and az logged in"'
+    docker compose exec control agentd doctor
+    docker compose exec services bash -lc 'gh auth status && az account show -o none && echo "ok    agent: gh and az logged in"'
 
-# KPIs: pickup, PR and merge times, queue wait and merge rate (e.g. just kpis --days 30 --project sample)
+# KPIs: tasks, time per task, finished and shipped, and tokens (e.g. just kpis --days 30)
 kpis *args:
-    docker compose exec core python -m agent kpis {{args}}
+    docker compose exec control agentd kpis {{args}}
 
 # Stop everything from the laptop itself (when Slack isn't an option)
 stop:
-    docker compose exec core python -m agent stop
+    docker compose exec control agentd stop
 
 # Resume after a stop
 resume:
-    docker compose exec core python -m agent resume
+    docker compose exec control agentd resume
 
 # Check the schedules file (data/schedules/schedules.toml) and show when each schedule runs next
 schedules:
-    docker compose exec core python -m agent schedules
+    docker compose exec control agentd schedules
 
-# One unattended turn end to end (core, runner, proxy, Claude), with no pack and no Slack; prints `smoke ok`
+# One unattended turn end to end (agentd, a conversation's container, the proxy, Claude), no Slack; prints `smoke ok`
 smoke:
-    docker compose exec core python /app/scripts/smoke.py
+    docker compose exec control agentd smoke
 
-# Fetch main, rebuild whatever changed, wait for an idle runner first, then check the stack live (see deploy.py)
+# The switch to agentd and back (see deploy/cutover.md): just cutover check|switch|rollback
+cutover step:
+    deploy/cutover.sh {{step}}
+
+# Fetch main, rebuild whatever changed (pausing only for a change to compose.yaml), then check the stack live
 deploy *args:
     PYTHONPATH=src python3 scripts/deploy.py {{args}}
 

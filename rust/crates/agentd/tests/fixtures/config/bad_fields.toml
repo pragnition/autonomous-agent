@@ -1,0 +1,52 @@
+github = 7
+timezone = ""
+
+[people.sam]
+linear = "sam@example.com"
+role = "boss"
+github = 5
+tailscale = 3
+
+[people.ivy]
+slack = "U2"
+linear = "ivy@example.com"
+
+[limits]
+max_concurrent_sessions = -1
+idle_minutes = 0
+schedule_hours = true
+
+[claude.models]
+default = ""
+allowed = ["gpt-4", "claude-ok-1"]
+
+[agent]
+uid = 0
+
+[observability]
+digest_channel = 5
+digest_time = "9am"
+
+[cli.azure]
+env = { A = 1 }
+login = "az login"
+
+[mcp.linear]
+type = "sse"
+url = "http://x"
+headers = { Authorization = 5 }
+
+[linear]
+public_url = "http://funnel"
+
+[dashboard]
+port = -3
+trusted_peers = "x"
+
+[llm_meter]
+daily_usd = -1
+[llm_meter.upstreams.Bad_Name]
+base_url = "http://x/"
+header = "X-Key"
+[llm_meter.prices]
+gpt = [1, 2]

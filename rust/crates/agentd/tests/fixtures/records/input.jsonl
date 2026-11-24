@@ -1,0 +1,28 @@
+{"type":"system","subtype":"init","cwd":"/var/agent/scratch/c1","session_id":"s1","tools":["Bash","Read"],"mcp_servers":[{"name":"agent","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"bypassPermissions","slash_commands":[],"apiKeySource":"none","claude_code_version":"2.1.321","output_style":"default","agents":[],"skills":[],"plugins":[],"uuid":"a1"}
+{"type":"user","message":{"role":"user","content":"[from Sam] fix it"},"parent_tool_use_id":null,"session_id":"s1","uuid":"u-prompt","isReplay":true}
+{"type":"user","message":{"role":"user","content":"(A new message arrived) stop"},"parent_tool_use_id":null,"session_id":"s1","uuid":"u-mid","isReplay":true,"priority":"now","origin":{"kind":"human"}}
+{"type":"assistant","message":{"model":"claude-opus-5-5","id":"msg_1","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"Let me look.","signature":"sig=="},{"type":"text","text":"Looking."},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls","description":"List"}}],"stop_reason":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":100,"cache_read_input_tokens":200,"output_tokens":20,"service_tier":"standard"}},"parent_tool_use_id":null,"session_id":"s1","uuid":"a2"}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"a\nb","is_error":false}]},"parent_tool_use_id":null,"session_id":"s1","uuid":"u3","tool_use_result":{"stdout":"a\nb","stderr":"","interrupted":false,"isImage":false}}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_2","type":"tool_result","content":[{"type":"text","text":"x"}]}]},"parent_tool_use_id":"toolu_9","session_id":"s1","uuid":"u4"}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_3","type":"tool_result","content":"Command was moved to the background (ID: b1)","is_error":false}]},"session_id":"s1","uuid":"u5","tool_use_result":{"stdout":"","stderr":"","interrupted":false,"backgroundTaskId":"b1","backgroundedToDeliverMessage":true}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]},"session_id":"s1","uuid":"u6"}
+{"type":"assistant","message":{"model":"claude-opus-5-5","id":"msg_2","content":[{"type":"server_tool_use","id":"srv_1","name":"web_search","input":{"q":"x"}},{"type":"advisor_tool_result","tool_use_id":"srv_1","content":{"ok":1}},{"type":"text","text":"Done."}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}},"parent_tool_use_id":"toolu_9","session_id":"s1","uuid":"a3","error":"rate_limit"}
+{"type":"system","subtype":"task_started","task_id":"t1","tool_use_id":"toolu_4","description":"Run tests","task_type":"local_bash","is_backgrounded":false,"uuid":"y1","session_id":"s1"}
+{"type":"system","subtype":"task_progress","task_id":"t2","description":"Agent","usage":{"total_tokens":10},"last_tool_name":"Read","uuid":"y2","session_id":"s1"}
+{"type":"system","subtype":"task_updated","task_id":"t1","patch":{"is_backgrounded":true},"uuid":"y3","session_id":"s1"}
+{"type":"system","subtype":"task_updated","task_id":"t1","patch":{"status":"completed","end_time":1},"session_id":"s1"}
+{"type":"system","subtype":"task_updated","task_id":"t9"}
+{"type":"system","subtype":"task_notification","task_id":"t1","tool_use_id":"toolu_4","status":"completed","output_file":"/tmp/t1.output","summary":"Run tests","uuid":"y4","session_id":"s1"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"t1","task_type":"local_bash"}],"uuid":"y5","session_id":"s1"}
+{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"uuid":"y6","session_id":"s1"}
+{"type":"system","subtype":"hook_started","hook_event":"PreToolUse","hook_id":"h1","uuid":"y7","session_id":"s1"}
+{"type":"system","subtype":"hook_response","hook_name":"Stop","uuid":"y8"}
+{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":201000},"uuid":"y9","session_id":"s1"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1795400000,"rateLimitType":"five_hour","utilization":0.4,"isUsingOverage":false},"uuid":"r1","session_id":"s1"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":8100,"duration_api_ms":6000,"num_turns":3,"result":"Done.","stop_reason":"end_turn","session_id":"s1","total_cost_usd":0.12,"usage":{"input_tokens":10,"cache_creation_input_tokens":100,"cache_read_input_tokens":400,"output_tokens":50,"server_tool_use":{"web_search_requests":0}},"modelUsage":{"claude-opus-5-5":{"inputTokens":10,"outputTokens":50,"costUSD":0.12}},"permission_denials":[],"uuid":"z1","terminal_reason":"completed"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":10,"duration_api_ms":0,"num_turns":0,"session_id":"s1","errors":["interrupted"],"api_error_status":null,"uuid":"z2","origin":{"kind":"human","extra":1}}
+{"type":"result","subtype":"error_max_turns","is_error":true,"duration_ms":1,"duration_api_ms":1,"num_turns":5,"session_id":"s1","api_error_status":403,"deferred_tool_use":{"id":"d1","name":"Bash","input":{}},"origin":"bogus"}
+{"type":"conversation_reset","new_conversation_id":"n1","uuid":"c9","session_id":"s1"}
+{"type":"command_lifecycle","state":"started","uuid":"q1"}
+{"type":"control_response","response":{"subtype":"success","request_id":"init","response":{}}}
+{"type":"stream_event","uuid":"e1","session_id":"s1","event":{"type":"content_block_delta"},"parent_tool_use_id":null}

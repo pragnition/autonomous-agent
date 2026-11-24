@@ -1,0 +1,5975 @@
+{
+ "now": "2026-11-20T10:00:00Z",
+ "tz": "Asia/Singapore",
+ "kpis": [
+  {
+   "days": 1,
+   "view": {
+    "since": "2026-11-19T10:00:00Z",
+    "until": "2026-11-20T10:00:00Z",
+    "tasks": 3,
+    "by_source": {
+     "slack": 3,
+     "linear": 0,
+     "schedule": 0
+    },
+    "by_project": {
+     "sample": 2,
+     "general": 1
+    },
+    "time": {
+     "n": 3,
+     "median_s": 300,
+     "p90_s": 600
+    },
+    "finished": 2,
+    "merged": 1,
+    "issues_closed": 1,
+    "tokens_by_project": {},
+    "finished_rate": 0.6666666666666666
+   },
+   "text": "Jensen, last 1 day\nTasks: 3 (sample 2 \u00b7 general 1)\nTime per task: median 5m \u00b7 p90 10m\nFinished: 67% (2 of 3)\nShipped: 1 PR merged \u00b7 1 Linear issue closed\nTokens: 0 in \u00b7 0 out \u00b7 0 cache read \u00b7 0 cache write"
+  },
+  {
+   "days": 7,
+   "view": {
+    "since": "2026-11-13T10:00:00Z",
+    "until": "2026-11-20T10:00:00Z",
+    "tasks": 5,
+    "by_source": {
+     "slack": 3,
+     "linear": 1,
+     "schedule": 1
+    },
+    "by_project": {
+     "sample": 3,
+     "general": 2
+    },
+    "time": {
+     "n": 5,
+     "median_s": 300,
+     "p90_s": 4000
+    },
+    "finished": 3,
+    "merged": 1,
+    "issues_closed": 1,
+    "tokens_by_project": {
+     "other": {
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "sample": {
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
+     }
+    },
+    "finished_rate": 0.6
+   },
+   "text": "Jensen, last 7 days\nTasks: 5 (sample 3 \u00b7 general 2)\nTime per task: median 5m \u00b7 p90 1h 6m\nFinished: 60% (3 of 5)\nShipped: 1 PR merged \u00b7 1 Linear issue closed\nTokens: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write"
+  },
+  {
+   "days": 30,
+   "view": {
+    "since": "2026-10-21T10:00:00Z",
+    "until": "2026-11-20T10:00:00Z",
+    "tasks": 6,
+    "by_source": {
+     "slack": 4,
+     "linear": 1,
+     "schedule": 1
+    },
+    "by_project": {
+     "sample": 3,
+     "other": 1,
+     "general": 2
+    },
+    "time": {
+     "n": 6,
+     "median_s": 450.0,
+     "p90_s": 90000
+    },
+    "finished": 4,
+    "merged": 2,
+    "issues_closed": 1,
+    "tokens_by_project": {
+     "other": {
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "sample": {
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
+     }
+    },
+    "finished_rate": 0.6666666666666666
+   },
+   "text": "Jensen, last 30 days\nTasks: 6 (sample 3 \u00b7 other 1 \u00b7 general 2)\nTime per task: median 7m \u00b7 p90 1d 1h\nFinished: 67% (4 of 6)\nShipped: 2 PRs merged \u00b7 1 Linear issue closed\nTokens: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write"
+  }
+ ],
+ "usage_windows": {
+  "view": {
+   "today": {
+    "since": "2026-11-19T16:00:00Z",
+    "by_project": {},
+    "total": {
+     "runs": 0,
+     "input_tokens": 0,
+     "output_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0
+    },
+    "apps_by_upstream": {
+     "foundry": {
+      "runs": 3,
+      "input_tokens": 6000,
+      "output_tokens": 400,
+      "cache_read_tokens": 200,
+      "cache_write_tokens": 10,
+      "cost_usd": 0.042
+     }
+    }
+   },
+   "7d": {
+    "since": "2026-11-13T10:00:00Z",
+    "by_project": {
+     "other": {
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "sample": {
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
+     }
+    },
+    "total": {
+     "runs": 5,
+     "input_tokens": 1230,
+     "output_tokens": 2501255,
+     "cache_read_tokens": 6000,
+     "cache_write_tokens": 800
+    },
+    "apps_by_upstream": {
+     "foundry": {
+      "runs": 3,
+      "input_tokens": 6000,
+      "output_tokens": 400,
+      "cache_read_tokens": 200,
+      "cache_write_tokens": 10,
+      "cost_usd": 0.042
+     },
+     "openai": {
+      "runs": 1,
+      "input_tokens": 10,
+      "output_tokens": 10,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": 0.001
+     }
+    }
+   },
+   "month": {
+    "since": "2026-10-31T16:00:00Z",
+    "by_project": {
+     "other": {
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0
+     },
+     "sample": {
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
+     }
+    },
+    "total": {
+     "runs": 5,
+     "input_tokens": 1230,
+     "output_tokens": 2501255,
+     "cache_read_tokens": 6000,
+     "cache_write_tokens": 800
+    },
+    "apps_by_upstream": {
+     "foundry": {
+      "runs": 3,
+      "input_tokens": 6000,
+      "output_tokens": 400,
+      "cache_read_tokens": 200,
+      "cache_write_tokens": 10,
+      "cost_usd": 0.042
+     },
+     "openai": {
+      "runs": 1,
+      "input_tokens": 10,
+      "output_tokens": 10,
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": 0.001
+     }
+    }
+   }
+  },
+  "text": "Tokens today: 0 in \u00b7 0 out \u00b7 0 cache read \u00b7 0 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\nTokens last 7 days: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\n  app meter, openai: 1 call \u00b7 10 in \u00b7 10 out \u00b7 0 cache read \u00b7 0 cache write \u00b7 $0.00 billed\nTokens this month: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\n  app meter, openai: 1 call \u00b7 10 in \u00b7 10 out \u00b7 0 cache read \u00b7 0 cache write \u00b7 $0.00 billed"
+ },
+ "format_tokens": [
+  [
+   0,
+   "0"
+  ],
+  [
+   999,
+   "999"
+  ],
+  [
+   1000,
+   "1k"
+  ],
+  [
+   1500,
+   "1.5k"
+  ],
+  [
+   999999,
+   "1000k"
+  ],
+  [
+   1000000,
+   "1M"
+  ],
+  [
+   2340000,
+   "2.3M"
+  ],
+  [
+   999999999,
+   "1000M"
+  ],
+  [
+   1000000000,
+   "1B"
+  ],
+  [
+   1234567890,
+   "1.23B"
+  ]
+ ],
+ "daily_tokens": {
+  "view": {
+   "projects": [
+    "other",
+    "sample"
+   ],
+   "days": [
+    {
+     "date": "2026-11-14",
+     "by_project": {}
+    },
+    {
+     "date": "2026-11-15",
+     "by_project": {
+      "sample": {
+       "runs": 1,
+       "input_tokens": 100,
+       "output_tokens": 50,
+       "cache_read_tokens": 1000,
+       "cache_write_tokens": 200
+      }
+     }
+    },
+    {
+     "date": "2026-11-16",
+     "by_project": {}
+    },
+    {
+     "date": "2026-11-17",
+     "by_project": {
+      "sample": {
+       "runs": 1,
+       "input_tokens": 700,
+       "output_tokens": 900,
+       "cache_read_tokens": 5000,
+       "cache_write_tokens": 600
+      }
+     }
+    },
+    {
+     "date": "2026-11-18",
+     "by_project": {
+      "sample": {
+       "runs": 1,
+       "input_tokens": 400,
+       "output_tokens": 300,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      }
+     }
+    },
+    {
+     "date": "2026-11-19",
+     "by_project": {
+      "other": {
+       "runs": 2,
+       "input_tokens": 30,
+       "output_tokens": 2500005,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      }
+     }
+    },
+    {
+     "date": "2026-11-20",
+     "by_project": {}
+    }
+   ]
+  },
+  "text": "Tokens per day, last 7 days:\n  2026-11-14: none\n  2026-11-15: 100 in \u00b7 50 out \u00b7 1k cache read \u00b7 200 cache write\n    sample: 100 in \u00b7 50 out \u00b7 1k cache read \u00b7 200 cache write\n  2026-11-16: none\n  2026-11-17: 700 in \u00b7 900 out \u00b7 5k cache read \u00b7 600 cache write\n    sample: 700 in \u00b7 900 out \u00b7 5k cache read \u00b7 600 cache write\n  2026-11-18: 400 in \u00b7 300 out \u00b7 0 cache read \u00b7 0 cache write\n    sample: 400 in \u00b7 300 out \u00b7 0 cache read \u00b7 0 cache write\n  2026-11-19: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n    other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  2026-11-20: none"
+ },
+ "format_duration": [
+  [
+   0,
+   "0s"
+  ],
+  [
+   59,
+   "59s"
+  ],
+  [
+   60,
+   "1m"
+  ],
+  [
+   3599,
+   "59m"
+  ],
+  [
+   3600,
+   "1h 0m"
+  ],
+  [
+   3661,
+   "1h 1m"
+  ],
+  [
+   86399,
+   "23h 59m"
+  ],
+  [
+   86400,
+   "1d 0h"
+  ],
+  [
+   200000,
+   "2d 7h"
+  ]
+ ],
+ "kpi_view": [
+  {
+   "days": 1,
+   "view": {
+    "kpis": {
+     "since": "2026-11-19T10:00:00Z",
+     "until": "2026-11-20T10:00:00Z",
+     "tasks": 3,
+     "by_source": {
+      "slack": 3,
+      "linear": 0,
+      "schedule": 0
+     },
+     "by_project": {
+      "sample": 2,
+      "general": 1
+     },
+     "time": {
+      "n": 3,
+      "median_s": 300,
+      "p90_s": 600
+     },
+     "finished": 2,
+     "merged": 1,
+     "issues_closed": 1,
+     "tokens_by_project": {},
+     "finished_rate": 0.6666666666666666
+    },
+    "daily": [
+     {
+      "date": "2026-11-20",
+      "slack": 3,
+      "linear": 0,
+      "schedule": 0
+     }
+    ],
+    "tasks": [
+     {
+      "id": "TK-0001",
+      "title": "Task TK-0001",
+      "source": "slack",
+      "project": "sample",
+      "started_at": "2026-11-20T09:00:00Z"
+     },
+     {
+      "id": "TK-0006",
+      "title": "Task TK-0006",
+      "source": "slack",
+      "project": "sample",
+      "started_at": "2026-11-20T07:00:00Z"
+     },
+     {
+      "id": "TK-0002",
+      "title": "Task TK-0002",
+      "source": "slack",
+      "project": null,
+      "started_at": "2026-11-20T00:30:00Z"
+     }
+    ],
+    "usage": {
+     "today": {
+      "since": "2026-11-19T16:00:00Z",
+      "by_project": {},
+      "total": {
+       "runs": 0,
+       "input_tokens": 0,
+       "output_tokens": 0,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       }
+      }
+     },
+     "7d": {
+      "since": "2026-11-13T10:00:00Z",
+      "by_project": {
+       "other": {
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+       },
+       "sample": {
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
+       }
+      },
+      "total": {
+       "runs": 5,
+       "input_tokens": 1230,
+       "output_tokens": 2501255,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       },
+       "openai": {
+        "runs": 1,
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.001
+       }
+      }
+     },
+     "month": {
+      "since": "2026-10-31T16:00:00Z",
+      "by_project": {
+       "other": {
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+       },
+       "sample": {
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
+       }
+      },
+      "total": {
+       "runs": 5,
+       "input_tokens": 1230,
+       "output_tokens": 2501255,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       },
+       "openai": {
+        "runs": 1,
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.001
+       }
+      }
+     }
+    },
+    "daily_tokens": {
+     "projects": [
+      "other",
+      "sample"
+     ],
+     "days": [
+      {
+       "date": "2026-11-14",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-15",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 100,
+         "output_tokens": 50,
+         "cache_read_tokens": 1000,
+         "cache_write_tokens": 200
+        }
+       }
+      },
+      {
+       "date": "2026-11-16",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-17",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 700,
+         "output_tokens": 900,
+         "cache_read_tokens": 5000,
+         "cache_write_tokens": 600
+        }
+       }
+      },
+      {
+       "date": "2026-11-18",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 400,
+         "output_tokens": 300,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-19",
+       "by_project": {
+        "other": {
+         "runs": 2,
+         "input_tokens": 30,
+         "output_tokens": 2500005,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-20",
+       "by_project": {}
+      }
+     ]
+    }
+   }
+  },
+  {
+   "days": 7,
+   "view": {
+    "kpis": {
+     "since": "2026-11-13T10:00:00Z",
+     "until": "2026-11-20T10:00:00Z",
+     "tasks": 5,
+     "by_source": {
+      "slack": 3,
+      "linear": 1,
+      "schedule": 1
+     },
+     "by_project": {
+      "sample": 3,
+      "general": 2
+     },
+     "time": {
+      "n": 5,
+      "median_s": 300,
+      "p90_s": 4000
+     },
+     "finished": 3,
+     "merged": 1,
+     "issues_closed": 1,
+     "tokens_by_project": {
+      "other": {
+       "runs": 2,
+       "input_tokens": 30,
+       "output_tokens": 2500005,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      },
+      "sample": {
+       "runs": 3,
+       "input_tokens": 1200,
+       "output_tokens": 1250,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      }
+     },
+     "finished_rate": 0.6
+    },
+    "daily": [
+     {
+      "date": "2026-11-14",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-15",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-16",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 1
+     },
+     {
+      "date": "2026-11-17",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-18",
+      "slack": 0,
+      "linear": 1,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-19",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-20",
+      "slack": 3,
+      "linear": 0,
+      "schedule": 0
+     }
+    ],
+    "tasks": [
+     {
+      "id": "TK-0001",
+      "title": "Task TK-0001",
+      "source": "slack",
+      "project": "sample",
+      "started_at": "2026-11-20T09:00:00Z"
+     },
+     {
+      "id": "TK-0006",
+      "title": "Task TK-0006",
+      "source": "slack",
+      "project": "sample",
+      "started_at": "2026-11-20T07:00:00Z"
+     },
+     {
+      "id": "TK-0002",
+      "title": "Task TK-0002",
+      "source": "slack",
+      "project": null,
+      "started_at": "2026-11-20T00:30:00Z"
+     },
+     {
+      "id": "TK-0003",
+      "title": "Task TK-0003",
+      "source": "linear",
+      "project": "sample",
+      "started_at": "2026-11-18T08:00:00Z"
+     },
+     {
+      "id": "TK-0004",
+      "title": "Task TK-0004",
+      "source": "schedule",
+      "project": null,
+      "started_at": "2026-11-16T06:00:00Z"
+     }
+    ],
+    "usage": {
+     "today": {
+      "since": "2026-11-19T16:00:00Z",
+      "by_project": {},
+      "total": {
+       "runs": 0,
+       "input_tokens": 0,
+       "output_tokens": 0,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       }
+      }
+     },
+     "7d": {
+      "since": "2026-11-13T10:00:00Z",
+      "by_project": {
+       "other": {
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+       },
+       "sample": {
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
+       }
+      },
+      "total": {
+       "runs": 5,
+       "input_tokens": 1230,
+       "output_tokens": 2501255,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       },
+       "openai": {
+        "runs": 1,
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.001
+       }
+      }
+     },
+     "month": {
+      "since": "2026-10-31T16:00:00Z",
+      "by_project": {
+       "other": {
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+       },
+       "sample": {
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
+       }
+      },
+      "total": {
+       "runs": 5,
+       "input_tokens": 1230,
+       "output_tokens": 2501255,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       },
+       "openai": {
+        "runs": 1,
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.001
+       }
+      }
+     }
+    },
+    "daily_tokens": {
+     "projects": [
+      "other",
+      "sample"
+     ],
+     "days": [
+      {
+       "date": "2026-11-14",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-15",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 100,
+         "output_tokens": 50,
+         "cache_read_tokens": 1000,
+         "cache_write_tokens": 200
+        }
+       }
+      },
+      {
+       "date": "2026-11-16",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-17",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 700,
+         "output_tokens": 900,
+         "cache_read_tokens": 5000,
+         "cache_write_tokens": 600
+        }
+       }
+      },
+      {
+       "date": "2026-11-18",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 400,
+         "output_tokens": 300,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-19",
+       "by_project": {
+        "other": {
+         "runs": 2,
+         "input_tokens": 30,
+         "output_tokens": 2500005,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-20",
+       "by_project": {}
+      }
+     ]
+    }
+   }
+  },
+  {
+   "days": 30,
+   "view": {
+    "kpis": {
+     "since": "2026-10-21T10:00:00Z",
+     "until": "2026-11-20T10:00:00Z",
+     "tasks": 6,
+     "by_source": {
+      "slack": 4,
+      "linear": 1,
+      "schedule": 1
+     },
+     "by_project": {
+      "sample": 3,
+      "other": 1,
+      "general": 2
+     },
+     "time": {
+      "n": 6,
+      "median_s": 450.0,
+      "p90_s": 90000
+     },
+     "finished": 4,
+     "merged": 2,
+     "issues_closed": 1,
+     "tokens_by_project": {
+      "other": {
+       "runs": 2,
+       "input_tokens": 30,
+       "output_tokens": 2500005,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      },
+      "sample": {
+       "runs": 3,
+       "input_tokens": 1200,
+       "output_tokens": 1250,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      }
+     },
+     "finished_rate": 0.6666666666666666
+    },
+    "daily": [
+     {
+      "date": "2026-10-22",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-23",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-24",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-25",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-26",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-27",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-28",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-29",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-30",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-10-31",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-01",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-02",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-03",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-04",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-05",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-06",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-07",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-08",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-09",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-10",
+      "slack": 1,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-11",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-12",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-13",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-14",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-15",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-16",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 1
+     },
+     {
+      "date": "2026-11-17",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-18",
+      "slack": 0,
+      "linear": 1,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-19",
+      "slack": 0,
+      "linear": 0,
+      "schedule": 0
+     },
+     {
+      "date": "2026-11-20",
+      "slack": 3,
+      "linear": 0,
+      "schedule": 0
+     }
+    ],
+    "tasks": [
+     {
+      "id": "TK-0001",
+      "title": "Task TK-0001",
+      "source": "slack",
+      "project": "sample",
+      "started_at": "2026-11-20T09:00:00Z"
+     },
+     {
+      "id": "TK-0006",
+      "title": "Task TK-0006",
+      "source": "slack",
+      "project": "sample",
+      "started_at": "2026-11-20T07:00:00Z"
+     },
+     {
+      "id": "TK-0002",
+      "title": "Task TK-0002",
+      "source": "slack",
+      "project": null,
+      "started_at": "2026-11-20T00:30:00Z"
+     },
+     {
+      "id": "TK-0003",
+      "title": "Task TK-0003",
+      "source": "linear",
+      "project": "sample",
+      "started_at": "2026-11-18T08:00:00Z"
+     },
+     {
+      "id": "TK-0004",
+      "title": "Task TK-0004",
+      "source": "schedule",
+      "project": null,
+      "started_at": "2026-11-16T06:00:00Z"
+     },
+     {
+      "id": "TK-0005",
+      "title": "Task TK-0005",
+      "source": "slack",
+      "project": "other",
+      "started_at": "2026-11-10T10:00:00Z"
+     }
+    ],
+    "usage": {
+     "today": {
+      "since": "2026-11-19T16:00:00Z",
+      "by_project": {},
+      "total": {
+       "runs": 0,
+       "input_tokens": 0,
+       "output_tokens": 0,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       }
+      }
+     },
+     "7d": {
+      "since": "2026-11-13T10:00:00Z",
+      "by_project": {
+       "other": {
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+       },
+       "sample": {
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
+       }
+      },
+      "total": {
+       "runs": 5,
+       "input_tokens": 1230,
+       "output_tokens": 2501255,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       },
+       "openai": {
+        "runs": 1,
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.001
+       }
+      }
+     },
+     "month": {
+      "since": "2026-10-31T16:00:00Z",
+      "by_project": {
+       "other": {
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+       },
+       "sample": {
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
+       }
+      },
+      "total": {
+       "runs": 5,
+       "input_tokens": 1230,
+       "output_tokens": 2501255,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
+      },
+      "apps_by_upstream": {
+       "foundry": {
+        "runs": 3,
+        "input_tokens": 6000,
+        "output_tokens": 400,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 10,
+        "cost_usd": 0.042
+       },
+       "openai": {
+        "runs": 1,
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.001
+       }
+      }
+     }
+    },
+    "daily_tokens": {
+     "projects": [
+      "other",
+      "sample"
+     ],
+     "days": [
+      {
+       "date": "2026-11-14",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-15",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 100,
+         "output_tokens": 50,
+         "cache_read_tokens": 1000,
+         "cache_write_tokens": 200
+        }
+       }
+      },
+      {
+       "date": "2026-11-16",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-17",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 700,
+         "output_tokens": 900,
+         "cache_read_tokens": 5000,
+         "cache_write_tokens": 600
+        }
+       }
+      },
+      {
+       "date": "2026-11-18",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 400,
+         "output_tokens": 300,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-19",
+       "by_project": {
+        "other": {
+         "runs": 2,
+         "input_tokens": 30,
+         "output_tokens": 2500005,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-20",
+       "by_project": {}
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "list_sessions": [
+  {
+   "filter": {},
+   "rows": [
+    {
+     "id": "W-4",
+     "kind": "turn",
+     "state": "queued",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "and then this",
+     "message": "and then this",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-20T09:00:00Z",
+     "started_at": null,
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    },
+    {
+     "id": "W-3",
+     "kind": "turn",
+     "state": "running",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "build the thing",
+     "message": "build the thing",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-20T08:00:00Z",
+     "started_at": "2026-11-20T08:30:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    },
+    {
+     "id": "W-10",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": null,
+     "task_id": null,
+     "title": "turn",
+     "message": "turn",
+     "source": "other",
+     "requester": "system",
+     "created_at": "2026-11-20T07:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T07:30:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-11",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-20T04:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T04:06:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-8",
+     "kind": "turn",
+     "state": "cancelled",
+     "project": null,
+     "conversation_id": "C-hand",
+     "task_id": null,
+     "title": "carry on",
+     "message": "carry on",
+     "source": "handover",
+     "requester": "agent",
+     "created_at": "2026-11-19T14:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T15:00:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-6",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "also check tests",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T10:00:00Z",
+     "started_at": "2026-11-19T11:00:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-9",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-19T04:30:00Z",
+     "account": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-2",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+     "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T05:00:00Z",
+     "account": "beta",
+     "turns": 1,
+     "tokens": {
+      "in": 10,
+      "out": 5,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": "error",
+     "error": "boom",
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    },
+    {
+     "id": "W-7",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "message": "SAM-7 \u2014 Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "account": "beta",
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-5",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "please fix login",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": "2026-11-17T12:00:00Z",
+     "account": "alpha",
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-1",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "message": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": "2026-11-15T11:00:00Z",
+     "account": "alpha",
+     "turns": 3,
+     "tokens": {
+      "in": 100,
+      "out": 50,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": "answered",
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    }
+   ],
+   "total": 11
+  },
+  {
+   "filter": {
+    "state": "running"
+   },
+   "rows": [
+    {
+     "id": "W-3",
+     "kind": "turn",
+     "state": "running",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "build the thing",
+     "message": "build the thing",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-20T08:00:00Z",
+     "started_at": "2026-11-20T08:30:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    },
+    {
+     "id": "W-6",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "also check tests",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T10:00:00Z",
+     "started_at": "2026-11-19T11:00:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    }
+   ],
+   "total": 2
+  },
+  {
+   "filter": {
+    "state": "queued"
+   },
+   "rows": [
+    {
+     "id": "W-4",
+     "kind": "turn",
+     "state": "queued",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "and then this",
+     "message": "and then this",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-20T09:00:00Z",
+     "started_at": null,
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    }
+   ],
+   "total": 1
+  },
+  {
+   "filter": {
+    "state": "done"
+   },
+   "rows": [
+    {
+     "id": "W-10",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": null,
+     "task_id": null,
+     "title": "turn",
+     "message": "turn",
+     "source": "other",
+     "requester": "system",
+     "created_at": "2026-11-20T07:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T07:30:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-9",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-19T04:30:00Z",
+     "account": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-7",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "message": "SAM-7 \u2014 Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "account": "beta",
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-5",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "please fix login",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": "2026-11-17T12:00:00Z",
+     "account": "alpha",
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-1",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "message": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": "2026-11-15T11:00:00Z",
+     "account": "alpha",
+     "turns": 3,
+     "tokens": {
+      "in": 100,
+      "out": 50,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": "answered",
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    }
+   ],
+   "total": 5
+  },
+  {
+   "filter": {
+    "state": "failed"
+   },
+   "rows": [
+    {
+     "id": "W-11",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-20T04:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T04:06:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-2",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+     "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T05:00:00Z",
+     "account": "beta",
+     "turns": 1,
+     "tokens": {
+      "in": 10,
+      "out": 5,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": "error",
+     "error": "boom",
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    }
+   ],
+   "total": 2
+  },
+  {
+   "filter": {
+    "project": "sample"
+   },
+   "rows": [
+    {
+     "id": "W-6",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "also check tests",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T10:00:00Z",
+     "started_at": "2026-11-19T11:00:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-7",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "message": "SAM-7 \u2014 Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "account": "beta",
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-5",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "please fix login",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": "2026-11-17T12:00:00Z",
+     "account": "alpha",
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    }
+   ],
+   "total": 3
+  },
+  {
+   "filter": {
+    "source": "linear"
+   },
+   "rows": [
+    {
+     "id": "W-7",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "message": "SAM-7 \u2014 Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "account": "beta",
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    }
+   ],
+   "total": 1
+  },
+  {
+   "filter": {
+    "source": "handover"
+   },
+   "rows": [
+    {
+     "id": "W-8",
+     "kind": "turn",
+     "state": "cancelled",
+     "project": null,
+     "conversation_id": "C-hand",
+     "task_id": null,
+     "title": "carry on",
+     "message": "carry on",
+     "source": "handover",
+     "requester": "agent",
+     "created_at": "2026-11-19T14:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T15:00:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    }
+   ],
+   "total": 1
+  },
+  {
+   "filter": {
+    "source": "slack"
+   },
+   "rows": [
+    {
+     "id": "W-4",
+     "kind": "turn",
+     "state": "queued",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "and then this",
+     "message": "and then this",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-20T09:00:00Z",
+     "started_at": null,
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    },
+    {
+     "id": "W-3",
+     "kind": "turn",
+     "state": "running",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "build the thing",
+     "message": "build the thing",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-20T08:00:00Z",
+     "started_at": "2026-11-20T08:30:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    },
+    {
+     "id": "W-6",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "also check tests",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T10:00:00Z",
+     "started_at": "2026-11-19T11:00:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-2",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+     "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T05:00:00Z",
+     "account": "beta",
+     "turns": 1,
+     "tokens": {
+      "in": 10,
+      "out": 5,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": "error",
+     "error": "boom",
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    },
+    {
+     "id": "W-5",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "please fix login",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": "2026-11-17T12:00:00Z",
+     "account": "alpha",
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-1",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "message": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": "2026-11-15T11:00:00Z",
+     "account": "alpha",
+     "turns": 3,
+     "tokens": {
+      "in": 100,
+      "out": 50,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": "answered",
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    }
+   ],
+   "total": 6
+  },
+  {
+   "filter": {
+    "source": "other"
+   },
+   "rows": [
+    {
+     "id": "W-10",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": null,
+     "task_id": null,
+     "title": "turn",
+     "message": "turn",
+     "source": "other",
+     "requester": "system",
+     "created_at": "2026-11-20T07:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T07:30:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-11",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-20T04:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T04:06:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-9",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-19T04:30:00Z",
+     "account": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    }
+   ],
+   "total": 3
+  },
+  {
+   "filter": {
+    "account": "alpha"
+   },
+   "rows": [
+    {
+     "id": "W-5",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "please fix login",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": "2026-11-17T12:00:00Z",
+     "account": "alpha",
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-1",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "message": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": "2026-11-15T11:00:00Z",
+     "account": "alpha",
+     "turns": 3,
+     "tokens": {
+      "in": 100,
+      "out": 50,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": "answered",
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "D111",
+     "_thread_ts": "1700000000.000100"
+    }
+   ],
+   "total": 2
+  },
+  {
+   "filter": {
+    "q": "login"
+   },
+   "rows": [
+    {
+     "id": "W-6",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "also check tests",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-19T10:00:00Z",
+     "started_at": "2026-11-19T11:00:00Z",
+     "ended_at": null,
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    },
+    {
+     "id": "W-5",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "message": "please fix login",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": "2026-11-17T12:00:00Z",
+     "account": "alpha",
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    }
+   ],
+   "total": 2
+  },
+  {
+   "filter": {
+    "q": "nightly",
+    "state": "done"
+   },
+   "rows": [
+    {
+     "id": "W-9",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-19T04:30:00Z",
+     "account": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    }
+   ],
+   "total": 1
+  },
+  {
+   "filter": {
+    "limit": 3,
+    "offset": 2
+   },
+   "rows": [
+    {
+     "id": "W-10",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": null,
+     "task_id": null,
+     "title": "turn",
+     "message": "turn",
+     "source": "other",
+     "requester": "system",
+     "created_at": "2026-11-20T07:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T07:30:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-11",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "message": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-20T04:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T04:06:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": null,
+     "_thread_ts": null
+    },
+    {
+     "id": "W-8",
+     "kind": "turn",
+     "state": "cancelled",
+     "project": null,
+     "conversation_id": "C-hand",
+     "task_id": null,
+     "title": "carry on",
+     "message": "carry on",
+     "source": "handover",
+     "requester": "agent",
+     "created_at": "2026-11-19T14:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T15:00:00Z",
+     "account": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     },
+     "_channel": "C222",
+     "_thread_ts": "1700000001.000200"
+    }
+   ],
+   "total": 11
+  },
+  {
+   "filter": {
+    "limit": 2,
+    "offset": 100
+   },
+   "rows": [],
+   "total": 11
+  }
+ ],
+ "list_conversations": [
+  {
+   "filter": {},
+   "groups": [
+    [
+     {
+      "id": "W-1",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "hi there",
+      "message": "hi there",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-15T10:00:00Z",
+      "started_at": "2026-11-15T10:06:00Z",
+      "ended_at": "2026-11-15T11:00:00Z",
+      "account": "alpha",
+      "turns": 3,
+      "tokens": {
+       "in": 100,
+       "out": 50,
+       "cache_read": 1000,
+       "cache_write": 200
+      },
+      "outcome": "answered",
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-2",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T05:00:00Z",
+      "account": "beta",
+      "turns": 1,
+      "tokens": {
+       "in": 10,
+       "out": 5,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": "error",
+      "error": "boom",
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-3",
+      "kind": "turn",
+      "state": "running",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "build the thing",
+      "message": "build the thing",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T08:00:00Z",
+      "started_at": "2026-11-20T08:30:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-4",
+      "kind": "turn",
+      "state": "queued",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "and then this",
+      "message": "and then this",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T09:00:00Z",
+      "started_at": null,
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     }
+    ],
+    [
+     {
+      "id": "W-10",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": null,
+      "task_id": null,
+      "title": "turn",
+      "message": "turn",
+      "source": "other",
+      "requester": "system",
+      "created_at": "2026-11-20T07:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T07:30:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ],
+    [
+     {
+      "id": "W-9",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": "2026-11-19T04:06:00Z",
+      "ended_at": "2026-11-19T04:30:00Z",
+      "account": null,
+      "turns": 2,
+      "tokens": {
+       "in": 20,
+       "out": 2500000,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     },
+     {
+      "id": "W-11",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-20T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T04:06:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ],
+    [
+     {
+      "id": "W-8",
+      "kind": "turn",
+      "state": "cancelled",
+      "project": null,
+      "conversation_id": "C-hand",
+      "task_id": null,
+      "title": "carry on",
+      "message": "carry on",
+      "source": "handover",
+      "requester": "agent",
+      "created_at": "2026-11-19T14:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T15:00:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ],
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ],
+    [
+     {
+      "id": "W-7",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-lin",
+      "task_id": "T-0002",
+      "title": "Crash on save",
+      "message": "SAM-7 \u2014 Crash on save",
+      "source": "linear",
+      "requester": "kim",
+      "created_at": "2026-11-18T10:00:00Z",
+      "started_at": "2026-11-18T10:06:00Z",
+      "ended_at": "2026-11-18T11:00:00Z",
+      "account": "beta",
+      "turns": 4,
+      "tokens": {
+       "in": 400,
+       "out": 300,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": "https://linear.app/x/issue/SAM-7/crash",
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ]
+   ],
+   "total": 6,
+   "rows": [
+    {
+     "id": "C-dm",
+     "kind": "turn",
+     "state": "running",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-20T09:00:00Z",
+     "messages": 4,
+     "busy_s": 12240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 110,
+      "out": 55,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "W-10",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": null,
+     "task_id": null,
+     "title": "turn",
+     "source": "other",
+     "requester": "system",
+     "created_at": "2026-11-20T07:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T07:30:00Z",
+     "last_active_at": "2026-11-20T07:30:00Z",
+     "messages": 1,
+     "busy_s": 1800,
+     "account": null,
+     "account_name": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-sched",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-20T04:06:00Z",
+     "last_active_at": "2026-11-20T04:06:00Z",
+     "messages": 2,
+     "busy_s": 1800,
+     "account": null,
+     "account_name": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-hand",
+     "kind": "turn",
+     "state": "cancelled",
+     "project": null,
+     "conversation_id": "C-hand",
+     "task_id": null,
+     "title": "carry on",
+     "source": "handover",
+     "requester": "agent",
+     "created_at": "2026-11-19T14:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T15:00:00Z",
+     "last_active_at": "2026-11-19T15:00:00Z",
+     "messages": 1,
+     "busy_s": 3600,
+     "account": null,
+     "account_name": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-thr",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-19T11:00:00Z",
+     "messages": 2,
+     "busy_s": 86400,
+     "account": "alpha",
+     "account_name": null,
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     }
+    },
+    {
+     "id": "C-lin",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "last_active_at": "2026-11-18T11:00:00Z",
+     "messages": 1,
+     "busy_s": 3240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "state": "running"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-1",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "hi there",
+      "message": "hi there",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-15T10:00:00Z",
+      "started_at": "2026-11-15T10:06:00Z",
+      "ended_at": "2026-11-15T11:00:00Z",
+      "account": "alpha",
+      "turns": 3,
+      "tokens": {
+       "in": 100,
+       "out": 50,
+       "cache_read": 1000,
+       "cache_write": 200
+      },
+      "outcome": "answered",
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-2",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T05:00:00Z",
+      "account": "beta",
+      "turns": 1,
+      "tokens": {
+       "in": 10,
+       "out": 5,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": "error",
+      "error": "boom",
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-3",
+      "kind": "turn",
+      "state": "running",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "build the thing",
+      "message": "build the thing",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T08:00:00Z",
+      "started_at": "2026-11-20T08:30:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-4",
+      "kind": "turn",
+      "state": "queued",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "and then this",
+      "message": "and then this",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T09:00:00Z",
+      "started_at": null,
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     }
+    ],
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ]
+   ],
+   "total": 2,
+   "rows": [
+    {
+     "id": "C-dm",
+     "kind": "turn",
+     "state": "running",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-20T09:00:00Z",
+     "messages": 4,
+     "busy_s": 12240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 110,
+      "out": 55,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-thr",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-19T11:00:00Z",
+     "messages": 2,
+     "busy_s": 86400,
+     "account": "alpha",
+     "account_name": null,
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "state": "queued"
+   },
+   "groups": [],
+   "total": 0,
+   "rows": []
+  },
+  {
+   "filter": {
+    "state": "done"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-10",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": null,
+      "task_id": null,
+      "title": "turn",
+      "message": "turn",
+      "source": "other",
+      "requester": "system",
+      "created_at": "2026-11-20T07:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T07:30:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ],
+    [
+     {
+      "id": "W-7",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-lin",
+      "task_id": "T-0002",
+      "title": "Crash on save",
+      "message": "SAM-7 \u2014 Crash on save",
+      "source": "linear",
+      "requester": "kim",
+      "created_at": "2026-11-18T10:00:00Z",
+      "started_at": "2026-11-18T10:06:00Z",
+      "ended_at": "2026-11-18T11:00:00Z",
+      "account": "beta",
+      "turns": 4,
+      "tokens": {
+       "in": 400,
+       "out": 300,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": "https://linear.app/x/issue/SAM-7/crash",
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ]
+   ],
+   "total": 2,
+   "rows": [
+    {
+     "id": "W-10",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": null,
+     "task_id": null,
+     "title": "turn",
+     "source": "other",
+     "requester": "system",
+     "created_at": "2026-11-20T07:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T07:30:00Z",
+     "last_active_at": "2026-11-20T07:30:00Z",
+     "messages": 1,
+     "busy_s": 1800,
+     "account": null,
+     "account_name": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-lin",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "last_active_at": "2026-11-18T11:00:00Z",
+     "messages": 1,
+     "busy_s": 3240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "state": "failed"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-9",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": "2026-11-19T04:06:00Z",
+      "ended_at": "2026-11-19T04:30:00Z",
+      "account": null,
+      "turns": 2,
+      "tokens": {
+       "in": 20,
+       "out": 2500000,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     },
+     {
+      "id": "W-11",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-20T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T04:06:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ]
+   ],
+   "total": 1,
+   "rows": [
+    {
+     "id": "C-sched",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-20T04:06:00Z",
+     "last_active_at": "2026-11-20T04:06:00Z",
+     "messages": 2,
+     "busy_s": 1800,
+     "account": null,
+     "account_name": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "project": "sample"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ],
+    [
+     {
+      "id": "W-7",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-lin",
+      "task_id": "T-0002",
+      "title": "Crash on save",
+      "message": "SAM-7 \u2014 Crash on save",
+      "source": "linear",
+      "requester": "kim",
+      "created_at": "2026-11-18T10:00:00Z",
+      "started_at": "2026-11-18T10:06:00Z",
+      "ended_at": "2026-11-18T11:00:00Z",
+      "account": "beta",
+      "turns": 4,
+      "tokens": {
+       "in": 400,
+       "out": 300,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": "https://linear.app/x/issue/SAM-7/crash",
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ]
+   ],
+   "total": 2,
+   "rows": [
+    {
+     "id": "C-thr",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-19T11:00:00Z",
+     "messages": 2,
+     "busy_s": 86400,
+     "account": "alpha",
+     "account_name": null,
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     }
+    },
+    {
+     "id": "C-lin",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "last_active_at": "2026-11-18T11:00:00Z",
+     "messages": 1,
+     "busy_s": 3240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "source": "linear"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-7",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-lin",
+      "task_id": "T-0002",
+      "title": "Crash on save",
+      "message": "SAM-7 \u2014 Crash on save",
+      "source": "linear",
+      "requester": "kim",
+      "created_at": "2026-11-18T10:00:00Z",
+      "started_at": "2026-11-18T10:06:00Z",
+      "ended_at": "2026-11-18T11:00:00Z",
+      "account": "beta",
+      "turns": 4,
+      "tokens": {
+       "in": 400,
+       "out": 300,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": "https://linear.app/x/issue/SAM-7/crash",
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ]
+   ],
+   "total": 1,
+   "rows": [
+    {
+     "id": "C-lin",
+     "kind": "turn",
+     "state": "done",
+     "project": "sample",
+     "conversation_id": "C-lin",
+     "task_id": "T-0002",
+     "title": "Crash on save",
+     "source": "linear",
+     "requester": "kim",
+     "created_at": "2026-11-18T10:00:00Z",
+     "started_at": "2026-11-18T10:06:00Z",
+     "ended_at": "2026-11-18T11:00:00Z",
+     "last_active_at": "2026-11-18T11:00:00Z",
+     "messages": 1,
+     "busy_s": 3240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 400,
+      "out": 300,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": "https://linear.app/x/issue/SAM-7/crash",
+      "pr": null
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "source": "handover"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-8",
+      "kind": "turn",
+      "state": "cancelled",
+      "project": null,
+      "conversation_id": "C-hand",
+      "task_id": null,
+      "title": "carry on",
+      "message": "carry on",
+      "source": "handover",
+      "requester": "agent",
+      "created_at": "2026-11-19T14:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T15:00:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ]
+   ],
+   "total": 1,
+   "rows": [
+    {
+     "id": "C-hand",
+     "kind": "turn",
+     "state": "cancelled",
+     "project": null,
+     "conversation_id": "C-hand",
+     "task_id": null,
+     "title": "carry on",
+     "source": "handover",
+     "requester": "agent",
+     "created_at": "2026-11-19T14:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T15:00:00Z",
+     "last_active_at": "2026-11-19T15:00:00Z",
+     "messages": 1,
+     "busy_s": 3600,
+     "account": null,
+     "account_name": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "source": "slack"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-1",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "hi there",
+      "message": "hi there",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-15T10:00:00Z",
+      "started_at": "2026-11-15T10:06:00Z",
+      "ended_at": "2026-11-15T11:00:00Z",
+      "account": "alpha",
+      "turns": 3,
+      "tokens": {
+       "in": 100,
+       "out": 50,
+       "cache_read": 1000,
+       "cache_write": 200
+      },
+      "outcome": "answered",
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-2",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T05:00:00Z",
+      "account": "beta",
+      "turns": 1,
+      "tokens": {
+       "in": 10,
+       "out": 5,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": "error",
+      "error": "boom",
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-3",
+      "kind": "turn",
+      "state": "running",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "build the thing",
+      "message": "build the thing",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T08:00:00Z",
+      "started_at": "2026-11-20T08:30:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-4",
+      "kind": "turn",
+      "state": "queued",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "and then this",
+      "message": "and then this",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T09:00:00Z",
+      "started_at": null,
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     }
+    ],
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ]
+   ],
+   "total": 2,
+   "rows": [
+    {
+     "id": "C-dm",
+     "kind": "turn",
+     "state": "running",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-20T09:00:00Z",
+     "messages": 4,
+     "busy_s": 12240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 110,
+      "out": 55,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-thr",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-19T11:00:00Z",
+     "messages": 2,
+     "busy_s": 86400,
+     "account": "alpha",
+     "account_name": null,
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "source": "other"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-10",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": null,
+      "task_id": null,
+      "title": "turn",
+      "message": "turn",
+      "source": "other",
+      "requester": "system",
+      "created_at": "2026-11-20T07:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T07:30:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ],
+    [
+     {
+      "id": "W-9",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": "2026-11-19T04:06:00Z",
+      "ended_at": "2026-11-19T04:30:00Z",
+      "account": null,
+      "turns": 2,
+      "tokens": {
+       "in": 20,
+       "out": 2500000,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     },
+     {
+      "id": "W-11",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-20T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T04:06:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ]
+   ],
+   "total": 2,
+   "rows": [
+    {
+     "id": "W-10",
+     "kind": "turn",
+     "state": "done",
+     "project": null,
+     "conversation_id": null,
+     "task_id": null,
+     "title": "turn",
+     "source": "other",
+     "requester": "system",
+     "created_at": "2026-11-20T07:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-20T07:30:00Z",
+     "last_active_at": "2026-11-20T07:30:00Z",
+     "messages": 1,
+     "busy_s": 1800,
+     "account": null,
+     "account_name": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-sched",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-20T04:06:00Z",
+     "last_active_at": "2026-11-20T04:06:00Z",
+     "messages": 2,
+     "busy_s": 1800,
+     "account": null,
+     "account_name": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "account": "alpha"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-1",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "hi there",
+      "message": "hi there",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-15T10:00:00Z",
+      "started_at": "2026-11-15T10:06:00Z",
+      "ended_at": "2026-11-15T11:00:00Z",
+      "account": "alpha",
+      "turns": 3,
+      "tokens": {
+       "in": 100,
+       "out": 50,
+       "cache_read": 1000,
+       "cache_write": 200
+      },
+      "outcome": "answered",
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-2",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T05:00:00Z",
+      "account": "beta",
+      "turns": 1,
+      "tokens": {
+       "in": 10,
+       "out": 5,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": "error",
+      "error": "boom",
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-3",
+      "kind": "turn",
+      "state": "running",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "build the thing",
+      "message": "build the thing",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T08:00:00Z",
+      "started_at": "2026-11-20T08:30:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-4",
+      "kind": "turn",
+      "state": "queued",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "and then this",
+      "message": "and then this",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T09:00:00Z",
+      "started_at": null,
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     }
+    ],
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ]
+   ],
+   "total": 2,
+   "rows": [
+    {
+     "id": "C-dm",
+     "kind": "turn",
+     "state": "running",
+     "project": null,
+     "conversation_id": "C-dm",
+     "task_id": null,
+     "title": "hi there",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-15T10:00:00Z",
+     "started_at": "2026-11-15T10:06:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-20T09:00:00Z",
+     "messages": 4,
+     "busy_s": 12240,
+     "account": "beta",
+     "account_name": null,
+     "turns": 4,
+     "tokens": {
+      "in": 110,
+      "out": 55,
+      "cache_read": 1000,
+      "cache_write": 200
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-thr",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-19T11:00:00Z",
+     "messages": 2,
+     "busy_s": 86400,
+     "account": "alpha",
+     "account_name": null,
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "q": "login"
+   },
+   "groups": [
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ]
+   ],
+   "total": 1,
+   "rows": [
+    {
+     "id": "C-thr",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-19T11:00:00Z",
+     "messages": 2,
+     "busy_s": 86400,
+     "account": "alpha",
+     "account_name": null,
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "q": "nightly",
+    "state": "done"
+   },
+   "groups": [],
+   "total": 0,
+   "rows": []
+  },
+  {
+   "filter": {
+    "limit": 3,
+    "offset": 2
+   },
+   "groups": [
+    [
+     {
+      "id": "W-9",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": "2026-11-19T04:06:00Z",
+      "ended_at": "2026-11-19T04:30:00Z",
+      "account": null,
+      "turns": 2,
+      "tokens": {
+       "in": 20,
+       "out": 2500000,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     },
+     {
+      "id": "W-11",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-sched",
+      "task_id": null,
+      "title": "nightly report",
+      "message": "nightly report",
+      "source": "other",
+      "requester": null,
+      "created_at": "2026-11-20T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T04:06:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ],
+    [
+     {
+      "id": "W-8",
+      "kind": "turn",
+      "state": "cancelled",
+      "project": null,
+      "conversation_id": "C-hand",
+      "task_id": null,
+      "title": "carry on",
+      "message": "carry on",
+      "source": "handover",
+      "requester": "agent",
+      "created_at": "2026-11-19T14:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T15:00:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ],
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ]
+   ],
+   "total": 6,
+   "rows": [
+    {
+     "id": "C-sched",
+     "kind": "turn",
+     "state": "failed",
+     "project": null,
+     "conversation_id": "C-sched",
+     "task_id": null,
+     "title": "nightly report",
+     "source": "other",
+     "requester": null,
+     "created_at": "2026-11-19T04:00:00Z",
+     "started_at": "2026-11-19T04:06:00Z",
+     "ended_at": "2026-11-20T04:06:00Z",
+     "last_active_at": "2026-11-20T04:06:00Z",
+     "messages": 2,
+     "busy_s": 1800,
+     "account": null,
+     "account_name": null,
+     "turns": 2,
+     "tokens": {
+      "in": 20,
+      "out": 2500000,
+      "cache_read": 0,
+      "cache_write": 0
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-hand",
+     "kind": "turn",
+     "state": "cancelled",
+     "project": null,
+     "conversation_id": "C-hand",
+     "task_id": null,
+     "title": "carry on",
+     "source": "handover",
+     "requester": "agent",
+     "created_at": "2026-11-19T14:00:00Z",
+     "started_at": null,
+     "ended_at": "2026-11-19T15:00:00Z",
+     "last_active_at": "2026-11-19T15:00:00Z",
+     "messages": 1,
+     "busy_s": 3600,
+     "account": null,
+     "account_name": null,
+     "turns": null,
+     "tokens": null,
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": null
+     }
+    },
+    {
+     "id": "C-thr",
+     "kind": "turn",
+     "state": "running",
+     "project": "sample",
+     "conversation_id": "C-thr",
+     "task_id": "T-0001",
+     "title": "Fix login bug",
+     "source": "slack",
+     "requester": "sam",
+     "created_at": "2026-11-17T10:00:00Z",
+     "started_at": "2026-11-17T11:00:00Z",
+     "ended_at": null,
+     "last_active_at": "2026-11-19T11:00:00Z",
+     "messages": 2,
+     "busy_s": 86400,
+     "account": "alpha",
+     "account_name": null,
+     "turns": 7,
+     "tokens": {
+      "in": 700,
+      "out": 900,
+      "cache_read": 5000,
+      "cache_write": 600
+     },
+     "outcome": null,
+     "error": null,
+     "live": false,
+     "links": {
+      "slack": null,
+      "linear": null,
+      "pr": "https://github.com/o/r/pull/12"
+     }
+    }
+   ]
+  },
+  {
+   "filter": {
+    "limit": 2,
+    "offset": 100
+   },
+   "groups": [],
+   "total": 6,
+   "rows": []
+  }
+ ],
+ "get_conversation": [
+  {
+   "ref": "C-dm",
+   "out": [
+    [
+     {
+      "id": "W-1",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "hi there",
+      "message": "hi there",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-15T10:00:00Z",
+      "started_at": "2026-11-15T10:06:00Z",
+      "ended_at": "2026-11-15T11:00:00Z",
+      "account": "alpha",
+      "turns": 3,
+      "tokens": {
+       "in": 100,
+       "out": 50,
+       "cache_read": 1000,
+       "cache_write": 200
+      },
+      "outcome": "answered",
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-2",
+      "kind": "turn",
+      "state": "failed",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u2026",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T04:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-19T05:00:00Z",
+      "account": "beta",
+      "turns": 1,
+      "tokens": {
+       "in": 10,
+       "out": 5,
+       "cache_read": 0,
+       "cache_write": 0
+      },
+      "outcome": "error",
+      "error": "boom",
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-3",
+      "kind": "turn",
+      "state": "running",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "build the thing",
+      "message": "build the thing",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T08:00:00Z",
+      "started_at": "2026-11-20T08:30:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     },
+     {
+      "id": "W-4",
+      "kind": "turn",
+      "state": "queued",
+      "project": null,
+      "conversation_id": "C-dm",
+      "task_id": null,
+      "title": "and then this",
+      "message": "and then this",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-20T09:00:00Z",
+      "started_at": null,
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": "D111",
+      "_thread_ts": "1700000000.000100"
+     }
+    ],
+    null
+   ]
+  },
+  {
+   "ref": "W-6",
+   "out": [
+    [
+     {
+      "id": "W-5",
+      "kind": "turn",
+      "state": "done",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "please fix login",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-17T10:00:00Z",
+      "started_at": "2026-11-17T11:00:00Z",
+      "ended_at": "2026-11-17T12:00:00Z",
+      "account": "alpha",
+      "turns": 7,
+      "tokens": {
+       "in": 700,
+       "out": 900,
+       "cache_read": 5000,
+       "cache_write": 600
+      },
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     },
+     {
+      "id": "W-6",
+      "kind": "turn",
+      "state": "running",
+      "project": "sample",
+      "conversation_id": "C-thr",
+      "task_id": "T-0001",
+      "title": "Fix login bug",
+      "message": "also check tests",
+      "source": "slack",
+      "requester": "sam",
+      "created_at": "2026-11-19T10:00:00Z",
+      "started_at": "2026-11-19T11:00:00Z",
+      "ended_at": null,
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": "https://github.com/o/r/pull/12"
+      },
+      "_channel": "C222",
+      "_thread_ts": "1700000001.000200"
+     }
+    ],
+    "W-6"
+   ]
+  },
+  {
+   "ref": "W-10",
+   "out": [
+    [
+     {
+      "id": "W-10",
+      "kind": "turn",
+      "state": "done",
+      "project": null,
+      "conversation_id": null,
+      "task_id": null,
+      "title": "turn",
+      "message": "turn",
+      "source": "other",
+      "requester": "system",
+      "created_at": "2026-11-20T07:00:00Z",
+      "started_at": null,
+      "ended_at": "2026-11-20T07:30:00Z",
+      "account": null,
+      "turns": null,
+      "tokens": null,
+      "outcome": null,
+      "error": null,
+      "live": false,
+      "links": {
+       "slack": null,
+       "linear": null,
+       "pr": null
+      },
+      "_channel": null,
+      "_thread_ts": null
+     }
+    ],
+    "W-10"
+   ]
+  },
+  {
+   "ref": "nope",
+   "out": null
+  }
+ ],
+ "get_session": [
+  {
+   "id": "W-7",
+   "out": {
+    "id": "W-7",
+    "kind": "turn",
+    "state": "done",
+    "project": "sample",
+    "conversation_id": "C-lin",
+    "task_id": "T-0002",
+    "title": "Crash on save",
+    "message": "SAM-7 \u2014 Crash on save",
+    "source": "linear",
+    "requester": "kim",
+    "created_at": "2026-11-18T10:00:00Z",
+    "started_at": "2026-11-18T10:06:00Z",
+    "ended_at": "2026-11-18T11:00:00Z",
+    "account": "beta",
+    "turns": 4,
+    "tokens": {
+     "in": 400,
+     "out": 300,
+     "cache_read": 0,
+     "cache_write": 0
+    },
+    "outcome": null,
+    "error": null,
+    "live": false,
+    "links": {
+     "slack": null,
+     "linear": "https://linear.app/x/issue/SAM-7/crash",
+     "pr": null
+    },
+    "_channel": null,
+    "_thread_ts": null
+   }
+  },
+  {
+   "id": "W-10",
+   "out": {
+    "id": "W-10",
+    "kind": "turn",
+    "state": "done",
+    "project": null,
+    "conversation_id": null,
+    "task_id": null,
+    "title": "turn",
+    "message": "turn",
+    "source": "other",
+    "requester": "system",
+    "created_at": "2026-11-20T07:00:00Z",
+    "started_at": null,
+    "ended_at": "2026-11-20T07:30:00Z",
+    "account": null,
+    "turns": null,
+    "tokens": null,
+    "outcome": null,
+    "error": null,
+    "live": false,
+    "links": {
+     "slack": null,
+     "linear": null,
+     "pr": null
+    },
+    "_channel": null,
+    "_thread_ts": null
+   }
+  },
+  {
+   "id": "nope",
+   "out": null
+  }
+ ],
+ "overview_counts": {
+  "running": 1,
+  "queued": 1,
+  "done_today": 1,
+  "failed_today": 1
+ },
+ "paused_by": {
+  "actor": "tailscale:pat@example.com",
+  "at": "2026-11-20T02:00:00Z"
+ },
+ "list_events": [
+  {
+   "args": [
+    null,
+    100,
+    null
+   ],
+   "out": {
+    "rows": [
+     {
+      "id": 17,
+      "ts": "2026-11-20T09:00:00Z",
+      "type": "llm_caps_changed",
+      "source": "other",
+      "sender": null
+     },
+     {
+      "id": 16,
+      "ts": "2026-11-20T08:00:00Z",
+      "type": "note",
+      "source": "other",
+      "sender": null
+     },
+     {
+      "id": 15,
+      "ts": "2026-11-20T07:00:00Z",
+      "type": "note",
+      "source": "slack",
+      "sender": "kim"
+     },
+     {
+      "id": 14,
+      "ts": "2026-11-20T06:00:00Z",
+      "type": "ask",
+      "source": "linear",
+      "sender": null
+     },
+     {
+      "id": 13,
+      "ts": "2026-11-20T05:00:00Z",
+      "type": "session_cancelled",
+      "source": "agent",
+      "sender": null
+     },
+     {
+      "id": 12,
+      "ts": "2026-11-20T04:00:00Z",
+      "type": "task_moved",
+      "source": "linear",
+      "sender": null
+     },
+     {
+      "id": 11,
+      "ts": "2026-11-20T03:00:00Z",
+      "type": "task_created",
+      "source": "slack",
+      "sender": "sam"
+     },
+     {
+      "id": 10,
+      "ts": "2026-11-20T02:00:00Z",
+      "type": "stop_all",
+      "source": "dashboard",
+      "sender": "tailscale:pat@example.com"
+     },
+     {
+      "id": 9,
+      "ts": "2026-11-20T01:00:00Z",
+      "type": "resume_all",
+      "source": "command line",
+      "sender": null
+     },
+     {
+      "id": 8,
+      "ts": "2026-11-20T00:00:00Z",
+      "type": "stop_all",
+      "source": "slack",
+      "sender": "sam"
+     },
+     {
+      "id": 7,
+      "ts": "2026-11-19T04:06:00Z",
+      "type": "session_started",
+      "source": "other",
+      "sender": null
+     },
+     {
+      "id": 6,
+      "ts": "2026-11-18T10:06:00Z",
+      "type": "session_started",
+      "source": "linear",
+      "sender": null
+     },
+     {
+      "id": 5,
+      "ts": "2026-11-19T11:00:00Z",
+      "type": "session_started",
+      "source": "slack",
+      "sender": "sam"
+     },
+     {
+      "id": 4,
+      "ts": "2026-11-17T11:00:00Z",
+      "type": "session_started",
+      "source": "slack",
+      "sender": "sam"
+     },
+     {
+      "id": 3,
+      "ts": "2026-11-20T08:30:00Z",
+      "type": "session_started",
+      "source": "slack",
+      "sender": "sam"
+     },
+     {
+      "id": 2,
+      "ts": "2026-11-15T10:12:00Z",
+      "type": "session_started",
+      "source": "slack",
+      "sender": "sam"
+     },
+     {
+      "id": 1,
+      "ts": "2026-11-15T10:06:00Z",
+      "type": "session_started",
+      "source": "slack",
+      "sender": "sam"
+     }
+    ],
+    "types": [
+     "ask",
+     "llm_caps_changed",
+     "note",
+     "resume_all",
+     "session_cancelled",
+     "session_started",
+     "stop_all",
+     "task_created",
+     "task_moved"
+    ]
+   }
+  },
+  {
+   "args": [
+    "stop_all",
+    100,
+    null
+   ],
+   "out": {
+    "rows": [
+     {
+      "id": 10,
+      "ts": "2026-11-20T02:00:00Z",
+      "type": "stop_all",
+      "source": "dashboard",
+      "sender": "tailscale:pat@example.com"
+     },
+     {
+      "id": 8,
+      "ts": "2026-11-20T00:00:00Z",
+      "type": "stop_all",
+      "source": "slack",
+      "sender": "sam"
+     }
+    ],
+    "types": [
+     "ask",
+     "llm_caps_changed",
+     "note",
+     "resume_all",
+     "session_cancelled",
+     "session_started",
+     "stop_all",
+     "task_created",
+     "task_moved"
+    ]
+   }
+  },
+  {
+   "args": [
+    null,
+    3,
+    null
+   ],
+   "out": {
+    "rows": [
+     {
+      "id": 17,
+      "ts": "2026-11-20T09:00:00Z",
+      "type": "llm_caps_changed",
+      "source": "other",
+      "sender": null
+     },
+     {
+      "id": 16,
+      "ts": "2026-11-20T08:00:00Z",
+      "type": "note",
+      "source": "other",
+      "sender": null
+     },
+     {
+      "id": 15,
+      "ts": "2026-11-20T07:00:00Z",
+      "type": "note",
+      "source": "slack",
+      "sender": "kim"
+     }
+    ],
+    "types": [
+     "ask",
+     "llm_caps_changed",
+     "note",
+     "resume_all",
+     "session_cancelled",
+     "session_started",
+     "stop_all",
+     "task_created",
+     "task_moved"
+    ]
+   }
+  },
+  {
+   "args": [
+    null,
+    5,
+    10
+   ],
+   "out": {
+    "rows": [
+     {
+      "id": 9,
+      "ts": "2026-11-20T01:00:00Z",
+      "type": "resume_all",
+      "source": "command line",
+      "sender": null
+     },
+     {
+      "id": 8,
+      "ts": "2026-11-20T00:00:00Z",
+      "type": "stop_all",
+      "source": "slack",
+      "sender": "sam"
+     },
+     {
+      "id": 7,
+      "ts": "2026-11-19T04:06:00Z",
+      "type": "session_started",
+      "source": "other",
+      "sender": null
+     },
+     {
+      "id": 6,
+      "ts": "2026-11-18T10:06:00Z",
+      "type": "session_started",
+      "source": "linear",
+      "sender": null
+     },
+     {
+      "id": 5,
+      "ts": "2026-11-19T11:00:00Z",
+      "type": "session_started",
+      "source": "slack",
+      "sender": "sam"
+     }
+    ],
+    "types": [
+     "ask",
+     "llm_caps_changed",
+     "note",
+     "resume_all",
+     "session_cancelled",
+     "session_started",
+     "stop_all",
+     "task_created",
+     "task_moved"
+    ]
+   }
+  }
+ ],
+ "match_issue": [
+  {
+   "texts": [
+    "pra-423-x",
+    "PRA-42 fix",
+    null
+   ],
+   "out": "PRA-423"
+  },
+  {
+   "texts": [
+    "xPRA-423",
+    "PRA-4230",
+    ""
+   ],
+   "out": null
+  },
+  {
+   "texts": [
+    null,
+    "Fix SAM-70 and SAM-7",
+    "SAM-7"
+   ],
+   "out": "SAM-70"
+  },
+  {
+   "texts": [
+    "feature/sam-7",
+    "title",
+    "body SAM-70"
+   ],
+   "out": "SAM-7"
+  },
+  {
+   "texts": [
+    "SAM-7_x",
+    null,
+    null
+   ],
+   "out": "SAM-7"
+  },
+  {
+   "texts": [
+    "",
+    "",
+    ""
+   ],
+   "out": null
+  },
+  {
+   "texts": [
+    "(PRA-42)",
+    null,
+    null
+   ],
+   "out": "PRA-42"
+  }
+ ],
+ "iso": [
+  [
+   "2026-11-20T01:00:00Z",
+   "2026-11-20T01:00:00Z"
+  ],
+  [
+   "2026-11-20T01:00:00.123Z",
+   "2026-11-20T01:00:00Z"
+  ],
+  [
+   "2026-11-20T09:00:00+08:00",
+   "2026-11-20T01:00:00Z"
+  ],
+  [
+   "2026-11-20T01:00:00.5+00:00",
+   "2026-11-20T01:00:00Z"
+  ],
+  [
+   null,
+   null
+  ],
+  [
+   "",
+   null
+  ]
+ ]
+}

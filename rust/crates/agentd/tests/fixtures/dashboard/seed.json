@@ -1,0 +1,556 @@
+{
+ "tasks": [
+  {
+   "id": "T-0001",
+   "project": "sample",
+   "title": "Fix login bug",
+   "kind": "bug",
+   "source": "slack",
+   "requester": "sam",
+   "status": "ready_for_review",
+   "pr_number": 12,
+   "pr_url": "https://github.com/o/r/pull/12",
+   "created_at": "2026-11-17T10:00:00Z",
+   "updated_at": "2026-11-19T10:00:00Z"
+  },
+  {
+   "id": "T-0002",
+   "project": "sample",
+   "title": "Crash on save",
+   "kind": "bug",
+   "source": "linear",
+   "requester": "kim",
+   "status": "in_progress",
+   "created_at": "2026-11-18T10:00:00Z",
+   "updated_at": "2026-11-18T10:00:00Z"
+  }
+ ],
+ "conversations": [
+  {
+   "id": "C-dm",
+   "channel": "D111",
+   "thread_ts": "1700000000.000100",
+   "created_at": "2026-11-15T10:00:00Z",
+   "last_active_at": "2026-11-20T09:00:00Z"
+  },
+  {
+   "id": "C-thr",
+   "channel": "C222",
+   "thread_ts": "1700000001.000200",
+   "project": "sample",
+   "task_id": "T-0001",
+   "created_at": "2026-11-17T10:00:00Z",
+   "last_active_at": "2026-11-19T10:00:00Z"
+  },
+  {
+   "id": "C-lin",
+   "project": "sample",
+   "task_id": "T-0002",
+   "created_at": "2026-11-18T10:00:00Z",
+   "last_active_at": "2026-11-18T10:00:00Z"
+  },
+  {
+   "id": "C-hand",
+   "channel": "C222",
+   "thread_ts": "1700000001.000200",
+   "is_primary": 0,
+   "created_at": "2026-11-19T10:00:00Z",
+   "last_active_at": "2026-11-19T14:00:00Z"
+  },
+  {
+   "id": "C-sched",
+   "created_at": "2026-11-19T04:00:00Z",
+   "last_active_at": "2026-11-19T04:00:00Z"
+  }
+ ],
+ "settings": [
+  {
+   "key": "linear_session:abc",
+   "value": "C-lin"
+  },
+  {
+   "key": "paused",
+   "value": "1"
+  }
+ ],
+ "work_items": [
+  {
+   "id": "W-1",
+   "conversation_id": "C-dm",
+   "kind": "turn",
+   "status": "done",
+   "payload": "{\"text\": \"hi there\\nsecond line\", \"actor\": \"sam\", \"system_prompt\": \"x\"}",
+   "result": "{\"text\": \"hello\", \"outcome\": \"answered\"}",
+   "created_at": "2026-11-15T10:00:00Z",
+   "updated_at": "2026-11-15T11:00:00Z"
+  },
+  {
+   "id": "W-2",
+   "conversation_id": "C-dm",
+   "kind": "turn",
+   "status": "failed",
+   "payload": "{\"text\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"actor\": \"sam\"}",
+   "result": "{\"text\": \"\", \"outcome\": \"error\"}",
+   "created_at": "2026-11-19T04:00:00Z",
+   "updated_at": "2026-11-19T05:00:00Z"
+  },
+  {
+   "id": "W-3",
+   "conversation_id": "C-dm",
+   "kind": "turn",
+   "status": "claimed",
+   "payload": "{\"text\": \"   \\n  build the thing  \", \"actor\": \"sam\"}",
+   "result": null,
+   "created_at": "2026-11-20T08:00:00Z",
+   "updated_at": "2026-11-20T09:00:00Z"
+  },
+  {
+   "id": "W-4",
+   "conversation_id": "C-dm",
+   "kind": "turn",
+   "status": "queued",
+   "payload": "{\"text\": \"and then this\", \"actor\": \"sam\"}",
+   "result": null,
+   "created_at": "2026-11-20T09:00:00Z",
+   "updated_at": "2026-11-20T09:00:00Z"
+  },
+  {
+   "id": "W-5",
+   "conversation_id": "C-thr",
+   "kind": "turn",
+   "status": "done",
+   "payload": "{\"text\": \"please fix login\", \"actor\": \"sam\"}",
+   "result": "{\"text\": \"PR open\"}",
+   "created_at": "2026-11-17T10:00:00Z",
+   "updated_at": "2026-11-17T12:00:00Z"
+  },
+  {
+   "id": "W-6",
+   "conversation_id": "C-thr",
+   "kind": "turn",
+   "status": "delivered",
+   "payload": "{\"text\": \"also check tests\", \"actor\": \"kim\"}",
+   "result": null,
+   "created_at": "2026-11-19T10:00:00Z",
+   "updated_at": "2026-11-19T10:00:00Z"
+  },
+  {
+   "id": "W-7",
+   "conversation_id": "C-lin",
+   "kind": "turn",
+   "status": "done",
+   "payload": "{\"text\": \"Linear agent session event:{\\\"agentSession\\\": {\\\"issue\\\": {\\\"identifier\\\": \\\"SAM-7\\\", \\\"title\\\": \\\"Crash on save\\\", \\\"url\\\": \\\"https://linear.app/x/issue/SAM-7/crash\\\"}}}\", \"actor\": \"kim\"}",
+   "result": "{\"text\": \"fixed\"}",
+   "created_at": "2026-11-18T10:00:00Z",
+   "updated_at": "2026-11-18T11:00:00Z"
+  },
+  {
+   "id": "W-8",
+   "conversation_id": "C-hand",
+   "kind": "turn",
+   "status": "cancelled",
+   "payload": "{\"text\": \"carry on\", \"actor\": \"agent\"}",
+   "result": null,
+   "created_at": "2026-11-19T14:00:00Z",
+   "updated_at": "2026-11-19T15:00:00Z"
+  },
+  {
+   "id": "W-9",
+   "conversation_id": "C-sched",
+   "kind": "turn",
+   "status": "done",
+   "payload": "{\"text\": \"nightly report\", \"origin\": \"[schedule nightly]\"}",
+   "result": "{\"text\": \"ok\"}",
+   "created_at": "2026-11-19T04:00:00Z",
+   "updated_at": "2026-11-19T04:30:00Z"
+  },
+  {
+   "id": "W-10",
+   "conversation_id": null,
+   "kind": "turn",
+   "status": "done",
+   "payload": "{\"text\": \"\", \"actor\": \"system\"}",
+   "result": null,
+   "created_at": "2026-11-20T07:00:00Z",
+   "updated_at": "2026-11-20T07:30:00Z"
+  },
+  {
+   "id": "W-11",
+   "conversation_id": "C-sched",
+   "kind": "turn",
+   "status": "failed",
+   "payload": "{\"text\": \"nightly report\"}",
+   "result": "{\"text\": \"boom\"}",
+   "created_at": "2026-11-20T04:00:00Z",
+   "updated_at": "2026-11-20T04:06:00Z"
+  }
+ ],
+ "runs": [
+  {
+   "id": "W-1",
+   "kind": "turn",
+   "status": "done",
+   "account_code": "alpha",
+   "turns": 3,
+   "input_tokens": 100,
+   "output_tokens": 50,
+   "cache_read_tokens": 1000,
+   "cache_write_tokens": 200,
+   "outcome": "answered",
+   "started_at": "2026-11-15T10:00:00Z",
+   "ended_at": "2026-11-15T11:00:00Z"
+  },
+  {
+   "id": "W-2",
+   "kind": "turn",
+   "status": "failed",
+   "account_code": "beta",
+   "turns": 1,
+   "input_tokens": 10,
+   "output_tokens": 5,
+   "error": "boom",
+   "outcome": "error",
+   "started_at": "2026-11-19T04:00:00Z",
+   "ended_at": "2026-11-19T05:00:00Z"
+  },
+  {
+   "id": "W-5",
+   "task_id": "T-0001",
+   "kind": "turn",
+   "status": "done",
+   "account_code": "alpha",
+   "turns": 7,
+   "input_tokens": 700,
+   "output_tokens": 900,
+   "cache_read_tokens": 5000,
+   "cache_write_tokens": 600,
+   "project": "sample",
+   "started_at": "2026-11-17T10:00:00Z",
+   "ended_at": "2026-11-17T12:00:00Z"
+  },
+  {
+   "id": "W-7",
+   "kind": "turn",
+   "status": "done",
+   "account_code": "beta",
+   "turns": 4,
+   "input_tokens": 400,
+   "output_tokens": 300,
+   "project": "sample",
+   "started_at": "2026-11-18T10:00:00Z",
+   "ended_at": "2026-11-18T11:00:00Z"
+  },
+  {
+   "id": "W-9",
+   "kind": "turn",
+   "status": "done",
+   "turns": 2,
+   "input_tokens": 20,
+   "output_tokens": 2500000,
+   "project": "other",
+   "started_at": "2026-11-19T04:00:00Z",
+   "ended_at": "2026-11-19T04:30:00Z"
+  },
+  {
+   "id": "R-old",
+   "kind": "turn",
+   "status": "done",
+   "turns": 1,
+   "input_tokens": 1,
+   "output_tokens": 1,
+   "started_at": "2026-10-11T10:00:00Z"
+  }
+ ],
+ "events": [
+  {
+   "ts": "2026-11-15T10:06:00Z",
+   "type": "session_started",
+   "actor": null,
+   "data": "{\"work_item\": \"W-1\"}"
+  },
+  {
+   "ts": "2026-11-15T10:12:00Z",
+   "type": "session_started",
+   "actor": null,
+   "data": "{\"work_item\": \"W-1\"}"
+  },
+  {
+   "ts": "2026-11-20T08:30:00Z",
+   "type": "session_started",
+   "actor": null,
+   "data": "{\"work_item\": \"W-3\"}"
+  },
+  {
+   "ts": "2026-11-17T11:00:00Z",
+   "type": "session_started",
+   "actor": null,
+   "data": "{\"work_item\": \"W-5\"}"
+  },
+  {
+   "ts": "2026-11-19T11:00:00Z",
+   "type": "session_started",
+   "actor": null,
+   "data": "{\"work_item\": \"W-6\"}"
+  },
+  {
+   "ts": "2026-11-18T10:06:00Z",
+   "type": "session_started",
+   "actor": null,
+   "data": "{\"work_item\": \"W-7\"}"
+  },
+  {
+   "ts": "2026-11-19T04:06:00Z",
+   "type": "session_started",
+   "actor": null,
+   "data": "{\"work_item\": \"W-9\"}"
+  },
+  {
+   "ts": "2026-11-20T00:00:00Z",
+   "type": "stop_all",
+   "actor": "sam",
+   "data": "{\"cancelled\": []}"
+  },
+  {
+   "ts": "2026-11-20T01:00:00Z",
+   "type": "resume_all",
+   "actor": "local",
+   "data": null
+  },
+  {
+   "ts": "2026-11-20T02:00:00Z",
+   "type": "stop_all",
+   "actor": "tailscale:pat@example.com",
+   "data": "{\"cancelled\": [\"W-8\"], \"via\": \"dashboard\"}"
+  },
+  {
+   "ts": "2026-11-20T03:00:00Z",
+   "type": "task_created",
+   "task_id": "T-0001",
+   "actor": "sam",
+   "data": "{\"x\": 1}"
+  },
+  {
+   "ts": "2026-11-20T04:00:00Z",
+   "type": "task_moved",
+   "task_id": "T-0002",
+   "actor": "linear",
+   "data": "not json"
+  },
+  {
+   "ts": "2026-11-20T05:00:00Z",
+   "type": "session_cancelled",
+   "actor": "kim",
+   "data": "{\"work_item\": \"W-8\"}"
+  },
+  {
+   "ts": "2026-11-20T06:00:00Z",
+   "type": "ask",
+   "actor": "kim",
+   "data": "{\"work_item\": \"W-7\"}"
+  },
+  {
+   "ts": "2026-11-20T07:00:00Z",
+   "type": "note",
+   "actor": "kim",
+   "data": "[1, 2]"
+  },
+  {
+   "ts": "2026-11-20T08:00:00Z",
+   "type": "note",
+   "actor": "system",
+   "data": null
+  },
+  {
+   "ts": "2026-11-20T09:00:00Z",
+   "type": "llm_caps_changed",
+   "actor": "tailscale:pat@example.com",
+   "data": "{\"daily_usd\": 5}"
+  }
+ ],
+ "task_records": [
+  {
+   "id": "TK-0001",
+   "source": "slack",
+   "project": "sample",
+   "requested_by": "sam",
+   "started_at": "2026-11-20T09:00:00Z",
+   "ended_at": "2026-11-20T09:30:00Z",
+   "work_time_s": 600,
+   "finished": 1,
+   "record": "{\"id\": \"TK-0001\", \"title\": \"Task TK-0001\", \"source\": \"slack\", \"project\": \"sample\", \"started_at\": \"2026-11-20T09:00:00Z\"}"
+  },
+  {
+   "id": "TK-0002",
+   "source": "slack",
+   "project": null,
+   "requested_by": "sam",
+   "started_at": "2026-11-20T00:30:00Z",
+   "ended_at": "2026-11-20T01:00:00Z",
+   "work_time_s": 120,
+   "finished": 0,
+   "record": "{\"id\": \"TK-0002\", \"title\": \"Task TK-0002\", \"source\": \"slack\", \"project\": null, \"started_at\": \"2026-11-20T00:30:00Z\"}"
+  },
+  {
+   "id": "TK-0003",
+   "source": "linear",
+   "project": "sample",
+   "requested_by": "sam",
+   "started_at": "2026-11-18T08:00:00Z",
+   "ended_at": "2026-11-18T08:30:00Z",
+   "work_time_s": 4000,
+   "finished": 1,
+   "record": "{\"id\": \"TK-0003\", \"title\": \"Task TK-0003\", \"source\": \"linear\", \"project\": \"sample\", \"started_at\": \"2026-11-18T08:00:00Z\"}"
+  },
+  {
+   "id": "TK-0004",
+   "source": "schedule",
+   "project": null,
+   "requested_by": "sam",
+   "started_at": "2026-11-16T06:00:00Z",
+   "ended_at": "2026-11-16T06:30:00Z",
+   "work_time_s": 30,
+   "finished": null,
+   "record": "{\"id\": \"TK-0004\", \"title\": \"Task TK-0004\", \"source\": \"schedule\", \"project\": null, \"started_at\": \"2026-11-16T06:00:00Z\"}"
+  },
+  {
+   "id": "TK-0005",
+   "source": "slack",
+   "project": "other",
+   "requested_by": "sam",
+   "started_at": "2026-11-10T10:00:00Z",
+   "ended_at": "2026-11-10T10:30:00Z",
+   "work_time_s": 90000,
+   "finished": 1,
+   "record": "{\"id\": \"TK-0005\", \"title\": \"Task TK-0005\", \"source\": \"slack\", \"project\": \"other\", \"started_at\": \"2026-11-10T10:00:00Z\"}"
+  },
+  {
+   "id": "TK-0006",
+   "source": "slack",
+   "project": "sample",
+   "requested_by": "sam",
+   "started_at": "2026-11-20T07:00:00Z",
+   "ended_at": "2026-11-20T07:30:00Z",
+   "work_time_s": 300,
+   "finished": 1,
+   "record": "{\"id\": \"TK-0006\", \"title\": \"Task TK-0006\", \"source\": \"slack\", \"project\": \"sample\", \"started_at\": \"2026-11-20T07:00:00Z\"}"
+  }
+ ],
+ "request_labels": [
+  {
+   "work_item_id": "W-1",
+   "source": "slack",
+   "asked": "a",
+   "label": "same",
+   "task_id": "TK-0003",
+   "arrived_at": "2026-11-15T10:00:00Z",
+   "labeled_at": "2026-11-15T12:00:00Z"
+  },
+  {
+   "work_item_id": "W-2",
+   "source": "slack",
+   "asked": "b",
+   "label": "new",
+   "project": "other",
+   "arrived_at": "2026-11-19T04:00:00Z",
+   "labeled_at": "2026-11-19T06:00:00Z"
+  }
+ ],
+ "agent_prs": [
+  {
+   "repo": "o/r",
+   "number": 12,
+   "url": "u",
+   "title": "t",
+   "head": "sam-7-fix",
+   "base": "main",
+   "opened_at": "2026-11-17T10:00:00Z",
+   "merged_at": "2026-11-19T10:00:00Z",
+   "updated_at": "2026-11-20T09:00:00Z"
+  },
+  {
+   "repo": "o/r",
+   "number": 13,
+   "opened_at": "2026-10-31T10:00:00Z",
+   "merged_at": "2026-11-05T10:00:00Z",
+   "updated_at": "2026-11-20T09:00:00Z"
+  },
+  {
+   "repo": "o/r",
+   "number": 14,
+   "opened_at": "2026-11-19T10:00:00Z",
+   "updated_at": "2026-11-20T09:00:00Z"
+  }
+ ],
+ "linear_issues": [
+  {
+   "issue_id": "i1",
+   "identifier": "SAM-7",
+   "handed_at": "2026-11-18T10:00:00Z",
+   "state_type": "completed",
+   "completed_at": "2026-11-19T22:00:00Z"
+  },
+  {
+   "issue_id": "i2",
+   "identifier": "SAM-8",
+   "handed_at": "2026-11-18T10:00:00Z",
+   "state_type": "started"
+  }
+ ],
+ "llm_usage": [
+  {
+   "at": "2026-11-20T09:00:00Z",
+   "upstream": "foundry",
+   "model": "gpt-5.6-terra",
+   "status": 200,
+   "input_tokens": 1000,
+   "cached_tokens": 200,
+   "output_tokens": 300,
+   "cost_usd": 0.012,
+   "cache_write_tokens": 0
+  },
+  {
+   "at": "2026-11-20T08:00:00Z",
+   "upstream": "foundry",
+   "model": "gpt-5.6-terra",
+   "status": 500,
+   "input_tokens": 0,
+   "cached_tokens": 0,
+   "output_tokens": 0,
+   "cost_usd": 0.0,
+   "cache_write_tokens": 0
+  },
+  {
+   "at": "2026-11-20T00:06:00Z",
+   "upstream": "foundry",
+   "model": "gpt-6-luna",
+   "status": 200,
+   "input_tokens": 5000,
+   "cached_tokens": 0,
+   "output_tokens": 100,
+   "cost_usd": 0.03,
+   "cache_write_tokens": 10
+  },
+  {
+   "at": "2026-11-18T08:00:00Z",
+   "upstream": "openai",
+   "model": "o4",
+   "status": 200,
+   "input_tokens": 10,
+   "cached_tokens": 0,
+   "output_tokens": 10,
+   "cost_usd": 0.001,
+   "cache_write_tokens": 0
+  },
+  {
+   "at": "2026-10-26T10:00:00Z",
+   "upstream": "foundry",
+   "model": "gpt-5.6-terra",
+   "status": 200,
+   "input_tokens": 99,
+   "cached_tokens": 0,
+   "output_tokens": 99,
+   "cost_usd": 1.5,
+   "cache_write_tokens": 0
+  }
+ ]
+}

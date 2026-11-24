@@ -38,6 +38,17 @@ CMD ["python", "-m", "agent", "core"]
 FROM app AS supervisor
 CMD ["python", "-m", "agent", "supervisor"]
 
+# The Rust control plane's build and test image (just rust-test), and its release build: agent-holder runs in every
+# conversation's container, agentd in the control plane's
+FROM rust:1.100-bookworm AS rust-dev
+
+FROM rust-dev AS rust-build
+WORKDIR /src
+COPY rust/ ./
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p agent-holder -p agentd \
+ && mkdir /out && cp target/release/agent-holder target/release/agentd /out/
+
 # The agent container: Claude Code sessions with a full development environment.
 # Bash everywhere (models write bash), sudo for installing what a task needs, gh and az for the agent's own use.
 # To test what it builds end to end: Docker (the CLI; the daemon is the stack's own `docker` service) to run a
@@ -86,6 +97,9 @@ ENV SHELL=/bin/bash AZURE_CONFIG_DIR=/data/cli/azure DOCKER_HOST=tcp://127.0.0.1
 # Its home folder and the browsers are links into the volume too (agent.runner.home seeds them), so what it installs
 # there survives a rebuild; `npm -g` goes to ~/.local.
 ENV NPM_CONFIG_PREFIX=/home/agent/.local PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"
+COPY --from=rust-build /out/agent-holder /out/agentd /usr/local/bin/
+# The dashboard's web app: agentd (agent-control runs this image) serves it
+COPY --from=dashboard /dashboard/dist /app/web
 USER agent
 CMD ["python", "-m", "agent", "runner"]
 

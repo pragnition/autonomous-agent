@@ -1,12 +1,12 @@
 """`measure`: one hourly pass over core's finished work, Jensen's PRs and Jensen's own notes, boiled down to a
 digest.
 
-Pulls the window's finished work items out of core (`core_collect.py`, run inside `agent-core` through
+Pulls the window's finished work items out of core (`core_collect.py`, run inside `agent-control` through
 `Host.core_python`), fetches each undelivered turn's own runner transcript to size it up with
 `agent.watch.transcript.turn_facts`, finds Jensen's PRs for the window with `gh search prs` and nails down each
 one's size, CI result and co-author trail with `gh pr view`/`gh pr checks` (or, when the token can't read checks,
 the Actions runs on the PR's head commit, then its commit statuses), reads whatever notes Jensen wrote to
-`/var/agent/feedback/` this window (`agent.watch.feedback.collect`, run inside `agent-runner` through
+`/var/agent/feedback/` this window (`agent.watch.feedback.collect`, run inside `agent-control` through
 `Host.runner_python`), then stages what `agent.watch.state.State` keeps (`State.stage`) and writes a digest file
 for improve-jensen to read next. Every piece of free text that lands in the digest -- a person's ask, Jensen's
 reply, a tool or error line, a note Jensen wrote itself -- is scrubbed of secrets first, since it might end up

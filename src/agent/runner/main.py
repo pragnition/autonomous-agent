@@ -83,6 +83,45 @@ async def serve(keeper: RunnerKeeper, read_token: Callable[[], str], check_s: fl
         await asyncio.wait([task])  # the services stop before the process exits
 
 
+async def keep_services(services: Coroutine, stopping: asyncio.Event) -> None:
+    """The agent's services until `stopping` is set; they stop before this returns."""
+    task = asyncio.create_task(services, name="services")
+    task.add_done_callback(_services_ended)
+    try:
+        await stopping.wait()
+    finally:
+        task.cancel()
+        await asyncio.wait([task])
+
+
+def services_main(argv: list[str] | None = None) -> int:
+    """`agent services`: the agent's own long-running services, in a container of their own now that each
+    conversation runs in its own one (agentd). As the runner did: the home folder and browsers on the volume first,
+    the services with the agent's git identity, and on SIGTERM the services stop cleanly before the process exits."""
+    import argparse
+
+    from agent.runner.services import supervise
+
+    parser = argparse.ArgumentParser(prog="agent services", description="Keep the agent's own services running")
+    parser.add_argument("--root", default="/var/agent")
+    parser.add_argument("--agent-name", default="agent")
+    parser.add_argument("--git-email", default="")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    root = Path(args.root)
+    prepare_home(root)
+    os.environ.update(agent_environment(os.environ, args.agent_name, args.git_email))
+
+    async def run() -> None:
+        stopping = asyncio.Event()
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stopping.set)
+        await keep_services(supervise(root / "services.toml", root / "run"), stopping)
+
+    asyncio.run(run())
+    return 0
+
+
 def _services_ended(task: asyncio.Task) -> None:
     if not task.cancelled() and task.exception() is not None:
         log.error("the services supervisor stopped", exc_info=task.exception())

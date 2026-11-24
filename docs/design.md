@@ -6,7 +6,7 @@ agent's own machine, with a full development environment and the agent's own log
 credentials reach, end to end and without a person in the loop: it answers questions, investigates incidents,
 builds, tests and ships code, sweeps codebases and files issues, reports on schedules, messages people and works in
 any other system it has a key for. Its abilities are its credentials plus the skills, plugins and MCP servers it
-installs for itself; core adds no gate in its way.
+installs for itself; the control plane adds no gate in its way.
 
 It runs as one Docker Compose stack on a single host. Claude access goes through a Claude account proxy on the
 same host. The agent's name is `name` in `agent.toml`; it is the agent's display name and the Linear label it
@@ -16,132 +16,138 @@ refusal.
 ## Components
 
 ```text
- Slack (Socket Mode)      Linear (webhook, poller)                              GitHub
+ Slack (Socket Mode)      Linear (webhook, poller)                          GitHub (PR stats, the agent's PRs)
         |                         |                                                ^
-        v                         v                                                | PR stats
- +-- core  (agent-core, 172.30.0.10) ----------------------------------------------+---+
- |  intake -> work queue (agent.db) -> tools, git mirrors, every stack credential       |
- |  :8080 agent API + git   :8085 Linear (Funnel)   :8086 dashboard   :8087 meter       |
- +-------^-----------------------------------------------------^-----------------------+
-         | pull work, call tools, clone and push               | the apps' model calls
-         | (runner and session tokens)                         |
- +-------+------------------- one network namespace -----------+-----------------------+
- |  agent  (agent-runner)                       docker  (agent-docker, dind)            |
- |  runner -> Claude Code sessions              dockerd on 127.0.0.1:2375: the apps     |
- |  /var/agent: clones, sessions, memory        that sessions run and test              |
- |  its own gh, az and Slack logins, the internet                                       |
- +-------+-----------------------------------------------------------------------------+
+        v                         v                                                |
+ +-- control  (agent-control: agentd, 172.30.0.10) --------------------------------+---+
+ |  intake -> work queue (agent.db) -> one turn at a time per conversation; tools;      |
+ |  schedules; every stack credential   :8085 Linear (Funnel)  :8086 dashboard  :8087 meter
+ +----+---------------------------^----------------------------------^------------------+
+      | starts, stops and reuses  | tools and output, through each   | the apps' model calls
+      | containers (Docker socket)| container's holder               |
+      v                           |                                  |
+ +-- one container per conversation, from the agent image -----------+------------------+
+ |  agent-holder -> Claude Code     /var/agent: sessions, memory, Claude home, caches     |
+ |  the agent's own gh, az and Slack logins and keys, the internet                       |
+ +-- these, agent-services and the apps share agent-docker's network -------------------+
+ |  docker (agent-docker, dind): the apps sessions run    services (agent-services)      |
+ +-------+------------------------------------------------------------------------------+
          | Claude API, placeholder token
          v
  relay (host network, 172.30.0.1:28090/28091) --> account proxy (host, 127.0.0.1:18090/18091) --> Claude
- supervisor + supervisor-standby: poll core, the runner's heartbeat and each other every minute; restart and alert
+ supervisor + supervisor-standby: poll the control plane and each other every minute; restart and alert
 ```
 
-The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.1. core has the fixed address
-172.30.0.10.
+The stack network `agentnet` is 172.30.0.0/24 with the host gateway at 172.30.0.1. The control plane has the fixed
+address 172.30.0.10.
 
 | Listener | Where | Reached by |
 |---|---|---|
-| core :8080 | stack network only | the runner (`http://core:8080`): agent API, git endpoint; the supervisors: `/health`, `/health/runner` |
+| control :8080 | stack network only | the supervisors: `/health` |
 | supervisor :8090 | stack network only | the other supervisor: `/health` |
-| core :8085 | host 127.0.0.1:18085 | Linear, through Tailscale Funnel: `/linear/webhook`, `/linear/oauth/callback` |
-| core :8086 | host 127.0.0.1:18086 | people on the tailnet, through `tailscale serve` on :9443 |
-| core :8087 | stack network only | apps under test, at `http://172.30.0.10:8087/llm/<upstream>` |
-| dockerd :2375 | 127.0.0.1 in the docker service's namespace | the agent container (`DOCKER_HOST`) |
-| relay :28090 | 172.30.0.1 | core, to the proxy origin `agent-core` (usage, session pins) |
+| control :8085 | host 127.0.0.1:18085 | Linear, through Tailscale Funnel: `/linear/webhook`, `/linear/oauth/callback` |
+| control :8086 | host 127.0.0.1:18086 | people on the tailnet, through `tailscale serve` on :9443 |
+| control :8087 | stack network only | apps under test, at `http://172.30.0.10:8087/llm/<upstream>` |
+| a holder's socket | `/var/agent/run/containers/<conversation>/holder.sock` | the control plane only; each container sees only its own run folder |
+| dockerd :2375 | 127.0.0.1 in the docker service's namespace | sessions and the agent's services (`DOCKER_HOST`) |
+| relay :28090 | 172.30.0.1 | the control plane, to the proxy origin `agent-core` (usage, session pins, task labels) |
 | relay :28091 | 172.30.0.1 | Claude Code sessions, to the proxy origin `agent-sandbox` (model traffic) |
 
-### core
+### The control plane
 
-`python -m agent core`. It holds every credential of the stack (`data/secrets/core.env`, read into memory, never
-into the environment), runs only this repository's code and never runs Claude. It:
+`agentd serve` (Rust) in the `control` service, container `agent-control`, from the agent image. It runs as the
+agent user (uid 1001) with the Docker socket's group. It holds every credential of the stack
+(`data/secrets/core.env`, read into memory, never into the environment or a container) and never runs Claude. It:
 
 - receives Slack events over Socket Mode (an outbound connection) and Linear webhooks and polls;
-- keeps all state in one SQLite database, `data/db/agent.db` (WAL), created on start;
-- serves the agent API, the git endpoint, the public Linear listener, the dashboard and the model-call meter;
-- runs core's tools for the sessions;
-- runs background loops: git mirror refresh (5 min), Linear poll (1 min), schedules (1 min), PR stats (5 min), KPI digest check
-  (5 min), Linear app token refresh (10 min) and runner token renewal (hourly).
+- keeps all state in one SQLite database, `data/db/agent.db` (WAL), plus its own tables for the containers, the
+  turns it is running and their tool calls;
+- runs each conversation's turns in that conversation's container, one at a time, and the tools they call;
+- serves the public Linear listener, the dashboard and the model-call meter;
+- runs background loops: Linear intake, schedules, usage watch, parks and the container sweep (1 min), Linear app
+  token refresh (10 min), task labels, the KPI digest check, PR stats, the agent's PRs and Linear issue states
+  (5 min), Azure's billed prices (30 min) and the Host page's samples (5 s).
 
-At start it writes the runner token to `data/runner/runner-token`, copies each project's app env file to
-`data/runner/projects/`, and gives the agent container's user (`[agent] uid`, default 1001) ownership of what it
-shares with it.
+At start it copies each project's app env file to `data/runner/projects/`, writes the timezone to
+`data/runner/timezone`, reconnects to every turn still running in its container, and puts back in the queue any
+work item marked running that has no turn. Restarting it interrupts no turn: they run in their containers, and it
+reads what they wrote while it was gone.
 
-### The agent container and the runner
+`agentd` also answers the admin commands: `doctor`, `smoke`, `kpis`, `stop`, `resume`, `schedules` (the agent runs
+it after editing the schedules file) and `ask` (a turn from the host without Slack).
 
-The `agent` service (container `agent-runner`) is where Claude Code runs. The image has Python 3.12, Node 22, bun,
-just, git, gh, az, the Docker CLI, Playwright's CLI with Chromium, build tools and CJK and emoji fonts. It runs as
-user `agent` (uid 1001) with passwordless sudo and bash as `/bin/sh`.
+### A container per conversation
 
-`python -m agent runner` reads the runner token from `/run/agent/runner-token` (`data/runner`, mounted read-only)
-every 15 s and starts, restarts or stops the runner when the token appears, changes or goes away. The runner:
+Each conversation (a Slack thread or DM, a Linear issue, a schedule run, a spawned agent) gets its own container,
+`agent-conv-<conversation>`, from the agent image, the first time it has a turn. Every one shares `agent-docker`'s
+network, so the apps it starts are on its localhost and the shared demo ports reach it. It runs as user `agent`
+(uid 1001) with passwordless sudo, under the memory, CPU and process caps in `[containers]`. It mounts the
+`agentwork` volume at `/var/agent` (with only its own run folder), `data/runner` read-only at `/run/agent`, the
+Azure login, the schedules file and the task record (read-only). The image has Python 3.12, Node 22, bun, just,
+git, gh, az, the Docker CLI, Playwright's CLI with Chromium, build tools and CJK and emoji fonts.
 
-1. long-polls `POST /agent/pull` with the runner token;
-2. gets a work item, a session token for that item and the tool manifest for the item's tier;
-3. fetches the plugin bundle (cached by version), prepares the working folder and runs the turn as a Claude Code
-   session through the Agent SDK;
-4. sends a heartbeat every 15 s and forwards every session message to core (`/agent/events`);
-5. posts the result to `/agent/result`.
+A container is stopped after an hour with nothing running and nothing listening in it, and 24 hours after its last
+turn at the latest; it stays stopped for 7 days and is started again for the same conversation, then deleted. When
+there isn't memory for another container, idle ones are stopped early.
+
+Its main process is `agent-holder`. For each turn the control plane asks it to start Claude Code (in stream-json
+mode) with the turn's arguments and environment; the holder writes every line Claude Code prints to a numbered log
+(`run/containers/<conversation>/<work item>.jsonl`), passes the control plane's messages in, and relays the
+session's tool calls: Claude Code sees the tools as an MCP server (`agent-holder mcp`) whose calls go through the
+holder's socket to the control plane, so no key for them enters the container. The waiting hook that keeps a turn
+open while helpers run is `agent-holder hook idle-wait`.
 
 Everything lives under `/var/agent`, the `agentwork` volume, which survives rebuilds:
 
 | Path | Contents |
 |---|---|
-| `clones/<project>` | one shared clone per project, from core's git endpoint |
-| `scratch/<conversation>/` | the conversation's session folder; its checkout is `scratch/<conversation>/<project>` |
+| `scratch/<conversation>/` | the conversation's folder, where its turns start; its checkouts and notes live here |
 | `claude/` | the agent's Claude home (`CLAUDE_CONFIG_DIR`, also `~/.claude`), shared by every session: its sessions, so the next turn can resume, and the skills, plugins and MCP servers it installs itself |
 | `memory/` | Claude Code's auto memory, shared by every session |
-| `transcripts/<work item>.jsonl` | the runner's own transcript of each turn |
+| `transcripts/<work item>.jsonl` | each turn's transcript, as the control plane recorded it |
 | `bundles/<version>/` | the core plugin, the effortless plugin and every pack's plugin |
 | `home/` | the agent's home folder (`/home/agent` links here): what it installs with `pip --user`, `uv tool`, `npm -g` or `bun add -g`, and its dotfiles; a fresh volume gets one from `/etc/skel` with the `.claude` link |
 | `ms-playwright/` | the Playwright browsers (`/opt/ms-playwright` links here): the image's, copied in when missing, and any the agent installs |
-| `services.toml` | the agent's long-running services, which the runner keeps going (below) |
+| `services.toml` | the agent's long-running services, which `agent-services` keeps going (below) |
 | `run/<name>.{lock,pid,out}` | each service's lock, pid and output (`.out.1` is the rotated one) |
+| `run/containers/<conversation>/` | that conversation's holder socket and its turns' logs |
 
-A rebuilt container starts from the image, so what the agent puts outside the volume (a `sudo apt` install, `/tmp`)
-is gone after a redeploy. The runner prepares `home/` and `ms-playwright/` as it starts (`agent.runner.home`).
+A container is made from the image, so what the agent puts outside the volume (a `sudo apt` install, `/tmp`) is gone
+when its container is replaced. The schedules file is outside the volume, at `/data/schedules/schedules.toml` (the
+host's `data/schedules/`).
 
-The schedules file is outside the volume, at `/data/schedules/schedules.toml` (the host's `data/schedules/`), the
-same path as in core.
-
-Sessions run with `permission_mode="bypassPermissions"`. Each gets the system prompt and persona from the payload,
-the plugins, the MCP servers from `[mcp]` (with `${VAR}` filled from the session's environment; a server with an
-unset variable is left out), and core's tools as in-process SDK tools, so the session token stays in the runner's
-process and out of the session's environment and files. The session's environment is the container's, including
-the keys from `agent.env` (passed explicitly, because the runner blanks every secret-looking variable a session
-would otherwise inherit), plus a git identity (`AGENT_NAME`, `AGENT_GIT_EMAIL`), `LINEAR_APP_TOKEN` from
+Sessions run with permission mode `bypassPermissions`. Each gets the system prompt and persona, the plugins, the MCP
+servers from `[mcp]` (with `${VAR}` filled from the session's environment; a server with an unset variable is left
+out), and the control plane's tools through the holder. The session's environment is the container's (which holds
+no keys) plus the keys from `agent.env`, a git identity (`AGENT_NAME`, `AGENT_GIT_EMAIL`), `LINEAR_APP_TOKEN` from
 `data/runner/linear.env`, the project's test keys, `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`
 (the effortless plugin, which picks each prompt's reasoning effort, needs it). The last two cannot be overridden.
 
-A Claude session is never resumed (`--resume`, with or without `--fork-session`) on a different account from the
-one it ran on. Core keeps the account each conversation's session last ran on (`conversations.session_account`, from
-the runner's heartbeat and result) and hands it to the next turn as `resume_account`. Before resuming, the runner
-asks the proxy's `/proxy/whoami` which account the session is pinned to. It resumes only when that is
-`resume_account` and the account isn't rejected or disabled. Otherwise (another account, an expired pin, an unknown
-last account or an unreachable proxy) it starts a fresh session (new id, empty history) with a handoff note
-placed after the prompt's who, where and link line. The earlier session's full history is never loaded into the
-fresh one, by `/resume` or any other route. The runner reads the earlier record itself and the note carries only a
-short digest of it (`agent/runner/handoff.py`): the earlier session id, the text of its last 3 assistant messages
-(4,000 characters in all at most) and the files it edited or wrote (its Edit/Write calls). The note gives the
-record's path (the Claude Code log `CLAUDE_CONFIG_DIR/projects/…/<session id>.jsonl`) for looking up one specific
-detail with grep or tail, and says not to read or load it whole and not to use `/resume` or `--resume`. The session
-catches up with `read_thread` and from the conversation folder's own state (git status, its notes), then carries on.
-When the proxy reports the account of a running session as rejected or disabled (the watchdog, a 403/503, or a 429
-while the account is rejected), the runner does the same within the turn: a fresh session, which the proxy pins
-to another account, with the handoff note. Its digest comes from the runner's transcript `transcripts/<run id>.jsonl`
-(the earlier session's own messages), whose path the note also gives.
-The watchdog also hands off when the account goes over its 5-hour soft cap (below, under Usage watch), in the same
-way: a fresh session with the handoff note, never `--resume`. It does this only when the run has a fork left and the
-proxy's top-ranked account (the one a fresh session lands on) is another account under its own cap. Otherwise the
-session keeps running where it is rather than ending the turn, and it doesn't hand off just to land on a capped
-account and hand off again.
-It does this up to twice per turn (the run's `forks` count). If a turn can't resume its saved session and fails
-before its first model turn, the runner starts a fresh session with a note to call `read_thread` first.
+A message for a conversation whose turn is running goes into that session at once, and is ticked once the session
+has read it. A turn ends when Claude Code's result arrives after the prompt and every delivered message has been
+read, with no helper agent and no shell it moved to the background still running.
 
-#### The agent's services
+A Claude session is never resumed on a different account from the one it ran on. The control plane keeps the
+account each conversation's session last ran on (`conversations.session_account`) and, before resuming, asks the
+proxy's `/proxy/whoami` which account the session is pinned to. It resumes only when that is the same account and
+the account isn't rejected or disabled. Otherwise (another account, an expired pin, an unknown last account or an
+unreachable proxy) it starts a fresh session with a handoff note after the prompt's who, where and link line. The
+earlier session's full history is never loaded into the fresh one. The note carries a short digest of it
+(`rust/crates/agentd/src/handoff.rs`): the earlier session id, the text of its last 3 assistant messages (4,000
+characters in all at most) and the files it edited or wrote. It gives the record's path for looking up one specific
+detail, and says not to read or load it whole and not to use `/resume` or `--resume`. The session catches up with
+`read_thread` and from the conversation folder's own state, then carries on. When the account of a running session
+is rejected or disabled, or goes over its 5-hour soft cap, the control plane moves the session the same way: at the
+next moment no tool call is running, or after 30 minutes at the latest, and only when the proxy's top-ranked
+account (where a fresh session lands) is another account under its own cap. It does this up to twice per turn. If
+Claude Code crashes, is killed for memory or loses its container, the turn resumes once from the saved session;
+if that fails too, the turn fails with what it had.
 
-The agent's long-running helpers (a bridge, a poller, a watcher) run under the runner, not with `nohup`, so they
-survive restarts and redeploys. The agent lists them in `/var/agent/services.toml`:
+### The agent's services
+
+The agent's long-running helpers (a bridge, a poller, a watcher) run in the `services` service (container
+`agent-services`, `python -m agent services`, from the agent image, on `agent-docker`'s network), not with `nohup`,
+so they survive restarts and redeploys. The agent lists them in `/var/agent/services.toml`:
 
 ```toml
 [[services]]
@@ -150,52 +156,47 @@ cmd = ["python3", "-I", "bridge.py"]         # the argv; no shell
 cwd = "/var/agent/bridges/outlook-bridge"    # an existing absolute directory
 ```
 
-A task in the runner process (`agent/runner/services.py`), started whether or not there is a runner token yet,
-reads the file every 30 s and reconciles: it starts new services, stops removed ones (SIGTERM to the service's
-process group, SIGKILL after 10 s) and restarts one whose `cmd` or `cwd` changed. A service that exits is started
-again after 5 s, doubling up to 5 minutes, and back to 5 s once a run has lasted 10 minutes. A missing file means
-no services. A file that can't be read or parsed keeps the services it listed last (none right after the runner
-starts), and the problem is logged once to the runner's log and once into each running service's `.out`; an invalid
-entry is left out. Nothing in the supervisor can stop the runner. A service gets the runner's environment (so the `agent.env` keys) and its own process group. While the
-runner runs a service it holds an exclusive `flock` on `run/<name>.lock`, so a second runner can't start another
-copy, and keeps its pid in `run/<name>.pid`. Before a service's first start in a runner's life, any process with
-exactly the same argv and working directory (from `/proc`) is stopped, which takes over a copy the agent started by
-hand; a process in the group of a service the runner started is never taken for one, so two services with the same
-command can't stop each other. A service's stdout and stderr go to `run/<name>.out` with the runner's own start, exit and stop lines,
-rotated to `.out.1` at 5 MB; the runner's log has each start, exit code and restart, never the arguments or
-environment. Every one of these files is opened without blocking and must be a regular file: a FIFO or a device in
-its place is refused, since a blocking open would freeze the runner's event loop. On SIGTERM the runner stops every
-service before it exits (the service has `stop_grace_period: 30s`, so Docker waits for that). The container runs
-with `init: true`, so an init process is PID 1 and reaps the orphans sessions leave behind; the runner is no longer
-PID 1, so a broad `pkill` or `kill -1` in the container would kill it, and the prompt tells the agent never to.
+The process (`agent/runner/services.py`) reads the file every 30 s and reconciles: it starts new services, stops
+removed ones (SIGTERM to the service's process group, SIGKILL after 10 s) and restarts one whose `cmd` or `cwd`
+changed. A service that exits is started again after 5 s, doubling up to 5 minutes, and back to 5 s once a run has
+lasted 10 minutes. A missing file means no services. A file that can't be read or parsed keeps the services it
+listed last (none right after the process starts), and the problem is logged once to its log and once into each
+running service's `.out`; an invalid entry is left out. A service gets the `agent.env` keys and the agent's git
+identity, and its own process group. While it runs a service it holds an exclusive `flock` on `run/<name>.lock`, so
+a second copy can't start, and keeps its pid in `run/<name>.pid`. Before a service's first start, any process with
+exactly the same argv and working directory is stopped, which takes over a copy the agent started by hand; a process
+in the group of a service it started is never taken for one. A service's stdout and stderr go to `run/<name>.out`
+with the process's own start, exit and stop lines, rotated to `.out.1` at 5 MB; its log has each start, exit code
+and restart, never the arguments or environment. Every one of these files is opened without blocking and must be a
+regular file. On SIGTERM every service is stopped before the process exits (`stop_grace_period: 30s`). As it starts
+it also prepares `home/` and `ms-playwright/` on the volume (`agent.runner.home`).
 
 ### docker (dind)
 
 `docker:29-dind`, privileged, container `agent-docker`. It is the agent's own Docker daemon: the apps a session
-runs to test its work start here, never on the host's Docker. Its API listens only on 127.0.0.1:2375, and the agent
-container shares its network namespace, so an app published on 127.0.0.1:<port> is on the agent's localhost. The
-`agentwork` volume is mounted at the same path in both containers, so compose bind mounts of a checkout resolve.
-Images and volumes live in the `agentdocker` volume.
+runs to test its work start here, never on the host's Docker. Its API listens only on 127.0.0.1:2375, and every
+conversation's container and `agent-services` share its network namespace, so an app published on 127.0.0.1:<port>
+is on their localhost. The `agentwork` volume is mounted at the same path, so compose bind mounts of a checkout
+resolve. Images and volumes live in the `agentdocker` volume. Nothing stops the apps a session leaves running here.
 
 ### supervisor and supervisor-standby
 
 `python -m agent supervisor`, run twice: containers `agent-supervisor` (`SUPERVISOR_ROLE=primary`) and
-`agent-supervisor-standby` (`standby`). They watch core, the runner and each other. Every 60 s each checks core's
-`/health`, the runner's heartbeat as core sees it (`core:8080/health/runner`, 503 once the runner hasn't pulled or
-heartbeated for 2 minutes) and its peer's `/health` (`:8090`, stack network only). The runner isn't checked while
-core is failing, since its heartbeat is read from core. After three failures in a row, a supervisor alerts and
-restarts the target through the Docker socket (`agent-core`, `agent-runner`, or the peer's container), and alerts
-again when the target is back. A target that is down again within 30 minutes of that restart gets an alert and no
-restart, so nothing is restarted in a loop. Each restarts its peer. Only the primary acts on core and the runner;
-the standby leaves them alone while the primary is up and takes them over once the primary is down, so nothing is
-restarted twice and the same alert is never sent twice. If both supervisors die together, compose's
-`restart: unless-stopped` brings them back.
+`agent-supervisor-standby` (`standby`). They watch the control plane and each other. Every 60 s each checks the
+control plane's `/health` and its peer's `/health` (`:8090`, stack network only). After three failures in a row, a
+supervisor alerts and restarts the target through the Docker socket (`agent-control`, or the peer's container), and
+alerts again when the target is back. A target that is down again within 30 minutes of that restart gets an alert
+and no restart, so nothing is restarted in a loop. Each restarts its peer. Only the primary acts on the control
+plane; the standby leaves it alone while the primary is up and takes it over once the primary is down, so nothing
+is restarted twice and the same alert is never sent twice. If both supervisors die together, compose's
+`restart: unless-stopped` brings them back. With `SUPERVISE_CONTROL` empty in `.env` (a rollback), they watch
+`agent-core` and `agent-runner` instead.
 
 A supervisor's own `/health` answers 503 once its watch loop hasn't finished a tick for three minutes, so a
 supervisor whose loop has hung counts as down, not just one whose process is gone. A tick that raises ends the
 process and Docker restarts it. Alerts go to the Slack incoming webhook `SLACK_ALERT_WEBHOOK`
 (`data/secrets/supervisor.env`, shared by both), prefixed with the role, or to the supervisor's own log when that
-isn't set. The supervisors are the only services with the host's Docker socket.
+isn't set. The supervisors and the control plane are the only services with the host's Docker socket.
 
 ### relay
 
@@ -209,26 +210,25 @@ in the checkout (ignored by git) before running `just proxy-install`, which inst
 (`deploy/claude-fallback-proxy.service`) that runs it from there. It spreads sessions across the team's Claude
 accounts and reports their usage: it holds the accounts, pins each session to one account and replaces the
 placeholder token that sessions send. Each origin has its own port; `deploy/proxy-origins.example.toml` lists the
-two this stack uses. core (origin `agent-core`) reads `/proxy/usage` for the queue's gate and `/proxy/usage`,
-`/proxy/perf` and `/proxy/whoami` for the dashboard. The runner (origin `agent-sandbox`) reads `/proxy/usage` and
-`/proxy/whoami` to decide when a session must move to a fresh one on another account, and whether a saved session
-would resume on the account it last ran on.
+two this stack uses. The control plane (origin `agent-core`) reads `/proxy/usage` for the queue's gate and for
+moving sessions between accounts, `/proxy/whoami` for where a saved session would resume, `/proxy/perf` for the
+dashboard, and asks Haiku for task labels.
 
 ### The dashboard
 
-A React app built into the core image and served by core on :8086. See [KPIs, the activity log and the
-dashboard](#kpis-the-activity-log-and-the-dashboard).
+A React app built into the agent image and served by the control plane on :8086. See [KPIs, the activity log and
+the dashboard](#kpis-the-activity-log-and-the-dashboard).
 
 ## From a message to a session
 
 ### Slack intake
 
-core handles a Slack message when it is a DM to the agent, mentions the agent, or is a reply in a thread core knows
-(one with a conversation, or one under a message core received or posted). It ignores bots, edits and every
+The control plane handles a Slack message when it is a DM to the agent, mentions the agent, or is a reply in a thread the control plane knows
+(one with a conversation, or one under a message the control plane received or posted). It ignores bots, edits and every
 subtype except `file_share` (a message with files attached), and handles each message once. A message's files ride
-in its turn's payload (`files`: id, name, mimetype, size); before the session sees the message, the runner fetches
-each one through core (`GET /agent/slack_file/{id}`, core's bot token, `files:read`) into the session folder under
-`slack-files/` and adds their paths to the prompt. A sender who isn't in `[people]` gets an ephemeral refusal in DMs and on
+in its turn's payload (`files`: id, name, mimetype, size); before the session sees the message, the control plane
+downloads each one with its bot token (`files:read`) into the conversation's folder under `slack-files/` and adds
+their paths to the prompt. A sender who isn't in `[people]` gets an ephemeral refusal in DMs and on
 mentions. Each accepted message gets an `eyes` reaction.
 
 Routing picks the message's conversation (one row in `conversations`, one Claude Code session):
@@ -237,7 +237,7 @@ Routing picks the message's conversation (one row in `conversations`, one Claude
   under the message.
 - **Thread** (in a channel or a DM): a conversation waiting for an answer in that thread (it called `ask`) takes the
   message first; otherwise the thread's primary conversation; otherwise the conversation of the message the thread
-  hangs off. Every message core receives or posts is recorded in `slack_messages`, so a thread under any of them
+  hangs off. Every message the control plane receives or posts is recorded in `slack_messages`, so a thread under any of them
   finds its way back. The reply goes to the thread the message came from.
 - **New**: a mention outside any known thread starts a conversation for that thread. In a channel that is a pack's
   `slack_channel`, the conversation is bound to that project from the start.
@@ -248,7 +248,7 @@ is a full id (`use claude-opus-4-6`), a family and version (`use opus 4.6`, `use
 one allowed model has it; "use default" (at the end of a sentence) goes back to `default`, and "use fable" anywhere
 in a message is `[claude.models] hard`, as it always was. Only models in
 `[claude.models]` (`default`, `hard` and `allowed`) count: any other model-shaped name, or one that fits more than one
-allowed model, changes nothing, and core replies in the thread with the models it can switch to. The message's own
+allowed model, changes nothing, and the control plane replies in the thread with the models it can switch to. The message's own
 turn runs on the new model; a turn already running keeps its model, so a message it takes in mid-turn applies from
 the conversation's next turn. `doctor` checks that the account proxy serves every one of these models.
 
@@ -269,18 +269,21 @@ line followed by `(handed over by <agent name>)`; the smoke test's turn has no l
 
 ### One queue
 
-Every turn is a `turn` work item in one queue (`work_items`). The runner's pull hands out the oldest claimable item:
-queued, and its conversation has no other item running. So a conversation runs one turn at a time, and a message
-sent while a turn is running becomes the next turn of the same session.
+Every turn is a `turn` work item in one queue (`work_items`). The control plane starts the oldest claimable item:
+queued, and its conversation has no other item running. So a conversation runs one turn at a time. A message sent
+while a turn is running goes into that turn's session at once; one that arrives as the turn ends becomes the next
+turn of the same session.
 
-Before claiming, core's gate checks three things:
+Before starting one, the control plane checks four things:
 
 - the agent isn't paused (stop);
 - the account proxy reports capacity on at least one account;
-- fewer than `[limits] max_concurrent_sessions` items are running (default 10).
+- fewer than `[limits] max_concurrent_sessions` items are running (default 10);
+- the host has free memory for another container's cap plus `[containers] min_free_gib` (idle containers are
+  stopped first to make room).
 
-While the usage watch holds scheduled runs (below), the pull skips turns whose `source` is `schedule`; people's
-requests still start.
+While the usage watch holds scheduled runs (below), turns whose `source` is `schedule` wait; people's requests still
+start.
 
 ### Usage watch
 
@@ -288,9 +291,9 @@ Each account has a soft cap on its 5-hour window (`proxy.SoftCap`), so no accoun
 early in a window. It counts as full at `SOFT_CAP_5H` (default 0.65) of the window until `SOFT_CAP_LIFT_S` (default
 5400, 1h30m) before the window resets. From then on the cap is 100%, since what is left would go unused at the reset
 anyway. The reset time is the proxy's 5-hour window data; when it isn't known, the 65% cap applies. Both values are
-environment variables of core and the agent container (`compose.yaml`, taken from the host's `.env`).
+environment variables of the control plane (`compose.yaml`, taken from the host's `.env`).
 
-Every 60 s core reads `/proxy/usage` (`core/usage_watch.py`) and gives each account a state:
+Every 60 s the control plane reads `/proxy/usage` (`rust/crates/agentd/src/usage_watch.rs`) and gives each account a state:
 
 - `out`: the proxy gives it no rank (no capacity);
 - `hot`: its 5-hour window is at its effective cap (the soft cap, or 100% once lifted), or its `pace_delta` is above
@@ -303,29 +306,29 @@ changes. With fewer, scheduled runs (and their carry-ons) wait in the queue. Wit
 with the earliest reset, and another when capacity is back. With every account over its soft cap, people's requests
 still start (the gate only needs an account with a rank) and scheduled runs wait. The proxy ranks accounts for new
 sessions and isn't in this repository, so the soft cap doesn't steer new sessions: one can still land on a capped
-account while the proxy ranks it first, and the runner's watchdog then moves it if another account is under its cap. An account whose `verified` goes false, or that has been `out` for over
+account while the proxy ranks it first, and the control plane then moves it if another account is under its cap. An account whose `verified` goes false, or that has been `out` for over
 5 hours, is reported to the admins once. Every change of state is an event (`usage_account`, `usage_pool`,
 `usage_unverified`, `usage_out_too_long`, and `usage_cap_reached` / `usage_cap_lifted` when an account reaches its
 soft cap or the cap lifts to 100%), shown on the dashboard's Events page. The Accounts page shows each account's
 effective cap. The last state is kept in
 `settings`, so a restart neither repeats an alert nor misses one.
 
-A turn cut off by a usage limit (a 429, or the runner giving up on an account the proxy reports rejected or
+A turn cut off by a usage limit (a 429, or the control plane giving up on an account the proxy reports rejected or
 disabled) doesn't fail. The thread is told it was cut off, the message keeps its ⏳, the session and the account it
 ran on are kept and the turn goes into `limit_waits` (event `usage_limit_cut`). Once an account is `ok`, the watch
 re-queues it as a new turn with a "you were cut off by a usage limit" note (event `usage_limit_resumed`). That turn
-goes through the same-account check as any next turn: the runner resumes the session only if the proxy still pins
+goes through the same-account check as any next turn: the control plane resumes the session only if the proxy still pins
 it to the account it last ran on. Usually it doesn't, since the limit was hit on that account, so the turn starts a
 fresh session with the digest handoff note instead (never `/resume` on another account). That happens once: a resumed turn that is cut off again fails like any other. A long project's build keeps its own
 retries (below) instead, and the gate holds them until there is capacity.
 
-A session can also park itself (`core/parking.py`) instead of keeping its turn alive to wait. The agent's `park`
+A session can also park itself (`rust/crates/agentd/src/parking.rs`) instead of keeping its turn alive to wait. The agent's `park`
 tool takes an optional `until` (HH:MM in the team's timezone, or an ISO date-time) and a `note`. Without `until`,
 the park waits out the whole account pool, since the turn that carries it on runs on whichever account the proxy
 gives it: it refuses while any account the proxy ranks is under its cap, and otherwise lasts until the first one
-has room again (the earliest soft-cap lift, or the reset of an account with no capacity). Core records the park in
+has room again (the earliest soft-cap lift, or the reset of an account with no capacity). The control plane records the park in
 `parks` (event `parked`) and tells the agent when it carries on; it posts nothing in the thread itself. The agent
-then ends its turn. Every minute core carries on each park that is due, as a new turn in the same conversation with
+then ends its turn. Every minute the control plane carries on each park that is due, as a new turn in the same conversation with
 the agent's note (event `park_resumed`); one that fails stays open for the next minute without holding up the
 others. That turn goes through the same-account check as any next turn, and it neither reacts to the parking turn's
 message nor counts as a continuation. A person's message in the thread ends the park at once (`ended_how =
@@ -333,54 +336,55 @@ replied`, event `park_ended`) and is the next turn itself. The `status` tool sho
 much of its 5-hour window is used, its effective cap, when the window resets and when the cap lifts, and how many
 accounts are under their cap.
 
-A claimed item has a 90 s lease that heartbeats extend, and each heartbeat renews its session token too. An item
-whose runner stops heartbeating is re-queued, and marked failed on its fifth lost lease. Finishing, cancelling or
-losing an item revokes its session token, and the runner interrupts the session at its next heartbeat; a later
-claim of the same item runs afresh. A turn has no time or step limit: it runs until the session is done. A session
-that sends nothing for `[limits] idle_minutes` (default 30) is stuck, and the runner stops it as `stalled`. A
+A running item stays the control plane's until its turn ends; after a restart the control plane reconnects to the
+turn in its container. An item marked running with no turn behind it goes back in the queue, and is marked failed on
+its fifth try. Cancelling an item (`cancel_task`, a stop, the dashboard) interrupts its session within seconds. A
+turn has no time or step limit: it runs until the session is done. A session that sends nothing for
+`[limits] idle_minutes` (default 30) is stuck, and the control plane stops it as `stalled`. A
 scheduled run, which no one is watching, also has a time budget of `schedule_hours` (default 6) for the whole run.
 A turn whose session has background agents running (the Agent tool with `run_in_background`, or a workflow) stays
 open past its result until they finish: each one wakes the session, messages sent meanwhile are read at once, and
 the reply posts after the last one. Their progress counts against `idle_minutes`, and a stop then ends the turn at
 once. A foreground Bash call that only waits (a sleep over 10 s, `tail -f /dev/null`) is turned away by a hook
-(`runner/idle_wait.py`), since no message reaches the session while it runs.
+(`agent-holder hook idle-wait`), since no message reaches the session while it runs.
 
-When the runner claims a turn, core refreshes its payload from the conversation as it is at that moment: the
+When the control plane starts a turn, it refreshes its payload from the conversation as it is at that moment: the
 session to resume, the project, the checkout and the test keys. A turn queued behind another one therefore
 resumes the session that turn ended with.
 
 ### Results
 
-The runner reports the outcome, the session's final text, the session id and token counts. core records a row in
+When a turn ends the control plane has its outcome, the session's final text, the session id and token counts. It
+records a row in
 `runs`, saves the session id on the conversation and posts the text, scrubbed of secrets, in the thread as
 Markdown. An active long project's build carries on in a new turn after an error or a stalled turn, up to three
 in a row, and the thread gets the error. Otherwise a failed turn (error, stalled, a scheduled run out of time,
-interrupted) gets a short failure reply, and its task, if any, becomes `failed`. After an error the next turn starts
-a fresh session; a stalled turn keeps its session, so a reply picks it up where it stopped.
+interrupted) gets a short failure reply, and its task, if any, becomes `failed`. The conversation keeps its session
+after an error or a stall, so the next turn picks it up where it stopped (on the same account, or with a handoff).
 
 ### Linear
 
 There are two ways in:
 
-- **Labelled issues.** Every minute core polls each pack's `linear_team` for open issues labelled with the agent's
-  name. Each new issue becomes one task. core posts `Linear <ID>: <title>` in the pack's `slack_channel` and starts
+- **Labelled issues.** Every minute the control plane polls each pack's `linear_team` for open issues labelled with the agent's
+  name. Each new issue becomes one task. the control plane posts `Linear <ID>: <title>` in the pack's `slack_channel` and starts
   an unattended turn bound to the project in that thread. Task changes set the issue's state through
   `[linear.status]`, and a ready PR is commented on the issue.
 - **Linear agent sessions.** With the Linear app installed (`[linear] public_url` and the app's client secrets set),
-  people can delegate issues to the agent. Linear's webhook reaches core's public listener through Tailscale
-  Funnel; core checks the signature and timestamp, acknowledges with an "On it." activity and queues the raw event
+  people can delegate issues to the agent. Linear's webhook reaches the control plane's public listener through Tailscale
+  Funnel; the control plane checks the signature and timestamp, acknowledges with an "On it." activity and queues the raw event
   as a turn. Follow-ups in the same Linear session resume the same Claude session. The agent reads the issue,
   picks the project, replies and posts activities itself through the Linear MCP server, which runs as the app
-  with `LINEAR_APP_TOKEN` (core refreshes it in `data/runner/linear.env`).
+  with `LINEAR_APP_TOKEN` (the control plane refreshes it in `data/runner/linear.env`).
 
-An admin installs the app with the `linear_install` tool: core DMs them a single-use link valid for 15 minutes.
+An admin installs the app with the `linear_install` tool: the control plane DMs them a single-use link valid for 15 minutes.
 
 ### Schedules
 
 Work on a timer. People ask the agent for something on a schedule in plain language ("send me PR stats every
 morning at 9", "sweep the codebase every night at 10"); the agent writes it into the schedules file with its own
-tools (the `schedules` skill), and core fires it. People can also edit the file by hand on the host:
-`data/schedules/schedules.toml`, mounted at `/data/schedules` in core and the agent container.
+tools (the `schedules` skill), and the control plane fires it. People can also edit the file by hand on the host:
+`data/schedules/schedules.toml`, mounted at `/data/schedules` in the control plane and every conversation's container.
 
 ```toml
 [nightly-sweep]
@@ -392,9 +396,9 @@ link = "https://…"            # where they asked (optional)
 paused = false                # optional
 ```
 
-Every minute core reads the file and, for each schedule whose latest cron slot it hasn't handled yet (`settings`:
+Every minute the control plane reads the file and, for each schedule whose latest cron slot it hasn't handled yet (`settings`:
 `schedule.<name>.last`), queues an unattended turn with the prompt in a new conversation, first line
-`[schedule <name> · <cron> · set up by <who> · <link>]`. Core posts nothing: like a teammate, the agent messages
+`[schedule <name> · <cron> · set up by <who> · <link>]`. The control plane posts nothing: like a teammate, the agent messages
 people itself when a run has something for them, and the run's final message goes nowhere, as in a Linear session.
 A run that fails says so in the channel (`My <name> run didn't finish.` with the error), and replies in that
 message's thread continue the run. Each firing is its own conversation, so runs can overlap; the queue's gate
@@ -402,7 +406,7 @@ applies as to any turn.
 
 - A schedule seen for the first time (or back after it was removed or invalid), or whose `cron` changed, waits for
   its next slot.
-- Slots missed while core was down collapse into one firing when it comes back.
+- Slots missed while the control plane was down collapse into one firing when it comes back.
 - Slots due while the schedule is `paused` or the agent is stopped are used up without firing.
 - A file that isn't valid TOML or can't be read keeps the last valid schedules; an invalid entry (including a cron
   that never matches) is skipped and the rest still fire.
@@ -410,14 +414,14 @@ applies as to any turn.
   once per distinct set and logged; a firing that couldn't start is retried every minute.
 
 `python -m agent schedules` (in either container; `just schedules` on the host) prints each schedule with its next
-three run times and any errors, and exits non-zero on errors. The agent runs it after every edit. Core writes its
-timezone to `runner/timezone` so the check in the agent container uses the same one.
+three run times and any errors, and exits non-zero on errors. The agent runs it after every edit. The control plane writes its
+timezone to `runner/timezone` so `agentd schedules` in a conversation's container uses the same one.
 
 ### Tasks and status in Slack
 
 A task is the record of a piece of work (`tasks`: feature, bug or chore; statuses queued, working, needs_input,
 ready_for_review, done, merged, closed, failed, cancelled). Linear issues create one; in Slack, `track_task`,
-`start_task` or the first `open_pr` does. Each task has one status message in its thread, edited in place, and a
+`start_task` does. Each task has one status message in its thread, edited in place, and a
 status reaction on the thread's first message. `[limits] max_tasks_per_day` (default 20) caps the tasks that
 `track_task` and `start_task` create.
 
@@ -434,50 +438,33 @@ A project is a pack in `data/config/packs/<project>/`:
 `examples/config/packs/sample/` is a minimal pack; `examples/pack-templates/chilliclaw/` is a full example with
 setup that writes the app's `.env`, local-run skills and a meter overlay.
 
-### work_on and checkouts
+### Checkouts
 
-A session starts in its session folder. To work on a project's code it calls `work_on(project, title?)`:
-
-1. core binds the conversation to the project and gives it a branch, `<agent name>/<task or conversation
-   id>-<slug of title>`. The title defaults to the first line of the message. A conversation has one project and
-   one branch for its whole life; `start_task` starts a separate session for another project.
-2. The runner makes the checkout at `<session folder>/<project>`: a clone of core's git endpoint that borrows
-   objects from the shared clone (`clone --reference`), on the branch, from `origin/<default_branch>`.
-3. `[build] setup` runs once, when the checkout is made. If it fails, the next `work_on` runs it again.
-4. The project's test keys (`[secrets] worker`: names of values in `core.env`) are written to
-   `.test-keys-<project>.env` (mode 0600) in the session folder and reach later turns as environment variables. The
-   stack's own credentials can't be listed there.
-5. If `data/secrets/projects/<project>.env` exists, `work_on` points the session at its copy,
-   `/run/agent/projects/<project>.env`: the app's own `.env` for running it locally.
-
-The session keeps the same working folder on every turn so `--resume` finds it. A conversation bound up front (a
-pack's channel, a labelled Linear issue, `start_task`) runs inside its checkout; any other runs in its session
-folder with the checkout as a subfolder. If something other than a checkout the runner made is at the checkout's
-path, the runner leaves it alone, runs the turn without a checkout and tells the session why.
-
-`[build] checks` run before every PR (see below). `just doctor` flags a pack with no checks.
+A session starts in its conversation's folder and clones and checks out a project's code itself, with its own `gh`
+login, the way an engineer on the team would. If `data/secrets/projects/<project>.env` exists, its copy is at
+`/run/agent/projects/<project>.env`: the app's own `.env` for running it locally. The session keeps the same working
+folder on every turn so `--resume` finds it.
 
 ## Tools and tiers
 
-core's tools reach the session as in-process SDK tools. A session's tier comes from the person whose message
+The control plane's tools reach the session through its holder, as an MCP server. A session's tier comes from the person whose message
 started the turn, never from the model's arguments: `admin` for people with `role = "admin"`, `act` for members and
 for unattended Linear work without a mapped requester, `read` otherwise. A tool is offered only at or above its
 tier. Every reply is scrubbed of secrets.
 
 | Tier | Tools |
 |---|---|
-| read | `status`, `list_tasks`, `get_task`, `read_thread`, `slack_read`, `kpis`, `gh_prs`, `gh_checks`, `gh_ci_log`, `gh_issue`, `gh_file`, `linear_issue` |
-| act | `post_update`, `ask`, `react`, `post_files`, `work_on`, `open_pr`, `track_task`, `finish_task`, `start_task`, `spawn_agent`, `park`, `cancel_task`, `stop_all`, `linear_comment`, `linear_set_status` |
+| read | `status`, `list_tasks`, `get_task`, `read_thread`, `slack_read`, `kpis`, `gh_prs`, `gh_checks`, `gh_ci_log`, `gh_issue`, `gh_file` |
+| act | `post_update`, `ask`, `react`, `post_files`, `track_task`, `finish_task`, `start_task`, `spawn_agent`, `park`, `cancel_task`, `stop_all`, `start_project`, `finish_project`, `tell_project` |
 | admin | `resume_all`, `az_login` (one `<cli>_login` per `[cli.<name>]` with a `login` command), `linear_install` |
 
-- `work_on`, `open_pr` and `post_files` do local work in the runner (checkout, checks and push, reading files) and
-  then call core.
+- `post_files` reads the files from the conversation's folder on the shared volume and refuses any path outside it.
 - `ask` posts the question and marks the conversation as waiting; the person's reply arrives as the next turn.
 - `start_task(project, title, kind, brief)` starts a separate session with a self-contained brief, in the same
   thread (or, from a DM, in a new thread under a "Working on <title>" message).
 - `spawn_agent(prompt, cwd)` starts a spawned agent: its own conversation, with no Slack thread, whose turns
   don't depend on the calling turn, so it runs on its own after that turn ends and reports back later. It returns
-  the agent's id at once. `cwd` is resolved in the runner, relative to the calling session's folder; it must exist,
+  the agent's id at once. `cwd` is resolved relative to the calling session's folder; it must exist,
   and it stays the agent's working directory on every turn. By default the agent gets its own new folder; a `cwd`
   inside the caller's folder shares that checkout with it, which is the caller's choice. The agent waits out a usage
   limit and can park like any conversation. Once it is finished (its turn ended with nothing queued, parked or
@@ -487,15 +474,15 @@ tier. Every reply is scrubbed of secrets.
   fails reports the failure and isn't retried; the caller decides. A spawned agent can't spawn agents of its own, a
   conversation can have at most 3 running at once and all conversations together 4 (a parked one counts). An agent
   whose turn is cancelled (`stop_all`) doesn't report back. `spawned_agents` in `agent.db` records each one
-  (`core/spawned.py`).
+  (`rust/crates/agentd/src/spawned.rs`).
 - `read_thread` reads the conversation's thread, or a DM chat's messages since it started.
-- `slack_read(method, params)` makes one read-only Slack Web API call with core's bot token. Allowed methods:
+- `slack_read(method, params)` makes one read-only Slack Web API call with the control plane's bot token. Allowed methods:
   `conversations.history`, `conversations.replies`, `conversations.list`, `conversations.info`, `users.info`,
   `users.list`, `pins.list`, `bookmarks.list`; anything else is refused with that list. The JSON reply is scrubbed
   and cut at 20,000 characters with a note on paging.
-- `gh_*` and `linear_*` work on the conversation's project, with core's tokens.
-- `az_login` runs `az login --use-device-code` in core as the agent's uid; the code goes to the admin by DM, and
-  the login in `data/cli/azure` is shared with the agent container.
+- `gh_*` and `linear_*` work on the conversation's project, with the control plane's tokens.
+- `az_login` runs `az login --use-device-code` in the control plane as the agent's uid; the code goes to the admin by DM, and
+  the login in `data/cli/azure` is shared with the conversations' containers.
 - `stop_all` pauses the agent and interrupts every running session; queued messages wait. Only an admin can
   resume.
 
@@ -505,8 +492,8 @@ Sessions also have the MCP servers in `[mcp]` (the example config has Linear's) 
 ## Memory
 
 Memory is a folder on the `agentwork` volume (`/var/agent/memory`), shared by every session (DMs, channels and
-Linear alike) and kept across restarts and rebuilds. core keeps no memory store of its own; the folder and
-everything in it are the runner's doing.
+Linear alike) and kept across restarts and rebuilds. The control plane keeps no memory store of its own; the
+folder and everything in it are the sessions' doing.
 
 One file per fact, named for what it holds (`people-ivan-replies.md`, `project-roster-demo.md`), each starting
 with a short front-matter block (a name, a one-line description of what it is and when it matters) before the
@@ -514,8 +501,8 @@ fact itself, with who said it, when and the link. `MEMORY.md` is the folder's in
 at its file (`- [Title](file.md) — hook`). The index holds pointers, never the facts themselves, so it stays
 short while the folder grows.
 
-The runner appends the memory rules and the current index — cut to the first 200 lines, with a note if more were
-hidden — to every session's system prompt (`memory_block()` in `src/agent/runner/worker.py`), so every session
+The control plane appends the memory rules and the current index — cut to the first 200 lines, with a note if more
+were hidden — to every session's system prompt (`memory_block()` in `rust/crates/agentd/src/prepare.rs`), so every session
 can read a fact's file when its line matters to what it's doing, and knows how to keep the folder itself: one
 fact per file, look for a file that already covers something before adding a new one, fix or delete a file (and
 its line) when a fact turns out wrong. Learned facts never go into CLAUDE.md, which is for how to work the repo,
@@ -525,21 +512,21 @@ Within a conversation, the context is the resumed Claude Code session itself.
 
 ## Code and PRs
 
-The agent works on code the way an engineer on the team does, with its own tools and no core step in between. It
+The agent works on code the way an engineer on the team does, with its own tools and no the control plane step in between. It
 clones the repos it needs into the conversation's folder with `gh repo clone` and its own `GH_TOKEN` (`agent.env`),
 sets them up with the project's skills, branches the way each repo names its branches, pushes, and opens PRs to
 the default branch with `gh pr create`, following the repo's own conventions (its CLAUDE.md, AGENTS.md,
 CONTRIBUTING and PR template). Draft or ready, who reviews and whether the agent merges are up to the repo's rules
-and branch protection and what the token allows; core adds no gate.
+and branch protection and what the token allows; the control plane adds no gate.
 
-core watches the result for the KPIs: every 5 minutes it searches GitHub for PRs by the agent's login and keeps
+The control plane watches the result for the KPIs: every 5 minutes it searches GitHub for PRs by the agent's login and keeps
 each one current until it is merged or closed, tying it to a Linear issue whose key it mentions. The PR stats poller
 records review and merge times, human commits and lines, and reverts within 30 days.
 
 ## KPIs, the activity log and the dashboard
 
-KPIs come from what core records: `tasks`, `pr_stats` and the `session_started` event appended when a runner
-claims a turn.
+KPIs come from what the control plane records: `tasks`, `pr_stats` and the `session_started` event appended when a
+turn starts.
 
 - ticket to pickup (labelled Linear issues), pickup to PR, PR to merge, queue wait: median and p90;
 - tasks, PRs, merged, closed unmerged, reverted, failed, cancelled; merge rate.
@@ -564,12 +551,12 @@ The dashboard has these pages:
 - **Foundry spend**: the model-call meter.
 - **KPIs**: the KPIs with daily series, per project.
 - **Activity**: the event log, with where each event came from and who.
-- **Host**: what the machine is doing (CPU, memory, network, disk I/O, disk space, the agent's containers and
-  listening ports), over the last hour and broken down by consumer. Those consumers are sessions, browsers, services,
-  containers, the runner, and what runs outside the agent container. The runner samples `/proc` and its Docker
-  daemon every 5 s (`agent/runner/host.py`) and posts to core's `/agent/host`. Core keeps the hour in memory
-  (`agent/dashboard/host.py`). A session's processes are found by the `AGENT_WORK_ITEM` and `AGENT_CONVERSATION`
-  variables the runner sets in its environment, or else by their nearest tagged ancestor.
+- **Host**: what the machine is doing (CPU, memory, network, disk I/O, disk space, the containers and listening
+  ports), over the last hour and broken down by consumer: each conversation's container (linked to its running
+  turn), the control plane, the services container, the apps' Docker (or each app container, when the control plane
+  can reach that Docker's API), and the rest of the machine. The control plane reads `/proc` and the Docker API
+  every 5 s and keeps the hour in memory (`rust/crates/agentd/src/host.rs`); listening ports come from the
+  conversations' holders.
 
 The kill switch on the dashboard stops the agent; resuming, like changing the meter's caps, needs an admin whose
 `tailscale` login is set in `[people]`.
@@ -577,8 +564,8 @@ The kill switch on the dashboard stops the agent; resuming, like changing the me
 ## The model-call meter
 
 Apps the agent runs and tests may call a model provider (Azure AI Foundry for the example pack). They call it
-through core instead: their OpenAI-compatible base URL is `http://172.30.0.10:8087/llm/<upstream>` with any
-placeholder key. core:
+through the control plane instead: their OpenAI-compatible base URL is `http://172.30.0.10:8087/llm/<upstream>` with any
+placeholder key. the control plane:
 
 - adds the upstream's real key from `core.env` (`api-key` header, or `Authorization: Bearer`);
 - forwards the call, streaming included (it asks streamed chat completions to report usage);
@@ -587,10 +574,10 @@ placeholder key. core:
 - refuses calls with 429 `cost_cap_reached` once the day's or the month's cap is spent (days and months in the
   config's timezone), and with 503 while the agent is stopped.
 
-The price is what Azure bills on the upstream's own resource. Every 6 hours core reads the resource's billing
+The price is what Azure bills on the upstream's own resource. Every 6 hours the control plane reads the resource's billing
 meters from Cost Management with the `[cli.azure]` login, and retries a failed read after 30 minutes. Each meter's cost over its quantity for the last 30 days
 gives a rate for input, cached input, cache writes and output per model, with the discount applied. Defender for
-AI's per-token charge is added on all but cached input. core then re-prices the month's calls. Azure records
+AI's per-token charge is added on all but cached input. the control plane then re-prices the month's calls. Azure records
 nothing per caller on a shared resource, so the agent's share is its own calls' token counts at those rates.
 `[llm_meter.prices]` (USD per million tokens for input, cached input and output; `default` for unlisted models)
 applies until a read works, and to models Azure hasn't billed on the resource yet. The dashboard shows which
@@ -598,7 +585,7 @@ applies to each endpoint.
 
 Caps start from `daily_usd` and `monthly_usd` and can be changed at runtime from the dashboard. The meter runs only
 when `[llm_meter.upstreams]` has an entry. The address is fixed because apps in the agent's Docker can't resolve
-the name `core`.
+the name `control`.
 
 ## Configuration
 
@@ -611,16 +598,16 @@ Host data lives under `${AGENT_DATA:-./data}`.
 | `config/agent/system.md` | optional: replaces the shipped system prompt; `{name}` is filled in |
 | `config/packs/<project>/` | one pack per project |
 | `config/account-names.toml` | written by `just account-names`: proxy code name to account holder |
-| `secrets/core.env` | core's credentials (below) |
+| `secrets/core.env` | the control plane's credentials (below) |
 | `secrets/supervisor.env` | `SLACK_ALERT_WEBHOOK` (optional) |
-| `secrets/agent.env` | the agent container's environment: `GH_TOKEN` for its own `gh` login, its dev and test keys |
-| `secrets/projects/<project>.env` | a project's app `.env` for local runs; core copies it at start |
-| `runner/` | written by core for the agent container: `runner-token`, `linear.env`, `projects/`, `timezone` |
-| `schedules/schedules.toml` | the schedules; the agent edits it, core fires it |
-| `db/agent.db` | core's state |
+| `secrets/agent.env` | every session's keys: `GH_TOKEN` for its own `gh` login, its dev and test keys |
+| `secrets/projects/<project>.env` | a project's app `.env` for local runs; the control plane copies it at start |
+| `runner/` | written by the control plane for the conversations' containers: `linear.env`, `projects/`, `timezone` |
+| `schedules/schedules.toml` | the schedules; the agent edits it, the control plane fires it |
+| `db/agent.db` | the control plane's state |
 | `runs/` | each turn's session messages, for the dashboard |
 | `git/` | the bare mirrors behind the git endpoint |
-| `cli/azure/` | the Azure CLI login, shared with the agent container |
+| `cli/azure/` | the Azure CLI login, shared with the conversations' containers |
 
 Secrets files are `KEY=value` lines, mode 0600, and each service mounts only its own. `core.env` needs
 `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `LINEAR_API_KEY`, `GITHUB_READ_TOKEN` and `GITHUB_WRITE_TOKEN`; with the
@@ -635,15 +622,16 @@ Linear app also `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` and `LINEAR_WEBHOOK_S
 | `[people.<key>]` | `slack` user id and `linear` email (required), `github` login, `role` (`member` or `admin`), `tailscale` login |
 | `[limits]` | `max_concurrent_sessions` (10), `max_tasks_per_day` (20), `idle_minutes` (30): a turn with no progress for this long is stopped, `schedule_hours` (6): a scheduled run's time budget, 0 for none |
 | `[claude.models]` | `default` for every session, `hard` after "use fable", `allowed`: more model ids "use <model>" may switch a conversation to |
-| `[agent]` | `uid` of the agent container's user (1001) |
+| `[agent]` | `uid` of the agent's user in its containers (1001) |
+| `[containers]` | each conversation's container: `image` (`autonomous-agent-agent`), `memory_gib` (8), `cpus` (4), `pids` (4096), `idle_stop_minutes` (60), `max_age_hours` (24), `keep_stopped_days` (7), `min_free_gib` (3): the free memory a new container needs beyond its cap |
 | `[linear]` | `public_url`: the Funnel URL for Linear's webhook and OAuth callback; empty means no Linear app |
 | `[mcp.<name>]` | MCP servers every session gets: `type = "http"`, `url`, `headers` with `${VAR}` from the session's environment |
 | `[dashboard]` | `port` (8086), `trusted_peers` (`["172.30.0.1"]`), `agent_origins` (proxy origins that are the agent) |
 | `[llm_meter]` | `port` (8087), `daily_usd`, `monthly_usd`, `[llm_meter.upstreams.<name>]` (`base_url`, `key`, `header`), `[llm_meter.prices]` |
 | `[observability]` | `digest_channel` (empty: no digest), `digest_time` |
-| `[cli.<name>]` | a CLI core logs in with a device code: `command`, `env`, `login`, `login_check` |
+| `[cli.<name>]` | a CLI the control plane logs in with a device code: `command`, `env`, `login`, `login_check` |
 
-core reads `agent.toml`, the packs' `project.toml`, the persona and the project env files at start: restart core
+The control plane reads `agent.toml`, the packs' `project.toml`, the persona and the project env files at start: restart the control plane
 after changing them. Pack plugins go out in the bundle, which is rebuilt for every session.
 
 Compose also reads `AGENT_NAME` and `AGENT_GIT_EMAIL` from the environment (or a `.env` file beside
@@ -678,7 +666,7 @@ workflow has seven jobs:
   instructions people repeat), files those as `learned` issues and proposes up to two, credited in Slack only to
   whose session they came from. Once approved, a fix makes them part of the agent's setup in every project.
 - `approvals`, every 10 minutes and at once after a decision in Slack, with no Claude: applies the decisions from the
-  Slack threads, labels each issue `approved` or `rejected`, and names the next approved fix and the next approved project (none while core's usage
+  Slack threads, labels each issue `approved` or `rejected`, and names the next approved fix and the next approved project (none while the control plane's usage
   watch holds the pool). Each fix or project run first checks that its issue is still approved.
 - `fix`, one at a time: ships one approved change through a PR that closes its issue, CI, a fresh review, the merge,
   `just deploy`, its health check and a revert if the check fails (`.github/improve-jensen.md`).
@@ -712,61 +700,64 @@ Conversations, people and products never go into this public repo. Host setup an
 
 | Command | What it does |
 |---|---|
-| `just up` | writes `account-names.toml` (on failure, carries on), then `docker compose up -d --build` |
+| `just up` | writes `account-names.toml` (on failure, carries on) and `.env` (the Docker socket's group, the data folder's path), then `docker compose up -d --build` |
 | `just down` | stops and removes the stack; data stays under `data/` |
-| `just doctor` | in core: config, packs, each required secret, the proxy (verified accounts, capacity), each pack's checks, GitHub read access per repo, Linear states per pack, the runner token. In the agent container: `gh auth status` and `az account show` |
-| `just smoke` | queues one turn ("reply with pong") with no Slack thread and waits up to 5 minutes for the answer: core, runner, proxy and Claude end to end |
-| `just deploy` | in the live checkout: fetches `main`, rebuilds only the services the change touches (waiting for an idle runner before `agent`), then checks the stack live. Exit 0 deployed, 1 check failed, 2 checkout not deployable, 3 pending |
+| `just doctor` | `agentd doctor`: config, packs, each required secret, the proxy (verified accounts, capacity, every model), GitHub read access per repo, Linear states per pack, Docker and the agent image. In `agent-services`: `gh auth status` and `az account show` |
+| `just smoke` | `agentd smoke`: queues one turn ("reply with pong") with no Slack thread and waits up to 5 minutes for the answer: the control plane, a conversation's container, the proxy and Claude end to end |
+| `just deploy` | in the live checkout: fetches `main`, rebuilds only the services the change touches (a `compose.yaml` change pauses and waits for running turns first, since it can recreate the network the conversations share), then checks the stack live. Exit 0 deployed, 1 check failed, 2 checkout not deployable, 3 pending |
+| `just cutover check\|switch\|rollback` | the switch from the Python control plane and back ([deploy/cutover.md](../deploy/cutover.md)) |
 | `just dashboard-serve` | `tailscale serve --bg --https=9443 http://127.0.0.1:18086`: the dashboard at `https://<node>.<tailnet>.ts.net:9443`, tailnet only |
-| `just logs [service]` | follows the stack's logs, or one service's (`core`, `agent`, `docker`, `supervisor`, `supervisor-standby`, `relay`) |
-| `just kpis [--days N] [--project P]` | prints the KPIs |
+| `just logs [service]` | follows the stack's logs, or one service's (`control`, `services`, `docker`, `supervisor`, `supervisor-standby`, `relay`) |
+| `just kpis [--days N]` | prints the KPIs |
 | `just schedules` | checks the schedules file and prints each schedule's next three run times |
 | `just stop`, `just resume` | the kill switch from the host, for when Slack isn't an option |
 | `just account-names` | writes the proxy's account holders' names for the dashboard (run on the host) |
 | `just proxy-install` | installs the account proxy, placed at `claude_proxy/claude-fallback-proxy.py` first, as a systemd user service (once) |
 | `just test`, `just dashboard-test` | the Python tests in the dev image; the dashboard's tests and build |
-| `just dashboard-dev` | the dashboard's dev server against a running core |
+| `just dashboard-dev` | the dashboard's dev server against a running control plane |
 
 `just doctor` exits non-zero when any check fails. The agent's Azure login comes from an admin: ask the agent in
 Slack to run `az_login`, and the device code arrives by DM.
 
-Session transcripts are on the dashboard's session pages and in `data/runs/`. `just logs core` shows intake, tool
-and loop errors; `just logs agent` shows the runner's.
+Session transcripts are on the dashboard's session pages and in `data/runs/`. `just logs control` shows intake,
+turn, tool and loop errors; `just logs services` shows the agent's services'.
 
 ## Security posture
 
-- **The agent container is open.** Sessions run with every permission, passwordless sudo, internet access, their own
-  `gh` and `az` logins and a privileged Docker daemon beside them. Nothing in the operating system limits what a
-  session does inside the container. The limits are in core's tools and in what the container's credentials allow.
-- **What the container never holds.** core's Slack tokens, `LINEAR_API_KEY` and the Linear app's client secret,
-  `GITHUB_READ_TOKEN` and `GITHUB_WRITE_TOKEN`, and the Claude accounts' credentials (sessions send a placeholder
-  that the host's proxy replaces). It does hold `agent.env`, the runner token and each turn's session token,
-  `LINEAR_APP_TOKEN`, its projects' test keys and app env files, and the shared Azure login.
+- **The conversations' containers are open.** Sessions run with every permission, passwordless sudo, internet
+  access, their own `gh` and `az` logins and a privileged Docker daemon beside them. Nothing in the operating system
+  limits what a session does inside its container. The limits are in the control plane's tools and in what the
+  container's credentials allow. A container sees only its own holder's socket, so it can't call tools as another
+  conversation.
+- **What the containers never hold.** The control plane's Slack tokens, `LINEAR_API_KEY` and the Linear app's client
+  secret, `GITHUB_READ_TOKEN` and `GITHUB_WRITE_TOKEN`, the meter's upstream keys, the Docker socket, and the Claude
+  accounts' credentials (sessions send a placeholder that the host's proxy replaces). A session does have
+  `agent.env`, `LINEAR_APP_TOKEN`, its projects' test keys and app env files, and the shared Azure login.
 - **Azure is staging only.** The Azure login that `az_login` creates is shared with the agent; it should have access
   to staging resources only. The system prompt also tells sessions never to change production resources or data.
   The code doesn't check this; the account's role assignments do.
 - **The agent's reach is its credentials.** It clones, pushes, opens PRs and merges with its own `GH_TOKEN`, and
-  works in any other system with the keys in `agent.env`, its Azure login and its Slack bot token. core puts no
+  works in any other system with the keys in `agent.env`, its Azure login and its Slack bot token. the control plane puts no
   gate on any of it: what a token allows, the agent can do. Scope each credential, and protect branches, to what
   the agent should be able to do.
-- **Secrets are scrubbed from what leaves core.** Every tool reply, `post_update` and other messages core's tools
+- **Secrets are scrubbed from what leaves the control plane.** Every tool reply, `post_update` and other messages the control plane's tools
   post, the session's final reply for each turn, the line of text sent with `post_files`, `slack_read` replies and
   the dashboard's transcript view have known secret values from `core.env` (8 characters or more) and token
   patterns (Anthropic, GitHub, Slack, Linear, AWS keys, private key blocks) replaced with `[redacted]`. The files
-  that `post_files` sends are not scrubbed. Values in `agent.env` are unknown to core, so only the patterns catch
+  that `post_files` sends are not scrubbed. Values in `agent.env` are unknown to the control plane, so only the patterns catch
   them.
-- **Each service has its own secrets.** Each service mounts only its own secrets file. core and the supervisors read
-  theirs into memory, never into their environment; the agent container gets `agent.env` as plain environment
-  variables.
+- **Each service has its own secrets.** Each service mounts only its own secrets file. The control plane and the
+  supervisors read theirs into memory, never into their environment; the control plane also reads `agent.env`, only
+  to hand it to each session, and `agent-services` gets it as plain environment variables.
 - **People and tiers.** In Slack, only people in `[people]` get answers, and their role sets the tools a session is
   offered: `stop_all` is open to members, `resume_all` to admins only. In Linear, anyone who can label an issue
   for the agent or delegate one to it starts work; without a mapped requester it runs at the `act` tier.
-- **The dashboard is tailnet only.** `tailscale serve`, never Funnel. core answers it only from `trusted_peers` (the
+- **The dashboard is tailnet only.** `tailscale serve`, never Funnel. the control plane answers it only from `trusted_peers` (the
   host gateway, where Tailscale's requests arrive), takes the viewer from `Tailscale-User-Login`, and requires an
-  `X-Dashboard: 1` header and a same-origin request for every POST. The agent container reaches core from its own
-  address and is refused. Any tailnet viewer can stop the agent or cancel a session; resuming and changing caps
+  `X-Dashboard: 1` header and a same-origin request for every POST. A conversation's container reaches the control
+  plane from its own address and is refused. Any tailnet viewer can stop the agent or cancel a session; resuming and changing caps
   need an admin.
-- **One public listener.** With the Linear app configured, core's :8085 is public through Tailscale Funnel, with two
+- **One public listener.** With the Linear app configured, the control plane's :8085 is public through Tailscale Funnel, with two
   routes: the Linear webhook (HMAC-SHA256 signature over the body, timestamp within a minute) and the OAuth
   callback (single-use state). Nothing else is public; Slack uses an outbound Socket Mode connection.
 - **Spend is capped.** The apps' model calls stop at the meter's daily and monthly caps. Claude sessions start only

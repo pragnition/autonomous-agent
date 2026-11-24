@@ -212,3 +212,13 @@ async def test_health_endpoint_reports_a_stalled_loop():
         assert (await client.get("/health")).status == 200
         now[0] = 500
         assert (await client.get("/health")).status == 503
+
+
+def test_control_plane_target_replaces_core_and_runner():
+    control = {"CONTROL_HEALTH": "http://control:8080/health", "CONTROL_CONTAINER": "agent-control"}
+    standby = {**STANDBY_ENV, **control}
+    assert health_targets(control) == {"control plane": "http://control:8080/health"}
+    assert restartable(control) == {"control plane": "agent-control"}
+    assert health_targets(standby)["peer"] == "http://supervisor:8090/health"
+    assert deferrals(standby, health_targets(standby)) == {"control plane": "peer"}
+    assert "runner" not in restartable(standby)
