@@ -435,6 +435,26 @@
    "record": "{\"id\": \"TK-0006\", \"title\": \"Task TK-0006\", \"source\": \"slack\", \"project\": \"sample\", \"started_at\": \"2026-11-20T07:00:00Z\"}"
   }
  ],
+ "request_labels": [
+  {
+   "work_item_id": "W-1",
+   "source": "slack",
+   "asked": "a",
+   "label": "same",
+   "task_id": "TK-0003",
+   "arrived_at": "2026-11-15T10:00:00Z",
+   "labeled_at": "2026-11-15T12:00:00Z"
+  },
+  {
+   "work_item_id": "W-2",
+   "source": "slack",
+   "asked": "b",
+   "label": "new",
+   "project": "other",
+   "arrived_at": "2026-11-19T04:00:00Z",
+   "labeled_at": "2026-11-19T06:00:00Z"
+  }
+ ],
  "agent_prs": [
   {
    "repo": "o/r",

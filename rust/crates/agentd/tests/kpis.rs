@@ -38,6 +38,17 @@ fn usage_windows_match_python() {
     assert_eq!(kpis::format_usage_windows(&w), e["usage_windows"]["text"].as_str().unwrap());
 }
 
+#[test]
+fn daily_tokens_match_python() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    agentd::db::create_schema(&conn).unwrap();
+    seed(&conn);
+    let (e, now) = (expected(), fixture_now());
+    let d = kpis::daily_tokens(&conn, now, e["tz"].as_str().unwrap(), 7).unwrap();
+    assert_json(&kpis::daily_json(&d), &e["daily_tokens"]["view"], "daily tokens");
+    assert_eq!(kpis::format_daily_tokens(&d), e["daily_tokens"]["text"].as_str().unwrap());
+}
+
 #[tokio::test]
 async fn kpis_tool_checks_days() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
@@ -50,6 +61,7 @@ async fn kpis_tool_checks_days() {
     let text = agentd::tools::call(&s, &ctx, "kpis", &json!({})).await;
     assert!(text.starts_with("jensen, last 7 days\nTasks: "), "{text}");
     assert!(text.contains("\n\nTokens today: "), "{text}");
+    assert!(text.contains("\n\nTokens per day, last 7 days:\n"), "{text}");
 }
 
 #[tokio::test]

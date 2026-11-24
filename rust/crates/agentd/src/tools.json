@@ -352,7 +352,7 @@
  },
  {
   "name": "kpis",
-  "description": "The agent's own KPIs over the last `days` days (default 7): tasks by project, time per task, the share finished, PRs merged and Linear issues closed, and its tokens by project (also today, 7 days and this month, with the apps' metered model calls by upstream).",
+  "description": "The agent's own KPIs over the last `days` days (default 7): tasks by project, time per task, the share finished, PRs merged and Linear issues closed, and its tokens by project (also today, 7 days and this month, with the apps' metered model calls by upstream, and per day for the last 7 days).",
   "input_schema": {
    "type": "object",
    "properties": {

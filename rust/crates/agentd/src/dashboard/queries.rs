@@ -424,8 +424,8 @@ pub fn list_events(c: &Connection, kind: Option<&str>, limit: i64, before: Optio
         "id": e.id, "ts": e.ts, "type": e.kind, "source": source, "sender": sender})).collect::<Vec<_>>(), "types": types}))
 }
 
-/// The four KPIs, tasks per local day by source, the window's tasks, newest first, and token use by project for
-/// today, 7 days and this month.
+/// The four KPIs, tasks per local day by source, the window's tasks, newest first, token use by project for today,
+/// 7 days and this month, and tokens per local day by project for the last 7 days.
 pub fn kpi_view(c: &Connection, days: i64, now: DateTime<Utc>, tz: &str) -> Result<Value> {
     let zone: Tz = tz.parse().unwrap_or(chrono_tz::UTC);
     let today = now.with_timezone(&zone).date_naive();
@@ -457,5 +457,6 @@ pub fn kpi_view(c: &Connection, days: i64, now: DateTime<Utc>, tz: &str) -> Resu
         .filter_map(|r| r.ok().and_then(|t| serde_json::from_str(&t).ok())).collect();
     Ok(json!({"kpis": kpis::kpis_json(&kpis::compute_kpis(c, since, now)?),
               "daily": daily.into_values().map(Value::Object).collect::<Vec<_>>(), "tasks": tasks,
-              "usage": kpis::windows_json(&kpis::usage_windows(c, now, tz)?)}))
+              "usage": kpis::windows_json(&kpis::usage_windows(c, now, tz)?),
+              "daily_tokens": kpis::daily_json(&kpis::daily_tokens(c, now, tz, 7)?)}))
 }

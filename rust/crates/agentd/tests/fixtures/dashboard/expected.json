@@ -55,30 +55,23 @@
     "issues_closed": 1,
     "tokens_by_project": {
      "other": {
-      "runs": 1,
-      "input_tokens": 20,
-      "output_tokens": 2500000,
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
       "cache_read_tokens": 0,
       "cache_write_tokens": 0
      },
      "sample": {
-      "runs": 2,
-      "input_tokens": 1100,
-      "output_tokens": 1200,
-      "cache_read_tokens": 5000,
-      "cache_write_tokens": 600
-     },
-     "general": {
-      "runs": 2,
-      "input_tokens": 110,
-      "output_tokens": 55,
-      "cache_read_tokens": 1000,
-      "cache_write_tokens": 200
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
      }
     },
     "finished_rate": 0.6
    },
-   "text": "Jensen, last 7 days\nTasks: 5 (sample 3 \u00b7 general 2)\nTime per task: median 5m \u00b7 p90 1h 6m\nFinished: 60% (3 of 5)\nShipped: 1 PR merged \u00b7 1 Linear issue closed\nTokens: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 20 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.1k in \u00b7 1.2k out \u00b7 5k cache read \u00b7 600 cache write\n  general: 110 in \u00b7 55 out \u00b7 1k cache read \u00b7 200 cache write"
+   "text": "Jensen, last 7 days\nTasks: 5 (sample 3 \u00b7 general 2)\nTime per task: median 5m \u00b7 p90 1h 6m\nFinished: 60% (3 of 5)\nShipped: 1 PR merged \u00b7 1 Linear issue closed\nTokens: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write"
   },
   {
    "days": 30,
@@ -106,30 +99,23 @@
     "issues_closed": 1,
     "tokens_by_project": {
      "other": {
-      "runs": 1,
-      "input_tokens": 20,
-      "output_tokens": 2500000,
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
       "cache_read_tokens": 0,
       "cache_write_tokens": 0
      },
      "sample": {
-      "runs": 2,
-      "input_tokens": 1100,
-      "output_tokens": 1200,
-      "cache_read_tokens": 5000,
-      "cache_write_tokens": 600
-     },
-     "general": {
-      "runs": 2,
-      "input_tokens": 110,
-      "output_tokens": 55,
-      "cache_read_tokens": 1000,
-      "cache_write_tokens": 200
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
      }
     },
     "finished_rate": 0.6666666666666666
    },
-   "text": "Jensen, last 30 days\nTasks: 6 (sample 3 \u00b7 other 1 \u00b7 general 2)\nTime per task: median 7m \u00b7 p90 1d 1h\nFinished: 67% (4 of 6)\nShipped: 2 PRs merged \u00b7 1 Linear issue closed\nTokens: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 20 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.1k in \u00b7 1.2k out \u00b7 5k cache read \u00b7 600 cache write\n  general: 110 in \u00b7 55 out \u00b7 1k cache read \u00b7 200 cache write"
+   "text": "Jensen, last 30 days\nTasks: 6 (sample 3 \u00b7 other 1 \u00b7 general 2)\nTime per task: median 7m \u00b7 p90 1d 1h\nFinished: 67% (4 of 6)\nShipped: 2 PRs merged \u00b7 1 Linear issue closed\nTokens: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write"
   }
  ],
  "usage_windows": {
@@ -159,25 +145,18 @@
     "since": "2026-11-13T10:00:00Z",
     "by_project": {
      "other": {
-      "runs": 1,
-      "input_tokens": 20,
-      "output_tokens": 2500000,
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
       "cache_read_tokens": 0,
       "cache_write_tokens": 0
      },
      "sample": {
-      "runs": 2,
-      "input_tokens": 1100,
-      "output_tokens": 1200,
-      "cache_read_tokens": 5000,
-      "cache_write_tokens": 600
-     },
-     "general": {
-      "runs": 2,
-      "input_tokens": 110,
-      "output_tokens": 55,
-      "cache_read_tokens": 1000,
-      "cache_write_tokens": 200
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
      }
     },
     "total": {
@@ -210,25 +189,18 @@
     "since": "2026-10-31T16:00:00Z",
     "by_project": {
      "other": {
-      "runs": 1,
-      "input_tokens": 20,
-      "output_tokens": 2500000,
+      "runs": 2,
+      "input_tokens": 30,
+      "output_tokens": 2500005,
       "cache_read_tokens": 0,
       "cache_write_tokens": 0
      },
      "sample": {
-      "runs": 2,
-      "input_tokens": 1100,
-      "output_tokens": 1200,
-      "cache_read_tokens": 5000,
-      "cache_write_tokens": 600
-     },
-     "general": {
-      "runs": 2,
-      "input_tokens": 110,
-      "output_tokens": 55,
-      "cache_read_tokens": 1000,
-      "cache_write_tokens": 200
+      "runs": 3,
+      "input_tokens": 1200,
+      "output_tokens": 1250,
+      "cache_read_tokens": 6000,
+      "cache_write_tokens": 800
      }
     },
     "total": {
@@ -258,7 +230,7 @@
     }
    }
   },
-  "text": "Tokens today: 0 in \u00b7 0 out \u00b7 0 cache read \u00b7 0 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\nTokens last 7 days: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 20 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.1k in \u00b7 1.2k out \u00b7 5k cache read \u00b7 600 cache write\n  general: 110 in \u00b7 55 out \u00b7 1k cache read \u00b7 200 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\n  app meter, openai: 1 call \u00b7 10 in \u00b7 10 out \u00b7 0 cache read \u00b7 0 cache write \u00b7 $0.00 billed\nTokens this month: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 20 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.1k in \u00b7 1.2k out \u00b7 5k cache read \u00b7 600 cache write\n  general: 110 in \u00b7 55 out \u00b7 1k cache read \u00b7 200 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\n  app meter, openai: 1 call \u00b7 10 in \u00b7 10 out \u00b7 0 cache read \u00b7 0 cache write \u00b7 $0.00 billed"
+  "text": "Tokens today: 0 in \u00b7 0 out \u00b7 0 cache read \u00b7 0 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\nTokens last 7 days: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\n  app meter, openai: 1 call \u00b7 10 in \u00b7 10 out \u00b7 0 cache read \u00b7 0 cache write \u00b7 $0.00 billed\nTokens this month: 1.2k in \u00b7 2.5M out \u00b7 6k cache read \u00b7 800 cache write\n  other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  sample: 1.2k in \u00b7 1.2k out \u00b7 6k cache read \u00b7 800 cache write\n  app meter, foundry: 3 calls \u00b7 6k in \u00b7 400 out \u00b7 200 cache read \u00b7 10 cache write \u00b7 $0.04 billed\n  app meter, openai: 1 call \u00b7 10 in \u00b7 10 out \u00b7 0 cache read \u00b7 0 cache write \u00b7 $0.00 billed"
  },
  "format_tokens": [
   [
@@ -288,8 +260,91 @@
   [
    2340000,
    "2.3M"
+  ],
+  [
+   999999999,
+   "1000M"
+  ],
+  [
+   1000000000,
+   "1B"
+  ],
+  [
+   1234567890,
+   "1.23B"
   ]
  ],
+ "daily_tokens": {
+  "view": {
+   "projects": [
+    "other",
+    "sample"
+   ],
+   "days": [
+    {
+     "date": "2026-11-14",
+     "by_project": {}
+    },
+    {
+     "date": "2026-11-15",
+     "by_project": {
+      "sample": {
+       "runs": 1,
+       "input_tokens": 100,
+       "output_tokens": 50,
+       "cache_read_tokens": 1000,
+       "cache_write_tokens": 200
+      }
+     }
+    },
+    {
+     "date": "2026-11-16",
+     "by_project": {}
+    },
+    {
+     "date": "2026-11-17",
+     "by_project": {
+      "sample": {
+       "runs": 1,
+       "input_tokens": 700,
+       "output_tokens": 900,
+       "cache_read_tokens": 5000,
+       "cache_write_tokens": 600
+      }
+     }
+    },
+    {
+     "date": "2026-11-18",
+     "by_project": {
+      "sample": {
+       "runs": 1,
+       "input_tokens": 400,
+       "output_tokens": 300,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      }
+     }
+    },
+    {
+     "date": "2026-11-19",
+     "by_project": {
+      "other": {
+       "runs": 2,
+       "input_tokens": 30,
+       "output_tokens": 2500005,
+       "cache_read_tokens": 0,
+       "cache_write_tokens": 0
+      }
+     }
+    },
+    {
+     "date": "2026-11-20",
+     "by_project": {}
+    }
+   ]
+  },
+  "text": "Tokens per day, last 7 days:\n  2026-11-14: none\n  2026-11-15: 100 in \u00b7 50 out \u00b7 1k cache read \u00b7 200 cache write\n    sample: 100 in \u00b7 50 out \u00b7 1k cache read \u00b7 200 cache write\n  2026-11-16: none\n  2026-11-17: 700 in \u00b7 900 out \u00b7 5k cache read \u00b7 600 cache write\n    sample: 700 in \u00b7 900 out \u00b7 5k cache read \u00b7 600 cache write\n  2026-11-18: 400 in \u00b7 300 out \u00b7 0 cache read \u00b7 0 cache write\n    sample: 400 in \u00b7 300 out \u00b7 0 cache read \u00b7 0 cache write\n  2026-11-19: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n    other: 30 in \u00b7 2.5M out \u00b7 0 cache read \u00b7 0 cache write\n  2026-11-20: none"
+ },
  "format_duration": [
   [
    0,
@@ -413,25 +468,18 @@
       "since": "2026-11-13T10:00:00Z",
       "by_project": {
        "other": {
-        "runs": 1,
-        "input_tokens": 20,
-        "output_tokens": 2500000,
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
        },
        "sample": {
-        "runs": 2,
-        "input_tokens": 1100,
-        "output_tokens": 1200,
-        "cache_read_tokens": 5000,
-        "cache_write_tokens": 600
-       },
-       "general": {
-        "runs": 2,
-        "input_tokens": 110,
-        "output_tokens": 55,
-        "cache_read_tokens": 1000,
-        "cache_write_tokens": 200
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
        }
       },
       "total": {
@@ -464,25 +512,18 @@
       "since": "2026-10-31T16:00:00Z",
       "by_project": {
        "other": {
-        "runs": 1,
-        "input_tokens": 20,
-        "output_tokens": 2500000,
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
        },
        "sample": {
-        "runs": 2,
-        "input_tokens": 1100,
-        "output_tokens": 1200,
-        "cache_read_tokens": 5000,
-        "cache_write_tokens": 600
-       },
-       "general": {
-        "runs": 2,
-        "input_tokens": 110,
-        "output_tokens": 55,
-        "cache_read_tokens": 1000,
-        "cache_write_tokens": 200
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
        }
       },
       "total": {
@@ -511,6 +552,74 @@
        }
       }
      }
+    },
+    "daily_tokens": {
+     "projects": [
+      "other",
+      "sample"
+     ],
+     "days": [
+      {
+       "date": "2026-11-14",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-15",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 100,
+         "output_tokens": 50,
+         "cache_read_tokens": 1000,
+         "cache_write_tokens": 200
+        }
+       }
+      },
+      {
+       "date": "2026-11-16",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-17",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 700,
+         "output_tokens": 900,
+         "cache_read_tokens": 5000,
+         "cache_write_tokens": 600
+        }
+       }
+      },
+      {
+       "date": "2026-11-18",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 400,
+         "output_tokens": 300,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-19",
+       "by_project": {
+        "other": {
+         "runs": 2,
+         "input_tokens": 30,
+         "output_tokens": 2500005,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-20",
+       "by_project": {}
+      }
+     ]
     }
    }
   },
@@ -540,25 +649,18 @@
      "issues_closed": 1,
      "tokens_by_project": {
       "other": {
-       "runs": 1,
-       "input_tokens": 20,
-       "output_tokens": 2500000,
+       "runs": 2,
+       "input_tokens": 30,
+       "output_tokens": 2500005,
        "cache_read_tokens": 0,
        "cache_write_tokens": 0
       },
       "sample": {
-       "runs": 2,
-       "input_tokens": 1100,
-       "output_tokens": 1200,
-       "cache_read_tokens": 5000,
-       "cache_write_tokens": 600
-      },
-      "general": {
-       "runs": 2,
-       "input_tokens": 110,
-       "output_tokens": 55,
-       "cache_read_tokens": 1000,
-       "cache_write_tokens": 200
+       "runs": 3,
+       "input_tokens": 1200,
+       "output_tokens": 1250,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
       }
      },
      "finished_rate": 0.6
@@ -670,25 +772,18 @@
       "since": "2026-11-13T10:00:00Z",
       "by_project": {
        "other": {
-        "runs": 1,
-        "input_tokens": 20,
-        "output_tokens": 2500000,
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
        },
        "sample": {
-        "runs": 2,
-        "input_tokens": 1100,
-        "output_tokens": 1200,
-        "cache_read_tokens": 5000,
-        "cache_write_tokens": 600
-       },
-       "general": {
-        "runs": 2,
-        "input_tokens": 110,
-        "output_tokens": 55,
-        "cache_read_tokens": 1000,
-        "cache_write_tokens": 200
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
        }
       },
       "total": {
@@ -721,25 +816,18 @@
       "since": "2026-10-31T16:00:00Z",
       "by_project": {
        "other": {
-        "runs": 1,
-        "input_tokens": 20,
-        "output_tokens": 2500000,
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
        },
        "sample": {
-        "runs": 2,
-        "input_tokens": 1100,
-        "output_tokens": 1200,
-        "cache_read_tokens": 5000,
-        "cache_write_tokens": 600
-       },
-       "general": {
-        "runs": 2,
-        "input_tokens": 110,
-        "output_tokens": 55,
-        "cache_read_tokens": 1000,
-        "cache_write_tokens": 200
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
        }
       },
       "total": {
@@ -768,6 +856,74 @@
        }
       }
      }
+    },
+    "daily_tokens": {
+     "projects": [
+      "other",
+      "sample"
+     ],
+     "days": [
+      {
+       "date": "2026-11-14",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-15",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 100,
+         "output_tokens": 50,
+         "cache_read_tokens": 1000,
+         "cache_write_tokens": 200
+        }
+       }
+      },
+      {
+       "date": "2026-11-16",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-17",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 700,
+         "output_tokens": 900,
+         "cache_read_tokens": 5000,
+         "cache_write_tokens": 600
+        }
+       }
+      },
+      {
+       "date": "2026-11-18",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 400,
+         "output_tokens": 300,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-19",
+       "by_project": {
+        "other": {
+         "runs": 2,
+         "input_tokens": 30,
+         "output_tokens": 2500005,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-20",
+       "by_project": {}
+      }
+     ]
     }
    }
   },
@@ -798,25 +954,18 @@
      "issues_closed": 1,
      "tokens_by_project": {
       "other": {
-       "runs": 1,
-       "input_tokens": 20,
-       "output_tokens": 2500000,
+       "runs": 2,
+       "input_tokens": 30,
+       "output_tokens": 2500005,
        "cache_read_tokens": 0,
        "cache_write_tokens": 0
       },
       "sample": {
-       "runs": 2,
-       "input_tokens": 1100,
-       "output_tokens": 1200,
-       "cache_read_tokens": 5000,
-       "cache_write_tokens": 600
-      },
-      "general": {
-       "runs": 2,
-       "input_tokens": 110,
-       "output_tokens": 55,
-       "cache_read_tokens": 1000,
-       "cache_write_tokens": 200
+       "runs": 3,
+       "input_tokens": 1200,
+       "output_tokens": 1250,
+       "cache_read_tokens": 6000,
+       "cache_write_tokens": 800
       }
      },
      "finished_rate": 0.6666666666666666
@@ -1073,25 +1222,18 @@
       "since": "2026-11-13T10:00:00Z",
       "by_project": {
        "other": {
-        "runs": 1,
-        "input_tokens": 20,
-        "output_tokens": 2500000,
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
        },
        "sample": {
-        "runs": 2,
-        "input_tokens": 1100,
-        "output_tokens": 1200,
-        "cache_read_tokens": 5000,
-        "cache_write_tokens": 600
-       },
-       "general": {
-        "runs": 2,
-        "input_tokens": 110,
-        "output_tokens": 55,
-        "cache_read_tokens": 1000,
-        "cache_write_tokens": 200
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
        }
       },
       "total": {
@@ -1124,25 +1266,18 @@
       "since": "2026-10-31T16:00:00Z",
       "by_project": {
        "other": {
-        "runs": 1,
-        "input_tokens": 20,
-        "output_tokens": 2500000,
+        "runs": 2,
+        "input_tokens": 30,
+        "output_tokens": 2500005,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
        },
        "sample": {
-        "runs": 2,
-        "input_tokens": 1100,
-        "output_tokens": 1200,
-        "cache_read_tokens": 5000,
-        "cache_write_tokens": 600
-       },
-       "general": {
-        "runs": 2,
-        "input_tokens": 110,
-        "output_tokens": 55,
-        "cache_read_tokens": 1000,
-        "cache_write_tokens": 200
+        "runs": 3,
+        "input_tokens": 1200,
+        "output_tokens": 1250,
+        "cache_read_tokens": 6000,
+        "cache_write_tokens": 800
        }
       },
       "total": {
@@ -1171,6 +1306,74 @@
        }
       }
      }
+    },
+    "daily_tokens": {
+     "projects": [
+      "other",
+      "sample"
+     ],
+     "days": [
+      {
+       "date": "2026-11-14",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-15",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 100,
+         "output_tokens": 50,
+         "cache_read_tokens": 1000,
+         "cache_write_tokens": 200
+        }
+       }
+      },
+      {
+       "date": "2026-11-16",
+       "by_project": {}
+      },
+      {
+       "date": "2026-11-17",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 700,
+         "output_tokens": 900,
+         "cache_read_tokens": 5000,
+         "cache_write_tokens": 600
+        }
+       }
+      },
+      {
+       "date": "2026-11-18",
+       "by_project": {
+        "sample": {
+         "runs": 1,
+         "input_tokens": 400,
+         "output_tokens": 300,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-19",
+       "by_project": {
+        "other": {
+         "runs": 2,
+         "input_tokens": 30,
+         "output_tokens": 2500005,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+        }
+       }
+      },
+      {
+       "date": "2026-11-20",
+       "by_project": {}
+      }
+     ]
     }
    }
   }

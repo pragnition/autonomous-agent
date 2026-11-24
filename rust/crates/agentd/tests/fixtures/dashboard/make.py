@@ -106,6 +106,13 @@ for tid, src, project, start_h, work, fin in (("TK-0001", "slack", "sample", 1, 
     rows["task_records"].append(dict(id=tid, source=src, project=project, requested_by="sam", started_at=ts(hours=start_h),
                                      ended_at=ts(hours=start_h - 0.5), work_time_s=work, finished=fin,
                                      record=json.dumps(record)))
+# runs labeled into a task record: W-1 (stamped general) counts to its task's project, W-2 (no task yet) to its label's
+rows["request_labels"] = [
+    dict(work_item_id="W-1", source="slack", asked="a", label="same", task_id="TK-0003", arrived_at=ts(hours=120),
+         labeled_at=ts(hours=118)),
+    dict(work_item_id="W-2", source="slack", asked="b", label="new", project="other", arrived_at=ts(hours=30),
+         labeled_at=ts(hours=28)),
+]
 rows["agent_prs"] = [
     dict(repo="o/r", number=12, url="u", title="t", head="sam-7-fix", base="main", opened_at=ts(days=3),
          merged_at=ts(days=1), updated_at=ts(hours=1)),
@@ -143,7 +150,10 @@ for days in (1, 7, 30):
     out["kpis"].append({"days": days, "view": q._kpis_dict(k), "text": kpis.format_kpis(k, "Jensen")})
 w = kpis.usage_windows(conn, NOW, TZ)
 out["usage_windows"] = {"view": plain(w), "text": kpis.format_usage_windows(w)}
-out["format_tokens"] = [[n, kpis.format_tokens(n)] for n in (0, 999, 1000, 1500, 999_999, 1_000_000, 2_340_000)]
+out["format_tokens"] = [[n, kpis.format_tokens(n)] for n in (0, 999, 1000, 1500, 999_999, 1_000_000, 2_340_000,
+                                                               999_999_999, 1_000_000_000, 1_234_567_890)]
+d = kpis.daily_tokens(conn, NOW, TZ)
+out["daily_tokens"] = {"view": plain(d), "text": kpis.format_daily_tokens(d)}
 out["format_duration"] = [[n, kpis.format_duration(n)] for n in (0, 59, 60, 3599, 3600, 3661, 86399, 86400, 200000)]
 out["kpi_view"] = [{"days": d, "view": q.kpi_view(conn, d, NOW, TZ)} for d in (1, 7, 30)]
 

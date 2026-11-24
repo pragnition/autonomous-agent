@@ -3,8 +3,9 @@
 //!
 //! Four numbers, the same whatever the work came from: Tasks, Time per task, Finished and Shipped. Tasks come from
 //! the task record (task_record.rs); Shipped from GitHub's and Linear's own state (pollers.rs). Tokens come from the
-//! runs table: each run counts to the project it was on when it ended, and to "general" when there was none, so a
-//! window's projects add up to the window's total.
+//! runs table. A run counts to the project of the task its request was labeled into (the labeler runs after the run is
+//! recorded, so this is joined at query time and catches up on its own), else to the project its conversation (else
+//! its task) was on when it ended, else to "general", so a window's projects add up to its total.
 
 use anyhow::Result;
 use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Utc};
@@ -71,28 +72,87 @@ pub fn local_midnight(t: DateTime<Utc>, tz: Tz) -> DateTime<Utc> {
     tz.from_local_datetime(&day.and_time(NaiveTime::MIN)).earliest().map_or(t, |d| d.with_timezone(&Utc))
 }
 
+/// Each run with its project: its request's task record, else that request's label, else what the run was stamped
+/// with when it ended (its conversation's or task's project). A run's id is its work item's id.
+const RUNS: &str = "SELECT r.started_at, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens, \
+    COALESCE(NULLIF(t.project, ''), NULLIF(l.project, ''), NULLIF(r.project, '')) AS project FROM runs r \
+    LEFT JOIN request_labels l ON l.work_item_id = r.id LEFT JOIN task_records t ON t.id = l.task_id \
+    WHERE r.started_at >= ? AND r.started_at < ?";
+
+/// Most output first, "general" last.
+fn ordered(mut by: Vec<(String, Usage)>) -> Vec<(String, Usage)> {
+    let general = by.iter().position(|(k, _)| k == GENERAL).map(|i| by.remove(i));
+    by.sort_by(|a, b| b.1.output_tokens.cmp(&a.1.output_tokens).then_with(|| a.0.cmp(&b.0)));
+    by.extend(general);
+    by
+}
+
+fn add_to(by: &mut Vec<(String, Usage)>, key: String, u: Usage) {
+    match by.iter_mut().find(|(k, _)| *k == key) {
+        Some((_, have)) => *have = have.add(u),
+        None => by.push((key, u)),
+    }
+}
+
 /// The tokens of the runs that started in [since, until), by project ("general": none), most output first and
 /// "general" last.
 pub fn tokens_by_project(c: &Connection, since: DateTime<Utc>, until: DateTime<Utc>) -> Result<Vec<(String, Usage)>> {
-    let mut stmt = c.prepare(
-        "SELECT NULLIF(project, '') AS project, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), \
-         SUM(cache_write_tokens) FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY 1")?;
+    let mut stmt = c.prepare(&format!(
+        "SELECT project, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), \
+         SUM(cache_write_tokens) FROM ({RUNS}) GROUP BY 1"))?;
     let rows = stmt.query_map([ts(since), ts(until)], |r| {
         Ok((r.get::<_, Option<String>>(0)?, Usage { runs: r.get(1)?, input_tokens: r.get(2)?, output_tokens: r.get(3)?,
                                                     cache_read_tokens: r.get(4)?, cache_write_tokens: r.get(5)? }))
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut by: Vec<(String, Usage)> = Vec::new();
     for (project, u) in rows { // every run lands in exactly one row, so the rows add up to the window's total
-        let key = project.unwrap_or_else(|| GENERAL.into());
-        match by.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, have)) => *have = have.add(u),
-            None => by.push((key, u)),
+        add_to(&mut by, project.unwrap_or_else(|| GENERAL.into()), u);
+    }
+    Ok(ordered(by))
+}
+
+/// Tokens per local day by project.
+pub struct Daily {
+    /// Every project that used any, most output first and "general" last.
+    pub projects: Vec<String>,
+    /// (local date, tokens by project), oldest first.
+    pub days: Vec<(String, Vec<(String, Usage)>)>,
+}
+
+/// The tokens of each of the last `days` local days (today included, days in `tz`) by project.
+pub fn daily_tokens(c: &Connection, now: DateTime<Utc>, tz: &str, days: i64) -> Result<Daily> {
+    let zone: Tz = tz.parse().unwrap_or(chrono_tz::UTC);
+    let today = now.with_timezone(&zone).date_naive();
+    let dates: Vec<String> = (0..days).rev().map(|n| (today - Duration::days(n)).to_string()).collect();
+    let since = local_midnight(now - Duration::days(days - 1), zone);
+    let mut per_day: Vec<(String, Vec<(String, Usage)>)> = dates.into_iter().map(|d| (d, Vec::new())).collect();
+    let mut stmt = c.prepare(RUNS)?;
+    let rows = stmt.query_map([ts(since), ts(now)], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(5)?,
+            Usage { runs: 1, input_tokens: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    output_tokens: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    cache_read_tokens: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    cache_write_tokens: r.get::<_, Option<i64>>(4)?.unwrap_or(0) }))
+    })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for (started, project, u) in rows {
+        let Ok(at) = chrono::NaiveDateTime::parse_from_str(&started, FMT) else { continue };
+        let day = at.and_utc().with_timezone(&zone).date_naive().to_string();
+        if let Some((_, by)) = per_day.iter_mut().find(|(d, _)| *d == day) {
+            add_to(by, project.unwrap_or_else(|| GENERAL.into()), u);
         }
     }
-    let general = by.iter().position(|(k, _)| k == GENERAL).map(|i| by.remove(i));
-    by.sort_by(|a, b| b.1.output_tokens.cmp(&a.1.output_tokens).then_with(|| a.0.cmp(&b.0)));
-    by.extend(general);
-    Ok(by)
+    let mut week = Vec::new();
+    for (key, u) in per_day.iter().flat_map(|(_, by)| by.iter()) {
+        add_to(&mut week, key.clone(), *u);
+    }
+    Ok(Daily { projects: ordered(week).into_iter().map(|(k, _)| k).collect(),
+               days: per_day.into_iter().map(|(d, by)| (d, ordered(by))).collect() })
+}
+
+/// The days as the dashboard reads them.
+pub fn daily_json(d: &Daily) -> Value {
+    json!({"projects": d.projects,
+           "days": d.days.iter().map(|(date, by)| json!({"date": date, "by_project": usages_json(by)})).collect::<Vec<_>>()})
 }
 
 /// The model calls the agent's apps made through the meter (llm_usage) in [since, until), by upstream.
@@ -252,8 +312,10 @@ pub fn format_tokens(n: i64) -> String {
         n.to_string()
     } else if n < 1_000_000 {
         format!("{:.1}k", n as f64 / 1000.0).replace(".0k", "k")
-    } else {
+    } else if n < 1_000_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0).replace(".0M", "M")
+    } else {
+        format!("{:.2}B", n as f64 / 1_000_000_000.0).replace(".00B", "B")
     }
 }
 
@@ -280,6 +342,20 @@ pub fn format_usage_windows(windows: &[Window]) -> String {
     lines.join("\n")
 }
 
+/// Each local day's tokens by project, oldest first.
+pub fn format_daily_tokens(d: &Daily) -> String {
+    let mut lines = vec![format!("Tokens per day, last {}:", plural(d.days.len() as i64, "day", "days"))];
+    for (date, by) in &d.days {
+        if by.is_empty() {
+            lines.push(format!("  {date}: none"));
+            continue;
+        }
+        lines.push(format!("  {date}: {}", format_usage(&total(by.iter().map(|(_, u)| u)))));
+        lines.extend(by.iter().map(|(p, u)| format!("    {p}: {}", format_usage(u))));
+    }
+    lines.join("\n")
+}
+
 pub fn format_kpis(k: &Kpis, name: &str) -> String {
     let days = ((k.until - k.since).num_seconds() as f64 / 86400.0).round_ties_even().max(1.0) as i64;
     let split = k.by_project.iter().map(|(p, n)| format!("{p} {n}")).collect::<Vec<_>>().join(" · ");
@@ -301,7 +377,7 @@ pub fn format_kpis(k: &Kpis, name: &str) -> String {
     lines.join("\n")
 }
 
-/// The `kpis` tool's reply: the KPIs over `days` and the token windows.
+/// The `kpis` tool's reply: the KPIs over `days`, the token windows and the last 7 days' tokens.
 pub fn tool_text(c: &Connection, days: Option<&Value>, now: DateTime<Utc>, name: &str, tz: &str) -> Result<String> {
     let days = match days {
         None => 7,
@@ -312,7 +388,8 @@ pub fn tool_text(c: &Connection, days: Option<&Value>, now: DateTime<Utc>, name:
         _ => return Ok("days must be a whole number from 1 to 365".into()),
     };
     let k = compute_kpis(c, now - Duration::days(days), now)?;
-    Ok(format!("{}\n\n{}", format_kpis(&k, name), format_usage_windows(&usage_windows(c, now, tz)?)))
+    Ok(format!("{}\n\n{}\n\n{}", format_kpis(&k, name), format_usage_windows(&usage_windows(c, now, tz)?),
+               format_daily_tokens(&daily_tokens(c, now, tz, 7)?)))
 }
 
 /// The daily KPI digest: once per local day, at or after digest_time, to digest_channel.
