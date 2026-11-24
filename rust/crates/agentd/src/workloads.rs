@@ -259,7 +259,9 @@ impl Workloads {
     }
 
     fn system(&self, states: &HashMap<String, Value>, rows: &HashMap<String, Value>, stats: &HashMap<String, Value>) -> Vec<Value> {
-        let mut out: Vec<Value> = states.iter().filter(|(_, s)| s["labels"]["com.docker.compose.project"] == self.settings.project.as_str())
+        // a conversation's container carries the image's compose labels too: it is listed with the conversations
+        let mut out: Vec<Value> = states.iter().filter(|(_, s)| s["labels"]["com.docker.compose.project"] == self.settings.project.as_str()
+                                                       && s["labels"]["agent.conversation"].is_null())
             .map(|(name, s)| {
                 let numbers = rows.get(name).cloned().unwrap_or(Value::Null);
                 let processes = stats.values().find(|c| c["name"] == name.as_str()).map_or(Value::Null, |c| c["processes"].clone());
