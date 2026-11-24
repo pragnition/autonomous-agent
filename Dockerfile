@@ -19,21 +19,13 @@ COPY src /app/src
 COPY scripts /app/scripts
 ENV PYTHONPATH=/app/src
 
-# The dashboard's web app, built once; core serves dist/ from /app/web
+# The dashboard's web app, built once; agentd serves dist/ from /app/web
 FROM node:22-bookworm-slim AS dashboard
 WORKDIR /dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY dashboard/ ./
 RUN npm run build
-
-# azure-cli: core runs az_login with the admin's device code.
-FROM app AS core
-COPY --from=dashboard /dashboard/dist /app/web
-RUN python -m venv /opt/az \
- && /opt/az/bin/pip install --no-cache-dir azure-cli \
- && ln -s /opt/az/bin/az /usr/local/bin/az
-CMD ["python", "-m", "agent", "core"]
 
 FROM app AS supervisor
 CMD ["python", "-m", "agent", "supervisor"]
@@ -94,14 +86,14 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && chmod -R a+rX /app   # COPY keeps the host's file modes; the agent user must read the code
 # The agent's own Claude home, on the work volume: the skills, plugins and MCP servers it installs stay
 ENV SHELL=/bin/bash AZURE_CONFIG_DIR=/data/cli/azure DOCKER_HOST=tcp://127.0.0.1:2375 CLAUDE_CONFIG_DIR=/var/agent/claude
-# Its home folder and the browsers are links into the volume too (agent.runner.home seeds them), so what it installs
+# Its home folder and the browsers are links into the volume too (agent.services.home seeds them), so what it installs
 # there survives a rebuild; `npm -g` goes to ~/.local.
 ENV NPM_CONFIG_PREFIX=/home/agent/.local PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"
 COPY --from=rust-build /out/agent-holder /out/agentd /usr/local/bin/
 # The dashboard's web app: agentd (agent-control runs this image) serves it
 COPY --from=dashboard /dashboard/dist /app/web
 USER agent
-CMD ["python", "-m", "agent", "runner"]
+CMD ["python", "-m", "agent", "services"]
 
 FROM alpine:3.20 AS relay
 RUN apk add --no-cache socat

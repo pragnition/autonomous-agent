@@ -1,11 +1,10 @@
-"""The supervisors' watchdog: health-checks the control plane (or, before it, core and the runner) and the other
-supervisor, and speaks up, independently of them.
+"""The supervisors' watchdog: health-checks the control plane (agentd) and the other supervisor, and speaks up,
+independently of them.
 
-Two supervisors run, `primary` and `standby`, and each watches core, the runner's heartbeat (as core sees it) and the
-other (its peer). Each answers its own `/health`, which turns unhealthy when its watch loop stops ticking, so a hung
-supervisor looks down too. Either one restarts its peer when the peer is down. Only the primary acts on core and the
-runner; the standby takes them over only while the primary is down, so nothing is restarted twice and nobody gets
-the same alert twice. A target is restarted once; down again within 30 minutes, it gets an alert and no restart.
+Two supervisors run, `primary` and `standby`, and each watches the control plane and the other (its peer). Each
+answers its own `/health`, which turns unhealthy when its watch loop stops ticking, so a hung supervisor looks down
+too. Either one restarts its peer when the peer is down. Only the primary acts on the control plane; the standby
+takes it over only while the primary is down, so nothing is restarted twice and nobody gets the same alert twice. A target is restarted once; down again within 30 minutes, it gets an alert and no restart.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ class Watchdog:
                  clock: Callable[[], float] = time.monotonic):
         """defer_to maps a target to a peer: this watchdog acts on the target only while that peer is down.
         depends_on maps a target to the one its check goes through: while that one is failing, the target isn't
-        checked (the runner's heartbeat is read from core, so a down core says nothing about the runner).
+        checked (a check that goes through a down target says nothing about the one behind it).
         A target is restarted once per outage. One that is down again within cooldown_s of its last restart is only
         alerted about, so a target that can't stay up isn't restarted in a loop."""
         self.targets, self.alert, self.restart, self.check, self.threshold = targets, alert, restart, check, threshold
@@ -123,17 +122,12 @@ def webhook_alert(url: str, who: str) -> Callable[[str], Awaitable[None]]:
     return alert
 
 
-CONTROL = "control plane"  # agentd, in place of core and the runner
+CONTROL = "control plane"  # agentd
 
 
 def health_targets(environ) -> dict[str, str]:
-    """What to watch: the control plane when CONTROL_HEALTH is set, else core and the runner's heartbeat as core sees
-    it; and the other supervisor when PEER_HEALTH is set."""
-    if environ.get("CONTROL_HEALTH"):
-        targets = {CONTROL: environ["CONTROL_HEALTH"]}
-    else:
-        targets = {"core": environ.get("CORE_HEALTH", "http://core:8080/health"),
-                   "runner": environ.get("RUNNER_HEALTH", "http://core:8080/health/runner")}
+    """What to watch: the control plane, and the other supervisor when PEER_HEALTH is set."""
+    targets = {CONTROL: environ.get("CONTROL_HEALTH", "http://control:8080/health")}
     if environ.get("PEER_HEALTH"):
         targets["peer"] = environ["PEER_HEALTH"]
     return targets
@@ -141,24 +135,16 @@ def health_targets(environ) -> dict[str, str]:
 
 def restartable(environ) -> dict[str, str]:
     """Target name to container: the only containers a supervisor restarts."""
-    if environ.get("CONTROL_HEALTH"):
-        containers = {CONTROL: environ.get("CONTROL_CONTAINER", "agent-control")}
-    else:
-        containers = {"core": environ.get("CORE_CONTAINER", "agent-core"),
-                      "runner": environ.get("RUNNER_CONTAINER", "agent-runner")}
+    containers = {CONTROL: environ.get("CONTROL_CONTAINER", "agent-control")}
     if environ.get("PEER_HEALTH") and environ.get("PEER_CONTAINER"):
         containers["peer"] = environ["PEER_CONTAINER"]
     return containers
 
 
-DEPENDS_ON = {"runner": "core"}  # the runner's heartbeat is read from core
-
-
 def deferrals(environ, targets: dict[str, str]) -> dict[str, str]:
-    """The standby leaves the control plane (or core and the runner) to the primary while the primary (its peer) is
-    up."""
+    """The standby leaves the control plane to the primary while the primary (its peer) is up."""
     if environ.get("SUPERVISOR_ROLE", "primary") == "standby" and "peer" in targets:
-        return {name: "peer" for name in ("core", "runner", CONTROL) if name in targets}
+        return {CONTROL: "peer"}
     return {}
 
 
@@ -186,7 +172,7 @@ def main() -> int:
             await docker_restart(containers[name])
 
     watchdog = Watchdog(targets, alert=alert, restart=restart, check=http_check,
-                        defer_to=deferrals(os.environ, targets), depends_on=DEPENDS_ON)
+                        defer_to=deferrals(os.environ, targets))
     heartbeat = Heartbeat(max_age_s=3 * INTERVAL_S)
 
     async def loop() -> None:

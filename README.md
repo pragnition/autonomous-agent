@@ -81,7 +81,7 @@ Then DM the agent in Slack.
 - [examples/config/](examples/config/): `agent.toml`, the shipped persona and a minimal pack.
 - [examples/pack-templates/chilliclaw/](examples/pack-templates/chilliclaw/): a full pack, with app setup,
   local-run skills and model calls through the meter.
-- [deploy/](deploy/): the Slack app manifest, the account proxy's systemd unit and origins, and the switch from the
-  Python control plane ([deploy/cutover.md](deploy/cutover.md)).
+- [deploy/](deploy/): the Slack app manifest, and the account proxy's systemd unit and origins.
 
-`just test` runs the Python tests in a dev image; `just dashboard-test` runs the dashboard's tests and build.
+`just test` runs the Python tests (the supervisors, agent-services and improve-jensen) in a dev image; `just rust-test`
+runs agentd's and the holder's; `just dashboard-test` runs the dashboard's tests and build.

@@ -3,24 +3,13 @@ import re
 import tomllib
 from pathlib import Path
 
-from agent.config import load_agent_config, load_pack, load_packs
-from agent.tasks import Status
-
 ROOT = Path(__file__).parent.parent
 EXAMPLES = ROOT / "examples" / "config"
 TEMPLATES = ROOT / "examples" / "pack-templates"
 
 
-def test_all_example_packs_load():
-    config = load_agent_config(EXAMPLES / "agent.toml")
-    assert "sample" in load_packs(EXAMPLES, config)
-    assert load_pack(TEMPLATES / "chilliclaw", config).project.name == "chilliclaw"
+def test_example_persona_is_the_default():
     assert (EXAMPLES / "persona.toml").read_text() == (ROOT / "src/agent/defaults/persona.toml").read_text()
-
-
-def test_chilliclaw_pack_status_keys_valid():
-    pack = load_pack(TEMPLATES / "chilliclaw", load_agent_config(EXAMPLES / "agent.toml"))
-    assert set(pack.project.linear_status) <= {s.value for s in Status}
     assert (TEMPLATES / "chilliclaw" / "plugin" / ".claude-plugin" / "plugin.json").is_file()
 
 
@@ -57,7 +46,7 @@ def test_chilliclaw_setup_writes_env_from_the_team_file(tmp_path, monkeypatch):
 
 
 def test_nothing_imports_agent_memory():
-    """Sessions keep what they learn in Claude Code's own memory; core has no memory store of its own."""
+    """Sessions keep what they learn in Claude Code's own memory; there is no memory store of our own."""
     assert importlib.util.find_spec("agent.memory") is None
     imports = re.compile(r"^\s*(from\s+agent\.memory\b|import\s+agent\.memory\b|from\s+agent\s+import\s+.*\bmemory\b)",
                          re.M)

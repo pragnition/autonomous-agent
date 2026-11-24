@@ -8,22 +8,22 @@ test *args:
     docker build -q --target dev -t {{dev_image}} . >/dev/null
     docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/app -w /app {{dev_image}} pytest -q {{args}}
 
-# Build and start the stack
 # The Rust workspace's tests, in the rust-dev image; cargo's caches stay in rust/ (git-ignored)
 rust-test *args:
     docker build -q --target rust-dev -t {{rust_image}} . >/dev/null
     docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e CARGO_HOME=/repo/rust/.cargo-home -v "$PWD":/repo -w /repo/rust {{rust_image}} cargo test --workspace {{args}}
 
+# Build and start the stack
 up:
     -just account-names
-    deploy/cutover.sh env
+    deploy/env.sh
     docker compose up -d --build
 
 # Stop and remove the stack (data stays under ./data)
 down:
     docker compose down
 
-# Follow logs (optionally one service: just logs core)
+# Follow logs (optionally one service: just logs control)
 logs *service:
     docker compose logs -f {{service}}
 
@@ -52,24 +52,20 @@ schedules:
 smoke:
     docker compose exec control agentd smoke
 
-# The switch to agentd and back (see deploy/cutover.md): just cutover check|switch|rollback
-cutover step:
-    deploy/cutover.sh {{step}}
-
 # Fetch main, rebuild whatever changed (pausing only for a change to compose.yaml), then check the stack live
 deploy *args:
     PYTHONPATH=src python3 scripts/deploy.py {{args}}
 
 # Give the dashboard the Claude account holders' names (from the account proxy's config; run on the laptop)
 account-names:
-    python3 -c "import sys; sys.path.insert(0, 'src'); from agent.dashboard.names import main; main()" data/config/account-names.toml
+    python3 scripts/account_names.py data/config/account-names.toml
 
 # Put the dashboard on the tailnet only (https://<node>.<tailnet>.ts.net:9443); never Funnel. Run on the laptop.
 dashboard-serve:
     tailscale serve --bg --https=9443 http://127.0.0.1:18086
     tailscale serve status
 
-# Work on the dashboard locally against a running core, e.g. after `ssh -L 18086:127.0.0.1:18086 <host>`:
+# Work on the dashboard locally against a running agentd, e.g. after `ssh -L 18086:127.0.0.1:18086 <host>`:
 # DASHBOARD_DEV_LOGIN=<your tailscale login> just dashboard-dev
 dashboard-dev:
     cd dashboard && npm install && npm run dev

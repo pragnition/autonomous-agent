@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from agent import db
-from agent.core.sessions import WorkQueue
 from agent.watch import core_collect
 
 T0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=UTC)
@@ -33,18 +32,6 @@ def _insert_item(conn, *, conversation_id, status, updated_at, payload=None, res
          json.dumps(result) if result is not None else None, created_at, updated_at),
     )
     return item_id
-
-
-class FakePayloads:
-    """Stands in for `agent.core.payloads.Payloads`: `enqueue_turn` only calls `.turn(...)` and never reads the
-    convo it's passed, so the fake ignores it and returns the bare text."""
-
-    def __init__(self):
-        self.calls = []
-
-    def turn(self, convo, text, actor, *, unattended=False):
-        self.calls.append((convo, text, actor, unattended))
-        return {"text": text}
 
 
 # -- core_collect --

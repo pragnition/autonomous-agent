@@ -169,7 +169,7 @@ in the group of a service it started is never taken for one. A service's stdout 
 with the process's own start, exit and stop lines, rotated to `.out.1` at 5 MB; its log has each start, exit code
 and restart, never the arguments or environment. Every one of these files is opened without blocking and must be a
 regular file. On SIGTERM every service is stopped before the process exits (`stop_grace_period: 30s`). As it starts
-it also prepares `home/` and `ms-playwright/` on the volume (`agent.runner.home`).
+it also prepares `home/` and `ms-playwright/` on the volume (`agent.services.home`).
 
 ### docker (dind)
 
@@ -189,8 +189,7 @@ alerts again when the target is back. A target that is down again within 30 minu
 and no restart, so nothing is restarted in a loop. Each restarts its peer. Only the primary acts on the control
 plane; the standby leaves it alone while the primary is up and takes it over once the primary is down, so nothing
 is restarted twice and the same alert is never sent twice. If both supervisors die together, compose's
-`restart: unless-stopped` brings them back. With `SUPERVISE_CONTROL` empty in `.env` (a rollback), they watch
-`agent-core` and `agent-runner` instead.
+`restart: unless-stopped` brings them back.
 
 A supervisor's own `/health` answers 503 once its watch loop hasn't finished a tick for three minutes, so a
 supervisor whose loop has hung counts as down, not just one whose process is gone. A tick that raises ends the
@@ -686,7 +685,7 @@ and what happens next, and stores the decisions for `approvals` to apply; a cond
 fired` tells the thread whether it shipped; a fix that didn't ship, or a project whose runs failed twice in a row, is
 marked `stuck` for a person. Nothing measures a change after it ships beyond the deploy's health check.
 
-The agent and improve-jensen talk through `/var/agent/feedback/` in `agent-runner`. The agent writes a short note
+The agent and improve-jensen talk through `/var/agent/feedback/` on the shared volume. The agent writes a short note
 there when something in its setup gets in its way. The watch reads new notes as evidence, records them on issues in
 general terms and answers in the note with a `Status:` line. After each deploy that changes how the agent behaves,
 improve-jensen adds a plain-words line to `CHANGES.md` there, which the agent reads when its setup seems different.
@@ -705,7 +704,6 @@ Conversations, people and products never go into this public repo. Host setup an
 | `just doctor` | `agentd doctor`: config, packs, each required secret, the proxy (verified accounts, capacity, every model), GitHub read access per repo, Linear states per pack, Docker and the agent image. In `agent-services`: `gh auth status` and `az account show` |
 | `just smoke` | `agentd smoke`: queues one turn ("reply with pong") with no Slack thread and waits up to 5 minutes for the answer: the control plane, a conversation's container, the proxy and Claude end to end |
 | `just deploy` | in the live checkout: fetches `main`, rebuilds only the services the change touches (a `compose.yaml` change pauses and waits for running turns first, since it can recreate the network the conversations share), then checks the stack live. Exit 0 deployed, 1 check failed, 2 checkout not deployable, 3 pending |
-| `just cutover check\|switch\|rollback` | the switch from the Python control plane and back ([deploy/cutover.md](../deploy/cutover.md)) |
 | `just dashboard-serve` | `tailscale serve --bg --https=9443 http://127.0.0.1:18086`: the dashboard at `https://<node>.<tailnet>.ts.net:9443`, tailnet only |
 | `just logs [service]` | follows the stack's logs, or one service's (`control`, `services`, `docker`, `supervisor`, `supervisor-standby`, `relay`) |
 | `just kpis [--days N]` | prints the KPIs |
@@ -713,7 +711,7 @@ Conversations, people and products never go into this public repo. Host setup an
 | `just stop`, `just resume` | the kill switch from the host, for when Slack isn't an option |
 | `just account-names` | writes the proxy's account holders' names for the dashboard (run on the host) |
 | `just proxy-install` | installs the account proxy, placed at `claude_proxy/claude-fallback-proxy.py` first, as a systemd user service (once) |
-| `just test`, `just dashboard-test` | the Python tests in the dev image; the dashboard's tests and build |
+| `just test`, `just rust-test`, `just dashboard-test` | the Python tests in the dev image; agentd's and the holder's; the dashboard's tests and build |
 | `just dashboard-dev` | the dashboard's dev server against a running control plane |
 
 `just doctor` exits non-zero when any check fails. The agent's Azure login comes from an admin: ask the agent in

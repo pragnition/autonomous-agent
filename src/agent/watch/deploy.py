@@ -80,9 +80,8 @@ from agent.watch.state import FMT, State
 
 _SUPERVISOR_PATH = "src/agent/supervisor.py"
 # Used only from the agent image, which agent-control (agentd, the dashboard's web app, the defaults and plugins it
-# hands the sessions, the Python it keeps for a rollback) and agent-services (the agent's own services) both run
-_AGENT_IMAGE_PREFIXES = ("src/agent/runner/", "src/agent/core/", "src/agent/dashboard/", "src/agent/defaults/",
-                         "src/agent/plugins/", "src/agent/connectors/", "rust/", "dashboard/")
+# hands the sessions) and agent-services (the agent's own services) both run
+_AGENT_IMAGE_PREFIXES = ("src/agent/services/", "src/agent/defaults/", "src/agent/plugins/", "rust/", "dashboard/")
 _NOTHING_PREFIXES = ("src/agent/watch/", "docs/", "tests/", ".github/", "deploy/", "examples/", "scripts/", "spike/")
 _NOTHING_EXTRA_PATHS = {"README.md", "justfile"}
 _DOCKERFILE_PATH = "Dockerfile"

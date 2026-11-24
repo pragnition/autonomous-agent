@@ -7,11 +7,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent import db
-from agent.ops import resume, stop
-from agent.proxy import PLACEHOLDER_TOKEN
-
 ROOT = Path(__file__).parent.parent
+# The stand-in Claude token the sessions see; the account proxy swaps in a real one (deploy/proxy-origins.example.toml)
+PLACEHOLDER_TOKEN = "sk-ant-oat01-container-via-host-proxy"
 
 
 @pytest.fixture(scope="module")
@@ -58,32 +56,24 @@ def volumes(compose, name):
     return [str(v) for v in compose["services"][name].get("volumes", [])]
 
 
-def test_core_gets_only_its_own_secrets(compose):
-    vols = volumes(compose, "core")
-    assert any(v.endswith("secrets/core.env:/run/agent/secrets.env:ro") for v in vols)
-    assert not any("supervisor.env" in v for v in vols)
-    assert "${AGENT_DATA:-./data}/secrets/projects:/data/secrets/projects:ro" in vols
-
-
 def test_schedules_folder_is_shared(compose):
-    for name in ("core", "agent", "control", "services"):
+    for name in ("control", "services"):
         assert "${AGENT_DATA:-./data}/schedules:/data/schedules" in volumes(compose, name), name
 
 
-def test_services_and_core_published_on_loopback_only(compose):
-    assert set(compose["services"]) == {"core", "supervisor", "supervisor-standby", "relay", "agent", "docker", "control",
-                                        "services"}
-    for name in ("agent", "docker", "services"):
+def test_only_the_control_plane_publishes_ports_on_loopback(compose):
+    assert set(compose["services"]) == {"supervisor", "supervisor-standby", "relay", "docker", "control", "services"}
+    for name in ("docker", "services"):
         assert "ports" not in compose["services"][name], name
-    for name in ("core", "control"):  # never both at once: core only in the rollback profile
-        assert compose["services"][name]["ports"] == ["127.0.0.1:18085:8085", "127.0.0.1:18086:8086"], name
+    # the Linear listener (the only port Tailscale Funnel exposes) and the dashboard
+    assert compose["services"]["control"]["ports"] == ["127.0.0.1:18085:8085", "127.0.0.1:18086:8086"]
     assert "ports" not in compose["services"]["supervisor"]
     assert "ports" not in compose["services"]["supervisor-standby"]
 
 
 def test_no_env_file_and_no_secrets_in_environment(compose):
     for name, svc in compose["services"].items():
-        if name in ("agent", "services"):  # the agent's own keys are plain environment variables
+        if name == "services":  # the agent's own keys are plain environment variables
             assert svc["env_file"] == ["${AGENT_DATA:-./data}/secrets/agent.env"]
         else:
             assert "env_file" not in svc, name
@@ -105,8 +95,7 @@ def test_supervisors_watch_each_other(compose):
         assert me["environment"]["PEER_CONTAINER"] == peer["container_name"]
         assert me["environment"]["PEER_HEALTH"] == f"http://{peer_name}:8090/health"
         assert me["environment"]["CONTROL_CONTAINER"] == compose["services"]["control"]["container_name"]
-        # empty in .env for a rollback: the supervisors then watch core and the runner again
-        assert me["environment"]["CONTROL_HEALTH"] == "${SUPERVISE_CONTROL-http://control:8080/health}"
+        assert me["environment"]["CONTROL_HEALTH"] == "http://control:8080/health"
         assert "${AGENT_DATA:-./data}/secrets/supervisor.env:/run/agent/secrets.env:ro" in [str(v) for v in me["volumes"]]
 
 
@@ -117,7 +106,6 @@ def test_restart_policies(compose):
 def test_subnet_and_gateway(compose):
     [ipam] = compose["networks"]["agentnet"]["ipam"]["config"]
     assert (ipam["subnet"], ipam["gateway"]) == ("172.30.0.0/24", "172.30.0.1")
-    assert compose["services"]["core"]["environment"]["PROXY_URL"] == "http://172.30.0.1:28090"
 
 
 def test_proxy_unit_directives():
@@ -144,25 +132,6 @@ def test_slack_manifest_scopes_and_events():
         set(m["settings"]["event_subscriptions"]["bot_events"])
 
 
-async def test_ops_stop_and_resume(tmp_path):
-    from agent.core.sessions import WorkQueue
-
-    conn = db.connect(tmp_path / "agent.db")
-    db.create_schema(conn)
-    queue = WorkQueue(conn)
-    item = queue.enqueue("V-1", "turn", {})
-    queue.claim()
-    assert stop(tmp_path / "agent.db") == [item]
-    assert db.get_setting(conn, "paused") == "1" and queue.get(item).status == "cancelled"
-    resume(tmp_path / "agent.db")
-    assert db.get_setting(conn, "paused") == "0"
-
-
-def test_core_image_has_az():
-    dockerfile = (ROOT / "Dockerfile").read_text()
-    assert "azure-cli" in dockerfile and "/usr/local/bin/az" in dockerfile
-
-
 def agent_target():
     dockerfile = (ROOT / "Dockerfile").read_text()
     return dockerfile.split("FROM app AS agent", 1)[1].split("\nFROM ", 1)[0]
@@ -172,7 +141,7 @@ def test_agent_image():
     target = agent_target()
     for needle in ("--uid 1001", "--shell /bin/bash", "NOPASSWD:ALL", "ln -sf /bin/bash /bin/sh", "USER agent",
                    "AZURE_CONFIG_DIR=/data/cli/azure", " gh", "azure-cli", "chown agent /var/agent",
-                   '"agent", "runner"', "chmod -R a+rX /app"):
+                   '"agent", "services"', "chmod -R a+rX /app"):
         assert needle in target, needle
 
 
@@ -180,27 +149,8 @@ def test_agent_image_serves_the_web_app():
     assert "COPY --from=dashboard /dashboard/dist /app/web" in agent_target()  # agentd serves the dashboard
 
 
-def test_agent_service(compose):
-    agent = compose["services"]["agent"]
-    assert agent["build"]["target"] == "agent" and agent["restart"] == "unless-stopped"
-    assert agent["init"] is True  # PID 1 is an init that reaps orphaned processes, not the runner
-    assert agent["stop_grace_period"] == "30s"  # time for the runner to stop the agent's services
-    assert agent["network_mode"] == "service:docker" and "networks" not in agent and not agent.get("privileged")
-    vols = volumes(compose, "agent")
-    assert "${AGENT_DATA:-./data}/runner:/run/agent:ro" in vols
-    assert "${AGENT_DATA:-./data}/cli/azure:/data/cli/azure" in vols
-    assert not any("agent.env" in v for v in vols)        # a 0600 file mounted in would be unreadable to uid 1001
-    assert "agentwork:/var/agent" in vols and "agentwork" in compose["volumes"]
-    command = " ".join(agent["command"])
-    for part in ("agent runner", "--core http://core:8080", "--proxy http://172.30.0.1:28091",
-                 "--token-file /run/agent/runner-token"):
-        assert part in command, part
-    assert "${AGENT_DATA:-./data}/runner:/data/runner" in volumes(compose, "core")
-
-
-def test_core_has_a_fixed_address_for_the_meter(compose):
-    for name in ("core", "control"):
-        assert compose["services"][name]["networks"]["agentnet"]["ipv4_address"] == "172.30.0.10", name
+def test_control_has_a_fixed_address_for_the_meter(compose):
+    assert compose["services"]["control"]["networks"]["agentnet"]["ipv4_address"] == "172.30.0.10"
 
 
 def test_agent_docker_daemon(compose):
@@ -211,7 +161,7 @@ def test_agent_docker_daemon(compose):
     assert docker["command"][0] == "dockerd"  # otherwise the image adds a 0.0.0.0:2375 listener of its own
     assert "--host=tcp://127.0.0.1:2375" in docker["command"] and not any("0.0.0.0" in c for c in docker["command"])
     assert "agentwork:/var/agent" in volumes(compose, "docker") and "agentdocker" in compose["volumes"]
-    for name in ("agent", "control", "services"):
+    for name in ("control", "services"):
         assert compose["services"][name]["depends_on"] == ["docker"], name
 
 
@@ -226,13 +176,13 @@ def test_agent_image_can_run_and_drive_apps():
 def test_the_agents_home_and_browsers_live_on_the_volume():
     """A rebuilt container starts from the image, so anything the agent installs outside the volume is lost: its home
     folder (pip --user, uv tools, npm -g, bun, dotfiles) and the Playwright browsers are links into /var/agent, and
-    the runner seeds them there (agent.runner.home)."""
+    the services container seeds them there (agent.services.home)."""
     target = agent_target()
     for needle in ("rm -rf /home/agent && ln -s /var/agent/home /home/agent",
                    "mv /opt/ms-playwright /opt/ms-playwright-image && ln -s /var/agent/ms-playwright /opt/ms-playwright",
                    "NPM_CONFIG_PREFIX=/home/agent/.local", 'PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"'):
         assert needle in target, needle
-    assert "ln -s /var/agent/claude /home/agent/.claude" not in target  # the runner makes that link, in the volume
+    assert "ln -s /var/agent/claude /home/agent/.claude" not in target  # agent.services.home makes that link, in the volume
 
 
 def test_control_service(compose):
@@ -241,9 +191,9 @@ def test_control_service(compose):
     # the tag agentd starts every conversation's container from ([containers] image)
     assert control["image"] == compose["services"]["services"]["image"] == "autonomous-agent-agent"
     assert control["command"] == ["agentd", "serve"] and control["init"] is True
-    # the agent user, with the Docker socket's group (written to .env by deploy/cutover.sh)
-    assert control["user"] == "1001" and control["group_add"] == ["${DOCKER_GID:?run deploy/cutover.sh check first}"]
-    assert control["environment"]["AGENTD_DATA_HOST"] == "${AGENTD_DATA_HOST:?run deploy/cutover.sh check first}"
+    # the agent user, with the Docker socket's group (written to .env by deploy/env.sh)
+    assert control["user"] == "1001" and control["group_add"] == ["${DOCKER_GID:?run deploy/env.sh first}"]
+    assert control["environment"]["AGENTD_DATA_HOST"] == "${AGENTD_DATA_HOST:?run deploy/env.sh first}"
     vols = volumes(compose, "control")
     for mount in ("/var/run/docker.sock:/var/run/docker.sock", "agentwork:/var/agent",
                   "${AGENT_DATA:-./data}/db:/data/db", "${AGENT_DATA:-./data}/runs:/data/runs",
@@ -267,22 +217,16 @@ def test_services_service(compose):
     assert services["network_mode"] == "service:docker" and services["init"] is True
     assert services["stop_grace_period"] == "30s"  # time to stop the agent's services (10 s each at most)
     assert services["command"][:4] == ["python", "-m", "agent", "services"]
-    assert "agentwork:/var/agent" in volumes(compose, "services")
-
-
-def test_python_services_only_in_the_rollback_profile(compose):
-    for name, svc in compose["services"].items():
-        assert svc.get("profiles") == (["python"] if name in ("core", "agent") else None), name
-
-
-def test_core_publishes_public_port(compose):
-    # only the Linear webhook/OAuth listener goes through Tailscale Funnel; both stay on loopback
-    assert "127.0.0.1:18085:8085" in compose["services"]["core"]["ports"]
+    vols = volumes(compose, "services")
+    assert "agentwork:/var/agent" in vols and "agentwork" in compose["volumes"]
+    assert "${AGENT_DATA:-./data}/runner:/run/agent:ro" in vols
+    assert "${AGENT_DATA:-./data}/cli/azure:/data/cli/azure" in vols
+    assert not any("agent.env" in v for v in vols)  # a 0600 file mounted in would be unreadable to uid 1001
 
 
 def test_task_files_are_shared_read_only_with_the_agent(compose):
-    assert "${AGENT_DATA:-./data}/tasks:/data/tasks" in volumes(compose, "core")
-    assert "${AGENT_DATA:-./data}/tasks:/data/tasks:ro" in volumes(compose, "agent")
+    assert "${AGENT_DATA:-./data}/tasks:/data/tasks" in volumes(compose, "control")
+    assert "${AGENT_DATA:-./data}/tasks:/data/tasks:ro" in volumes(compose, "services")
 
 
 def test_agent_toolkit_installs_exactly_the_vetted_set():
@@ -299,7 +243,7 @@ def test_agent_toolkit_installs_exactly_the_vetted_set():
 
 
 def test_agent_toolkit_runs_every_install_when_piped_into_bash(tmp_path):
-    """It's run as `docker exec -i agent-runner bash < deploy/agent-toolkit.sh`, so bash reads the script from stdin.
+    """It's run as `docker exec -i agent-services bash < deploy/agent-toolkit.sh`, so bash reads the script from stdin.
     An installer that reads stdin too must not swallow the lines after it."""
     bin_dir, log = tmp_path / "bin", tmp_path / "calls.log"
     bin_dir.mkdir()
