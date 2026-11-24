@@ -21,7 +21,7 @@ chrono = "0.4"
 bollard = "0.21"
 sha2 = "0.10"
 hmac = "0.12"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 serde_urlencoded = "0.7"
 chrono-tz = "0.10"
 croner = "3"

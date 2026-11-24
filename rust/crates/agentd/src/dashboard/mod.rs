@@ -9,6 +9,7 @@
 pub mod accounts;
 pub mod queries;
 pub mod transcript;
+mod workloads;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -51,9 +52,11 @@ pub struct Options {
     pub poll: Duration,
     pub host: Arc<Mutex<HostStore>>,
     pub rates: Option<Arc<AzureRates>>,
+    /// The Containers page's source; None when agentd can't reach Docker.
+    pub workloads: Option<Arc<crate::workloads::Workloads>>,
 }
 
-struct Dash {
+pub(crate) struct Dash {
     s: Arc<Shared>,
     root: Option<PathBuf>,
     poll: Duration,
@@ -65,24 +68,25 @@ struct Dash {
     pinned: Mutex<HashMap<String, String>>,
     history: Mutex<HashMap<i64, (Instant, Value)>>,
     names: AccountNames,
+    workloads: Option<Arc<crate::workloads::Workloads>>,
 }
 
-type D = State<Arc<Dash>>;
+pub(crate) type D = State<Arc<Dash>>;
 
 /// The person looking: their Tailscale login and name, and the person in [people] it matches.
 #[derive(Clone)]
-struct Viewer {
+pub(crate) struct Viewer {
     login: String,
     name: String,
     person: Option<(String, String)>,
 }
 
 impl Viewer {
-    fn actor(&self) -> String {
+    pub(crate) fn actor(&self) -> String {
         self.person.as_ref().map_or_else(|| format!("tailscale:{}", self.login), |p| p.0.clone())
     }
 
-    fn can_resume(&self) -> bool {
+    pub(crate) fn can_resume(&self) -> bool {
         self.person.as_ref().is_some_and(|p| p.1 == "admin")
     }
 }
@@ -111,11 +115,11 @@ impl AccountNames {
     }
 }
 
-fn error(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error(status: StatusCode, message: &str) -> Response {
     (status, axum::Json(json!({"error": message}))).into_response()
 }
 
-fn ok(v: Value) -> Response {
+pub(crate) fn ok(v: Value) -> Response {
     axum::Json(v).into_response()
 }
 
@@ -140,7 +144,7 @@ macro_rules! tri {
     };
 }
 
-fn internal(e: anyhow::Error) -> Response {
+pub(crate) fn internal(e: anyhow::Error) -> Response {
     tracing::error!("dashboard: {e:#}");
     error(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}"))
 }
@@ -152,7 +156,7 @@ pub fn app(s: Arc<Shared>, options: Options) -> Router {
         scrub: Scrubber::new(&s.secret_values), transcripts: TranscriptCache::new(Scrubber::new(&s.secret_values), RECENT),
         names: AccountNames { path: s.paths.config.join("account-names.toml"), cache: Mutex::default() },
         root, poll: options.poll, host: options.host, rates: options.rates, pinned: Mutex::default(),
-        history: Mutex::default(), s,
+        history: Mutex::default(), workloads: options.workloads, s,
     });
     Router::new()
         .route("/api/me", get(me))
@@ -172,6 +176,13 @@ pub fn app(s: Arc<Shared>, options: Options) -> Router {
         .route("/api/llm/caps", post(llm_caps))
         .route("/api/host", get(host_totals))
         .route("/api/host/consumers", get(host_consumers))
+        .route("/api/workloads", get(workloads::overview))
+        .route("/api/workloads/container/{id}", get(workloads::container))
+        .route("/api/workloads/service/{name}", get(workloads::service))
+        .route("/api/workloads/app/{name}", get(workloads::app))
+        .route("/api/workloads/logs", get(workloads::logs))
+        .route("/api/workloads/action", post(workloads::act))
+        .route("/api/workloads/shell", get(workloads::shell))
         .fallback(web_app)
         .layer(middleware::from_fn_with_state(dash.clone(), access))
         .with_state(dash)
@@ -262,7 +273,7 @@ impl Dash {
     }
 }
 
-fn viewer(req_ext: &axum::http::Extensions) -> Viewer {
+pub(crate) fn viewer(req_ext: &axum::http::Extensions) -> Viewer {
     req_ext.get::<Viewer>().cloned().unwrap_or(Viewer { login: String::new(), name: String::new(), person: None })
 }
 

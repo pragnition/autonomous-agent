@@ -90,6 +90,12 @@ A container is stopped after an hour with nothing running and nothing listening 
 turn at the latest; it stays stopped for 7 days and is started again for the same conversation, then deleted. When
 there isn't memory for another container, idle ones are stopped early.
 
+People can change when things stop (`agentd_keeps`): a container, one server in it (by port), a service, or a stack
+in the agent's own Docker can be kept for some hours or until changed, from the dashboard's Containers page or by
+asking the agent (its `keep_running` tool). A kept container isn't stopped by the rules above, nor for memory, and is
+stopped when its expiry passes. A kept server holds its container up; once the container is past its usual stop,
+everything else in it is stopped. An expired service is taken out of `services.toml`, an expired stack is stopped.
+
 Its main process is `agent-holder`. For each turn the control plane asks it to start Claude Code (in stream-json
 mode) with the turn's arguments and environment; the holder writes every line Claude Code prints to a numbered log
 (`run/containers/<conversation>/<work item>.jsonl`), passes the control plane's messages in, and relays the
@@ -216,7 +222,11 @@ dashboard, and asks Haiku for task labels.
 ### The dashboard
 
 A React app built into the agent image and served by the control plane on :8086. See [KPIs, the activity log and
-the dashboard](#kpis-the-activity-log-and-the-dashboard).
+the dashboard](#kpis-the-activity-log-and-the-dashboard). Its Containers page shows everything that runs: each
+conversation's container with its processes, servers, memory and logs, the services, the stacks in the agent's own
+Docker (read through `docker exec agent-docker`) and the stack's own containers. From it people follow any of their
+logs live, set expiries, stop, start or delete them, and admins open a shell (which holds all the agent's
+credentials). Every action is in the activity log as `workload_action`.
 
 ## From a message to a session
 

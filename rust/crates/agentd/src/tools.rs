@@ -165,6 +165,7 @@ async fn run(s: &Shared, ctx: &ToolContext, name: &str, args: &Value) -> Result<
             Ok("Resumed.".into())
         }
         "read_thread" => read_thread(s, ctx, args).await,
+        "keep_running" => keep_running(s, ctx, args),
         "slack_read" => slack_read(s, args).await,
         "park" => parking::park(s, ctx, args).await,
         "linear_install" => match s.linear.as_ref().and_then(|l| l.app.as_ref()) {
@@ -556,4 +557,55 @@ async fn slack_read(s: &Shared, args: &Value) -> Result<String> {
         text.chars().take(SLACK_READ_CHARS).collect::<String>()
             + &format!("\n[truncated: {n} characters in all; ask for less with limit, or page with cursor]")
     } else { text })
+}
+
+/// An expiry for something the agent runs (see `keeps`), set for the person whose message started the turn.
+fn keep_running(s: &Shared, ctx: &ToolContext, args: &Value) -> Result<String> {
+    let what = arg(args, "what");
+    let target = match what {
+        "container" | "server" => {
+            let convo = ctx.conversation_id.clone().ok_or_else(|| anyhow!("this turn has no conversation"))?;
+            if what == "container" { convo } else {
+                let port = args["port"].as_u64().and_then(|p| u16::try_from(p).ok()).filter(|p| *p > 0)
+                    .ok_or_else(|| anyhow!("give the server's port"))?;
+                crate::keeps::server_target(&convo, port)
+            }
+        }
+        "service" | "stack" => {
+            let name = arg(args, "name");
+            if !crate::workloads::plain_name(name) {
+                return Ok(format!("give the {what}'s name"));
+            }
+            if what == "service" && !crate::workloads::service_entries(&std::fs::read_to_string(
+                s.paths.work.join("services.toml")).unwrap_or_default()).iter().any(|e| e.name == name) {
+                return Ok(format!("no service named {name} in services.toml"));
+            }
+            name.to_string()
+        }
+        _ => return Ok("what: container, server, service or stack".into()),
+    };
+    let by = ctx.actor.clone().unwrap_or_else(|| "agent".into());
+    let now = chrono::Utc::now();
+    let c = s.db.lock();
+    if args["clear"].as_bool() == Some(true) {
+        crate::keeps::clear(&c, what, &target)?;
+        append_event(&c, "workload_action", None, Some(&by), Some(&json!({"kind": what, "target": target, "action": "keep", "clear": true, "via": "agent"})))?;
+        return Ok(format!("{what} {target}: back to the usual rules"));
+    }
+    let until = if args["forever"].as_bool() == Some(true) { None } else {
+        let hours = args["hours"].as_f64().filter(|h| *h > 0.0 && *h <= 24.0 * 365.0)
+            .ok_or_else(|| anyhow!("give hours (at most a year), forever or clear"))?;
+        Some(now + chrono::Duration::seconds((hours * 3600.0) as i64))
+    };
+    crate::keeps::set(&c, what, &target, until, &by, now)?;
+    append_event(&c, "workload_action", None, Some(&by), Some(&json!({"kind": what, "target": target, "action": "keep",
+        "hours": args["hours"], "forever": until.is_none(), "via": "agent"})))?;
+    Ok(match until {
+        None => format!("{what} {target}: kept until someone changes it"),
+        Some(t) => {
+            let local = s.config.timezone.parse::<chrono_tz::Tz>().map(|tz| t.with_timezone(&tz).format("%a %d %b %H:%M %Z").to_string())
+                .unwrap_or_else(|_| crate::keeps::fmt(t));
+            format!("{what} {target}: kept until {local}")
+        }
+    })
 }

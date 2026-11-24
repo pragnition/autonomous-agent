@@ -363,3 +363,115 @@ export function useAction<T = unknown>(path: string) {
     },
   })
 }
+
+// --- the Containers page (agentd's workloads.rs) ------------------------------------------------------------------
+
+/** An expiry a person set: `until` null means kept until someone changes it. */
+export type Keep = { kind: string; target: string; until: string | null; set_by: string | null; set_at: string }
+export type Expiry = { at: string | null; why: string; rule?: string }
+export type SessionLink = {
+  id: string; title: string; state: SessionState; requester: string | null; source: string | null; project: string | null
+  created_at: string; ended_at: string | null; links?: { slack: string | null; linear: string | null; pr: string | null }
+} | null
+
+export type ConversationBox = {
+  conversation: string; name: string; state: string; status: string | null
+  created_at: string; last_turn_at: string | null; stopped_at: string | null
+  turn_running: boolean; work_item: string | null; listeners: number[]; other_processes: number | null
+  cpu_percent: number | null; mem_bytes: number | null; mem_limit: number
+  rx_bps: number | null; tx_bps: number | null; read_bps: number | null; write_bps: number | null; processes: number | null
+  keep: Keep | null; servers_kept: { port: number; keep: Keep }[]; expires: Expiry; session: SessionLink
+}
+export type ServiceBox = {
+  name: string; cmd: string; cwd: string | null; note: string; pid: number | null; running: boolean
+  started: number | null; cpu_percent: number; mem_bytes: number; ports: number[]; processes: number
+  log_bytes: number | null; keep: Keep | null; expires: Expiry
+}
+export type AppContainer = {
+  name: string; service: string | null; image: string; state: string; status: string; ports: string; created: string
+  running_for: string; cpu_percent: number; mem_bytes: number; mem_limit: number; net_rx: number; net_tx: number
+  block_read: number; block_write: number; pids: number | null
+}
+export type StackBox = {
+  name: string; folder: string | null; conversation: string | null; session: SessionLink; running: number; total: number
+  cpu_percent: number; mem_bytes: number; ports: number[]; keep: Keep | null; expires: Expiry; containers: AppContainer[]
+}
+export type SystemBox = {
+  name: string; service: string | null; state: string; status: string; image: string; cpu_percent: number | null
+  mem_bytes: number | null; processes: number | null; shell: boolean; note: string
+}
+export type Rules = {
+  memory_bytes: number; cpus: number; pids: number; idle_stop_minutes: number; max_age_hours: number
+  keep_stopped_days: number; min_free_bytes: number; max_sessions: number
+}
+export type Workloads = {
+  now: string
+  host: { cpu: HostTotals["cpu"]; memory: HostTotals["memory"]; disk: HostTotals["disk_space"]; stale: boolean; age_s: number | null }
+  rules: Rules
+  conversations: ConversationBox[]
+  services: { file: string; items: ServiceBox[]; error: string | null }
+  stacks: StackBox[] | { error: string }
+  stacks_at: string | null
+  system: SystemBox[]
+}
+
+export type Proc = {
+  pid: number; ppid: number; pgid: number; comm: string; state: string; cmd: string; cwd: string | null; threads: number
+  started: number | null; cpu_percent: number; cpu_seconds: number; rss: number; pss: number; swap: number
+  ports: number[]; log: string | null; err: string | null; read_bytes?: number; write_bytes?: number; uid: number | null
+  kind: "init" | "holder" | "claude" | "server" | "process"; in_turn: boolean; kept: boolean
+}
+export type Cgroup = {
+  memory_current: number | null; memory_max: number | null; memory_peak: number | null; anon: number | null
+  file: number | null; kernel: number | null; shmem: number | null; oom_kills: number | null; oom_events: number | null
+  high_events: number | null; cpu_usage_us: number | null; throttled_us: number | null; cpus: number | null
+  pids_current: number | null; pids_max: number | null
+}
+export type ContainerDetail = {
+  summary: ConversationBox
+  container: { id: string | null; image: string | null; image_id: string | null; created: string | null
+    started_at: string | null; finished_at: string | null; oom_killed: boolean | null; exit_code: number | null
+    restart_count: number | null; size_rw: number | null; size_root_fs: number | null; memory_limit: number | null
+    nano_cpus: number | null; pids_limit: number | null }
+  cgroup: Cgroup | null; processes: Proc[]; processes_error: string | null
+  folder: { path: string; bytes: number | null }
+  sessions: NonNullable<SessionLink>[]
+}
+export type ServiceDetail = { name: string; cmd: string; cwd: string | null; note: string; pid: number | null; processes: Proc[] }
+export type AppDetail = {
+  name: string; image: string; created: string; started_at: string; state: string; restart_count: number
+  oom_killed: boolean; exit_code: number; size_rw: number | null; size_root_fs: number | null
+  memory_limit: number; nano_cpus: number
+  mounts: { type: string; source: string; name: string | null; destination: string }[]
+  processes: { pid: number | null; ppid: number | null; cpu_percent: number | null; rss: number | null; elapsed: string; cmd: string }[]
+}
+
+export const useWorkloads = () =>
+  useQuery({ queryKey: ["workloads"], queryFn: () => api.get<Workloads>("/api/workloads"), ...live })
+
+export const useContainerDetail = (id: string | null) =>
+  useQuery({ queryKey: ["workloads", "container", id], enabled: !!id,
+    queryFn: () => api.get<ContainerDetail>(`/api/workloads/container/${encodeURIComponent(id ?? "")}`), ...live })
+
+export const useServiceDetail = (name: string | null) =>
+  useQuery({ queryKey: ["workloads", "service", name], enabled: !!name,
+    queryFn: () => api.get<ServiceDetail>(`/api/workloads/service/${encodeURIComponent(name ?? "")}`), ...live })
+
+export const useAppDetail = (name: string | null) =>
+  useQuery({ queryKey: ["workloads", "app", name], enabled: !!name,
+    queryFn: () => api.get<AppDetail>(`/api/workloads/app/${encodeURIComponent(name ?? "")}`), ...live })
+
+export type WorkloadAction = {
+  kind: "container" | "server" | "process" | "service" | "stack" | "app"
+  target: string
+  action: "stop" | "start" | "restart" | "remove" | "keep" | "kill"
+  hours?: number; forever?: boolean; clear?: boolean; pid?: number; port?: number; signal?: "TERM" | "KILL"
+}
+
+export function useWorkloadAction() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (a: WorkloadAction) => api.post<{ ok: true; done: string }>("/api/workloads/action", a),
+    onSettled: () => client.invalidateQueries({ queryKey: ["workloads"] }),
+  })
+}

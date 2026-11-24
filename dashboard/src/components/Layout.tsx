@@ -1,4 +1,4 @@
-import { Activity, ChartLine, Cpu, Gauge, LayoutDashboard, ListTree, Receipt } from "lucide-react"
+import { Activity, Boxes, ChartLine, Cpu, Gauge, LayoutDashboard, ListTree, Receipt } from "lucide-react"
 import { NavLink, Outlet } from "react-router"
 import { useMe } from "@/api"
 import { AgentState } from "@/components/AgentState"
@@ -14,6 +14,7 @@ const NAV = [
   { to: "/foundry", label: "Foundry spend", icon: Receipt, end: false },
   { to: "/kpis", label: "KPIs", icon: ChartLine, end: false },
   { to: "/activity", label: "Activity", icon: Activity, end: false },
+  { to: "/containers", label: "Containers", icon: Boxes, end: false },
   { to: "/host", label: "Host", icon: Cpu, end: false },
 ]
 
