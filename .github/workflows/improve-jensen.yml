@@ -3,19 +3,19 @@
 # Host setup: deploy/improve-jensen.md.
 #
 # The clock is the host listener (deploy/improve-jensen-listen.service), not GitHub's cron, which never fired these:
-# it sends `improve-jensen-watch` at :17 and `improve-jensen-assess` at :10 every hour, and
+# it sends `improve-jensen-watch` every 4 hours at :17 and `improve-jensen-assess` at 00:47 and 08:47 (UTC), and
 # `improve-jensen-approvals` every 10 minutes (and at once after a decision in Slack), as repository_dispatch events.
 # Each wakes its job only while `vars.IMPROVE_JENSEN_ENGINE` is `on`. The listener also answers replies to the
 # proposals in Slack in plain language and stores the decisions it read for `approvals` to apply.
 #
-#   watch     - hourly (and on manual dispatch): deploys a pending change, measures what's outstanding, lets
+#   watch     - every 4 hours (and on manual dispatch): deploys a pending change, measures what's outstanding, lets
 #               Claude record what went wrong in the issues, then plans what the review jobs should pick up. It proposes
 #               nothing: only the assessment posts proposals, a few at most and only with new evidence.
 #   review    - one run per open Jensen PR the watch job's plan names (or the single PR a manual dispatch names).
 #               The scheduled path never puts a PR URL in this workflow's own prompt or logs: it names a review by
 #               index into this run's own `runs/<run id>-reviews.json`, and Claude looks the URL/conversation up
 #               itself with `review-target`.
-#   assess    - every hour when there's new conversation since the last one: lets Claude write an assessment
+#   assess    - twice a day when there's new conversation since the last one: lets Claude write an assessment
 #               (what holds Jensen back, and what worked that Jensen should keep) and update the pinned assessment
 #               issue, then posts the changes it proposes to Slack, learned ones marked as such.
 #   approvals - every 10 minutes, no Claude: applies the decisions the listener stored and any plain reply or
@@ -98,7 +98,7 @@ jobs:
         with:
           claude_code_oauth_token: sk-ant-oat01-container-via-host-proxy   # placeholder; the proxy swaps in a real account
           prompt: |
-            Run the hourly watch. Digest: ${{ steps.measure.outputs.digest }}. Use the state folder
+            Run the watch. Digest: ${{ steps.measure.outputs.digest }}. Use the state folder
             ($IMPROVE_JENSEN_STATE, default ~/.local/state/improve-jensen). Follow .github/improve-jensen-watch.md.
           claude_args: |
             --model claude-opus-5-5
@@ -355,7 +355,7 @@ jobs:
 
   respond:
     # A person's own request. One Jensen files itself (`vars.JENSEN_GITHUB_LOGIN`) is proposed in Slack instead,
-    # by the hourly watch, and ships only once a person approves it.
+    # by the watch, and ships only once a person approves it.
     if: >
       github.actor != vars.JENSEN_GITHUB_LOGIN && (
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'improve-jensen') &&

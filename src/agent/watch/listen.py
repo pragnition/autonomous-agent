@@ -2,7 +2,7 @@
 clock and its ear in Slack, one loop every 15 seconds.
 
 - The clock: GitHub's cron never fires the workflow, so the listener sends its `repository_dispatch` events through
-  Jensen's `gh` (`watch` at :17 and `assess` at :10 every hour, `approvals` every 10 minutes, all UTC). `<state>/clock.json` keeps each type's last slot sent; each loop sends a type's most recent
+  Jensen's `gh` (`watch` every 4 hours at :17, `assess` at 00:47 and 08:47, `approvals` every 10 minutes, all UTC). `<state>/clock.json` keeps each type's last slot sent; each loop sends a type's most recent
   slot once when it's later than that, so a long stop catches up with one event, not a burst. The first start sends
   nothing and just records the slots.
 - The threads: `approvals.answer_threads` answers new replies to the proposals in plain language, with Claude
@@ -51,15 +51,25 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+# When each job runs (UTC). The watch every 4 hours; the assessment twice a day, half an hour after a watch so it reads
+# that watch's digest, at the start and the end of the team's day in Singapore (08:47 and 16:47 there).
+WATCH_HOURS = (0, 4, 8, 12, 16, 20)
+WATCH_MINUTE = 17
+ASSESS_HOURS = (0, 8)
+ASSESS_MINUTE = 47
+
+
 def latest_slots(now: datetime) -> dict[str, datetime]:
     """Each dispatch type's most recent slot at or before `now`."""
     now = now.astimezone(UTC).replace(second=0, microsecond=0)
 
-    def hourly(minute: int) -> datetime:
-        slot = now.replace(minute=minute)
-        return slot if slot <= now else slot - timedelta(hours=1)
+    def latest(hours: tuple[int, ...], minute: int) -> datetime:
+        day = now.replace(hour=0, minute=0)
+        slots = [day + timedelta(days=back, hours=hour, minutes=minute) for back in (-1, 0) for hour in hours]
+        return max(slot for slot in slots if slot <= now)
 
-    return {WATCH: hourly(17), ASSESS: hourly(10), APPROVALS: now.replace(minute=now.minute - now.minute % 10)}
+    return {WATCH: latest(WATCH_HOURS, WATCH_MINUTE), ASSESS: latest(ASSESS_HOURS, ASSESS_MINUTE),
+            APPROVALS: now.replace(minute=now.minute - now.minute % 10)}
 
 
 def tick(dispatch: Callable[[str], None], state_root: Path, now: datetime) -> None:

@@ -1,7 +1,7 @@
 # improve-jensen host setup
 
 improve-jensen (`.github/workflows/improve-jensen.yml`; see `docs/design.md`) runs on two self-hosted GitHub Actions
-runners on this host: one for the hourly watch and one for the reviews, fixes, assessments, approvals and
+runners on this host: one for the watch and one for the reviews, fixes, assessments, approvals and
 improvement projects, which take turns. Both run as `pragnition`, the user that owns the live checkout `~/autonomous-agent`, with
 Docker and passwordless sudo, so every run has the whole host. Only people with write access can start a run.
 improve-jensen reaches Claude through the account proxy's `improve-jensen` origin.
@@ -210,7 +210,7 @@ From now on, deploy with `cd ~/autonomous-agent && just deploy`. Its exit codes:
 - 1: the check failed, logged as `check_failed` in `~/.local/state/improve-jensen/deploys.jsonl`; a later plain
   deploy retries the same services until a revert or a fix lands;
 - 2: the live checkout isn't deployable (dirty, diverged, or the fetch failed; logged). Fix it by hand;
-- 3: pending: another deploy holds the lock. The hourly watch retries it. A busy Jensen never makes a deploy wait:
+- 3: pending: another deploy holds the lock. The watch retries it. A busy Jensen never makes a deploy wait:
   a change to its container pauses core, gives a running turn up to `--wait-idle-s` to finish, swaps and resumes.
 
 `seed` creates the labels (`jensen-watch`, `ships`, `works`, `long-runs`, `people`, `fixing`, `needs-person`,
@@ -301,8 +301,8 @@ cat ~/.local/state/improve-jensen/plan.json                 # the reviews and th
 The first window is the last hour. An hour with no finished turns, no new PRs and nothing that needs attention
 (the control plane unreachable, a failed deploy) starts no Claude run and writes no plan, and neither does one while
 agentd's usage watch is holding scheduled runs. The changes it proposes, if any, are in the Slack channel (step 9). From here the
-listener (step 9) starts the watch every hour at :17, the assessment every hour at :10 (it runs only when there's new
-conversation since the last one), and the approvals job every 10 minutes.
+listener (step 9) starts the watch every 4 hours at :17 UTC, the assessment at 00:47 and 08:47 UTC (08:47 and 16:47
+in Singapore; it runs only when there's new conversation since the last one), and the approvals job every 10 minutes.
 
 Then check, once, that the jobs work on their own tokens. The `fix` and `respond` jobs check out with
 `persist-credentials: false`, so Claude pushes and opens PRs as the Claude app: a push made with a job's own
@@ -345,7 +345,7 @@ one (no turn of Jensen's, no note from Jensen) starts no Claude run.
 - A `fix` run takes one of this repo's issues as its `target`, and a `project` run a `project` issue's number. Either
   is a person's own choice and skips the approval in Slack.
 - A `review` run takes a product PR's URL as its `target`, and that URL then shows in this public repo's run: in its
-  inputs and in the Claude step's prompt. Leave reviews to the hourly watch, which names a PR only by an index into
+  inputs and in the Claude step's prompt. Leave reviews to the watch, which names a PR only by an index into
   the state folder; start one by hand only for a PR whose URL may be public.
 - Never re-run a run with debug logging. It writes every tool call's full output (digests, transcripts, product
   code) into the public log.

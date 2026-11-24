@@ -34,12 +34,15 @@ def _clock(root: Path) -> dict:
     return json.loads((root / "clock.json").read_text())
 
 
+# The watch every 4 hours at :17 UTC; the assessment twice a day, half an hour after a watch (08:47 and 16:47 in
+# Singapore), so it reads that watch's digest.
 @pytest.mark.parametrize("now, watch, assess, approvals", [
-    ("10:05:00", "09:17", "09:10", "10:00"),
-    ("10:17:00", "10:17", "10:10", "10:10"),
-    ("10:09:59", "09:17", "09:10", "10:00"),
-    ("10:10:00", "09:17", "10:10", "10:10"),
-    ("00:16:59", "23:17", "00:10", "00:10"),
+    ("10:05:00", "08:17", "08:47", "10:00"),
+    ("12:17:00", "12:17", "08:47", "12:10"),
+    ("08:46:59", "08:17", "00:47", "08:40"),
+    ("08:47:00", "08:17", "08:47", "08:40"),
+    ("00:16:59", "20:17", "08:47", "00:10"),
+    ("16:47:00", "16:17", "08:47", "16:40"),
 ])
 def test_latest_slots(now, watch, assess, approvals):
     at = datetime.fromisoformat(f"2026-11-19T{now}+00:00")
@@ -52,17 +55,19 @@ def test_first_start_records_the_latest_slots_without_sending(tmp_path):
     dispatch = Dispatch()
     listen.tick(dispatch, tmp_path, T0)
     assert dispatch.sent == []
-    assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T09:17:00Z",
-                                "improve-jensen-assess": "2026-11-19T09:10:00Z",
+    assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T08:17:00Z",
+                                "improve-jensen-assess": "2026-11-19T08:47:00Z",
                                 "improve-jensen-approvals": "2026-11-19T10:00:00Z"}
 
 
 def test_each_slot_is_sent_once(tmp_path):
     dispatch = Dispatch()
     listen.tick(dispatch, tmp_path, T0)
-    for minute, second in ((10, 0), (10, 15), (12, 30), (17, 0), (17, 45)):
-        listen.tick(dispatch, tmp_path, T0.replace(minute=minute, second=second))
-    assert dispatch.sent == ["improve-jensen-assess", "improve-jensen-approvals", "improve-jensen-watch"]
+    for hour, minute in ((10, 10), (10, 15), (12, 20), (12, 25)):
+        listen.tick(dispatch, tmp_path, T0.replace(hour=hour, minute=minute))
+    assert dispatch.sent == ["improve-jensen-approvals", "improve-jensen-watch", "improve-jensen-approvals"]
+    listen.tick(dispatch, tmp_path, datetime(2026, 11, 20, 0, 50, tzinfo=UTC))
+    assert dispatch.sent[3:] == ["improve-jensen-watch", "improve-jensen-assess", "improve-jensen-approvals"]
 
 
 def test_catch_up_after_downtime_sends_the_latest_slot_once(tmp_path):
@@ -71,9 +76,9 @@ def test_catch_up_after_downtime_sends_the_latest_slot_once(tmp_path):
     later = T0 + timedelta(hours=3, minutes=15)   # 13:20
     listen.tick(dispatch, tmp_path, later)
     listen.tick(dispatch, tmp_path, later + timedelta(seconds=15))
-    assert sorted(dispatch.sent) == ["improve-jensen-approvals", "improve-jensen-assess", "improve-jensen-watch"]
-    assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T13:17:00Z",
-                                "improve-jensen-assess": "2026-11-19T13:10:00Z",
+    assert sorted(dispatch.sent) == ["improve-jensen-approvals", "improve-jensen-watch"]
+    assert _clock(tmp_path) == {"improve-jensen-watch": "2026-11-19T12:17:00Z",
+                                "improve-jensen-assess": "2026-11-19T08:47:00Z",
                                 "improve-jensen-approvals": "2026-11-19T13:20:00Z"}
 
 

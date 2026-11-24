@@ -139,7 +139,7 @@ minutes and swaps the stack. When a change reaches Jensen:
   one that is running keeps the old image until it goes idle and stops;
 - agentd itself: at once.
 
-A 3 (pending) means another deploy held the lock; the hourly watch retries it. A deploy can outlast one Bash call (at
+A 3 (pending) means another deploy held the lock; the watch retries it. A deploy can outlast one Bash call (at
 most 10 minutes), so start it in a session of its own (`setsid`), which outlives the Bash call:
 
 ```sh
@@ -164,13 +164,13 @@ stash or clean the live checkout yourself.
      general terms>); reverted in <revert sha>.` The change didn't ship, and the workflow's last step marks the issue
      `stuck` for a person.
   4. If the redeploy returns 1 or 2, Jensen may be down: DM each admin in Slack (below), add `needs-person`, and
-     comment that the admins have been told. If it returns 3, comment `Revert merged; deploy pending, the hourly
-     watch retries it.` and stop.
+     comment that the admins have been told. If it returns 3, comment `Revert merged; deploy pending, the watch
+     retries it.` and stop.
 - **2, the checkout isn't deployable** (dirty, diverged, or the fetch failed; logged in `deploys.jsonl`): comment the
   reason in general terms, @-mention the admins to make `~/autonomous-agent` deployable and run `just deploy`, and add
   `needs-person`.
 - **3, pending** (another deploy holds the lock): comment `Merged <merge sha>; deploy pending, the
-  hourly watch retries it.` and stop. Once it lands, the watch comments `Deployed` and tells Jensen.
+  watch retries it.` and stop. Once it lands, the watch comments `Deployed` and tells Jensen.
 
 A host-config or Claude-home change has no merge to deploy, and always alters how Jensen behaves. Once its check
 passes, go on as for 0, with `Deployed <the change, in general terms> at <YYYY-MM-DDTHH:MM:SSZ>.` as the comment, and
