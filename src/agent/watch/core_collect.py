@@ -23,11 +23,24 @@ _FINISHED_STATUSES = ("done", "failed", "cancelled")
 # What a watcher needs from a payload/result — never the system prompt, resume ids or test secrets.
 _PAYLOAD_KEEP = ("text", "actor", "unattended", "source", "origin", "continuation", "project")
 _RESULT_KEEP = ("text", "outcome", "error")
+# From agentd's own record of a turn (`agentd_turns.progress`): how often its session started, its moves to another
+# account, and whether a crashed or lost session had to be resumed or started fresh. Never the prompt or session ids.
+_AGENTD_KEEP = ("attempts", "forks", "crash_resumed", "fresh_retried")
 
 
 def _reduced(raw: str | None, keep: tuple[str, ...]) -> dict:
     data = json.loads(raw) if raw else {}
     return {key: data[key] for key in keep if key in data}
+
+
+def _agentd_progress(conn: sqlite3.Connection, item_id: str) -> dict | None:
+    """agentd's record of how it ran the turn, reduced to `_AGENTD_KEEP`; `None` when it has none (a turn from
+    before agentd, or a database without its tables)."""
+    try:
+        row = conn.execute("SELECT progress FROM agentd_turns WHERE work_item_id = ?", (item_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return _reduced(row["progress"], _AGENTD_KEEP) if row is not None else None
 
 
 def collect(conn: sqlite3.Connection, since: str, until: str) -> dict:
@@ -56,6 +69,9 @@ def collect(conn: sqlite3.Connection, since: str, until: str) -> dict:
             "delivered_into": row["delivered_into"],
             "payload": _reduced(row["payload"], _PAYLOAD_KEEP), "result": _reduced(row["result"], _RESULT_KEEP),
         })
+        progress = _agentd_progress(conn, row["id"])
+        if progress is not None:
+            items[-1]["agentd"] = progress
         if conversation_id:
             conversation_ids.add(conversation_id)
 

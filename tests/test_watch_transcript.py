@@ -306,3 +306,25 @@ def test_added_is_deduplicated_in_order_and_counts_subagent_threads():
     ]
     assert turn_facts(lines).added == ["install: pipx install some-tool", "instructions: /work/repo/CLAUDE.md",
                                        "memory: /var/agent/memory/a.md"]
+
+
+def test_prs_created_by_gh_pr_create():
+    # The CLI no longer emits code_change_published for a PR opened through Bash: `gh pr create` prints the URL alone
+    # on its last line, and that names the PR the turn made.
+    lines = [
+        _assistant([_tool_use("t1", "Bash", {"command": "cd repo && gh pr create --base main --title x --body-file b"})]),
+        _result("t1", "Warning: 1 uncommitted change\nhttps://github.com/org/repo/pull/7\n"),
+        # --help mentions URLs in examples; a list prints other PRs: neither made one
+        _assistant([_tool_use("t2", "Bash", {"command": "gh pr list --json url; gh pr create --help"})]),
+        _result("t2", "https://github.com/org/repo/pull/3\nUsage: gh pr create [flags]"),
+        # a failed create made nothing
+        _assistant([_tool_use("t3", "Bash", {"command": "gh pr create --title y"})]),
+        _result("t3", "https://github.com/org/repo/pull/9\nalready exists", is_error=True),
+    ]
+    facts = turn_facts(lines)
+    assert facts.prs_created == ["https://github.com/org/repo/pull/7"]
+
+    # Both ways naming the same PR count it once.
+    published = _line(type="SystemMessage", subtype="code_change_published",
+                      data={"url": "https://github.com/org/repo/pull/7", "action": "created"})
+    assert turn_facts(lines + [published]).prs_created == ["https://github.com/org/repo/pull/7"]

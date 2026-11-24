@@ -6,7 +6,7 @@ reviews that run after you. You propose nothing (the hourly assessment does, fro
 code, review PRs or fix anything yourself.
 
 ## What you read
-- The digest named in your prompt: what needs attention (core unreachable, a failed deploy, a behaviour-changing
+- The digest named in your prompt: what needs attention (the control plane unreachable, a failed deploy, a behaviour-changing
   deploy that landed), the hour's totals, the new Jensen PRs, Jensen's own notes ("Jensen reports") and each
   conversation's turns with their signals. Handle "Needs attention" first (see Housekeeping and Pending deploys).
 - Turns marked "improve-jensen's own: not in the totals" are your own traffic (a review's findings, a live check).
@@ -26,7 +26,9 @@ code, review PRs or fix anything yourself.
 - Numbers come only from `python scripts/jensen_watch.py count <signal> --since <YYYY-MM-DDTHH:MM:SSZ>`, quoted as
   it prints them. Never count by hand. Signals: `context_first`, `context_peak`, `inline_code_chars`,
   `midturn_wait_s`, `lost_background`, `still_running`, `turn_failed`, `no_delegation`, `big_start_small_ask`,
-  `reclone`, `tool_errors`, `missing_tools`, `pr`. `count pr` reads each PR once, at its newest record; a PR whose
+  `reclone`, `tool_errors`, `missing_tools`, `session_restarted`, `account_moved`, `pr`. `session_restarted` is a
+  turn whose session crashed or was lost and had to start again; `account_moved` counts a turn's moves to another
+  account (both from agentd's own record of the turn). `count pr` reads each PR once, at its newest record; a PR whose
   CI couldn't be read counts in `ci_unknown`, never as a failure, and no finding rests on it.
 - Record an occurrence with `python scripts/jensen_watch.py note <issue> <ref> "<line>"`: `ref` is the turn id or
   the PR URL, `line` one plain sentence of what happened. Both stay on the host. It prints the issue's total, in
@@ -100,9 +102,10 @@ it.
   issue doesn't have `needs-person` yet, comment the reason there in general terms, add `needs-person` and
   @-mention the admins. With no such issue, and no open `The live checkout can't be deployed` issue, open that one
   with the reason in general terms, labelled `needs-person`, and @-mention the admins.
-- Jensen's core is unreachable (the digest says so): this hour's turns couldn't be read, and the next digest covers
-  them once core answers. If the newest deploy record is `check_failed`, the failed-deploy rule above covers it.
-  Otherwise, unless an open `Jensen's core is unreachable` issue already exists, open one in general terms,
+- Jensen's control plane is unreachable (the digest says so): agentd in `agent-control` didn't answer, so this hour's
+  turns couldn't be read, and the next digest covers them once it answers. If the newest deploy record is
+  `check_failed`, the failed-deploy rule above covers it. Otherwise, unless an open `Jensen's control plane is
+  unreachable` issue already exists, open one in general terms,
   labelled `needs-person`, and @-mention the admins. Close it with a short comment once a digest no longer says so.
 
 ## The plan

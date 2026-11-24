@@ -259,6 +259,27 @@ def test_turn_records_and_signals(tmp_path):
     assert records["W-b"]["turn_failed"] == 0
 
 
+def test_session_restarts_and_account_moves_from_agentd(tmp_path):
+    # agentd's record of the turn: a session that crashed or was lost and had to start again, and the times the turn
+    # moved to another account. A turn agentd has no record of counts neither.
+    state = State(tmp_path)
+    restarted = _item("W-r", conversation_id="C-a")
+    restarted["agentd"] = {"attempts": 2, "forks": 0, "crash_resumed": True, "fresh_retried": False}
+    moved = _item("W-m", conversation_id="C-a")
+    moved["agentd"] = {"attempts": 3, "forks": 2, "crash_resumed": False, "fresh_retried": False}
+    bare = _item("W-b", conversation_id="C-a")
+    host = FakeHost(collect={"items": [restarted, moved, bare], "conversations": {}, "projects": [],
+                             "pool": "normal", "claimed": 0}, **_NO_PRS)
+
+    measure(state, host, T0)
+
+    records = {r["id"]: r for r in state.read_metrics(_since(T0)) if r["kind"] == "turn"}
+    assert (records["W-r"]["session_restarted"], records["W-r"]["account_moved"]) == (1, 0)
+    assert (records["W-m"]["session_restarted"], records["W-m"]["account_moved"]) == (0, 2)
+    assert (records["W-b"]["session_restarted"], records["W-b"]["account_moved"]) == (0, 0)
+    assert state.count("account_moved", _since(T0)).endswith("total=2 turns=1")
+
+
 def test_turn_failed_isolated_cases(tmp_path):
     state = State(tmp_path)
     # status="failed" wins outright, even though the result carries real text.
@@ -833,7 +854,7 @@ def test_digest_lists_totals(tmp_path):
     text = result.digest.read_text()
     for signal in ("context_first", "context_peak", "inline_code_chars", "lost_background", "still_running",
                    "turn_failed", "no_delegation", "big_start_small_ask", "reclone", "tool_errors",
-                   "missing_tools", "midturn_wait_s", "pr"):
+                   "missing_tools", "session_restarted", "account_moved", "midturn_wait_s", "pr"):
         assert f"{signal} since" in text
 
 
@@ -1028,7 +1049,7 @@ def test_core_unreachable_still_reports_work_and_keeps_the_window_open(tmp_path)
 
     assert result.has_work is True
     text = result.digest.read_text()
-    assert "Jensen's core is unreachable" in text
+    assert "Jensen's control plane is unreachable" in text
     assert "No such container" not in text  # the raw error never reaches the digest
     # Committing this hour must not skip the turns core couldn't hand over: the next window starts where this one did.
     state.commit()
@@ -1044,7 +1065,7 @@ def test_core_answering_garbage_counts_as_unreachable(tmp_path):
     result = measure(state, host, T0)
 
     assert result.has_work is True
-    assert "Jensen's core is unreachable" in result.digest.read_text()
+    assert "Jensen's control plane is unreachable" in result.digest.read_text()
 
 
 def _deploys(state, *results):
@@ -1171,6 +1192,33 @@ def test_records_are_stamped_with_the_event_time_not_the_measurement_time(tmp_pa
     stamps = {r.get("id") or r.get("url"): r["ts"] for r in state.read_metrics(_since(T0))}
     assert stamps == {"W-t": "2026-11-19T09:20:00Z", "W-m": "2026-11-19T09:31:00Z",
                       merged: "2026-11-19T09:40:00Z", still_open: "2026-11-19T09:45:00Z"}
+
+
+# -- a PR the turn announced --
+
+
+def test_a_pr_the_turn_announced_maps_to_its_conversation(tmp_path):
+    # `gh pr create ... | tail -1` hides the URL from the transcript; Jensen still says it in a progress post or its
+    # reply. A PR the turn made itself (created) wins over one another turn only mentioned.
+    state = State(tmp_path)
+    announced, made = "https://github.com/org/repo1/pull/1", "https://github.com/org/repo1/pull/2"
+    talker = _item("W-a", conversation_id="C-said", updated_at="2026-11-19T09:01:00Z",
+                   result={"text": f"Merged {made}.", "outcome": "done"})
+    poster = [_assistant([{"id": "p1", "name": "mcp__agent__post_update",
+                           "input": {"text": f"PR is up: {announced}. Checks next."}}]),
+              _result_line("p1", "posted")]
+    maker = _item("W-m", conversation_id="C-made", updated_at="2026-11-19T09:02:00Z")
+    host = FakeHost(collect={**_EMPTY, "items": [talker, maker]},
+                    transcripts={"W-a": poster, "W-m": [_line(type="SystemMessage", subtype="code_change_published",
+                                                              data={"url": made, "action": "created"})]},
+                    login=_cp(stdout="jensen-bot\n"), search=_search(announced, made),
+                    views={announced: _pr_view(merged_at=None), made: _pr_view(merged_at=None)},
+                    checks={announced: _cp(returncode=0), made: _cp(returncode=0)})
+
+    measure(state, host, T0)
+
+    prs = {r["url"]: r["conversation"] for r in state.read_metrics(_since(T0)) if r["kind"] == "pr"}
+    assert prs == {announced: "C-said", made: "C-made"}
 
 
 # -- a PR made by a turn still running (I7) --

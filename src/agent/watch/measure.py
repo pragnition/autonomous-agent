@@ -30,7 +30,7 @@ itself just because an earlier, abandoned attempt at the same window already sta
 
 Nothing that goes wrong here may stop the hour from reaching Claude, because the hour that most needs Claude is
 the one after a deploy broke Jensen -- and only Claude reverts it. So:
-- core unreachable (or answering garbage) still gives `has_work`, with a digest that says so, and the window is
+- the control plane (agentd, in `agent-control`) unreachable (or answering garbage) still gives `has_work`, with a digest that says so, and the window is
   held open (`State.hold_window`) so the turns core couldn't hand over are read once it answers again;
 - a newest `deploys.jsonl` record of `check_failed` or `not_deployable` gives `has_work` on an otherwise quiet hour,
   with the record named in the digest;
@@ -67,7 +67,7 @@ from agent.watch import feedback
 from agent.watch.digest import SIGNAL_KEYS, ConvoView, render
 from agent.watch.host import Host, pool_is_holding
 from agent.watch.state import FMT, State, is_improve_jensens_own, summarize
-from agent.watch.transcript import TurnFacts, turn_facts
+from agent.watch.transcript import PR_URL_RE, TurnFacts, turn_facts
 
 # A person-started turn counts as failed on any of these outcomes.
 _FAILED_OUTCOMES = {"error", "timeout", "max_turns", "interrupted"}
@@ -84,8 +84,8 @@ _PR_SEARCH_LIMIT = 200
 _DEPLOY_FAILURES = ("check_failed", "not_deployable")
 _SHA = re.compile(r"[0-9a-f]{7,40}")
 
-_CORE_DOWN = ("Jensen's core is unreachable: this hour's finished turns could not be read, and the window stays "
-              "open until core answers again.")
+_CORE_DOWN = ("Jensen's control plane is unreachable: this hour's finished turns could not be read, and the window "
+              "stays open until it answers again.")
 
 # A head commit's combined status (`gh api repos/<repo>/commits/<sha>/status`), read as a CI result.
 _STATUS_CI = {"success": "passed", "pending": "failed", "failure": "failed", "error": "failed"}
@@ -94,7 +94,7 @@ _STATUS_CI = {"success": "passed", "pending": "failed", "failure": "failed", "er
 # since it needs its own fallback text when `gh` is unavailable.
 _SIGNALS = ("context_first", "context_peak", "inline_code_chars", "lost_background", "still_running",
             "turn_failed", "no_delegation", "big_start_small_ask", "reclone", "tool_errors", "missing_tools",
-            "midturn_wait_s")
+            "session_restarted", "account_moved", "midturn_wait_s")
 
 
 @dataclass
@@ -362,6 +362,7 @@ def _turn_record_and_view(item: dict, facts: TurnFacts, known_clones: set[str],
     created, updated = _parse(item["created_at"]), _parse(item["updated_at"])
     payload = item.get("payload") or {}
     result = item.get("result") or {}
+    agentd = item.get("agentd") or {}
     source = payload.get("source")
     record = {
         "ts": _iso(updated), "kind": "turn", "id": item["id"], "conversation": item.get("conversation_id"),
@@ -371,6 +372,9 @@ def _turn_record_and_view(item: dict, facts: TurnFacts, known_clones: set[str],
         "still_running": facts.still_running, "turn_failed": _turn_failed(_person_started(payload), item, result),
         "reclone": sum(1 for repo in facts.clones if repo in known_clones), "tool_errors": facts.tool_errors,
         "missing_tools": facts.missing_tools,
+        # agentd's record of the turn: its session crashed or was lost and had to start again; its account moves
+        "session_restarted": int(bool(agentd.get("crash_resumed") or agentd.get("fresh_retried"))),
+        "account_moved": int(agentd.get("forks") or 0),
     }
     # Belt and suspenders: the lines fed into turn_facts were already scrubbed, but scrub again here in case a line
     # was skipped (bad JSON) and its text still ended up somewhere -- scrubbing already-safe text is a no-op.
@@ -414,6 +418,9 @@ def measure(state: State, host: Host, now: datetime) -> MeasureResult:
     midturn_records: list[dict] = []
     convo_views: dict[str | None, ConvoView] = {}
     pr_to_conversation: dict[str, str] = {}
+    # A PR a turn only announced (in a progress post or its reply) names that turn's conversation, unless a turn
+    # made it (`prs_created`): the first turn to announce it wins.
+    pr_announced_in: dict[str, str] = {}
     known_clones = set(state.known_clones())
     new_clones: set[str] = set()
     skipped = 0
@@ -452,6 +459,8 @@ def measure(state: State, host: Host, now: datetime) -> MeasureResult:
         conversation_id = item.get("conversation_id")
         for url in facts.prs_created:
             pr_to_conversation[url] = conversation_id
+        for url in facts.prs_announced + PR_URL_RE.findall(str((item.get("result") or {}).get("text") or "")):
+            pr_announced_in.setdefault(url, conversation_id)
         known_clones.update(facts.clones)
         new_clones.update(facts.clones)
         turn_records.append(record)
@@ -461,6 +470,7 @@ def measure(state: State, host: Host, now: datetime) -> MeasureResult:
                       turns=[]))
         convo.turns.append(view)
 
+    pr_to_conversation = {**pr_announced_in, **pr_to_conversation}
     pr_records, prs_error = _fetch_prs(host, now, start, pr_to_conversation, projects)
     deploy_alert = _deploy_alert(state)
     landed = _landed_deploys(state, start, end)

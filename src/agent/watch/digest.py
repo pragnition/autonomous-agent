@@ -27,7 +27,8 @@ _FMT = "%Y-%m-%dT%H:%M:%SZ"
 # `signals` keys, in the order a turn shows them -- also what `measure.py` uses to pull exactly these fields out
 # of a turn's metrics record when building that turn's `signals` dict, so the two don't drift apart.
 SIGNAL_KEYS = ("context_first", "context_peak", "big_start_small_ask", "no_delegation", "inline_code_chars",
-               "lost_background", "still_running", "turn_failed", "reclone", "tool_errors", "missing_tools")
+               "lost_background", "still_running", "turn_failed", "reclone", "tool_errors", "missing_tools",
+               "session_restarted", "account_moved")
 
 
 @dataclass
@@ -150,7 +151,7 @@ def _render_at(window: tuple[datetime, datetime], convos: list[ConvoView], total
 
 def render(window: tuple[datetime, datetime], convos: list[ConvoView], totals: dict, prs: list[dict],
            budget: int = 400_000, *, notes: list[dict] | None = None, alerts: list[str] | None = None) -> str:
-    """The digest's markdown text. `alerts` (core unreachable, a failed deploy, a behaviour-changing deploy that
+    """The digest's markdown text. `alerts` (the control plane unreachable, a failed deploy, a behaviour-changing deploy that
     landed) go first, under "Needs attention". `notes` (already-scrubbed Jensen reports, each `{name, text,
     modified}`) get their own "## Jensen reports" section, one `###` subsection per note, each line of its text
     quoted with `> ` (so a note's own text can't impersonate a digest heading) and shown in full -- never cut by

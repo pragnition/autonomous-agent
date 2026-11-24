@@ -50,6 +50,12 @@ _HEREDOC_RE = re.compile(r"<<-?\s*['\"]?\w+['\"]?")
 _GH_CLONE_RE = re.compile(r"gh repo clone\s+(\S+)")
 _GIT_CLONE_RE = re.compile(r"git clone\s+(\S+)")
 
+# `gh pr create` prints the new PR's URL alone on its last line. The CLI's own `code_change_published` event doesn't
+# fire for a PR opened through Bash, so this is how most PRs name the turn that made them.
+_GH_PR_CREATE_RE = re.compile(r"(?:^|[;&|(\n]\s*)gh\s+pr\s+create\b(?![^;&|\n]*\s(?:--help|-h)\b)")
+PR_URL_RE = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
+_PR_URL_LINE_RE = re.compile(r"^(https://github\.com/[^/\s]+/[^/\s]+/pull/\d+)\s*$", re.MULTILINE)
+
 # A Bash command installs something lasting when one of its parts (split on `&&`, `||`, `;`, `|` and newlines)
 # matches one of these. `npm`/`bun` count only with `-g`/`--global` and `pip` only with `--user` in the same part:
 # without them they install into the project, which adds nothing to Jensen.
@@ -106,6 +112,9 @@ class TurnFacts:
     clones: list[str] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
     prs_created: list[str] = field(default_factory=list)
+    # PR URLs Jensen announced in a progress post (`mcp__agent__post_update`): how a PR names its turn when the
+    # create's own output was cut (`gh pr create ... | tail -1`).
+    prs_announced: list[str] = field(default_factory=list)
     tool_lines: list[str] = field(default_factory=list)
     error_lines: list[str] = field(default_factory=list)
     added: list[str] = field(default_factory=list)
@@ -273,6 +282,10 @@ def turn_facts(lines: Iterable[str], *, tool_chars: int = 300, error_chars: int 
                     skill = _as_dict(tool_input).get("skill")
                     if skill:
                         facts.skills.append(skill)
+                elif name.endswith("post_update"):
+                    for url in PR_URL_RE.findall(str(_as_dict(tool_input).get("text", ""))):
+                        if url not in facts.prs_announced:
+                            facts.prs_announced.append(url)
 
         elif kind == "UserMessage":
             content = record.get("content")
@@ -285,6 +298,12 @@ def turn_facts(lines: Iterable[str], *, tool_chars: int = 300, error_chars: int 
                 output_text = clean(_result_text(block.get("content")))
                 input_text = clean(_input_text(name, tool_input))
                 facts.tool_lines.append(f"{name}: {input_text[:tool_chars]} -> {output_text[:tool_chars]}")
+
+                if name == "Bash" and not block.get("is_error") and \
+                        _GH_PR_CREATE_RE.search(str(_as_dict(tool_input).get("command", ""))):
+                    for url in _PR_URL_LINE_RE.findall(_result_text(block.get("content"))):
+                        if url not in facts.prs_created:
+                            facts.prs_created.append(url)
 
                 if block.get("is_error"):
                     facts.error_lines.append(output_text[:error_chars])
@@ -315,7 +334,7 @@ def turn_facts(lines: Iterable[str], *, tool_chars: int = 300, error_chars: int 
 
         elif kind == "SystemMessage" and record.get("subtype") == "code_change_published":
             data = _as_dict(record.get("data"))
-            if data.get("action") == "created" and data.get("url"):
+            if data.get("action") == "created" and data.get("url") and data["url"] not in facts.prs_created:
                 facts.prs_created.append(data["url"])
 
     facts.still_running = len(started_tasks)
