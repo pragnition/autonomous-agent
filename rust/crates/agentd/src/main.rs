@@ -37,7 +37,7 @@ fn env(name: &str, default: &str) -> String {
 /// One cleanup pass now: the report as JSON on stdout, its summary on stderr.
 async fn cleanup(args: &[String]) -> Result<()> {
     use agentd::cleanup;
-    let s = agentd::serve::open_offline()?;
+    let s = Arc::new(agentd::serve::open_offline()?);
     let idle_days = match flag(args, "--idle-days") {
         Some(n) => n.parse().context("--idle-days takes a whole number")?,
         None => s.config.cleanup.idle_days,
@@ -52,7 +52,8 @@ async fn cleanup(args: &[String]) -> Result<()> {
     }
     let settings = cleanup::Settings::new(&s.paths.work, idle_days);
     let apps: Arc<dyn cleanup::Apps> = Arc::new(cleanup::DockerApps::new(&env("AGENTD_NETWORK", "agent-docker"), &settings)?);
-    let report = cleanup::pass(s.db.clone(), apps, settings, chrono::Utc::now(), dry_run).await?;
+    let ask: Arc<dyn cleanup::Ask> = Arc::new(cleanup::Jensen(s.clone()));
+    let report = cleanup::pass(s.db.clone(), apps, Some(ask), settings, chrono::Utc::now(), dry_run).await?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     eprintln!("{}", report.summary());
     Ok(())

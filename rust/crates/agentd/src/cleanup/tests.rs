@@ -4,17 +4,35 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
 
-/// The agent's Docker, faked: a fixed listing (or none), and root moves and removals done as ourselves.
+/// The agent's Docker, faked: a fixed listing (or none), root moves and removals done as ourselves, and canned
+/// answers for the Docker step (`docker` calls are recorded).
+#[derive(Default)]
 struct Fake {
     listing: Option<String>,
     moved_as_root: Mutex<Vec<PathBuf>>,
     removed_as_root: Mutex<Vec<PathBuf>>,
+    /// `docker inspect` of every container and `docker volume inspect` of every volume.
+    containers_json: String,
+    volumes_json: String,
+    processes: HashMap<String, String>,
+    connections: String,
+    contents: HashMap<String, (bool, u64)>,
+    calls: Mutex<Vec<String>>,
 }
 
 impl Fake {
     fn new(listing: &str) -> Arc<Fake> {
-        Arc::new(Fake { listing: Some(listing.to_string()), moved_as_root: Mutex::default(), removed_as_root: Mutex::default() })
+        Arc::new(Fake { listing: Some(listing.to_string()), containers_json: "[]".into(), volumes_json: "[]".into(),
+                        ..Default::default() })
     }
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+fn ids_in(json: &str, key: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(json).unwrap().as_array().unwrap().iter()
+        .map(|c| c[key].as_str().unwrap().to_string()).collect::<Vec<_>>().join("\n")
 }
 
 impl Apps for Fake {
@@ -29,6 +47,32 @@ impl Apps for Fake {
             fs::rename(&from, &to)?;
             self.moved_as_root.lock().unwrap().push(from);
             Ok(())
+        })
+    }
+    fn docker(&self, args: Vec<String>) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move {
+            let line = args.join(" ");
+            let out = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+                ["ps", ..] => ids_in(&self.containers_json, "Id"),
+                ["inspect", ..] => self.containers_json.clone(),
+                ["volume", "ls", ..] => ids_in(&self.volumes_json, "Name"),
+                ["volume", "inspect", ..] => self.volumes_json.clone(),
+                _ => "Total reclaimed space: 0B".into(),
+            };
+            self.calls.lock().unwrap().push(line);
+            Ok(out)
+        })
+    }
+    fn processes(&self, conversation: &str) -> BoxFuture<'_, Result<String>> {
+        let out = self.processes.get(conversation).cloned().unwrap_or_default();
+        Box::pin(async move { Ok(out) })
+    }
+    fn connections(&self) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move { Ok(self.connections.clone()) })
+    }
+    fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>> {
+        Box::pin(async move {
+            Ok(mountpoints.into_iter().map(|m| { let c = self.contents.get(&m).copied().unwrap_or((false, 1000)); (m, c) }).collect())
         })
     }
     fn remove_as_root(&self, path: PathBuf) -> BoxFuture<'_, Result<()>> {
@@ -78,7 +122,7 @@ impl Setup {
         state(&self.db.lock(), name, &path, self.now, self.settings.idle, modified(&path)).unwrap()
     }
     async fn pass(&self, apps: Arc<Fake>, dry_run: bool) -> Result<Report> {
-        pass(self.db.clone(), apps, self.settings.clone(), self.now, dry_run).await
+        pass(self.db.clone(), apps, None, self.settings.clone(), self.now, dry_run).await
     }
 }
 
@@ -312,7 +356,7 @@ async fn no_answer_from_the_agents_docker_means_no_pass() {
     let s = setup();
     let f = typical(&s, "V-old");
     s.conversation("V-old", 4, None);
-    let apps = Arc::new(Fake { listing: None, moved_as_root: Mutex::default(), removed_as_root: Mutex::default() });
+    let apps = Arc::new(Fake { listing: None, containers_json: "[]".into(), volumes_json: "[]".into(), ..Default::default() });
     assert!(s.pass(apps, false).await.is_err());
     assert!(f.join("app/node_modules").exists() && f.join("tools/node_modules").exists());
 }
@@ -402,4 +446,142 @@ fn quote_makes_one_shell_word() {
     assert_eq!(quote("https://github.com/o/r.git"), "https://github.com/o/r.git");
     assert_eq!(quote("my dir"), "'my dir'");
     assert_eq!(quote("it's"), r"'it'\''s'");
+}
+
+// --- the agent's Docker ----------------------------------------------------------------------------------------------
+
+/// The cleanup's questions to the agent, recorded.
+#[derive(Default)]
+struct Asker {
+    asked: Mutex<Vec<String>>,
+}
+
+impl Ask for Asker {
+    fn ask(&self, text: &str) -> Result<String> {
+        self.asked.lock().unwrap().push(text.to_string());
+        Ok("w-ask".into())
+    }
+    fn project_channels(&self) -> HashMap<String, String> {
+        HashMap::from([("rosterrolo".to_string(), "C-RR".to_string())])
+    }
+}
+
+/// One container of `docker inspect`, `days` before the pass (started when running, stopped when not).
+#[allow(clippy::too_many_arguments)]
+fn container(s: &Setup, id: &str, project: &str, folder: Option<&str>, running: bool, days: f64, volumes: &[&str], port: Option<u16>) -> serde_json::Value {
+    let when = keeps::fmt(s.now - Duration::minutes((days * 1440.0) as i64));
+    let mut mounts: Vec<serde_json::Value> = volumes.iter().map(|v| serde_json::json!({"Type": "volume", "Name": v})).collect();
+    let mut labels = serde_json::json!({"com.docker.compose.project": project});
+    if let Some(f) = folder {
+        labels["com.docker.compose.project.working_dir"] = serde_json::json!(format!("{}/{f}/app", s.settings.scratch().display()));
+        mounts.push(serde_json::json!({"Type": "bind", "Source": format!("{}/{f}/app", s.settings.scratch().display())}));
+    }
+    serde_json::json!({"Id": id, "Name": format!("/{id}"), "Created": when,
+        "State": {"Status": if running { "running" } else { "exited" }, "StartedAt": when,
+                  "FinishedAt": if running { "0001-01-01T00:00:00Z".to_string() } else { when.clone() }},
+        "Config": {"Labels": labels}, "Mounts": mounts,
+        "NetworkSettings": {"Ports": port.map(|p| serde_json::json!({"8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": p.to_string()}]}))
+                                         .unwrap_or(serde_json::json!({}))}})
+}
+
+fn volume(s: &Setup, name: &str, project: &str, days: i64) -> serde_json::Value {
+    serde_json::json!({"Name": name, "Labels": {"com.docker.compose.project": project},
+                       "CreatedAt": keeps::fmt(s.now - Duration::days(days)), "Mountpoint": format!("/v/{name}")})
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_docker_step_stops_only_what_no_session_uses_and_asks_before_a_database_goes() {
+    let s = setup();
+    for (name, days) in [("V-stale", 5), ("V-live", 5), ("V-recent", 0), ("V-ref", 5), ("V-conn", 5), ("V-kept", 5), ("V-old", 5)] {
+        s.folder(name);
+        s.conversation(name, days, None);
+    }
+    // V-recent was active half an hour ago; V-live's session is up and its processes call V-ref's stack
+    s.exec(&format!("UPDATE conversations SET last_active_at = '{}' WHERE id = 'V-recent'", keeps::fmt(s.now - Duration::minutes(30))));
+    s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-live', 'agent-conv-V-live', 'x')");
+    s.exec("UPDATE conversations SET channel = 'C-OLD', thread_ts = '111.222' WHERE id = 'V-old'");
+    s.exec("INSERT INTO agentd_keeps(kind, target, until, set_by, set_at) VALUES ('stack', 'rr-kept', NULL, 'sam', 'x')");
+    let containers = serde_json::json!([
+        container(&s, "rr-stale-app", "rr-stale", Some("V-stale"), true, 1.0, &[], Some(18090)),
+        container(&s, "rr-live-app", "rr-live", Some("V-live"), true, 1.0, &[], Some(18091)),
+        container(&s, "rr-recent-app", "rr-recent", Some("V-recent"), true, 1.0, &[], Some(18092)),
+        container(&s, "rr-ref-app", "rr-ref", Some("V-ref"), true, 1.0, &[], Some(18093)),
+        container(&s, "rr-conn-app", "rr-conn", Some("V-conn"), true, 1.0, &[], Some(18094)),
+        container(&s, "rr-kept-app", "rr-kept", Some("V-kept"), true, 1.0, &[], Some(18095)),
+        container(&s, "rr-old-db", "rr-old", Some("V-old"), false, 5.0, &["rr-old_postgres", "rr-old_cache"], None),
+        container(&s, "loose", "", None, true, 9.0, &[], None),
+    ]);
+    let anon_db = "0".repeat(30) + "db" + &"0".repeat(32); // random hex that happens to read "db"
+    let volumes = serde_json::json!([volume(&s, "rr-old_postgres", "rr-old", 9), volume(&s, "rr-old_cache", "rr-old", 9),
+                                     volume(&s, "anon-new", "", 1), volume(&s, &anon_db, "rr-old", 9)]);
+    let apps = Arc::new(Fake {
+        listing: Some("__END__".into()), containers_json: containers.to_string(), volumes_json: volumes.to_string(),
+        processes: HashMap::from([("V-live".to_string(), "claude --system-prompt 18093 --output-format stream-json\n\
+                                                          curl -s http://localhost:18093/health\n".to_string())]),
+        connections: "0: 0100007F:46AE 0100007F:C350 01 0:0\n".into(), // something connected to 18094
+        contents: HashMap::from([("/v/rr-old_cache".to_string(), (false, 2_000_000)), ("/v/rr-old_postgres".to_string(), (true, 9_000_000))]),
+        ..Default::default()
+    });
+    let asker = Arc::new(Asker::default());
+    let report = pass(s.db.clone(), apps.clone(), Some(asker.clone()), s.settings.clone(), s.now, false).await.unwrap();
+    let d = report.docker.unwrap();
+    assert!(d.failures.is_empty(), "{:?}", d.failures);
+    assert_eq!(d.stopped_stacks, ["loose", "rr-stale"]);
+    assert_eq!(d.removed_containers, ["rr-old-db"]);
+    assert_eq!(d.removed_volumes, ["rr-old_cache".to_string(), anon_db], "the database volume isn't removed");
+    assert_eq!(d.asked_about, ["rr-old_postgres"]);
+    let calls = apps.calls();
+    assert!(calls.contains(&"stop rr-stale-app".to_string()) && calls.contains(&"stop loose".to_string()), "{calls:?}");
+    assert!(calls.contains(&"rm rr-old-db".to_string()) && calls.contains(&"volume rm rr-old_cache".to_string()), "{calls:?}");
+    assert!(!calls.iter().any(|c| c.contains("rr-old_postgres") && c.starts_with("volume rm")), "{calls:?}");
+    assert!(calls.iter().any(|c| c.starts_with("image prune -a -f --filter until=72h")) && calls.iter().any(|c| c.starts_with("builder prune")));
+    let asked = asker.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].contains("`rr-old_postgres`") && asked[0].contains("channel C-OLD") && asked[0].contains("C-OLD/111.222"), "{}", asked[0]);
+    assert!(fs::read_to_string(s.settings.scratch().join("V-stale").join(NOTES)).unwrap().contains("`docker start rr-stale-app`"));
+    assert!(fs::read_to_string(s.settings.scratch().join("V-old").join(NOTES)).unwrap().contains("volume `rr-old_cache`"));
+
+    // the next pass doesn't ask about it again
+    let again = pass(s.db.clone(), apps.clone(), Some(asker.clone()), s.settings.clone(), s.now + Duration::days(2), false).await.unwrap();
+    assert!(again.docker.unwrap().asked_about.is_empty());
+    assert_eq!(asker.asked.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_of_the_docker_step_changes_nothing() {
+    let s = setup();
+    s.folder("V-stale");
+    s.conversation("V-stale", 5, None);
+    let containers = serde_json::json!([container(&s, "rr-stale-app", "rr-stale", Some("V-stale"), true, 1.0, &[], None)]);
+    let apps = Arc::new(Fake { listing: Some("__END__".into()), containers_json: containers.to_string(), volumes_json: "[]".into(),
+                               ..Default::default() });
+    let report = pass(s.db.clone(), apps.clone(), Some(Arc::new(Asker::default())), s.settings.clone(), s.now, true).await.unwrap();
+    assert_eq!(report.docker.unwrap().stopped_stacks, ["rr-stale"]);
+    assert!(apps.calls().iter().all(|c| c.starts_with("ps") || c.starts_with("inspect") || c.starts_with("volume ls")), "{:?}", apps.calls());
+    assert!(!s.settings.scratch().join("V-stale").join(NOTES).exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_whose_processes_cannot_be_read_stops_nothing() {
+    let s = setup();
+    s.folder("V-stale");
+    s.conversation("V-stale", 5, None);
+    s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-other', 'agent-conv-V-other', 'x')");
+    struct Blind(Arc<Fake>);
+    impl Apps for Blind {
+        fn containers(&self) -> BoxFuture<'_, Result<String>> { self.0.containers() }
+        fn move_as_root(&self, f: PathBuf, t: PathBuf) -> BoxFuture<'_, Result<()>> { self.0.move_as_root(f, t) }
+        fn remove_as_root(&self, p: PathBuf) -> BoxFuture<'_, Result<()>> { self.0.remove_as_root(p) }
+        fn docker(&self, a: Vec<String>) -> BoxFuture<'_, Result<String>> { self.0.docker(a) }
+        fn processes(&self, _: &str) -> BoxFuture<'_, Result<String>> { Box::pin(async { Err(anyhow!("no such container")) }) }
+        fn connections(&self) -> BoxFuture<'_, Result<String>> { self.0.connections() }
+        fn volume_contents(&self, m: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>> { self.0.volume_contents(m) }
+    }
+    let containers = serde_json::json!([container(&s, "rr-stale-app", "rr-stale", Some("V-stale"), true, 1.0, &[], None)]);
+    let fake = Arc::new(Fake { listing: Some("__END__".into()), containers_json: containers.to_string(), volumes_json: "[]".into(),
+                               ..Default::default() });
+    let report = pass(s.db.clone(), Arc::new(Blind(fake.clone())), None, s.settings.clone(), s.now, false).await.unwrap();
+    let d = report.docker.unwrap();
+    assert!(d.stopped_stacks.is_empty() && !d.failures.is_empty());
+    assert!(!fake.calls().iter().any(|c| c.starts_with("stop")));
 }

@@ -157,3 +157,44 @@ and a one-line command to get it back, plus each kept clone and why it was kept.
 
 - The exact layout of `CLEANUP.md` and the summary line.
 - The git command lines, timeouts and output parsing.
+
+## Jensen's own Docker (added after the first pass went live)
+
+The first pass freed 128 GB from the folders. Jensen's own Docker (`agent-docker`) still held about 106 GB: images
+24 GB, containers 6.7 GB, volumes 54 GB, build cache 21 GB. Its test stacks also never stopped, which kept memory and
+load high. Of the volumes no container used, 13.7 GB were test-stack databases (83 Postgres volumes), 7 GB were
+`node_modules` volumes and 3 GB were small anonymous ones.
+
+The same hourly pass now runs a Docker step first.
+
+- **A running stack is stopped** (compose project, or a lone container) only when no running Claude Code session is
+  using it, and nobody kept it. It counts as used when any of these holds:
+  - a conversation working in its folder is in use (a turn queued, running, parked or waiting on a usage limit,
+    its container still up, an active long project or spawned agent, someone kept its container) or was active in
+    the last hour;
+  - a running session's processes name the stack, one of its containers, its folder or one of its published ports
+    (a `docker compose`, a test run, a `curl`);
+  - anything is connected to one of its published ports right now (a session, another stack, a person viewing a
+    preview through the tailnet).
+
+  A stack with no conversation folder is stopped only after running `idle_days` with none of the above. Stopping
+  is reversible: the folder's `CLEANUP.md` says how to start it again.
+- **Stopped containers** go once stopped for `idle_days`, when nothing in their stack runs, nobody kept it, and its
+  folders have been quiet for `idle_days`.
+- **Unused images and build cache** older than `idle_days` go (`docker image prune -a`, `docker builder prune`, both
+  with `until`).
+- **Volumes no container uses** (after the above), at least `idle_days` old, whose stacks and folders have been quiet
+  for `idle_days`:
+  - one holding no database (`node_modules`, anonymous scratch) goes;
+  - one holding a database is never deleted by the cleanup. It counts as a database by its files (`PG_VERSION`, MySQL
+    `ibdata1`, Mongo `WiredTiger`, Redis dumps, SQLite files) or by its name (postgres, pg, mysql, mongo, redis, db,
+    data, sql). agentd starts a Jensen turn (source `cleanup`), at most once a day, listing these volumes with their
+    stack, conversation, thread and channel. Jensen asks in the project's channel (the project's own channel, else
+    the channel the conversation came from, else its parent's), one message per channel, saying what each database
+    was for. It deletes a volume only after a person says it's safe. A reply in that thread reaches a Jensen session
+    that reads the thread and acts. agentd asks about each volume once (`agentd_cleanup_asks`, keyed by name and
+    creation time).
+- Notes about stopped stacks and removed containers and volumes go into the folder's `CLEANUP.md`. Writing a note
+  doesn't count as activity in the folder.
+- If the Docker step fails, it's reported and the folder step still runs. The pass logs the disk's free space
+  before and after.
