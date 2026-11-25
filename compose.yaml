@@ -89,6 +89,12 @@ services:
     container_name: agent-docker
     restart: unless-stopped
     privileged: true
+    # Everything the agent runs in here (its apps, their databases, builds) shares these caps, so a heavy stack is
+    # killed in here instead of pushing the laptop into swap. No swap: memory-hungry apps fail fast, not slowly.
+    mem_limit: 12g
+    memswap_limit: 12g
+    cpus: 5
+    pids_limit: 8192
     networks: [agentnet]
     environment:
       DOCKER_TLS_CERTDIR: ""
