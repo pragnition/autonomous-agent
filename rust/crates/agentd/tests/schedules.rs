@@ -181,6 +181,28 @@ fn account_states_match_python() {
 }
 
 #[tokio::test]
+async fn weekly_capped_account_is_out_until_its_week_resets_without_an_alert() {
+    let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
+    let now = Utc::now().timestamp() as f64;
+    let capped = json!({"status": "allowed_warning", "rank": null, "verified": true, "5h": [0.43, now + 3600.0],
+                        "7d": [0.84, now + 2.0 * 86400.0], "cap_7d": 0.65});
+    assert_eq!(usage_watch::next_reset(&capped), Some(now + 2.0 * 86400.0), "room comes back at the weekly reset");
+    let usage = json!({"a": capped, "b": rec(Some(1), 0.1, 3600.0, true), "c": rec(Some(2), 0.1, 3600.0, true),
+                       "d": rec(None, 0.1, 3600.0, true)});
+    let s = shared_at(dir.path(), &slack, &fake_proxy_live(Arc::new(Mutex::new(usage))).await);
+    let long_ago = now - 6.0 * 3600.0;
+    let out = json!({"state": "out", "since": long_ago, "verified": true, "out_alerted": false, "cap": 0.65, "capped": false});
+    agentd::db::set_setting(&s.db.lock(), "usage_watch", &json!({"pool": "normal", "accounts": {
+        "a": out, "b": {"state": "ok", "since": long_ago, "verified": true}, "c": {"state": "ok", "since": long_ago, "verified": true},
+        "d": out}}).to_string()).unwrap();
+    usage_watch::tick(&s).await.unwrap();
+    let dms: Vec<String> = slack.sent("chat.postMessage").iter().map(|m| m["text"].as_str().unwrap().to_string()).collect();
+    assert_eq!(dms.len(), 1, "{dms:?}");
+    assert!(dms[0].starts_with("Account d has had no capacity"), "only the account out for no reason: {dms:?}");
+    let _ = dir;
+}
+
+#[tokio::test]
 async fn pool_hold_and_alerts_once() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
     let usage = Arc::new(Mutex::new(json!({"a": rec(Some(0), 0.9, 4.0 * 3600.0, true), "b": rec(None, 1.0, 3600.0, true)})));

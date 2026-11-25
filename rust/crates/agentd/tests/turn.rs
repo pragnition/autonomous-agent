@@ -130,6 +130,10 @@ struct Rig {
 
 impl Rig {
     async fn new(a_used: f64) -> Rig {
+        Rig::with_usage(usage(a_used)).await
+    }
+
+    async fn with_usage(usage: Value) -> Rig {
         let dir = tempfile::tempdir().unwrap();
         let run = dir.path().join("run");
         let db = Db::open(&dir.path().join("agent.db")).unwrap();
@@ -139,7 +143,7 @@ impl Rig {
                           uid: 1001, run_root: run.clone() };
         let engine = LocalEngine { root: run.clone(), holders: Mutex::default() };
         let containers = Arc::new(Containers::new(engine, HolderProbe { run_root: run }, db.clone(), settings, host));
-        Rig { proxy_url: fake_proxy(usage(a_used)).await, dir, db, containers, host: Arc::default() }
+        Rig { proxy_url: fake_proxy(usage).await, dir, db, containers, host: Arc::default() }
     }
 
     /// A runner whose Claude Code plays `attempts[k]` on its k-th start.
@@ -400,6 +404,19 @@ async fn soft_cap_moves_only_at_quiet_moment() {
     let log = rig.log("W-1");
     let tool_done = log.iter().find(|l| matches!(&l.entry, Entry::Out { line } if line.contains("tool_result"))).unwrap();
     assert!(interrupt_seq(&log) > tool_done.seq, "interrupted only once the command had finished");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn weekly_cap_moves_the_session_like_the_soft_cap() {
+    let mut weekly = usage(0.10); // well under the 5-hour cap, but past the proxy's weekly one
+    weekly["acct-a"]["rank"] = Value::Null;
+    weekly["acct-a"]["7d"] = json!([0.84, chrono::Utc::now().timestamp() as f64 + 2.0 * 86400.0]);
+    weekly["acct-a"]["cap_7d"] = json!(0.65);
+    let rig = Rig::with_usage(weekly).await;
+    let runner = rig.runner(&[vec![init(), read_prompt(), say("on a"), json!({"wait_interrupt": true}), failed(None)],
+                              vec![init(), read_prompt(), say("on b"), result("moved")]], |_| {});
+    let r = runner.run(rig.spec("W-1"), rig.host.clone()).await;
+    assert_eq!((r.outcome.as_str(), r.text.as_str(), r.forks, r.account_code.as_deref()), ("done", "moved", 1, Some("acct-b")));
 }
 
 #[tokio::test(flavor = "multi_thread")]

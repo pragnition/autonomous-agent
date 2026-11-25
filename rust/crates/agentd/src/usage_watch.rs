@@ -1,9 +1,10 @@
 //! The usage watch: every minute, the account pool's state from the proxy, and what agentd does about it (a port of
 //! core/usage_watch.py).
 //!
-//! Each account is `ok`, `hot` or `out`: `out` while the proxy gives it no rank; `hot` once its 5-hour window is at its
-//! soft cap; `ok` again only COOL_MARGIN below the cap, so it doesn't flap (once the cap has lifted, there is no
-//! margin). How fast an account spends its 7-day allowance doesn't count. The pool, counted in `ok` accounts: two
+//! Each account is `ok`, `hot` or `out`: `out` while the proxy gives it no rank (as it does past the weekly cap);
+//! `hot` once its 5-hour window is at its soft cap; `ok` again only COOL_MARGIN below the cap, so it doesn't flap (once
+//! the cap has lifted, there is no margin). How fast an account spends its 7-day allowance doesn't count; only the
+//! weekly cap does. The pool, counted in `ok` accounts: two
 //! or more (or every verified account, in a smaller pool) is normal; fewer holds scheduled runs in the queue; none
 //! tells the admins once. Turns a usage limit cut off are each carried on once an account is `ok` again. Every change
 //! goes to the event log.
@@ -14,7 +15,7 @@ use chrono_tz::Tz;
 use serde_json::{Map, Value, json};
 
 use crate::db::{append_event, get_setting, set_setting};
-use crate::proxy::SoftCap;
+use crate::proxy::{SoftCap, weekly_capped};
 use crate::shared::Shared;
 
 const COOL_MARGIN: f64 = 0.10;
@@ -47,10 +48,11 @@ pub fn account_state(rec: &Value, previous: Option<&str>, now: f64, soft: &SoftC
     if previous == Some("hot") && cooling { "hot" } else { "ok" }
 }
 
-/// When the account gets room again: its 7-day reset when that window is spent, else its 5-hour one.
+/// When the account gets room again: its 7-day reset when that window is spent or past its weekly cap, else its
+/// 5-hour one.
 pub fn next_reset(rec: &Value) -> Option<f64> {
     let (used_7d, reset_7d) = window(rec, "7d");
-    if used_7d.is_some_and(|u| u >= 1.0) { reset_7d } else { window(rec, "5h").1 }
+    if used_7d.is_some_and(|u| u >= 1.0) || weekly_capped(rec) { reset_7d } else { window(rec, "5h").1 }
 }
 
 pub fn pool_level(ok: i64, verified: i64) -> &'static str {
@@ -80,7 +82,7 @@ pub async fn tick(s: &Shared) -> Result<()> {
     for (code, rec) in &accounts {
         let before = &old["accounts"][code.as_str()];
         let state = account_state(rec, before["state"].as_str(), now, &soft);
-        let verified = rec["verified"].as_bool().unwrap_or(false);
+        let (verified, weekly) = (rec["verified"].as_bool().unwrap_or(false), weekly_capped(rec));
         let (used, reset) = window(rec, "5h");
         let (cap, capped) = (soft.cap(reset, now), soft.over(used, reset, now));
         let since = if before["state"] == state { num(&before["since"]).unwrap_or(now) } else { now };
@@ -88,7 +90,7 @@ pub async fn tick(s: &Shared) -> Result<()> {
         let known = before["state"].is_string();
         if known && before["state"] != state {
             event("usage_account", json!({"account": code, "from": before["state"], "to": state, "used_5h": used, "cap": cap,
-                                          "pace_delta": num(&rec["pace_delta"])}))?;
+                                          "pace_delta": num(&rec["pace_delta"]), "weekly_capped": weekly}))?;
         }
         let cap_data = json!({"account": code, "used_5h": used, "cap": cap, "reset_5h": reset});
         if known && capped && before["capped"] != true {
@@ -101,7 +103,8 @@ pub async fn tick(s: &Shared) -> Result<()> {
             event("usage_unverified", json!({"account": code}))?;
             alerts.push(format!("Account {code} is no longer verified by the proxy; it gets no new sessions until someone signs it in again."));
         }
-        if verified && state == "out" && !out_alerted && now - since > OUT_TOO_LONG_S {
+        // past its weekly cap, an account is out by design until its week resets
+        if verified && state == "out" && !weekly && !out_alerted && now - since > OUT_TOO_LONG_S {
             out_alerted = true;
             event("usage_out_too_long", json!({"account": code, "since": since}))?;
             alerts.push(format!("Account {code} has had no capacity for over {} hours (next reset {}, status {}).",
