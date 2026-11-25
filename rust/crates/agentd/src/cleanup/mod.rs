@@ -566,6 +566,11 @@ pub fn state(c: &Connection, folder: &str, path: &Path, now: DateTime<Utc>, idle
             return busy("someone kept its container");
         }
     }
+    // the cleanup's own changes to the folder (moving things out, its note) aren't activity
+    let accounted: Option<String> = c.query_row("SELECT activity_at FROM agentd_cleanups WHERE folder = ?", [folder], |r| r.get(0))
+        .optional()?;
+    let accounted = accounted.as_deref().and_then(parse_time);
+    let touched = touched.filter(|t| accounted.is_none_or(|a| *t > a));
     let mut times = ask("SELECT last_active_at FROM conversations WHERE id IN ({ids})")?;
     times.extend(ask("SELECT last_turn_at FROM agentd_containers WHERE conversation_id IN ({ids})")?);
     times.extend(ask("SELECT MAX(updated_at) FROM work_items WHERE conversation_id IN ({ids})")?);
