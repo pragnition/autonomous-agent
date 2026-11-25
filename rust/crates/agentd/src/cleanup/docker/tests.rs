@@ -47,6 +47,7 @@ fn hex_ip_reads_both_families() {
     assert_eq!(hex_ip("0201C90A:0050"), Some("10.201.1.2".parse().unwrap()));
     assert_eq!(hex_ip("0000000000000000FFFF00000100007F:1F90"), Some("::ffff:127.0.0.1".parse().unwrap()));
     assert_eq!(hex_ip("zz:1"), None);
+    assert_eq!(hex_ip("0000000000000000FFFF00001800C90A:1F90").map(|ip| ip.to_canonical()), Some("10.201.0.24".parse().unwrap()));
 }
 
 #[test]
@@ -73,6 +74,8 @@ fn kind_of_needs_a_sign_to_remove_and_any_sign_of_a_database_to_ask() {
     let anon = "ab".repeat(32);
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     assert_eq!(kind_of(&vol("rr-x_api_node_modules"), &[], &[], None), Kind::Rebuildable);
+    assert_eq!(kind_of(&vol("rr-s_search_cache"), &[], &[], Some(false)), Kind::Unknown, "a cache by name alone isn't enough");
+    assert_eq!(kind_of(&vol("rr-s_build_cache"), &s(&["/root/.cache"]), &s(&["node:22"]), Some(false)), Kind::Rebuildable);
     assert_eq!(kind_of(&vol(&anon), &s(&["/app/node_modules"]), &s(&["node:22"]), Some(false)), Kind::Rebuildable);
     assert_eq!(kind_of(&vol("rr-x_postgres"), &[], &[], None), Kind::Database);
     assert_eq!(kind_of(&vol(&anon), &s(&["/var/lib/postgresql"]), &[], None), Kind::Database, "postgres 18's mount point");

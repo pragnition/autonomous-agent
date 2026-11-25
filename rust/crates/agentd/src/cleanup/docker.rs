@@ -44,8 +44,11 @@ static DB_IMAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(
 /// Where a database keeps its files.
 static DB_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(
     r"(?i)^/var/lib/(postgresql|mysql|mongodb|redis|neo4j|rabbitmq|clickhouse|elasticsearch|influxdb|cassandra)|^/data(/db)?/?$|^/var/opt/mssql|^/usr/share/(elasticsearch|opensearch)/data|^/bitnami|^/opt/couchdb/data").unwrap());
-/// Named after installed dependencies or a cache.
-static REBUILD_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)node_modules|_nm$|-nm$|cache|\.venv|venv$|pnpm-store").unwrap());
+/// Named after installed dependencies. ("cache" alone isn't enough: a search index's volume can be called that.)
+static REBUILD_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)node_modules|_nm$|-nm$|\.venv|venv$|pnpm-store").unwrap());
+/// A file a database keeps, as `docker diff` lists it.
+static DB_FILE: LazyLock<Regex> = LazyLock::new(|| Regex::new(
+    r"(?i)(/PG_VERSION|/ibdata1|/WiredTiger[^/]*|/dump\.rdb|/appendonly[^/]*|\.sqlite3?|\.db|\.mdb|\.duckdb|/neostore[^/]*|/meta\.properties|/influxd\.bolt|/\.minio\.sys|/mnesia|/member/wal|/_state)$").unwrap());
 /// Mounted where installed dependencies or caches go.
 static REBUILD_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(
     r"(?i)(/node_modules|/\.venv|/venv|/\.cache|/cache|/\.next|/\.turbo|/\.pnpm-store|/__pycache__|/\.gradle)/?$").unwrap());
@@ -61,6 +64,10 @@ pub struct AppContainer {
     pub running: bool,
     /// Its main process in the agent's Docker (0 when not running).
     pub pid: u32,
+    /// Started with `--rm`: stopping it deletes it, and its anonymous volumes with it.
+    pub auto_remove: bool,
+    /// A `docker exec` is running in it right now.
+    pub exec_running: bool,
     /// Its compose project, else its own name.
     pub stack: String,
     /// The conversations' folders it runs from (compose folder) or mounts.
@@ -93,6 +100,8 @@ impl AppVolume {
 #[derive(Debug, Default, Serialize)]
 pub struct DockerReport {
     pub stopped_stacks: Vec<String>,
+    /// Unused stacks left running because stopping would delete them (`--rm`).
+    pub kept_running: Vec<String>,
     pub removed_containers: Vec<String>,
     /// Stopped containers kept because they may hold data of their own.
     pub kept_containers: Vec<String>,
@@ -152,7 +161,7 @@ pub fn parse_containers(json: &str, scratch: &Path) -> Result<Vec<AppContainer>>
             .filter_map(|b| b["HostPort"].as_str()?.parse().ok()).collect();
         let ips = c["NetworkSettings"]["Networks"].as_object().into_iter().flatten()
             .flat_map(|(_, n)| [n["IPAddress"].as_str(), n["GlobalIPv6Address"].as_str()])
-            .filter_map(|ip| ip?.parse().ok()).collect();
+            .filter_map(|ip| ip?.parse::<IpAddr>().ok()).map(|ip| ip.to_canonical()).collect();
         let since = if running { time(&c["State"]["StartedAt"]) } else { time(&c["State"]["FinishedAt"]) }
             .or_else(|| time(&c["Created"])).unwrap_or_else(Utc::now);
         out.push(AppContainer {
@@ -161,6 +170,8 @@ pub fn parse_containers(json: &str, scratch: &Path) -> Result<Vec<AppContainer>>
             image_id: c["Image"].as_str().unwrap_or_default().to_string(),
             stack: labels["com.docker.compose.project"].as_str().filter(|p| !p.is_empty()).unwrap_or(&name).to_string(),
             pid: if running { c["State"]["Pid"].as_u64().unwrap_or(0) as u32 } else { 0 },
+            auto_remove: c["HostConfig"]["AutoRemove"].as_bool().unwrap_or(false),
+            exec_running: c["ExecIDs"].as_array().is_some_and(|e| !e.is_empty()),
             name, running, folders, volumes, ports, ips, since,
         });
     }
@@ -204,7 +215,7 @@ pub fn parse_net(text: &str) -> HashMap<u32, Net> {
             // a TCP socket: "sl: local remote st ..."
             let f: Vec<&str> = rest.split_whitespace().collect();
             if f.len() > 2 && f[2] == "01"
-                && let Some(ip) = hex_ip(f[1]).filter(|ip| !ip.is_loopback() && !mapped_loopback(ip)) {
+                && let Some(ip) = hex_ip(f[1]).map(|ip| ip.to_canonical()).filter(|ip| !ip.is_loopback()) {
                 net.peers.insert(ip);
             }
         } else if head != "lo" && !head.contains(' ') && !head.contains('|') {
@@ -216,10 +227,6 @@ pub fn parse_net(text: &str) -> HashMap<u32, Net> {
         }
     }
     out
-}
-
-fn mapped_loopback(ip: &IpAddr) -> bool {
-    matches!(ip, IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()))
 }
 
 /// An address as `/proc/net/tcp*` writes it (`0100007F:1F90`): 32-bit words in little-endian order.
@@ -421,7 +428,8 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
         .split_whitespace().map(str::to_string).collect();
     let volumes = if names.is_empty() { Vec::new() } else { parse_volumes(&apps.volume_inspect(names).await?)? };
     let mut image_refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let listed = apps.docker(vec!["images".into(), "--no-trunc".into(), "--format".into(), "{{.ID}}\t{{.Repository}}:{{.Tag}}".into()]).await?;
+    // `-a`: with the containerd image store an image left untagged by a rebuild only shows with it
+    let listed = apps.docker(vec!["images".into(), "-a".into(), "--no-trunc".into(), "--format".into(), "{{.ID}}\t{{.Repository}}:{{.Tag}}".into()]).await?;
     for line in listed.lines() {
         if let Some((id, reference)) = line.split_once('\t') {
             let refs = image_refs.entry(id.to_string()).or_default();
@@ -440,6 +448,10 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
         commands += &apps.processes(Some(convo.as_str())).await.with_context(|| format!("reading the processes of {convo}'s session"))?;
     }
     let service_folders = services_in_use(services, &scratch);
+    // a stack with no conversation folder can't be tied to a session: it counts as used while any session is up or
+    // any turn is queued or running
+    let anything_going = !sessions.is_empty() || db.call(|c| Ok(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM work_items WHERE status IN ('queued', 'claimed', 'delivered'))", [], |r| r.get::<_, bool>(0))?)).await?;
     let pids: Vec<u32> = containers.iter().filter(|c| c.pid > 0).map(|c| c.pid).collect();
     let net = if pids.is_empty() { HashMap::new() } else { parse_net(&apps.network(pids).await?) };
     let kept: HashSet<String> = keeps::all(&db.lock())?.into_iter().filter(|k| k.kind == "stack" && k.holds(now))
@@ -485,10 +497,15 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
             }
         }
         let used = folder_in_use || held(stack, members) || referenced(&commands, stack, members, &scratch) || outside || traffic
-            || running.iter().any(|c| now - c.since < STACK_GRACE);
+            || running.iter().any(|c| now - c.since < STACK_GRACE || c.exec_running)
+            || (folders_of(members).is_empty() && anything_going);
         let last_used = if used { now } else { before.last_used.unwrap_or(now) };
         if !used && now - last_used >= STACK_GRACE {
-            stop.push((stack.to_string(), running));
+            if running.iter().any(|c| c.auto_remove) {
+                report.kept_running.push(stack.to_string()); // stopping would delete it and its anonymous volumes
+            } else {
+                stop.push((stack.to_string(), running));
+            }
         }
         seen_stacks.insert(stack.to_string(), StackSeen { last_used: Some(last_used), counters });
     }
@@ -507,8 +524,13 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
     for (stack, running) in &stop {
         let folders = folders_of(&stacks[stack.as_str()]);
         // asked again right before it stops
-        if folders_stand(db, &scratch, &folders, now, st.idle)?.0 {
-            continue;
+        match folders_stand(db, &scratch, &folders, now, st.idle) {
+            Ok((false, _)) => {}
+            Ok(_) => continue,
+            Err(e) => {
+                report.failures.push(format!("checking {stack} again: {e:#}"));
+                continue;
+            }
         }
         if !dry_run {
             if !act(apps, [vec!["stop".to_string()], running.iter().map(|c| c.id.clone()).collect()].concat(), &mut report).await {
@@ -532,25 +554,30 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
         if members.iter().any(|c| c.running) || stopped_now.contains(stack) || held(stack, members) {
             continue;
         }
-        let (in_use, quiet) = folders_stand(db, &scratch, &folders_of(members), now, st.idle)?;
+        let Ok((in_use, quiet)) = folders_stand(db, &scratch, &folders_of(members), now, st.idle) else { continue };
         let recently = seen_stacks.get(stack).and_then(|s| s.last_used).is_some_and(|t| now - t < st.idle);
         if !in_use && quiet && !recently {
             candidates.extend(members.iter().copied().filter(|c| now - c.since >= st.idle));
         }
     }
-    let sizes = if candidates.is_empty() { HashMap::new() } else {
-        match apps.writable_sizes(candidates.iter().map(|c| c.id.clone()).collect()).await {
-            Ok(s) => s,
-            Err(e) => {
-                report.failures.push(format!("reading containers' own sizes: {e:#}"));
-                HashMap::new() // then none is removed
+    let ids: Vec<String> = candidates.iter().map(|c| c.id.clone()).collect();
+    let (sizes, files) = if ids.is_empty() { (HashMap::new(), HashMap::new()) } else {
+        match (apps.writable_sizes(ids.clone()).await, apps.changed_files(ids).await) {
+            (Ok(s), Ok(f)) => (s, f),
+            (Err(e), _) | (_, Err(e)) => {
+                report.failures.push(format!("reading containers' own files: {e:#}"));
+                (HashMap::new(), HashMap::new()) // then none is removed
             }
         }
     };
     let mut removed_ids = HashSet::new();
     let mut by_folder: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for c in candidates {
-        if sizes.get(&c.id).is_none_or(|&b| b > OWN_DATA) || (DB_IMAGE.is_match(&c.image) && c.volumes.is_empty()) {
+        // a database's files or data folder in its own layer (Elasticsearch and MSSQL declare no volume), or a database
+        // image with no volume at all: its data may be in there
+        let own_database = files.get(&c.id).is_none_or(|f| f.lines().any(|l| DB_FILE.is_match(l.trim()) || DB_PATH.is_match(l.trim())))
+            || (DB_IMAGE.is_match(&c.image) && c.volumes.is_empty());
+        if sizes.get(&c.id).is_none_or(|&b| b > OWN_DATA) || own_database {
             report.kept_containers.push(c.name.clone());
             continue;
         }
@@ -593,9 +620,10 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
             !kept.contains(s) && !members.iter().any(|c| c.running) && !(!members.is_empty() && held(s, &members))
         });
         if quiet_long && owners_fine && !seen.folders.iter().any(|f| service_folders.contains(f)) {
-            let (in_use, quiet) = folders_stand(db, &scratch, &seen.folders, now, st.idle)?;
-            if !in_use && quiet {
-                candidates.push(v);
+            match folders_stand(db, &scratch, &seen.folders, now, st.idle) {
+                Ok((false, true)) => candidates.push(v),
+                Ok(_) => {}
+                Err(e) => report.failures.push(format!("checking volume {}: {e:#}", v.name)),
             }
         }
         seen_volumes.insert(v.name.clone(), seen);
@@ -631,7 +659,7 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
                     by_folder.entry(f.clone()).or_default().push(format!("volume `{}`", v.name));
                 }
             }
-            Some(Kind::Database) => to_ask.push((v.clone(), seen.clone(), contents.get(&v.mountpoint).map(|c| c.1).unwrap_or(0))),
+            Some(Kind::Database) => to_ask.push((v.clone(), seen.clone(), contents.get(&v.mountpoint).map(|c| c.1))),
             _ => report.kept_volumes += 1,
         }
     }
@@ -650,16 +678,22 @@ pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings
                  again): {}.", st.idle.num_days(), gone.join(", ")), &mut report);
         }
     }
+    // each database asked about is measured, so people know what keeping it costs
+    let unmeasured: Vec<String> = to_ask.iter().filter(|(_, _, b)| b.is_none()).map(|(v, ..)| v.mountpoint.clone()).collect();
+    let measured = if unmeasured.is_empty() { HashMap::new() } else { apps.volume_contents(unmeasured).await.unwrap_or_default() };
+    let to_ask: Vec<(AppVolume, VolumeSeen, u64)> = to_ask.into_iter()
+        .map(|(v, seen, b)| { let bytes = b.or_else(|| measured.get(&v.mountpoint).map(|m| m.1)).unwrap_or(0); (v, seen, bytes) }).collect();
     if let Err(e) = ask_about(db, ask, &to_ask, &scratch, now, st.idle, dry_run, &mut report) {
         report.failures.push(format!("asking about databases: {e:#}"));
     }
 
     // images no container has used for the idle period, then old build cache
     // an image counts as used through the pass its last container goes in
-    let in_use: HashSet<&str> = containers.iter().map(|c| c.image_id.as_str()).collect();
+    let in_use: HashSet<&str> = containers.iter().flat_map(|c| [c.image_id.as_str(), c.image.as_str()]).collect();
     let mut keep_images = Vec::new();
     for (id, refs) in &image_refs {
-        let last = if in_use.contains(id.as_str()) { now } else { seen_images.get(id).copied().unwrap_or(now) };
+        let used = in_use.contains(id.as_str()) || refs.iter().any(|r| in_use.contains(r.as_str()));
+        let last = if used { now } else { seen_images.get(id).copied().unwrap_or(now) };
         if now - last >= st.idle {
             let args = if refs.is_empty() { vec![id.clone()] } else { refs.clone() };
             if dry_run || act(apps, [vec!["image".to_string(), "rm".into()], args].concat(), &mut report).await {
@@ -724,7 +758,8 @@ fn ask_about(db: &Db, ask: Option<&dyn Ask>, volumes: &[(AppVolume, VolumeSeen, 
     let (fresh, lines) = {
         let c = db.lock();
         if !dry_run {
-            c.execute("DELETE FROM agentd_cleanup_asks WHERE work_item IN \
+            // asked again (its creation time no longer matches), but its time still counts toward once a day
+            c.execute("UPDATE agentd_cleanup_asks SET created_at = '' WHERE work_item IN \
                        (SELECT id FROM work_items WHERE status IN ('failed', 'cancelled'))", [])?;
         }
         let mut fresh = Vec::new();
@@ -753,9 +788,9 @@ fn ask_about(db: &Db, ask: Option<&dyn Ask>, volumes: &[(AppVolume, VolumeSeen, 
                     thread.map(|(ch, ts)| format!(", its thread {ch}/{ts}")).unwrap_or_default(),
                     project.map(|p| format!(", project {p}")).unwrap_or_default()));
             }
-            lines.push(format!("- `{}` ({:.2} GB, stack {}, image {}, mounted at {}, made {}, unused since {}): {}", v.name,
-                *bytes as f64 / 1e9, join(&seen.stacks), join(&seen.images), join(&seen.destinations), v.created.format("%Y-%m-%d"),
-                seen.unused_since.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_default(),
+            lines.push(format!("- `{}` ({:.2} GB, stack {}, image {}, mounted at {}, created {}, unused since {}): {}", v.name,
+                *bytes as f64 / 1e9, join(&seen.stacks), join(&seen.images), join(&seen.destinations), keeps::fmt(v.created),
+                seen.unused_since.map(keeps::fmt).unwrap_or_default(),
                 if place.is_empty() { "no conversation known".into() } else { place.join("; ") }));
         }
         (fresh, lines)
@@ -768,14 +803,16 @@ used them for at least {} days (their stacks and conversations were quiet that l
 
 {}
 
-Ask whether each can be deleted, one message per channel listing that channel's volumes by their exact names: in the \
-project's channel when one is named, else the channel the conversation came from (link its thread for context). Where \
-no channel is known, work out the project from the stack's name and ask in its channel; if you can't tell, leave that \
-volume alone. Say what each database was for (read the thread or the folder if you need to) and that keeping it costs \
-disk, and say plainly that only the volumes named in the message will be deleted, each only once a person says it's \
-safe. When someone does, check that no container uses it (`docker ps -a --filter volume=<name>` prints nothing) and \
-remove that one volume with `docker volume rm <name>`. Keep any nobody answers about or wants kept, and delete nothing \
-else: no prune, no other volume.", idle.num_days(), lines.join("\n"));
+Ask whether each can be deleted, one message per channel listing that channel's volumes: in the project's channel \
+when one is named, else the channel the conversation came from (link its thread for context). Where no channel is \
+known, work out the project from the stack's name and ask in its channel; if you can't tell, leave that volume alone. \
+Write the message so it stands on its own, since whoever acts on a reply sees only the thread: each volume's exact \
+name and creation time, what its database was for (read the thread or the folder if you need to), that keeping it \
+costs disk, and that only the volumes named there will be deleted, each only once a person says it's safe and only if \
+it is still the same volume, unused. When someone says so: check `docker volume inspect -f '{{{{.CreatedAt}}}}' <name>` \
+still shows the creation time in the message and `docker ps -a --filter volume=<name>` prints nothing, then remove \
+that one volume with `docker volume rm <name>`. If either check fails, the volume changed: keep it and say so. Keep \
+any nobody answers about or wants kept, and delete nothing else: no prune, no other volume.", idle.num_days(), lines.join("\n"));
     // queued with the DB unlocked: queueing locks it too
     let item = ask.ask(&text)?;
     let c = db.lock();

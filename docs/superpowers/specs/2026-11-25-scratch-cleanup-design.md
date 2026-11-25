@@ -181,31 +181,43 @@ decides from that history.
     (`/proc/<pid>/net/tcp`). That includes a person on the tailnet, a session or another stack. Loopback and the
     stack's own containers don't count;
   - its containers' network moved 16 KB or more since the last pass (`/proc/<pid>/net/dev`, loopback left out);
-  - a container is new (first seen) or started within the hour.
+  - a container is new (first seen), started within the hour, or has a `docker exec` running;
+  - it has no conversation folder at all, and any session is up or any turn is queued or running (nothing ties it to
+    one session, so any could be using it).
+
+  Addresses are compared in their plain form, so a dual-stack listener's view of its own stack (`::ffff:10.x`) counts
+  as inside. A stack with a container started with `--rm` is never stopped, since stopping deletes it and its
+  anonymous volumes; it is reported as kept running.
 
   A session or service whose processes can't be read stops nothing that pass. Stopping is reversible: the folder's
   `CLEANUP.md` says how to start it again.
 - **A stopped container** goes once its stack has sat unused for `idle_days`: nothing running in it, nobody keeping
-  it, no service in its folder, its folders quiet, and stopped that long. A container whose own writable layer holds
-  over 100 MB, or a database image with no volume, is kept: it may hold data.
-- **An image** goes once no container (running or stopped) has used it for `idle_days`, by the passes' own record, not
-  its build date. **Build cache** older than `idle_days` goes.
+  it, no service in its folder, its folders quiet, and stopped that long. A container is kept when it may hold data
+  of its own: its writable layer holds over 100 MB, `docker diff` shows database files or a database's data folder
+  in it (an app's SQLite file, Elasticsearch's `_state`), or it is a database image with no volume.
+- **An image** goes once no container (running or stopped) has used it, by id or by the name it was run as, for
+  `idle_days`, by the passes' own record, not its build date. The listing uses `-a`: with the containerd image store
+  an image a rebuild left untagged only shows that way. **Build cache** older than `idle_days` goes.
 - **A volume** is tracked from when no container mounts it, with the folders, stacks, mount points and images that
   used it. Once it has been unused and its folders quiet for `idle_days`:
-  - it goes if it is positively rebuildable: named after `node_modules` or a cache or `.venv`, or only ever mounted
-    where dependencies or caches go;
+  - it goes if it is positively rebuildable: named after `node_modules` or `.venv`, or only ever mounted where
+    dependencies or caches go. A name like `cache` alone isn't enough (a search index's volume can be called that);
   - it is a database by any sign: database files up to four levels down (`PG_VERSION`, MySQL `ibdata1`, Mongo
-    `WiredTiger`, Redis dumps, SQLite), a database image (postgres, mysql, mongo, redis, elasticsearch, mssql, neo4j and
+    `WiredTiger`, Redis dumps, SQLite, LMDB, DuckDB, Neo4j, Kafka, InfluxDB, MinIO, RabbitMQ, etcd, Elasticsearch), a database image (postgres, mysql, mongo, redis, elasticsearch, mssql, neo4j and
     others), a database's data path (Postgres 18's `/var/lib/postgresql` included), or the name of a named volume
     (postgres, pg, mysql, mongo, redis, db, data, sql). It is never deleted by the cleanup. agentd starts a Jensen
-    turn (source `cleanup`), at most once a day, listing these volumes by exact name with their stack, image, mount
-    point, conversation, thread and channel. Jensen asks in the project's channel, or works out the project from the
-    stack's name when no channel is known. It says that only the named volumes will be deleted, and only once a person
-    says so. Before removing one it checks that no container uses it. A volume is asked about once; if the turn
-    fails, it is asked about again;
+    turn (source `cleanup`), at most once a day, listing these volumes by exact name with their size, creation time,
+    unused-since time, stack, image, mount point, conversation, thread and channel. Jensen asks in the project's
+    channel, or works out the project from the stack's name when no channel is known. Its message stands on its own,
+    since whoever acts on a reply sees only the thread: it says that only the named volumes will be deleted, and only
+    once a person says so. Before removing one, Jensen checks it is the same volume (its creation time) and that no
+    container uses it. A volume is asked about once. If that turn fails, it is asked about again, still at most once
+    a day;
   - anything else is kept.
 - Notes about stopped stacks and removed containers and volumes go into the folder's `CLEANUP.md`. Writing a note
   doesn't count as activity in the folder.
 - A dry run reports what this pass would do from the history so far, and records nothing.
+- Slow reads in Jensen's Docker (`find`, `du`, `docker diff`, `inspect --size`) are bounded with `timeout`, so a slow
+  disk can't pile them up pass after pass.
 - A failure in the Docker step is reported and logged, and the folder step still runs. The pass logs the disk's free
   space before and after.
