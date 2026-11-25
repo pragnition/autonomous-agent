@@ -15,14 +15,29 @@ pub struct Deleted {
     pub failed: u64,
 }
 
+/// A new name in `trash` for `target`.
+pub fn trash_path(target: &Path, trash: &Path) -> PathBuf {
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    trash.join(format!("{}-{}-{}-{name}", chrono::Utc::now().format("%Y%m%dT%H%M%S"), std::process::id(),
+                       MOVED.fetch_add(1, Ordering::Relaxed)))
+}
+
 /// Move `target` into `trash` under a new name, and return where it went.
 pub fn to_trash(target: &Path, trash: &Path) -> std::io::Result<PathBuf> {
-    std::fs::create_dir_all(trash)?;
-    let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let dest = trash.join(format!("{}-{}-{}-{name}", chrono::Utc::now().format("%Y%m%dT%H%M%S"), std::process::id(),
-                                  MOVED.fetch_add(1, Ordering::Relaxed)));
+    plain_dir(trash)?;
+    let dest = trash_path(target, trash);
     std::fs::rename(target, &dest)?;
     Ok(dest)
+}
+
+/// Make sure `dir` is a folder of its own (made if missing), not a symlink to somewhere else.
+pub fn plain_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let meta = std::fs::symlink_metadata(dir)?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{} isn't a plain folder", dir.display())));
+    }
+    Ok(())
 }
 
 /// Delete `path` and everything under it without following symlinks. A folder of our own that we may not write to is
@@ -96,10 +111,18 @@ pub fn tree_bytes(path: &Path) -> u64 {
     own + std::fs::read_dir(path).map(|es| es.flatten().map(|e| tree_bytes(&e.path())).sum()).unwrap_or(0)
 }
 
-/// Whether `path` is absolute, has no `..` and lies strictly inside one of `roots`.
-pub fn under(path: &Path, roots: &[&Path]) -> bool {
-    path.is_absolute() && !path.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir))
-        && roots.iter().any(|r| path != *r && path.starts_with(r))
+/// Whether `path` is plain (absolute, no `.` or `..`) and lies at least `depth` levels inside `root`, with no symlink
+/// on the way from `root` to it, the path itself included.
+pub fn inside(path: &Path, root: &Path, depth: usize) -> bool {
+    let plain = path.is_absolute() && !path.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir));
+    let Ok(rest) = path.strip_prefix(root) else { return false };
+    plain && rest.components().count() >= depth && {
+        let mut at = root.to_path_buf();
+        rest.components().all(|c| {
+            at.push(c);
+            std::fs::symlink_metadata(&at).is_ok_and(|m| !m.file_type().is_symlink())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -148,13 +171,30 @@ mod tests {
     }
 
     #[test]
-    fn under_needs_a_plain_path_inside_a_root() {
-        let roots = [Path::new("/var/agent/scratch"), Path::new("/var/agent/.cleanup-trash")];
-        assert!(under(Path::new("/var/agent/scratch/V-1/node_modules"), &roots));
-        assert!(under(Path::new("/var/agent/.cleanup-trash/x"), &roots));
-        assert!(!under(Path::new("/var/agent/scratch"), &roots));
-        assert!(!under(Path::new("/var/agent/scratch/../memory"), &roots));
-        assert!(!under(Path::new("/var/agent/memory"), &roots));
-        assert!(!under(Path::new("scratch/V-1"), &roots));
+    fn inside_needs_a_plain_path_deep_enough_with_no_symlinks() {
+        let t = tempfile::tempdir().unwrap();
+        let scratch = t.path().join("scratch");
+        fs::create_dir_all(scratch.join("V-1/app/node_modules")).unwrap();
+        fs::create_dir_all(t.path().join("memory/node_modules")).unwrap();
+        std::os::unix::fs::symlink(t.path().join("memory"), scratch.join("V-1/link")).unwrap();
+        assert!(inside(&scratch.join("V-1/app/node_modules"), &scratch, 2));
+        assert!(inside(&scratch.join("V-1/app"), &scratch, 2));
+        assert!(!inside(&scratch.join("V-1"), &scratch, 2), "a conversation's folder itself");
+        assert!(!inside(&scratch, &scratch, 1));
+        assert!(!inside(&scratch.join("V-1/link/node_modules"), &scratch, 2), "through a symlink");
+        assert!(!inside(&scratch.join("V-1/../../memory"), &scratch, 2));
+        assert!(!inside(&t.path().join("memory/node_modules"), &scratch, 1));
+        assert!(!inside(Path::new("scratch/V-1/app"), Path::new("scratch"), 2));
+    }
+
+    #[test]
+    fn a_trash_that_is_a_symlink_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir_all(t.path().join("memory")).unwrap();
+        fs::write(t.path().join("memory/note.md"), "keep").unwrap();
+        std::os::unix::fs::symlink(t.path().join("memory"), t.path().join("trash")).unwrap();
+        fs::create_dir_all(t.path().join("f/node_modules")).unwrap();
+        assert!(to_trash(&t.path().join("f/node_modules"), &t.path().join("trash")).is_err());
+        assert!(t.path().join("f/node_modules").exists() && t.path().join("memory/note.md").exists());
     }
 }

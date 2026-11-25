@@ -4,21 +4,32 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
 
-/// The agent's Docker, faked: a fixed listing (or none), and root removals done as ourselves.
+/// The agent's Docker, faked: a fixed listing (or none), and root moves and removals done as ourselves.
 struct Fake {
     listing: Option<String>,
+    moved_as_root: Mutex<Vec<PathBuf>>,
     removed_as_root: Mutex<Vec<PathBuf>>,
 }
 
 impl Fake {
     fn new(listing: &str) -> Arc<Fake> {
-        Arc::new(Fake { listing: Some(listing.to_string()), removed_as_root: Mutex::default() })
+        Arc::new(Fake { listing: Some(listing.to_string()), moved_as_root: Mutex::default(), removed_as_root: Mutex::default() })
     }
 }
 
 impl Apps for Fake {
     fn containers(&self) -> BoxFuture<'_, Result<String>> {
         Box::pin(async move { self.listing.clone().ok_or_else(|| anyhow!("Cannot connect to the Docker daemon")) })
+    }
+    fn move_as_root(&self, from: PathBuf, to: PathBuf) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            if let Some(parent) = from.parent() {
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o755))?;
+            }
+            fs::rename(&from, &to)?;
+            self.moved_as_root.lock().unwrap().push(from);
+            Ok(())
+        })
     }
     fn remove_as_root(&self, path: PathBuf) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
@@ -63,7 +74,8 @@ impl Setup {
         self.db.lock().execute_batch(sql).unwrap();
     }
     fn state(&self, name: &str) -> State {
-        state(&self.db.lock(), name, &self.settings.scratch().join(name), self.now, self.settings.idle).unwrap()
+        let path = self.settings.scratch().join(name);
+        state(&self.db.lock(), name, &path, self.now, self.settings.idle, modified(&path)).unwrap()
     }
     async fn pass(&self, apps: Arc<Fake>, dry_run: bool) -> Result<Report> {
         pass(self.db.clone(), apps, self.settings.clone(), self.now, dry_run).await
@@ -112,7 +124,8 @@ fn a_folder_without_a_conversation_goes_by_when_it_changed() {
     let s = setup();
     s.folder("V-loose");
     assert!(matches!(s.state("V-loose"), State::Quiet(_)), "made ten days before the pass");
-    let in_a_day = state(&s.db.lock(), "V-loose", &s.settings.scratch().join("V-loose"), Utc::now() + Duration::days(1), s.settings.idle).unwrap();
+    let path = s.settings.scratch().join("V-loose");
+    let in_a_day = state(&s.db.lock(), "V-loose", &path, Utc::now() + Duration::days(1), s.settings.idle, modified(&path)).unwrap();
     assert_eq!(in_a_day, State::Recent);
 }
 
@@ -122,6 +135,7 @@ fn busy_while_anything_runs_in_it() {
         "INSERT INTO work_items(id, conversation_id, kind, payload, status, created_at, updated_at) VALUES ('w', 'V-1', 'turn', '{}', 'queued', 'x', 'x')",
         "INSERT INTO work_items(id, conversation_id, kind, payload, status, created_at, updated_at) VALUES ('w', 'V-1', 'turn', '{}', 'claimed', 'x', 'x')",
         "INSERT INTO parks(conversation_id, work_item_id, until_at, created_at) VALUES ('V-1', 'w', 'x', 'x')",
+        "INSERT INTO limit_waits(work_item_id, conversation_id, created_at) VALUES ('w', 'V-1', 'x')",
         "INSERT INTO projects(name, repo, conversation_id, status, created_at, updated_at) VALUES ('p', 'o/r', 'V-1', 'active', 'x', 'x')",
         "INSERT INTO spawned_agents(id, parent_conversation_id, child_conversation_id, prompt, created_at) VALUES ('A-1', 'V-1', 'V-2', 'go', 'x')",
         "INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-1', 'agent-conv-V-1', 'x')",
@@ -183,12 +197,23 @@ fn in_use_from_ps_reads_running_folders_and_kept_stacks() {
                    exited\trr-c-db-1\trr-c\t/var/agent/scratch/V-c/x\trr-c_pg\n\
                    exited\trr-d-db-1\trr-d\t/var/agent/scratch/V-d/x\t\n\
                    restarting\tloop\t\t\t/var/agent/scratch/V-e\n\
-                   running\tother\t\t\t/var/agent/memory,/tmp/x\n__END__\n";
+                   running\tother\t\t\t/var/agent/memory,/tmp/x,/var/run/docker.sock\n__END__\n";
     let used = in_use_from_ps(listing, scratch, &["rr-d".into()]).unwrap();
     assert_eq!(used, HashSet::from(["V-a", "V-b", "V-d", "V-e"].map(String::from)));
     assert!(in_use_from_ps("running\tx\t\t\t/var/agent/scratch/V-a\n", scratch, &[]).is_err(), "no end: an error");
     assert!(in_use_from_ps("Cannot connect to the Docker daemon\n", scratch, &[]).is_err());
     assert!(in_use_from_ps("__END__\n", scratch, &[]).unwrap().is_empty());
+    let everything = "running\tbig\t\t\t/var/agent\n__END__\n";
+    assert!(in_use_from_ps(everything, scratch, &[]).is_err(), "a container using every folder stops the pass");
+}
+
+#[test]
+fn services_in_use_reads_their_folders_and_commands() {
+    let scratch = Path::new("/var/agent/scratch");
+    let file = "[[services]]\nname = \"proxy\"\ncmd = [\"node\", \"proxy.mjs\"]\ncwd = \"/var/agent/scratch/V-1/proxy\"\n\n\
+                [[services]]\nname = \"api\"\ncmd = [\"sh\", \"-c\", \"cd /var/agent/scratch/V-2/api && npm start\"]\n\n\
+                [[services]]\nname = \"other\"\ncmd = [\"x\"]\ncwd = \"/var/agent/home\"\n";
+    assert_eq!(services_in_use(file, scratch), HashSet::from(["V-1", "V-2"].map(String::from)));
 }
 
 // --- a pass ----------------------------------------------------------------------------------------------------------
@@ -207,7 +232,7 @@ async fn a_pass_removes_what_can_be_rebuilt_and_keeps_the_rest() {
     assert!(f.join("wip/b.js").exists(), "the clone with an unpushed commit stays");
     let notes = fs::read_to_string(f.join(NOTES)).unwrap();
     assert!(notes.contains("git clone ") && notes.contains(&f.join("app-remote.git").to_string_lossy().into_owned()), "{notes}");
-    assert!(notes.contains("`wip`: 1 commits not on its remote") && notes.contains("`tools/node_modules`"), "{notes}");
+    assert!(notes.contains("`wip`: 1 commits not on origin") && notes.contains("`tools/node_modules`"), "{notes}");
 
     assert_eq!(report.folders.len(), 1);
     assert!(report.freed_bytes >= 100_000, "{}", report.freed_bytes);
@@ -287,13 +312,53 @@ async fn no_answer_from_the_agents_docker_means_no_pass() {
     let s = setup();
     let f = typical(&s, "V-old");
     s.conversation("V-old", 4, None);
-    let apps = Arc::new(Fake { listing: None, removed_as_root: Mutex::default() });
+    let apps = Arc::new(Fake { listing: None, moved_as_root: Mutex::default(), removed_as_root: Mutex::default() });
     assert!(s.pass(apps, false).await.is_err());
     assert!(f.join("app/node_modules").exists() && f.join("tools/node_modules").exists());
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn what_agentd_cannot_move_is_removed_as_root() {
+async fn a_service_running_from_a_folder_holds_it() {
+    let s = setup();
+    let f = typical(&s, "V-svc");
+    s.conversation("V-svc", 4, None);
+    fs::write(s.settings.work.join("services.toml"),
+              format!("[[services]]\nname = \"proxy\"\ncmd = [\"node\", \"p.mjs\"]\ncwd = \"{}/tools\"\n", f.display())).unwrap();
+    let report = s.pass(Fake::new("__END__"), false).await.unwrap();
+    assert!(f.join("tools/node_modules").exists() && f.join("app").exists());
+    assert_eq!(report.in_use, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_use_inside_a_clone_counts_as_activity() {
+    let s = setup();
+    let f = typical(&s, "V-old");
+    s.conversation("V-old", 4, None);
+    // another conversation checked something out in it yesterday
+    let yesterday = std::time::SystemTime::from(s.now - Duration::days(1));
+    fs::File::options().write(true).open(f.join("app/.git/HEAD")).unwrap().set_modified(yesterday).unwrap();
+    let report = s.pass(Fake::new("__END__"), false).await.unwrap();
+    assert!(f.join("app/node_modules").exists() && f.join("tools/node_modules").exists());
+    assert_eq!(report.recent, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_folder_that_is_itself_a_clone_stays() {
+    let s = setup();
+    let scratch = s.settings.scratch();
+    let (_, clone) = pushed_clone(&scratch, "V-clone");
+    fs::create_dir_all(clone.join("node_modules/x")).unwrap();
+    s.conversation("V-clone", 4, None);
+    s.conversation("V-clone-remote.git", 4, None); // the test's remote sits beside it: keep it out of the way
+    let report = s.pass(Fake::new("__END__"), false).await.unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert!(clone.join("app.js").exists() && clone.join(NOTES).exists());
+    assert!(!clone.join("node_modules").exists(), "its dependencies still go");
+    assert_eq!(report.kept_clones, BTreeMap::from([("folder".to_string(), 1)]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_agentd_cannot_move_is_moved_as_root() {
     // SAFETY: geteuid has no preconditions.
     if unsafe { libc::geteuid() } == 0 {
         return; // root can move anything: nothing to fall back from
@@ -306,8 +371,10 @@ async fn what_agentd_cannot_move_is_removed_as_root() {
     let apps = Fake::new("__END__");
     let report = s.pass(apps.clone(), false).await.unwrap();
     assert!(report.failures.is_empty(), "{:?}", report.failures);
-    assert_eq!(*apps.removed_as_root.lock().unwrap(), [f.join("locked/node_modules")]);
+    assert_eq!(*apps.moved_as_root.lock().unwrap(), [f.join("locked/node_modules")], "moved at the check, not later");
+    assert!(apps.removed_as_root.lock().unwrap().is_empty());
     assert!(!f.join("locked/node_modules").exists());
+    assert_eq!(fs::read_dir(s.settings.trash()).unwrap().count(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

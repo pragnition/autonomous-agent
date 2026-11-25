@@ -45,9 +45,14 @@ async fn cleanup(args: &[String]) -> Result<()> {
     if idle_days <= 0 {
         bail!("the cleanup is off ([cleanup] idle_days = 0); pass --idle-days to run it anyway");
     }
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    // SAFETY: geteuid has no preconditions.
+    if !dry_run && unsafe { libc::geteuid() } == 0 {
+        bail!("run it as the agent's user (uid 1001), not root: the trash and lock it leaves must stay agentd's");
+    }
     let settings = cleanup::Settings::new(&s.paths.work, idle_days);
     let apps: Arc<dyn cleanup::Apps> = Arc::new(cleanup::DockerApps::new(&env("AGENTD_NETWORK", "agent-docker"), &settings)?);
-    let report = cleanup::pass(s.db.clone(), apps, settings, chrono::Utc::now(), args.iter().any(|a| a == "--dry-run")).await?;
+    let report = cleanup::pass(s.db.clone(), apps, settings, chrono::Utc::now(), dry_run).await?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     eprintln!("{}", report.summary());
     Ok(())
