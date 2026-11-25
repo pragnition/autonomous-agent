@@ -109,14 +109,15 @@ pub async fn serve() -> Result<()> {
     // the conversations' folders: what can be rebuilt goes once a folder has been quiet a while
     if s.config.cleanup.idle_days > 0 {
         let settings = cleanup::Settings::new(&s.paths.work, s.config.cleanup.idle_days);
-        let apps: Arc<dyn cleanup::Apps> = Arc::new(cleanup::DockerApps::new(&env("AGENTD_NETWORK", "agent-docker"), &settings)?);
+        let apps: Arc<dyn cleanup::Apps> = Arc::new(cleanup::DockerApps::new(&env("AGENTD_NETWORK", "agent-docker"), &env("AGENTD_SERVICES", "agent-services"), &settings)?);
         every(&s, 3600, "cleanup", move |s| {
             let (apps, settings) = (apps.clone(), settings.clone());
             async move {
                 let ask: Arc<dyn cleanup::Ask> = Arc::new(cleanup::Jensen(s.clone()));
                 let report = cleanup::pass(s.db.clone(), apps, Some(ask), settings, chrono::Utc::now(), false).await?;
                 tracing::info!("{}", report.summary());
-                for problem in report.failures.iter().take(20) {
+                let docker = report.docker.iter().flat_map(|d| d.failures.iter());
+                for problem in report.failures.iter().chain(docker).take(20) {
                     tracing::warn!("cleanup: {problem}");
                 }
                 Ok(())

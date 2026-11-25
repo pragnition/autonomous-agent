@@ -1,45 +1,76 @@
-//! Jensen's own Docker (agent-docker), where its test stacks run. A stack no running Claude Code session uses is
-//! stopped; what has sat stopped or unused for the idle period goes (containers, images, build cache, volumes that hold
-//! no database); and a database volume is never deleted here: a Jensen turn asks in the project's channel, and Jensen
-//! deletes only what a person says is safe.
+//! Jensen's own Docker (agent-docker), where its test stacks run. Every pass records what it sees, and decides from
+//! that history rather than from one snapshot:
+//!
+//! - a running stack is stopped only once it has been seen unused for `STACK_GRACE`: no conversation working in its
+//!   folder in use or active, no service of the agent's in its folder, no session's or service's process naming it, no
+//!   connection into its containers from outside the stack, and no traffic on their network since the last pass;
+//! - a stopped container goes once its stack has sat unused for the idle period, unless it holds data of its own;
+//! - an image goes once no container has used it for the idle period, and build cache older than that goes;
+//! - a volume goes only when it is known to be rebuildable (installed dependencies, caches) and has sat unmounted for
+//!   the idle period. One that holds a database is never deleted here: a Jensen turn asks people in the project's
+//!   channel, and Jensen deletes only what a person says is safe. One that is neither is kept.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path};
 use std::sync::LazyLock;
 
-use anyhow::{Context, Result, bail};
-
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, Utc};
 use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Apps, Ask, Settings, State, append_note, modified, state};
+use super::{Apps, Ask, Settings, State, append_note, modified, services_in_use, state};
 use crate::db::Db;
 use crate::keeps;
 
-/// A stack keeps running this long after its conversation was last active, even when no session is using it.
+/// A stack is stopped only after it has been seen unused for this long.
 pub const STACK_GRACE: Duration = Duration::hours(1);
 /// Database questions go out at most this often.
 const ASK_EVERY: Duration = Duration::hours(24);
+/// Traffic on a stack's network below this between two passes is background noise (ARP, neighbour discovery).
+const QUIET_BYTES: u64 = 16 * 1024;
+/// A stopped container whose own writable layer holds more than this keeps it: that may be data.
+const OWN_DATA: u64 = 100 * 1024 * 1024;
+/// Volumes whose files are looked at per pass (reading them takes a while, so it is bounded).
+const CONTENT_CHECKS: usize = 100;
+/// Named after a database (named volumes only: an anonymous one's name is random hex).
 static DB_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)postgres|pg|mysql|maria|mongo|redis|db|data|sql").unwrap());
+/// A database's image.
+static DB_IMAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(
+    r"(?i)postgres|postgis|timescale|mysql|mariadb|mongo|redis|valkey|elastic|opensearch|mssql|sqlserver|neo4j|rabbitmq|minio|clickhouse|cassandra|scylla|influx|couchdb|cockroach|surreal|qdrant|weaviate|milvus|meilisearch|typesense|etcd|zookeeper|kafka").unwrap());
+/// Where a database keeps its files.
+static DB_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(
+    r"(?i)^/var/lib/(postgresql|mysql|mongodb|redis|neo4j|rabbitmq|clickhouse|elasticsearch|influxdb|cassandra)|^/data(/db)?/?$|^/var/opt/mssql|^/usr/share/(elasticsearch|opensearch)/data|^/bitnami|^/opt/couchdb/data").unwrap());
+/// Named after installed dependencies or a cache.
+static REBUILD_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)node_modules|_nm$|-nm$|cache|\.venv|venv$|pnpm-store").unwrap());
+/// Mounted where installed dependencies or caches go.
+static REBUILD_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(
+    r"(?i)(/node_modules|/\.venv|/venv|/\.cache|/cache|/\.next|/\.turbo|/\.pnpm-store|/__pycache__|/\.gradle)/?$").unwrap());
 
 /// A container in the agent's Docker.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AppContainer {
     pub id: String,
     pub name: String,
+    pub image: String,
+    pub image_id: String,
     /// Running, restarting or paused.
     pub running: bool,
+    /// Its main process in the agent's Docker (0 when not running).
+    pub pid: u32,
     /// Its compose project, else its own name.
     pub stack: String,
     /// The conversations' folders it runs from (compose folder) or mounts.
     pub folders: BTreeSet<String>,
-    /// The volumes it mounts.
-    pub volumes: BTreeSet<String>,
-    /// Its published ports on the agent's Docker's host side.
+    /// The volumes it mounts: name -> where.
+    pub volumes: BTreeMap<String, String>,
+    /// Its published ports.
     pub ports: BTreeSet<u16>,
+    /// Its addresses on its networks.
+    pub ips: BTreeSet<IpAddr>,
     /// When it started (running), stopped, or was made (never started).
     pub since: DateTime<Utc>,
 }
@@ -53,16 +84,26 @@ pub struct AppVolume {
     pub mountpoint: String,
 }
 
+impl AppVolume {
+    fn anonymous(&self) -> bool {
+        self.name.len() == 64 && self.name.chars().all(|c| c.is_ascii_hexdigit())
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct DockerReport {
     pub stopped_stacks: Vec<String>,
     pub removed_containers: Vec<String>,
+    /// Stopped containers kept because they may hold data of their own.
+    pub kept_containers: Vec<String>,
     pub removed_volumes: Vec<String>,
+    /// Unused volumes kept because nothing says they can be rebuilt (and nothing says they are databases).
+    pub kept_volumes: usize,
     /// Database volumes a Jensen turn was asked to check with people (or, in a dry run, would be).
     pub asked_about: Vec<String>,
     /// Database volumes waiting for the next daily question.
     pub to_ask_later: usize,
-    pub images: String,
+    pub removed_images: usize,
     pub build_cache: String,
     pub failures: Vec<String>,
 }
@@ -79,36 +120,48 @@ fn folder_of(path: &str, scratch: &Path) -> Option<String> {
     }
 }
 
+// --- reading ---------------------------------------------------------------------------------------------------------
+
 /// The containers from `docker inspect` of every container.
 pub fn parse_containers(json: &str, scratch: &Path) -> Result<Vec<AppContainer>> {
     let all: Value = serde_json::from_str(json).context("reading docker inspect")?;
     let mut out = Vec::new();
-    for c in all.as_array().into_iter().flatten() {
+    for c in all.as_array().ok_or_else(|| anyhow!("docker inspect didn't give a list"))? {
         let labels = &c["Config"]["Labels"];
         let name = c["Name"].as_str().unwrap_or_default().trim_start_matches('/').to_string();
         let status = c["State"]["Status"].as_str().unwrap_or_default();
         let running = matches!(status, "running" | "restarting" | "paused");
         let mut folders = BTreeSet::new();
-        let mut volumes = BTreeSet::new();
+        let mut volumes = BTreeMap::new();
         if let Some(dir) = labels["com.docker.compose.project.working_dir"].as_str() {
             folders.extend(folder_of(dir, scratch));
         }
         for m in c["Mounts"].as_array().into_iter().flatten() {
             match m["Type"].as_str() {
                 Some("bind") => folders.extend(m["Source"].as_str().and_then(|s| folder_of(s, scratch))),
-                Some("volume") => volumes.extend(m["Name"].as_str().map(str::to_string)),
+                Some("volume") => {
+                    if let Some(n) = m["Name"].as_str() {
+                        volumes.insert(n.to_string(), m["Destination"].as_str().unwrap_or_default().to_string());
+                    }
+                }
                 _ => {}
             }
         }
         let ports = c["NetworkSettings"]["Ports"].as_object().into_iter().flatten()
             .flat_map(|(_, binds)| binds.as_array().into_iter().flatten())
             .filter_map(|b| b["HostPort"].as_str()?.parse().ok()).collect();
+        let ips = c["NetworkSettings"]["Networks"].as_object().into_iter().flatten()
+            .flat_map(|(_, n)| [n["IPAddress"].as_str(), n["GlobalIPv6Address"].as_str()])
+            .filter_map(|ip| ip?.parse().ok()).collect();
         let since = if running { time(&c["State"]["StartedAt"]) } else { time(&c["State"]["FinishedAt"]) }
             .or_else(|| time(&c["Created"])).unwrap_or_else(Utc::now);
         out.push(AppContainer {
             id: c["Id"].as_str().unwrap_or_default().to_string(),
+            image: c["Config"]["Image"].as_str().unwrap_or_default().to_string(),
+            image_id: c["Image"].as_str().unwrap_or_default().to_string(),
             stack: labels["com.docker.compose.project"].as_str().filter(|p| !p.is_empty()).unwrap_or(&name).to_string(),
-            name, running, folders, volumes, ports, since,
+            pid: if running { c["State"]["Pid"].as_u64().unwrap_or(0) as u32 } else { 0 },
+            name, running, folders, volumes, ports, ips, since,
         });
     }
     Ok(out)
@@ -117,7 +170,7 @@ pub fn parse_containers(json: &str, scratch: &Path) -> Result<Vec<AppContainer>>
 /// The volumes from `docker volume inspect` of every volume.
 pub fn parse_volumes(json: &str) -> Result<Vec<AppVolume>> {
     let all: Value = serde_json::from_str(json).context("reading docker volume inspect")?;
-    Ok(all.as_array().into_iter().flatten().map(|v| AppVolume {
+    Ok(all.as_array().ok_or_else(|| anyhow!("docker volume inspect didn't give a list"))?.iter().map(|v| AppVolume {
         name: v["Name"].as_str().unwrap_or_default().to_string(),
         project: v["Labels"]["com.docker.compose.project"].as_str().map(str::to_string),
         // a time that can't be read counts as now: never as long ago
@@ -126,17 +179,68 @@ pub fn parse_volumes(json: &str) -> Result<Vec<AppVolume>> {
     }).collect())
 }
 
-/// The ports of every established TCP connection in `/proc/net/tcp` and `/proc/net/tcp6` text, either end.
-pub fn connected_ports(proc_net: &str) -> HashSet<u16> {
-    let port = |addr: &str| addr.rsplit(':').next().and_then(|p| u16::from_str_radix(p, 16).ok());
-    proc_net.lines().filter_map(|l| {
-        let f: Vec<&str> = l.split_whitespace().collect();
-        (f.len() > 3 && f[3] == "01").then(|| [port(f[1]), port(f[2])])
-    }).flatten().flatten().collect()
+/// One running container's network as seen from inside it: bytes moved on its interfaces other than loopback, and
+/// the far ends of its established TCP connections (loopback left out).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Net {
+    pub bytes: u64,
+    pub peers: BTreeSet<IpAddr>,
 }
 
-/// Whether a running session's command lines (one process per line) name the stack, one of its containers, one of
-/// its folders or one of its ports. Claude Code's own command line (its system prompt mentions ports) doesn't count.
+/// `== <pid>` then that process's `/proc/<pid>/net/dev`, `tcp` and `tcp6`, for each pid.
+pub fn parse_net(text: &str) -> HashMap<u32, Net> {
+    let mut out: HashMap<u32, Net> = HashMap::new();
+    let mut pid = None;
+    for line in text.lines() {
+        if let Some(p) = line.strip_prefix("== ") {
+            pid = p.trim().parse().ok();
+            continue;
+        }
+        let Some(pid) = pid else { continue };
+        let Some((head, rest)) = line.trim().split_once(':') else { continue };
+        let head = head.trim();
+        let net = out.entry(pid).or_default();
+        if !head.is_empty() && head.chars().all(|c| c.is_ascii_digit()) {
+            // a TCP socket: "sl: local remote st ..."
+            let f: Vec<&str> = rest.split_whitespace().collect();
+            if f.len() > 2 && f[2] == "01"
+                && let Some(ip) = hex_ip(f[1]).filter(|ip| !ip.is_loopback() && !mapped_loopback(ip)) {
+                net.peers.insert(ip);
+            }
+        } else if head != "lo" && !head.contains(' ') && !head.contains('|') {
+            // an interface: "name: rx_bytes (7 more) tx_bytes ..."
+            let n: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            if n.len() >= 9 {
+                net.bytes += n[0] + n[8];
+            }
+        }
+    }
+    out
+}
+
+fn mapped_loopback(ip: &IpAddr) -> bool {
+    matches!(ip, IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()))
+}
+
+/// An address as `/proc/net/tcp*` writes it (`0100007F:1F90`): 32-bit words in little-endian order.
+fn hex_ip(addr: &str) -> Option<IpAddr> {
+    let (ip, _) = addr.split_once(':')?;
+    if ip.len() % 8 != 0 {
+        return None;
+    }
+    let words: Vec<u32> = (0..ip.len() / 8).map(|i| u32::from_str_radix(&ip[i * 8..i * 8 + 8], 16).ok()).collect::<Option<_>>()?;
+    match words.as_slice() {
+        [w] => Some(IpAddr::V4(Ipv4Addr::from(w.to_le_bytes()))),
+        [a, b, c, d] => {
+            let bytes: Vec<u8> = [a, b, c, d].iter().flat_map(|w| w.to_le_bytes()).collect();
+            Some(IpAddr::V6(Ipv6Addr::from(<[u8; 16]>::try_from(bytes).ok()?)))
+        }
+        _ => None,
+    }
+}
+
+/// Whether command lines (one process per line) name the stack, one of its containers, one of its folders or one of
+/// its published ports. Claude Code's own command line (its system prompt mentions ports) doesn't count.
 pub fn referenced(commands: &str, stack: &str, containers: &[&AppContainer], scratch: &Path) -> bool {
     let words: Vec<String> = std::iter::once(stack.to_string())
         .chain(containers.iter().map(|c| c.name.clone()))
@@ -157,239 +261,444 @@ fn mentions_number(line: &str, n: u16) -> bool {
     })
 }
 
-/// How a stack's conversations' folders stand: `in_use` when any is busy or was active within `STACK_GRACE`; `quiet`
-/// when all have been quiet for the idle period (a stack with no folder is neither).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Folders {
-    pub in_use: bool,
-    pub quiet: bool,
-    pub known: bool,
+// --- what kind of volume ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Kind {
+    /// Installed dependencies or a cache: removed once unused for the idle period.
+    Rebuildable,
+    /// Holds a database: people are asked.
+    Database,
+    /// Neither is known: kept.
+    Unknown,
 }
 
-/// What the step will do, decided from what it read.
-#[derive(Debug, Default, PartialEq)]
-pub struct Plan {
-    /// Stack -> its running containers' ids.
-    pub stop: BTreeMap<String, Vec<String>>,
-    /// (id, name, stack) of each stopped container to remove.
-    pub remove_containers: Vec<(String, String, String)>,
-    /// Volumes nothing will use, old and quiet enough: removed, or asked about when they hold a database.
-    pub volume_candidates: Vec<AppVolume>,
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Kind::Rebuildable => "rebuildable",
+            Kind::Database => "database",
+            Kind::Unknown => "unknown",
+        }
+    }
+    fn parse(s: &str) -> Option<Kind> {
+        Some(match s {
+            "rebuildable" => Kind::Rebuildable,
+            "database" => Kind::Database,
+            "unknown" => Kind::Unknown,
+            _ => return None,
+        })
+    }
 }
 
-/// Decide what stops and what goes. `folders` says how each stack's folders stand, `used` lists the stacks a running
-/// session uses, `kept` the stacks someone kept.
-pub fn plan(containers: &[AppContainer], volumes: &[AppVolume], folders: &HashMap<String, Folders>, used: &HashSet<String>,
-            kept: &HashSet<String>, now: DateTime<Utc>, idle: Duration) -> Plan {
-    let mut stacks: BTreeMap<&str, Vec<&AppContainer>> = BTreeMap::new();
-    for c in containers {
-        stacks.entry(c.stack.as_str()).or_default().push(c);
+/// What a volume is, from its name, where it was mounted, the images that mounted it, and (once looked at) whether
+/// its files are a database's. Any sign of a database wins; rebuildable needs a positive sign and none of those.
+pub fn kind_of(v: &AppVolume, destinations: &[String], images: &[String], db_files: Option<bool>) -> Kind {
+    let named = !v.anonymous();
+    if db_files == Some(true) || destinations.iter().any(|d| DB_PATH.is_match(d)) || images.iter().any(|i| DB_IMAGE.is_match(i))
+        || (named && DB_NAME.is_match(&v.name)) {
+        return Kind::Database;
     }
-    let standing = |s: &str| folders.get(s).copied().unwrap_or_default();
-    let mut plan = Plan::default();
-    for (&stack, members) in &stacks {
-        if kept.contains(stack) || used.contains(stack) {
-            continue;
-        }
-        let f = standing(stack);
-        let running: Vec<&&AppContainer> = members.iter().filter(|c| c.running).collect();
-        if !running.is_empty() {
-            let old = running.iter().all(|c| now - c.since >= idle);
-            if !f.in_use && (f.known || old) {
-                plan.stop.insert(stack.to_string(), running.iter().map(|c| c.id.clone()).collect());
-            }
-            continue; // stopped now; its containers go once they have been stopped for the idle period
-        }
-        if f.in_use || (f.known && !f.quiet) {
-            continue;
-        }
-        for c in members.iter().filter(|c| now - c.since >= idle) {
-            plan.remove_containers.push((c.id.clone(), c.name.clone(), stack.to_string()));
-        }
-    }
-    let removed: HashSet<&str> = plan.remove_containers.iter().map(|(id, ..)| id.as_str()).collect();
-    let mounted: HashSet<&str> = containers.iter().filter(|c| !removed.contains(c.id.as_str()))
-        .flat_map(|c| c.volumes.iter().map(String::as_str)).collect();
-    for v in volumes {
-        if mounted.contains(v.name.as_str()) || now - v.created < idle {
-            continue;
-        }
-        // the stacks it belongs to: its compose project, and those of the containers that mounted it
-        let owners: BTreeSet<&str> = v.project.iter().map(String::as_str)
-            .chain(containers.iter().filter(|c| c.volumes.contains(&v.name)).map(|c| c.stack.as_str())).collect();
-        let fine = owners.iter().all(|o| !kept.contains(*o) && !used.contains(*o) && {
-            let f = standing(o);
-            !f.in_use && (!f.known || f.quiet)
-        });
-        if fine {
-            plan.volume_candidates.push(v.clone());
-        }
-    }
-    plan
+    let by_path = !destinations.is_empty() && destinations.iter().all(|d| REBUILD_PATH.is_match(d));
+    if (named && REBUILD_NAME.is_match(&v.name)) || by_path { Kind::Rebuildable } else { Kind::Unknown }
 }
 
-/// One Docker step: read, decide, act (or, in a dry run, only report).
-pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings, now: DateTime<Utc>, dry_run: bool)
-                  -> Result<DockerReport> {
+// --- what the passes remember ----------------------------------------------------------------------------------------
+
+/// A stack as passes have seen it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StackSeen {
+    pub last_used: Option<DateTime<Utc>>,
+    /// Container id -> bytes on its network at the last pass.
+    pub counters: BTreeMap<String, u64>,
+}
+
+/// A volume as passes have seen it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VolumeSeen {
+    pub unused_since: Option<DateTime<Utc>>,
+    pub folders: BTreeSet<String>,
+    pub stacks: BTreeSet<String>,
+    pub destinations: BTreeSet<String>,
+    pub images: BTreeSet<String>,
+    pub kind: Option<Kind>,
+    /// The creation time it was seen with: a new volume of the same name starts over.
+    pub created: String,
+}
+
+fn json_set(s: Option<String>) -> BTreeSet<String> {
+    s.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn parse_t(s: Option<String>) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&s?).ok().map(|t| t.with_timezone(&Utc))
+}
+
+fn stacks_seen(c: &Connection) -> Result<HashMap<String, StackSeen>> {
+    Ok(c.prepare("SELECT stack, last_used_at, counters FROM agentd_cleanup_stacks")?.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, StackSeen { last_used: parse_t(r.get(1)?),
+            counters: r.get::<_, Option<String>>(2)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default() }))
+    })?.collect::<rusqlite::Result<_>>()?)
+}
+
+fn volumes_seen(c: &Connection) -> Result<HashMap<String, VolumeSeen>> {
+    Ok(c.prepare("SELECT volume, unused_since, folders, stacks, destinations, images, kind, created_at FROM agentd_cleanup_volumes")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, VolumeSeen {
+            unused_since: parse_t(r.get(1)?), folders: json_set(r.get(2)?), stacks: json_set(r.get(3)?),
+            destinations: json_set(r.get(4)?), images: json_set(r.get(5)?),
+            kind: r.get::<_, Option<String>>(6)?.as_deref().and_then(Kind::parse), created: r.get(7)?,
+        })))?.collect::<rusqlite::Result<_>>()?)
+}
+
+fn images_seen(c: &Connection) -> Result<HashMap<String, DateTime<Utc>>> {
+    Ok(c.prepare("SELECT image, last_used_at FROM agentd_cleanup_images")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?
+        .filter_map(|r| r.ok().and_then(|(i, t)| Some((i, parse_t(t)?)))).collect())
+}
+
+fn save_stack(c: &Connection, stack: &str, seen: &StackSeen) -> Result<()> {
+    c.execute("INSERT INTO agentd_cleanup_stacks(stack, last_used_at, counters) VALUES (?1, ?2, ?3) ON CONFLICT(stack) \
+               DO UPDATE SET last_used_at = ?2, counters = ?3",
+              params![stack, seen.last_used.map(keeps::fmt), serde_json::to_string(&seen.counters)?])?;
+    Ok(())
+}
+
+fn save_volume(c: &Connection, name: &str, seen: &VolumeSeen) -> Result<()> {
+    let j = |s: &BTreeSet<String>| serde_json::to_string(s).unwrap_or_default();
+    c.execute("INSERT INTO agentd_cleanup_volumes(volume, created_at, unused_since, folders, stacks, destinations, images, kind) \
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(volume) DO UPDATE SET created_at = ?2, unused_since = ?3, \
+               folders = ?4, stacks = ?5, destinations = ?6, images = ?7, kind = ?8",
+              params![name, seen.created, seen.unused_since.map(keeps::fmt), j(&seen.folders), j(&seen.stacks),
+                      j(&seen.destinations), j(&seen.images), seen.kind.map(Kind::as_str)])?;
+    Ok(())
+}
+
+// --- the step --------------------------------------------------------------------------------------------------------
+
+/// How a set of conversation folders stands: (in use: any busy or active within `STACK_GRACE`; quiet: all quiet for
+/// the idle period). No folders: neither in use nor anything but quiet.
+fn folders_stand(db: &Db, scratch: &Path, folders: &BTreeSet<String>, now: DateTime<Utc>, idle: Duration) -> Result<(bool, bool)> {
+    let (mut in_use, mut quiet) = (false, true);
+    for folder in folders {
+        let path = scratch.join(folder);
+        if !path.is_dir() {
+            continue; // a folder that's gone holds nothing to protect
+        }
+        let touched = modified(&path); // read before the DB is locked: the disk can be slow
+        let c = db.lock();
+        in_use |= !matches!(state(&c, folder, &path, now, STACK_GRACE, touched)?, State::Quiet(_));
+        quiet &= matches!(state(&c, folder, &path, now, idle, touched)?, State::Quiet(_));
+    }
+    Ok((in_use, quiet))
+}
+
+/// `docker <args>`, its failure kept in the report instead of ending the step.
+async fn act(apps: &dyn Apps, args: Vec<String>, report: &mut DockerReport) -> bool {
+    match apps.docker(args.clone()).await {
+        Ok(_) => true,
+        Err(e) => {
+            report.failures.push(format!("docker {}: {e:#}", args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")));
+            false
+        }
+    }
+}
+
+fn folders_of(members: &[&AppContainer]) -> BTreeSet<String> {
+    members.iter().flat_map(|c| c.folders.iter().cloned()).collect()
+}
+
+/// One Docker step: read, remember, decide, act. A dry run only reports, and remembers nothing either.
+pub async fn step(db: &Db, apps: &dyn Apps, ask: Option<&dyn Ask>, st: &Settings, services: &str, now: DateTime<Utc>,
+                  dry_run: bool) -> Result<DockerReport> {
     let scratch = st.scratch();
     let mut report = DockerReport::default();
-    let ids = apps.docker(vec!["ps".into(), "-aq".into(), "--no-trunc".into()]).await?;
-    let ids: Vec<String> = ids.split_whitespace().map(str::to_string).collect();
-    let containers = if ids.is_empty() {
-        Vec::new()
-    } else {
-        parse_containers(&apps.docker([vec!["inspect".to_string()], ids].concat()).await?, &scratch)?
-    };
+
+    // what is there
+    let ids: Vec<String> = apps.docker(vec!["ps".into(), "-aq".into(), "--no-trunc".into()]).await?
+        .split_whitespace().map(str::to_string).collect();
+    let containers = if ids.is_empty() { Vec::new() } else { parse_containers(&apps.inspect(ids).await?, &scratch)? };
     let names: Vec<String> = apps.docker(vec!["volume".into(), "ls".into(), "-q".into()]).await?
         .split_whitespace().map(str::to_string).collect();
-    let volumes = if names.is_empty() {
-        Vec::new()
-    } else {
-        parse_volumes(&apps.docker([vec!["volume".to_string(), "inspect".into()], names].concat()).await?)?
-    };
-
-    // which stacks a running session uses
-    let sessions: Vec<String> = db.call(|c| Ok(c.prepare("SELECT conversation_id FROM agentd_containers WHERE stopped_at IS NULL")?
-        .query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)).await?;
-    let mut commands = String::new();
-    for convo in &sessions {
-        match apps.processes(convo).await {
-            Ok(text) => commands += &text,
-            // a session whose processes can't be read might use anything: stop nothing this time
-            Err(e) => bail!("reading the processes of {convo}'s session: {e:#}"),
+    let volumes = if names.is_empty() { Vec::new() } else { parse_volumes(&apps.volume_inspect(names).await?)? };
+    let mut image_refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let listed = apps.docker(vec!["images".into(), "--no-trunc".into(), "--format".into(), "{{.ID}}\t{{.Repository}}:{{.Tag}}".into()]).await?;
+    for line in listed.lines() {
+        if let Some((id, reference)) = line.split_once('\t') {
+            let refs = image_refs.entry(id.to_string()).or_default();
+            if !reference.contains("<none>") {
+                refs.push(reference.to_string());
+            }
         }
     }
-    let connected = connected_ports(&apps.connections().await?);
+
+    // who uses what: sessions' and services' processes, the services' folders, and the stacks' own network
+    let sessions: Vec<String> = db.call(|c| Ok(c.prepare("SELECT conversation_id FROM agentd_containers WHERE stopped_at IS NULL")?
+        .query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)).await?;
+    let mut commands = apps.processes(None).await.context("reading the agent's services' processes")?;
+    for convo in &sessions {
+        // a session whose processes can't be read might use anything: stop nothing this time
+        commands += &apps.processes(Some(convo.as_str())).await.with_context(|| format!("reading the processes of {convo}'s session"))?;
+    }
+    let service_folders = services_in_use(services, &scratch);
+    let pids: Vec<u32> = containers.iter().filter(|c| c.pid > 0).map(|c| c.pid).collect();
+    let net = if pids.is_empty() { HashMap::new() } else { parse_net(&apps.network(pids).await?) };
+    let kept: HashSet<String> = keeps::all(&db.lock())?.into_iter().filter(|k| k.kind == "stack" && k.holds(now))
+        .map(|k| k.target).collect();
+
     let mut stacks: BTreeMap<&str, Vec<&AppContainer>> = BTreeMap::new();
     for c in &containers {
         stacks.entry(c.stack.as_str()).or_default().push(c);
     }
-    let used: HashSet<String> = stacks.iter().filter(|(stack, members)| {
-        referenced(&commands, stack, members, &scratch) || members.iter().any(|c| c.ports.iter().any(|p| connected.contains(p)))
-    }).map(|(s, _)| s.to_string()).collect();
-    let kept: HashSet<String> = keeps::all(&db.lock())?.into_iter().filter(|k| k.kind == "stack" && k.holds(now))
-        .map(|k| k.target).collect();
-
-    // how each stack's folders stand (each folder's top is read before the DB is locked: the disk can be slow)
-    let mut folders = HashMap::new();
-    for (&stack, members) in &stacks {
-        let mine: BTreeSet<&String> = members.iter().flat_map(|c| c.folders.iter()).collect();
-        let mut f = Folders { in_use: false, quiet: true, known: !mine.is_empty() };
-        for folder in mine {
-            let path = scratch.join(folder);
-            let touched = modified(&path);
-            let c = db.lock();
-            f.in_use |= !matches!(state(&c, folder, &path, now, STACK_GRACE, touched)?, State::Quiet(_));
-            f.quiet &= matches!(state(&c, folder, &path, now, st.idle, touched)?, State::Quiet(_));
-        }
-        folders.insert(stack.to_string(), Folders { quiet: f.quiet && f.known, ..f });
-    }
-    let plan = plan(&containers, &volumes, &folders, &used, &kept, now, st.idle);
-    let stack_folders = |stack: &str| -> BTreeSet<String> {
-        stacks.get(stack).into_iter().flatten().flat_map(|c| c.folders.iter().cloned()).collect()
+    let held = |stack: &str, members: &[&AppContainer]| kept.contains(stack) || members.iter().any(|c| kept.contains(&c.name))
+        || folders_of(members).iter().any(|f| service_folders.contains(f));
+    let (mut seen_stacks, mut seen_volumes, seen_images) = {
+        let c = db.lock();
+        (stacks_seen(&c)?, volumes_seen(&c)?, images_seen(&c)?)
     };
 
-    for (stack, ids) in &plan.stop {
+    // running stacks: used now, or stopped once seen unused for STACK_GRACE
+    let mut stop: Vec<(String, Vec<&AppContainer>)> = Vec::new();
+    for (&stack, members) in &stacks {
+        let running: Vec<&AppContainer> = members.iter().copied().filter(|c| c.running).collect();
+        if running.is_empty() {
+            continue;
+        }
+        let (folder_in_use, _) = folders_stand(db, &scratch, &folders_of(members), now, st.idle)?;
+        let ips: BTreeSet<IpAddr> = members.iter().flat_map(|c| c.ips.iter().copied()).collect();
+        let before = seen_stacks.get(stack).cloned().unwrap_or_default();
+        let (mut counters, mut traffic, mut outside) = (BTreeMap::new(), false, false);
+        for c in &running {
+            let n = net.get(&c.pid);
+            outside |= n.is_some_and(|n| n.peers.iter().any(|p| !ips.contains(p)));
+            match (n.map(|n| n.bytes), before.counters.get(&c.id)) {
+                (Some(bytes), Some(&was)) => {
+                    traffic |= bytes < was || bytes - was >= QUIET_BYTES;
+                    counters.insert(c.id.clone(), bytes);
+                }
+                // first sight of this container: counts as used, and the count starts here
+                (Some(bytes), None) => {
+                    traffic = true;
+                    counters.insert(c.id.clone(), bytes);
+                }
+                // its network couldn't be read: counts as used
+                (None, _) => traffic = true,
+            }
+        }
+        let used = folder_in_use || held(stack, members) || referenced(&commands, stack, members, &scratch) || outside || traffic
+            || running.iter().any(|c| now - c.since < STACK_GRACE);
+        let last_used = if used { now } else { before.last_used.unwrap_or(now) };
+        if !used && now - last_used >= STACK_GRACE {
+            stop.push((stack.to_string(), running));
+        }
+        seen_stacks.insert(stack.to_string(), StackSeen { last_used: Some(last_used), counters });
+    }
+    // a stack seen now without running containers keeps the last time it was used
+    for (&stack, _) in stacks.iter().filter(|(_, m)| m.iter().all(|c| !c.running)) {
+        seen_stacks.entry(stack.to_string()).or_insert(StackSeen { last_used: None, counters: BTreeMap::new() });
+    }
+    if !dry_run {
+        let c = db.lock();
+        for (stack, seen) in seen_stacks.iter().filter(|(s, _)| stacks.contains_key(s.as_str())) {
+            save_stack(&c, stack, seen)?;
+        }
+        c.execute("DELETE FROM agentd_cleanup_stacks WHERE stack NOT IN (SELECT value FROM json_each(?))",
+                  [serde_json::to_string(&stacks.keys().collect::<Vec<_>>())?])?;
+    }
+    for (stack, running) in &stop {
+        let folders = folders_of(&stacks[stack.as_str()]);
+        // asked again right before it stops
+        if folders_stand(db, &scratch, &folders, now, st.idle)?.0 {
+            continue;
+        }
         if !dry_run {
-            if let Err(e) = apps.docker([vec!["stop".to_string()], ids.clone()].concat()).await {
-                report.failures.push(format!("stopping {stack}: {e:#}"));
+            if !act(apps, [vec!["stop".to_string()], running.iter().map(|c| c.id.clone()).collect()].concat(), &mut report).await {
                 continue;
             }
-            for folder in stack_folders(stack) {
-                note(&scratch.join(&folder), now, &format!(
-                    "Stopped the stack `{stack}` in the agent's Docker: no running session was using it. `docker start {}` \
-                     starts it again as it was.", ids_to_names(&containers, ids).join(" ")), &mut report);
+            let names: Vec<String> = running.iter().map(|c| c.name.clone()).collect();
+            for folder in &folders {
+                note(&scratch.join(folder), now, &format!(
+                    "Stopped the stack `{stack}` in the agent's Docker: nothing had used it for over an hour. `docker start {}` \
+                     starts it again (reinstall the folder's dependencies first if they were cleaned up since).", names.join(" ")),
+                    &mut report);
             }
         }
         report.stopped_stacks.push(stack.clone());
     }
-    let mut by_folder: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for chunk in plan.remove_containers.chunks(50) {
-        let ids: Vec<String> = chunk.iter().map(|(id, ..)| id.clone()).collect();
-        if !dry_run && let Err(e) = apps.docker([vec!["rm".to_string()], ids].concat()).await {
-            report.failures.push(format!("removing stopped containers: {e:#}"));
+    let stopped_now: HashSet<&str> = report.stopped_stacks.iter().map(String::as_str).collect();
+
+    // stopped containers: gone once their stack has sat unused for the idle period, unless they may hold data of their own
+    let mut candidates: Vec<&AppContainer> = Vec::new();
+    for (&stack, members) in &stacks {
+        if members.iter().any(|c| c.running) || stopped_now.contains(stack) || held(stack, members) {
             continue;
         }
-        for (_, name, stack) in chunk {
-            report.removed_containers.push(name.clone());
-            for folder in stack_folders(stack) {
-                by_folder.entry(folder).or_default().push(format!("container `{name}`"));
+        let (in_use, quiet) = folders_stand(db, &scratch, &folders_of(members), now, st.idle)?;
+        let recently = seen_stacks.get(stack).and_then(|s| s.last_used).is_some_and(|t| now - t < st.idle);
+        if !in_use && quiet && !recently {
+            candidates.extend(members.iter().copied().filter(|c| now - c.since >= st.idle));
+        }
+    }
+    let sizes = if candidates.is_empty() { HashMap::new() } else {
+        match apps.writable_sizes(candidates.iter().map(|c| c.id.clone()).collect()).await {
+            Ok(s) => s,
+            Err(e) => {
+                report.failures.push(format!("reading containers' own sizes: {e:#}"));
+                HashMap::new() // then none is removed
             }
+        }
+    };
+    let mut removed_ids = HashSet::new();
+    let mut by_folder: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for c in candidates {
+        if sizes.get(&c.id).is_none_or(|&b| b > OWN_DATA) || (DB_IMAGE.is_match(&c.image) && c.volumes.is_empty()) {
+            report.kept_containers.push(c.name.clone());
+            continue;
+        }
+        if !dry_run && !act(apps, vec!["rm".into(), c.id.clone()], &mut report).await {
+            continue;
+        }
+        removed_ids.insert(c.id.clone());
+        report.removed_containers.push(c.name.clone());
+        for f in &c.folders {
+            by_folder.entry(f.clone()).or_default().push(format!("container `{}`", c.name));
         }
     }
 
-    // volumes: a database is asked about, anything else goes
-    let mounts: Vec<String> = plan.volume_candidates.iter().map(|v| v.mountpoint.clone()).collect();
-    let databases = if mounts.is_empty() { HashMap::new() } else { apps.volume_contents(mounts).await? };
+    // volumes: remember who mounted each and since when nothing has; rebuildable ones go, databases are asked about
+    let mut candidates: Vec<&AppVolume> = Vec::new();
+    for v in &volumes {
+        let created = keeps::fmt(v.created);
+        let mut seen = seen_volumes.get(&v.name).filter(|s| s.created == created).cloned()
+            .unwrap_or(VolumeSeen { created, ..Default::default() });
+        let mounting: Vec<&AppContainer> = containers.iter().filter(|c| c.volumes.contains_key(&v.name)).collect();
+        for c in &mounting {
+            seen.folders.extend(c.folders.iter().cloned());
+            seen.stacks.insert(c.stack.clone());
+            seen.destinations.extend(c.volumes.get(&v.name).cloned());
+            seen.images.insert(c.image.clone());
+        }
+        seen.stacks.extend(v.project.clone());
+        if mounting.iter().any(|c| !removed_ids.contains(&c.id)) {
+            seen.unused_since = None;
+        } else if seen.unused_since.is_none() {
+            seen.unused_since = Some(now);
+        }
+        if kind_of(v, &seen.destinations.iter().cloned().collect::<Vec<_>>(), &seen.images.iter().cloned().collect::<Vec<_>>(), None)
+            == Kind::Database {
+            seen.kind = Some(Kind::Database);
+        }
+        let quiet_long = seen.unused_since.is_some_and(|t| now - t >= st.idle) && now - v.created >= st.idle;
+        let owners_fine = seen.stacks.iter().all(|s| {
+            let members = stacks.get(s.as_str()).cloned().unwrap_or_default();
+            !kept.contains(s) && !members.iter().any(|c| c.running) && !(!members.is_empty() && held(s, &members))
+        });
+        if quiet_long && owners_fine && !seen.folders.iter().any(|f| service_folders.contains(f)) {
+            let (in_use, quiet) = folders_stand(db, &scratch, &seen.folders, now, st.idle)?;
+            if !in_use && quiet {
+                candidates.push(v);
+            }
+        }
+        seen_volumes.insert(v.name.clone(), seen);
+    }
+    // their files decide what the signs don't (a database's files win over a rebuildable name)
+    let unchecked: Vec<String> = candidates.iter().filter(|v| seen_volumes[&v.name].kind.is_none())
+        .take(CONTENT_CHECKS).map(|v| v.mountpoint.clone()).collect();
+    let contents = if unchecked.is_empty() { HashMap::new() } else {
+        match apps.volume_contents(unchecked).await {
+            Ok(c) => c,
+            Err(e) => {
+                report.failures.push(format!("looking at volumes' files: {e:#}"));
+                HashMap::new() // then they're looked at next pass
+            }
+        }
+    };
     let mut to_ask = Vec::new();
-    for v in &plan.volume_candidates {
-        let (has_db, bytes) = databases.get(&v.mountpoint).copied().unwrap_or((true, 0));
-        // an anonymous volume's name is random hex ("...db..." means nothing): only its files count
-        let anonymous = v.name.len() == 64 && v.name.chars().all(|c| c.is_ascii_hexdigit());
-        if has_db || (!anonymous && DB_NAME.is_match(&v.name)) {
-            to_ask.push((v.clone(), bytes));
-            continue;
+    for v in candidates {
+        let seen = seen_volumes.get_mut(&v.name).expect("seen above");
+        if seen.kind.is_none() {
+            let Some(&(db_files, _)) = contents.get(&v.mountpoint) else { continue };
+            let destinations: Vec<String> = seen.destinations.iter().cloned().collect();
+            let images: Vec<String> = seen.images.iter().cloned().collect();
+            seen.kind = Some(kind_of(v, &destinations, &images, Some(db_files)));
         }
-        if !dry_run && let Err(e) = apps.docker(vec!["volume".into(), "rm".into(), v.name.clone()]).await {
-            report.failures.push(format!("removing volume {}: {e:#}", v.name));
-            continue;
-        }
-        report.removed_volumes.push(v.name.clone());
-        let owners: BTreeSet<String> = v.project.iter().cloned()
-            .chain(containers.iter().filter(|c| c.volumes.contains(&v.name)).map(|c| c.stack.clone())).collect();
-        for folder in owners.iter().flat_map(|o| stack_folders(o)) {
-            by_folder.entry(folder).or_default().push(format!("volume `{}`", v.name));
+        match seen.kind {
+            Some(Kind::Rebuildable) => {
+                if !dry_run && !act(apps, vec!["volume".into(), "rm".into(), v.name.clone()], &mut report).await {
+                    continue;
+                }
+                report.removed_volumes.push(v.name.clone());
+                for f in &seen.folders {
+                    by_folder.entry(f.clone()).or_default().push(format!("volume `{}`", v.name));
+                }
+            }
+            Some(Kind::Database) => to_ask.push((v.clone(), seen.clone(), contents.get(&v.mountpoint).map(|c| c.1).unwrap_or(0))),
+            _ => report.kept_volumes += 1,
         }
     }
     if !dry_run {
+        let c = db.lock();
+        let alive: Vec<&String> = volumes.iter().map(|v| &v.name).filter(|n| !report.removed_volumes.contains(n)).collect();
+        for name in &alive {
+            save_volume(&c, name, &seen_volumes[*name])?;
+        }
+        c.execute("DELETE FROM agentd_cleanup_volumes WHERE volume NOT IN (SELECT value FROM json_each(?))",
+                  [serde_json::to_string(&alive)?])?;
+        drop(c);
         for (folder, gone) in &by_folder {
             note(&scratch.join(folder), now, &format!(
                 "Removed from the agent's Docker after {} quiet days (nothing used them, and the stack's own setup makes them \
                  again): {}.", st.idle.num_days(), gone.join(", ")), &mut report);
         }
     }
-    ask_about(db, ask, &containers, &to_ask, &st.scratch(), now, st.idle, dry_run, &mut report)?;
-
-    let until = format!("until={}h", st.idle.num_hours());
-    if dry_run {
-        report.images = "not pruned in a dry run".into();
-        report.build_cache = "not pruned in a dry run".into();
-    } else {
-        report.images = reclaimed(apps.docker(vec!["image".into(), "prune".into(), "-a".into(), "-f".into(), "--filter".into(), until.clone()]).await);
-        report.build_cache = reclaimed(apps.docker(vec!["builder".into(), "prune".into(), "-f".into(), "--filter".into(), until]).await);
+    if let Err(e) = ask_about(db, ask, &to_ask, &scratch, now, st.idle, dry_run, &mut report) {
+        report.failures.push(format!("asking about databases: {e:#}"));
     }
+
+    // images no container has used for the idle period, then old build cache
+    // an image counts as used through the pass its last container goes in
+    let in_use: HashSet<&str> = containers.iter().map(|c| c.image_id.as_str()).collect();
+    let mut keep_images = Vec::new();
+    for (id, refs) in &image_refs {
+        let last = if in_use.contains(id.as_str()) { now } else { seen_images.get(id).copied().unwrap_or(now) };
+        if now - last >= st.idle {
+            let args = if refs.is_empty() { vec![id.clone()] } else { refs.clone() };
+            if dry_run || act(apps, [vec!["image".to_string(), "rm".into()], args].concat(), &mut report).await {
+                report.removed_images += 1;
+                continue;
+            }
+        }
+        keep_images.push((id.clone(), last));
+    }
+    if !dry_run {
+        let c = db.lock();
+        c.execute("DELETE FROM agentd_cleanup_images", [])?;
+        for (id, last) in &keep_images {
+            c.execute("INSERT INTO agentd_cleanup_images(image, last_used_at) VALUES (?, ?)", params![id, keeps::fmt(*last)])?;
+        }
+    }
+    report.build_cache = if dry_run {
+        "not pruned in a dry run".into()
+    } else {
+        match apps.docker(vec!["builder".into(), "prune".into(), "-f".into(), "--filter".into(), format!("until={}h", st.idle.num_hours())]).await {
+            Ok(text) => text.lines().find(|l| l.starts_with("Total")).unwrap_or("nothing").trim().to_string(),
+            Err(e) => format!("failed: {e:#}"),
+        }
+    };
     Ok(report)
 }
 
-fn ids_to_names(containers: &[AppContainer], ids: &[String]) -> Vec<String> {
-    ids.iter().filter_map(|id| containers.iter().find(|c| &c.id == id).map(|c| c.name.clone())).collect()
-}
-
 fn note(folder: &Path, now: DateTime<Utc>, text: &str, report: &mut DockerReport) {
-    if let Err(e) = append_note(folder, now, text) {
+    if folder.is_dir() && let Err(e) = append_note(folder, now, text) {
         report.failures.push(format!("writing a note in {}: {e}", folder.display()));
     }
 }
 
-/// Docker's "Total reclaimed space" line, or the error.
-fn reclaimed(out: Result<String>) -> String {
-    match out {
-        Ok(text) => text.lines().find(|l| l.starts_with("Total")).unwrap_or("nothing").trim().to_string(),
-        Err(e) => format!("failed: {e:#}"),
-    }
-}
+// --- asking about databases ------------------------------------------------------------------------------------------
 
-/// Where a question about a conversation's databases goes: its project's channel, else its own channel (or its
-/// parent's, for a spawned agent), with its thread for context.
-#[derive(Debug, Clone, PartialEq)]
-struct Asked {
-    conversation: String,
-    channel: Option<String>,
-    thread: Option<(String, String)>,
-    project: Option<String>,
-}
-
-fn where_to_ask(c: &Connection, conversation: &str, project_channels: &HashMap<String, String>) -> Result<Asked> {
+/// Where a question about a conversation's databases goes: (channel, its thread, project). The project's channel
+/// first, else the conversation's own channel, else its parent's (a spawned agent).
+fn where_to_ask(c: &Connection, conversation: &str, project_channels: &HashMap<String, String>)
+                -> Result<(Option<String>, Option<(String, String)>, Option<String>)> {
     let row: Option<(Option<String>, Option<String>, Option<String>)> = c.query_row(
         "SELECT channel, thread_ts, project FROM conversations WHERE id = ?", [conversation],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
@@ -402,69 +711,74 @@ fn where_to_ask(c: &Connection, conversation: &str, project_channels: &HashMap<S
     }
     let thread = channel.clone().zip(thread_ts);
     let channel = project.as_ref().and_then(|p| project_channels.get(p).cloned()).or(channel);
-    Ok(Asked { conversation: conversation.to_string(), channel, thread, project })
+    Ok((channel, thread, project))
 }
 
-/// Start one Jensen turn asking people about the database volumes not asked about yet, at most once a day.
+/// Start one Jensen turn asking people about the database volumes not asked about yet, at most once a day. A volume
+/// whose question's turn failed is asked about again.
 #[allow(clippy::too_many_arguments)]
-fn ask_about(db: &Db, ask: Option<&dyn Ask>, containers: &[AppContainer], volumes: &[(AppVolume, u64)], scratch: &Path,
-             now: DateTime<Utc>, idle: Duration, dry_run: bool, report: &mut DockerReport) -> Result<()> {
+fn ask_about(db: &Db, ask: Option<&dyn Ask>, volumes: &[(AppVolume, VolumeSeen, u64)], scratch: &Path, now: DateTime<Utc>,
+             idle: Duration, dry_run: bool, report: &mut DockerReport) -> Result<()> {
     let channels: HashMap<String, String> = ask.map(|a| a.project_channels()).unwrap_or_default();
     let (fresh, lines) = {
         let c = db.lock();
+        if !dry_run {
+            c.execute("DELETE FROM agentd_cleanup_asks WHERE work_item IN \
+                       (SELECT id FROM work_items WHERE status IN ('failed', 'cancelled'))", [])?;
+        }
         let mut fresh = Vec::new();
-        for (v, bytes) in volumes {
+        for (v, seen, bytes) in volumes {
             let asked: Option<String> = c.query_row("SELECT created_at FROM agentd_cleanup_asks WHERE volume = ?", [&v.name],
                                                     |r| r.get(0)).optional()?;
             if asked.as_deref() != Some(keeps::fmt(v.created).as_str()) {
-                fresh.push((v, *bytes));
+                fresh.push((v, seen, *bytes));
             }
         }
         if fresh.is_empty() {
             return Ok(());
         }
         let last: Option<String> = c.query_row("SELECT MAX(asked_at) FROM agentd_cleanup_asks", [], |r| r.get(0))?;
-        if last.and_then(|t| DateTime::parse_from_rfc3339(&t).ok()).is_some_and(|t| now - t.with_timezone(&Utc) < ASK_EVERY) {
+        if parse_t(last).is_some_and(|t| now - t < ASK_EVERY) {
             report.to_ask_later = fresh.len();
             return Ok(());
         }
         let mut lines = Vec::new();
-        for (v, bytes) in &fresh {
-            let owners: BTreeSet<&str> = v.project.iter().map(String::as_str)
-                .chain(containers.iter().filter(|k| k.volumes.contains(&v.name)).map(|k| k.stack.as_str())).collect();
-            let folders: BTreeSet<&String> = containers.iter().filter(|k| owners.contains(k.stack.as_str()))
-                .flat_map(|k| k.folders.iter()).collect();
+        for (v, seen, bytes) in &fresh {
             let mut place = Vec::new();
-            for folder in &folders {
-                let a = where_to_ask(&c, folder, &channels)?;
-                place.push(format!("conversation {} (folder {}){}{}{}", a.conversation, scratch.join(folder).display(),
-                    a.channel.map(|ch| format!(", ask in channel {ch}")).unwrap_or_else(|| ", no channel known".into()),
-                    a.thread.map(|(ch, ts)| format!(", its thread {ch}/{ts}")).unwrap_or_default(),
-                    a.project.map(|p| format!(", project {p}")).unwrap_or_default()));
+            for folder in &seen.folders {
+                let (channel, thread, project) = where_to_ask(&c, folder, &channels)?;
+                place.push(format!("conversation {folder} (folder {}){}{}{}", scratch.join(folder).display(),
+                    channel.map(|ch| format!(", ask in channel {ch}")).unwrap_or_else(|| ", no channel known".into()),
+                    thread.map(|(ch, ts)| format!(", its thread {ch}/{ts}")).unwrap_or_default(),
+                    project.map(|p| format!(", project {p}")).unwrap_or_default()));
             }
-            lines.push(format!("- `{}` ({:.1} GB, stack {}, made {}): {}", v.name, *bytes as f64 / 1e9,
-                owners.iter().copied().collect::<Vec<_>>().join(", "), v.created.format("%Y-%m-%d"),
-                if place.is_empty() { "no conversation folder known".into() } else { place.join("; ") }));
+            lines.push(format!("- `{}` ({:.2} GB, stack {}, image {}, mounted at {}, made {}, unused since {}): {}", v.name,
+                *bytes as f64 / 1e9, join(&seen.stacks), join(&seen.images), join(&seen.destinations), v.created.format("%Y-%m-%d"),
+                seen.unused_since.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_default(),
+                if place.is_empty() { "no conversation known".into() } else { place.join("; ") }));
         }
         (fresh, lines)
     };
-    report.asked_about.extend(fresh.iter().map(|(v, _)| v.name.clone()));
+    report.asked_about.extend(fresh.iter().map(|(v, ..)| v.name.clone()));
     let Some(ask) = ask.filter(|_| !dry_run) else { return Ok(()) };
     let text = format!(
-"Disk cleanup needs a decision about test databases. These volumes in your Docker hold databases of test stacks that \
-have been stopped, with no session using them, for at least {} days; nothing uses them now:
+"Disk cleanup needs a decision about test databases. These volumes in your Docker hold databases, and no container has \
+used them for at least {} days (their stacks and conversations were quiet that long too):
 
 {}
 
-Ask whether they can be deleted, one message per channel listing that channel's databases: in the project's channel \
-when one is named, else the channel the conversation came from (link its thread for context). Say what each database \
-was for (read the thread or the folder if you need to) and that keeping it costs disk. When a person says one is safe \
-to delete, remove it with `docker volume rm <name>`; keep any nobody answers about or wants kept. Delete nothing else.",
-        idle.num_days(), lines.join("\n"));
+Ask whether each can be deleted, one message per channel listing that channel's volumes by their exact names: in the \
+project's channel when one is named, else the channel the conversation came from (link its thread for context). Where \
+no channel is known, work out the project from the stack's name and ask in its channel; if you can't tell, leave that \
+volume alone. Say what each database was for (read the thread or the folder if you need to) and that keeping it costs \
+disk, and say plainly that only the volumes named in the message will be deleted, each only once a person says it's \
+safe. When someone does, check that no container uses it (`docker ps -a --filter volume=<name>` prints nothing) and \
+remove that one volume with `docker volume rm <name>`. Keep any nobody answers about or wants kept, and delete nothing \
+else: no prune, no other volume.", idle.num_days(), lines.join("\n"));
     // queued with the DB unlocked: queueing locks it too
     let item = ask.ask(&text)?;
     let c = db.lock();
-    for (v, _) in &fresh {
+    for (v, ..) in &fresh {
         c.execute("INSERT INTO agentd_cleanup_asks(volume, created_at, asked_at, work_item) VALUES (?, ?, ?, ?) \
                    ON CONFLICT(volume) DO UPDATE SET created_at = excluded.created_at, asked_at = excluded.asked_at, \
                    work_item = excluded.work_item",
@@ -473,88 +787,9 @@ to delete, remove it with `docker volume rm <name>`; keep any nobody answers abo
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_containers_reads_stack_folders_volumes_ports_and_times() {
-        let json = r#"[{"Id": "a1", "Name": "/rr-x-app-1", "Created": "2026-11-20T00:00:00Z",
-            "State": {"Status": "running", "StartedAt": "2026-11-21T00:00:00.5Z", "FinishedAt": "0001-01-01T00:00:00Z"},
-            "Config": {"Labels": {"com.docker.compose.project": "rr-x",
-                                  "com.docker.compose.project.working_dir": "/var/agent/scratch/V-1/app"}},
-            "Mounts": [{"Type": "bind", "Source": "/var/agent/scratch/V-2/data"}, {"Type": "volume", "Name": "rr-x_pg"},
-                       {"Type": "bind", "Source": "/var/run/docker.sock"}],
-            "NetworkSettings": {"Ports": {"8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "18096"}], "9229/tcp": null}}},
-            {"Id": "b2", "Name": "/loose", "Created": "2026-11-19T00:00:00Z",
-             "State": {"Status": "exited", "StartedAt": "2026-11-19T00:00:00Z", "FinishedAt": "2026-11-22T00:00:00Z"},
-             "Config": {"Labels": null}, "Mounts": [], "NetworkSettings": {"Ports": {}}}]"#;
-        let got = parse_containers(json, Path::new("/var/agent/scratch")).unwrap();
-        assert_eq!(got[0].stack, "rr-x");
-        assert!(got[0].running);
-        assert_eq!(got[0].folders, BTreeSet::from(["V-1".to_string(), "V-2".to_string()]));
-        assert_eq!(got[0].volumes, BTreeSet::from(["rr-x_pg".to_string()]));
-        assert_eq!(got[0].ports, BTreeSet::from([18096]));
-        assert_eq!(keeps::fmt(got[0].since), "2026-11-21T00:00:00Z");
-        assert_eq!((got[1].stack.as_str(), got[1].running, keeps::fmt(got[1].since)), ("loose", false, "2026-11-22T00:00:00Z".into()));
-    }
-
-    #[test]
-    fn connected_ports_reads_established_connections_only() {
-        let text = "  sl  local_address rem_address   st tx_queue rx_queue\n\
-                    0: 0100007F:46B0 0100007F:C350 01 00000000:00000000\n\
-                    1: 00000000:46B3 00000000:0000 0A 00000000:00000000\n\
-                    0: 00000000000000000000000001000000:9C40 00000000000000000000000001000000:46B1 01 0:0\n";
-        assert_eq!(connected_ports(text), HashSet::from([18096, 50000, 40000, 18097]));
-    }
-
-    #[test]
-    fn a_session_references_a_stack_by_name_folder_or_port() {
-        let app = AppContainer { name: "rr-x-app-1".into(), stack: "rr-x".into(), ports: BTreeSet::from([18096]),
-                                 folders: BTreeSet::from(["V-1".to_string()]), ..Default::default() };
-        let scratch = Path::new("/var/agent/scratch");
-        let yes = ["curl -s http://localhost:18096/api", "docker compose -p rr-x logs", "npm test --prefix /var/agent/scratch/V-1/app",
-                   "docker exec rr-x-app-1 sh"];
-        for line in yes {
-            assert!(referenced(line, "rr-x", &[&app], scratch), "{line}");
-        }
-        let no = ["curl http://localhost:180960", "sleep 118096", "node server.js",
-                  "claude --system-prompt use ports 18090-18099 like 18096 --output-format stream-json"];
-        for line in no {
-            assert!(!referenced(line, "rr-x", &[&app], scratch), "{line}");
-        }
-    }
-
-    fn at(days: i64) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-12-01T00:00:00Z").unwrap().with_timezone(&Utc) - Duration::days(days)
-    }
-
-    fn app(stack: &str, running: bool, days: i64, volumes: &[&str]) -> AppContainer {
-        AppContainer { id: format!("{stack}-id"), name: format!("{stack}-1"), running, stack: stack.into(),
-                       volumes: volumes.iter().map(|v| v.to_string()).collect(), since: at(days), ..Default::default() }
-    }
-
-    #[test]
-    fn plan_stops_unused_stacks_and_removes_what_sat_unused() {
-        let folders = HashMap::from([
-            ("idle".to_string(), Folders { in_use: false, quiet: true, known: true }),
-            ("busy".to_string(), Folders { in_use: true, quiet: false, known: true }),
-            ("old".to_string(), Folders { in_use: false, quiet: true, known: true }),
-            ("lately".to_string(), Folders { in_use: false, quiet: false, known: true }),
-        ]);
-        let containers = [app("idle", true, 1, &[]), app("busy", true, 9, &[]), app("used", true, 9, &[]), app("kept", true, 9, &[]),
-                          app("loose-old", true, 9, &[]), app("loose-new", true, 1, &[]),
-                          app("old", false, 5, &["old_pg", "old_nm"]), app("lately", false, 5, &["lately_nm"]),
-                          app("just-stopped", false, 1, &[])];
-        let volumes = [AppVolume { name: "old_pg".into(), project: Some("old".into()), created: at(9), mountpoint: "/v/old_pg".into() },
-                       AppVolume { name: "old_nm".into(), project: Some("old".into()), created: at(9), mountpoint: "/v/old_nm".into() },
-                       AppVolume { name: "lately_nm".into(), project: Some("lately".into()), created: at(9), mountpoint: "/v/l".into() },
-                       AppVolume { name: "orphan".into(), project: None, created: at(9), mountpoint: "/v/o".into() },
-                       AppVolume { name: "new-orphan".into(), project: None, created: at(1), mountpoint: "/v/n".into() }];
-        let p = plan(&containers, &volumes, &folders, &HashSet::from(["used".to_string()]), &HashSet::from(["kept".to_string()]),
-                     at(0), Duration::days(3));
-        assert_eq!(p.stop.keys().cloned().collect::<Vec<_>>(), ["idle", "loose-old"]);
-        assert_eq!(p.remove_containers, [("old-id".to_string(), "old-1".to_string(), "old".to_string())]);
-        assert_eq!(p.volume_candidates.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["old_pg", "old_nm", "orphan"]);
-    }
+fn join(s: &BTreeSet<String>) -> String {
+    if s.is_empty() { "unknown".into() } else { s.iter().cloned().collect::<Vec<_>>().join(", ") }
 }
+
+#[cfg(test)]
+mod tests;

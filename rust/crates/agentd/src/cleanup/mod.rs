@@ -61,10 +61,17 @@ pub trait Apps: Send + Sync {
     fn remove_as_root(&self, path: PathBuf) -> BoxFuture<'_, Result<()>>;
     /// `docker <args>` there: its output, or an error when it fails.
     fn docker(&self, args: Vec<String>) -> BoxFuture<'_, Result<String>>;
-    /// The command lines (one process per line) of a conversation's running session container.
-    fn processes(&self, conversation: &str) -> BoxFuture<'_, Result<String>>;
-    /// `/proc/net/tcp` and `/proc/net/tcp6` of the agent's Docker's network, which the sessions share.
-    fn connections(&self) -> BoxFuture<'_, Result<String>>;
+    /// `docker inspect` of these containers (one that vanished meanwhile is left out).
+    fn inspect(&self, ids: Vec<String>) -> BoxFuture<'_, Result<String>>;
+    /// `docker volume inspect` of these volumes (one that vanished meanwhile is left out).
+    fn volume_inspect(&self, names: Vec<String>) -> BoxFuture<'_, Result<String>>;
+    /// The command lines (one process per line) in a conversation's running session container, or in the agent's
+    /// services container (None).
+    fn processes(&self, conversation: Option<&str>) -> BoxFuture<'_, Result<String>>;
+    /// `== <pid>` then `/proc/<pid>/net/dev`, `tcp` and `tcp6` for each container process: its own network.
+    fn network(&self, pids: Vec<u32>) -> BoxFuture<'_, Result<String>>;
+    /// How many bytes each container's own writable layer holds.
+    fn writable_sizes(&self, ids: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, u64>>>;
     /// For each volume mountpoint: whether it holds database files, and how many bytes it takes.
     fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>>;
 }
@@ -161,13 +168,13 @@ impl Report {
         }
         let changed = self.folders.iter().filter(|f| !f.deps.is_empty() || !f.clones_removed.is_empty()).count();
         let kept = self.kept_clones.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ");
+        let (to, gone, ask) = if self.dry_run { ("to stop", "to remove", "to ask about") } else { ("stopped", "removed", "asked about") };
         let docker = self.docker.as_ref().map(|d| format!(
-            "; the agent's Docker: {} stacks {}, {} containers and {} volumes {}, {} databases {}{}, images {}, build cache {}, \
-             {} problems", d.stopped_stacks.len(), if self.dry_run { "to stop" } else { "stopped" }, d.removed_containers.len(),
-            d.removed_volumes.len(), if self.dry_run { "to remove" } else { "removed" }, d.asked_about.len(),
-            if self.dry_run { "to ask about" } else { "asked about" },
-            if d.to_ask_later > 0 { format!(" ({} for tomorrow's question)", d.to_ask_later) } else { String::new() },
-            d.images, d.build_cache, d.failures.len())).unwrap_or_default();
+            "; the agent's Docker: {} stacks {to}, {} containers, {} volumes and {} images {gone}, {} databases {ask}{}, kept {} \
+             containers with data of their own and {} volumes of unknown use, build cache {}, {} problems",
+            d.stopped_stacks.len(), d.removed_containers.len(), d.removed_volumes.len(), d.removed_images, d.asked_about.len(),
+            if d.to_ask_later > 0 { format!(" ({} for the next daily question)", d.to_ask_later) } else { String::new() },
+            d.kept_containers.len(), d.kept_volumes, d.build_cache, d.failures.len())).unwrap_or_default();
         format!("cleanup{}: {changed} folders {}, {:.1} GB {}; {} in use, {} active in the last idle period, {} already \
                  clean, {} left for the next pass; clones kept: {}; {} problems{docker}; disk free {:.1} GB -> {:.1} GB",
                 if self.dry_run { " (dry run)" } else { "" }, if self.dry_run { "to clean" } else { "cleaned" },
@@ -190,7 +197,16 @@ pub async fn pass(db: Db, apps: Arc<dyn Apps>, ask: Option<Arc<dyn Ask>>, settin
         }
     };
     let free_before = free_space(&settings.work);
-    let docker = match docker::step(&db, apps.as_ref(), ask.as_deref(), &settings, now, dry_run).await {
+    let services = match std::fs::read_to_string(settings.services()) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(anyhow::Error::from(e).context("reading the services file")),
+    };
+    let docker = match services {
+        Ok(services) => docker::step(&db, apps.as_ref(), ask.as_deref(), &settings, &services, now, dry_run).await,
+        Err(e) => Err(e),
+    };
+    let docker = match docker {
         Ok(d) => d,
         Err(e) => docker::DockerReport { failures: vec![format!("the agent's Docker: {e:#}")], ..Default::default() },
     };
@@ -742,13 +758,16 @@ impl Lock {
 pub struct DockerApps {
     docker: bollard::Docker,
     container: String,
+    /// The agent's services container (agent-services).
+    services: String,
     scratch: PathBuf,
     trash: PathBuf,
 }
 
 impl DockerApps {
-    pub fn new(container: &str, settings: &Settings) -> Result<DockerApps> {
+    pub fn new(container: &str, services: &str, settings: &Settings) -> Result<DockerApps> {
         Ok(DockerApps { docker: bollard::Docker::connect_with_local_defaults()?, container: container.to_string(),
+                        services: services.to_string(),
                         scratch: settings.scratch(), trash: settings.trash() })
     }
 
@@ -803,25 +822,51 @@ impl Apps for DockerApps {
         Box::pin(async move { self.finished(&self.container, None, "docker \"$@\"", args, StdDuration::from_secs(600)).await })
     }
 
-    fn processes(&self, conversation: &str) -> BoxFuture<'_, Result<String>> {
-        let conversation = conversation.to_string();
+    fn inspect(&self, ids: Vec<String>) -> BoxFuture<'_, Result<String>> {
+        // one that vanished since the listing only gets an error line on stderr, which is dropped
+        Box::pin(async move { self.finished(&self.container, None, "docker inspect \"$@\" 2>/dev/null; true", ids, StdDuration::from_secs(300)).await })
+    }
+
+    fn volume_inspect(&self, names: Vec<String>) -> BoxFuture<'_, Result<String>> {
         Box::pin(async move {
-            let name = crate::containers::container_name(&conversation)?;
+            self.finished(&self.container, None, "docker volume inspect \"$@\" 2>/dev/null; true", names, StdDuration::from_secs(300)).await
+        })
+    }
+
+    fn processes(&self, conversation: Option<&str>) -> BoxFuture<'_, Result<String>> {
+        let conversation = conversation.map(str::to_string);
+        Box::pin(async move {
+            let name = match &conversation {
+                Some(c) => crate::containers::container_name(c)?,
+                None => self.services.clone(),
+            };
             let script = r#"for f in /proc/[0-9]*/cmdline; do tr '\0' ' ' < "$f" 2>/dev/null; echo; done; true"#;
             self.finished(&name, Some("1001"), script, Vec::new(), StdDuration::from_secs(60)).await
         })
     }
 
-    fn connections(&self) -> BoxFuture<'_, Result<String>> {
+    fn network(&self, pids: Vec<u32>) -> BoxFuture<'_, Result<String>> {
         Box::pin(async move {
-            self.finished(&self.container, None, "cat /proc/net/tcp /proc/net/tcp6", Vec::new(), StdDuration::from_secs(60)).await
+            let script = r#"for p in "$@"; do echo "== $p"; cat /proc/$p/net/dev /proc/$p/net/tcp /proc/$p/net/tcp6 2>/dev/null; done; true"#;
+            self.finished(&self.container, None, script, pids.iter().map(u32::to_string).collect(), StdDuration::from_secs(120)).await
+        })
+    }
+
+    fn writable_sizes(&self, ids: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, u64>>> {
+        Box::pin(async move {
+            let out = self.finished(&self.container, None, "docker inspect --size --format '{{.Id}} {{.SizeRw}}' \"$@\" 2>/dev/null; true",
+                                    ids, StdDuration::from_secs(900)).await?;
+            Ok(out.lines().filter_map(|l| {
+                let (id, size) = l.split_once(' ')?;
+                Some((id.to_string(), size.trim().parse().ok()?))
+            }).collect())
         })
     }
 
     fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>> {
         Box::pin(async move {
             // a missing or unreadable mountpoint counts as a database: never removed without a person's say-so
-            let script = r#"for m in "$@"; do db=0; [ -d "$m" ] && [ -r "$m" ] || db=1; [ -n "$(find "$m" -maxdepth 2 \( -name PG_VERSION -o -name ibdata1 -o -name WiredTiger -o -name dump.rdb -o -name 'appendonly*' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.db' \) 2>/dev/null | head -n 1)" ] && db=1; k=$(du -sk "$m" 2>/dev/null | cut -f1); printf '%s\t%s\t%s\n' "$m" "$db" "${k:-0}"; done; true"#;
+            let script = r#"for m in "$@"; do db=0; [ -d "$m" ] && [ -r "$m" ] || db=1; [ -n "$(find "$m" -maxdepth 4 \( -name PG_VERSION -o -name ibdata1 -o -name WiredTiger -o -name dump.rdb -o -name 'appendonly*' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.db' \) 2>/dev/null | head -n 1)" ] && db=1; k=$(du -sk "$m" 2>/dev/null | cut -f1); printf '%s\t%s\t%s\n' "$m" "$db" "${k:-0}"; done; true"#;
             let out = self.finished(&self.container, None, script, mountpoints, StdDuration::from_secs(1800)).await?;
             Ok(out.lines().filter_map(|l| {
                 let mut f = l.split('\t');

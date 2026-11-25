@@ -4,26 +4,34 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
 
-/// The agent's Docker, faked: a fixed listing (or none), root moves and removals done as ourselves, and canned
-/// answers for the Docker step (`docker` calls are recorded).
+/// The agent's Docker, faked: a fixed listing (or none), root moves and removals done as ourselves, and answers for
+/// the Docker step that a test can change between passes (`docker` calls are recorded).
 #[derive(Default)]
 struct Fake {
     listing: Option<String>,
     moved_as_root: Mutex<Vec<PathBuf>>,
     removed_as_root: Mutex<Vec<PathBuf>>,
     /// `docker inspect` of every container and `docker volume inspect` of every volume.
-    containers_json: String,
-    volumes_json: String,
-    processes: HashMap<String, String>,
-    connections: String,
-    contents: HashMap<String, (bool, u64)>,
+    containers_json: Mutex<String>,
+    volumes_json: Mutex<String>,
+    /// `docker images` lines: id TAB repo:tag.
+    images: Mutex<String>,
+    /// Command lines by session ("" for the agent's services); a session in `blind` can't be read.
+    processes: Mutex<HashMap<String, String>>,
+    blind: Mutex<HashSet<String>>,
+    /// What `network` prints.
+    network: Mutex<String>,
+    sizes: Mutex<HashMap<String, u64>>,
+    contents: Mutex<HashMap<String, (bool, u64)>>,
     calls: Mutex<Vec<String>>,
 }
 
 impl Fake {
     fn new(listing: &str) -> Arc<Fake> {
-        Arc::new(Fake { listing: Some(listing.to_string()), containers_json: "[]".into(), volumes_json: "[]".into(),
-                        ..Default::default() })
+        let fake = Fake { listing: Some(listing.to_string()), ..Default::default() };
+        *fake.containers_json.lock().unwrap() = "[]".into();
+        *fake.volumes_json.lock().unwrap() = "[]".into();
+        Arc::new(fake)
     }
     fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
@@ -53,26 +61,43 @@ impl Apps for Fake {
         Box::pin(async move {
             let line = args.join(" ");
             let out = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-                ["ps", ..] => ids_in(&self.containers_json, "Id"),
-                ["inspect", ..] => self.containers_json.clone(),
-                ["volume", "ls", ..] => ids_in(&self.volumes_json, "Name"),
-                ["volume", "inspect", ..] => self.volumes_json.clone(),
+                ["ps", ..] => ids_in(&self.containers_json.lock().unwrap(), "Id"),
+                ["volume", "ls", ..] => ids_in(&self.volumes_json.lock().unwrap(), "Name"),
+                ["images", ..] => self.images.lock().unwrap().clone(),
                 _ => "Total reclaimed space: 0B".into(),
             };
             self.calls.lock().unwrap().push(line);
             Ok(out)
         })
     }
-    fn processes(&self, conversation: &str) -> BoxFuture<'_, Result<String>> {
-        let out = self.processes.get(conversation).cloned().unwrap_or_default();
-        Box::pin(async move { Ok(out) })
+    fn inspect(&self, _: Vec<String>) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move { Ok(self.containers_json.lock().unwrap().clone()) })
     }
-    fn connections(&self) -> BoxFuture<'_, Result<String>> {
-        Box::pin(async move { Ok(self.connections.clone()) })
+    fn volume_inspect(&self, _: Vec<String>) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move { Ok(self.volumes_json.lock().unwrap().clone()) })
+    }
+    fn processes(&self, conversation: Option<&str>) -> BoxFuture<'_, Result<String>> {
+        let key = conversation.unwrap_or_default().to_string();
+        Box::pin(async move {
+            if self.blind.lock().unwrap().contains(&key) {
+                bail!("no such container");
+            }
+            Ok(self.processes.lock().unwrap().get(&key).cloned().unwrap_or_default())
+        })
+    }
+    fn network(&self, _: Vec<u32>) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move { Ok(self.network.lock().unwrap().clone()) })
+    }
+    fn writable_sizes(&self, ids: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, u64>>> {
+        Box::pin(async move {
+            let sizes = self.sizes.lock().unwrap();
+            Ok(ids.into_iter().map(|id| { let b = sizes.get(&id).copied().unwrap_or(1000); (id, b) }).collect())
+        })
     }
     fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>> {
         Box::pin(async move {
-            Ok(mountpoints.into_iter().map(|m| { let c = self.contents.get(&m).copied().unwrap_or((false, 1000)); (m, c) }).collect())
+            let contents = self.contents.lock().unwrap();
+            Ok(mountpoints.into_iter().map(|m| { let c = contents.get(&m).copied().unwrap_or((false, 1000)); (m, c) }).collect())
         })
     }
     fn remove_as_root(&self, path: PathBuf) -> BoxFuture<'_, Result<()>> {
@@ -356,7 +381,9 @@ async fn no_answer_from_the_agents_docker_means_no_pass() {
     let s = setup();
     let f = typical(&s, "V-old");
     s.conversation("V-old", 4, None);
-    let apps = Arc::new(Fake { listing: None, containers_json: "[]".into(), volumes_json: "[]".into(), ..Default::default() });
+    let apps = Arc::new(Fake { listing: None, ..Default::default() });
+    *apps.containers_json.lock().unwrap() = "[]".into();
+    *apps.volumes_json.lock().unwrap() = "[]".into();
     assert!(s.pass(apps, false).await.is_err());
     assert!(f.join("app/node_modules").exists() && f.join("tools/node_modules").exists());
 }
@@ -466,99 +493,130 @@ impl Ask for Asker {
     }
 }
 
-/// One container of `docker inspect`, `days` before the pass (started when running, stopped when not).
-#[allow(clippy::too_many_arguments)]
-fn container(s: &Setup, id: &str, project: &str, folder: Option<&str>, running: bool, days: f64, volumes: &[&str], port: Option<u16>) -> serde_json::Value {
-    let when = keeps::fmt(s.now - Duration::minutes((days * 1440.0) as i64));
-    let mut mounts: Vec<serde_json::Value> = volumes.iter().map(|v| serde_json::json!({"Type": "volume", "Name": v})).collect();
-    let mut labels = serde_json::json!({"com.docker.compose.project": project});
-    if let Some(f) = folder {
-        labels["com.docker.compose.project.working_dir"] = serde_json::json!(format!("{}/{f}/app", s.settings.scratch().display()));
-        mounts.push(serde_json::json!({"Type": "bind", "Source": format!("{}/{f}/app", s.settings.scratch().display())}));
-    }
-    serde_json::json!({"Id": id, "Name": format!("/{id}"), "Created": when,
-        "State": {"Status": if running { "running" } else { "exited" }, "StartedAt": when,
-                  "FinishedAt": if running { "0001-01-01T00:00:00Z".to_string() } else { when.clone() }},
-        "Config": {"Labels": labels}, "Mounts": mounts,
-        "NetworkSettings": {"Ports": port.map(|p| serde_json::json!({"8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": p.to_string()}]}))
-                                         .unwrap_or(serde_json::json!({}))}})
+/// A container for `docker inspect`: started `days` before the pass when running (pid `pid`), stopped then when not.
+struct Box_ {
+    id: &'static str,
+    project: &'static str,
+    folder: Option<&'static str>,
+    running: bool,
+    days: f64,
+    volumes: Vec<(&'static str, &'static str)>,
+    image: &'static str,
+    pid: u32,
 }
 
-fn volume(s: &Setup, name: &str, project: &str, days: i64) -> serde_json::Value {
-    serde_json::json!({"Name": name, "Labels": {"com.docker.compose.project": project},
-                       "CreatedAt": keeps::fmt(s.now - Duration::days(days)), "Mountpoint": format!("/v/{name}")})
+impl Default for Box_ {
+    fn default() -> Self {
+        Box_ { id: "", project: "", folder: None, running: true, days: 1.0, volumes: vec![], image: "node:22", pid: 0 }
+    }
+}
+
+fn inspect(s: &Setup, boxes: &[Box_]) -> String {
+    serde_json::Value::Array(boxes.iter().map(|b| {
+        let when = keeps::fmt(s.now - Duration::minutes((b.days * 1440.0) as i64));
+        let mut mounts: Vec<serde_json::Value> = b.volumes.iter()
+            .map(|(v, at)| serde_json::json!({"Type": "volume", "Name": v, "Destination": at})).collect();
+        let mut labels = serde_json::json!({"com.docker.compose.project": b.project});
+        if let Some(f) = b.folder {
+            let dir = format!("{}/{f}/app", s.settings.scratch().display());
+            labels["com.docker.compose.project.working_dir"] = serde_json::json!(dir);
+            mounts.push(serde_json::json!({"Type": "bind", "Source": dir}));
+        }
+        serde_json::json!({"Id": b.id, "Name": format!("/{}", b.id), "Created": when, "Image": format!("sha256:{}", b.image),
+            "State": {"Status": if b.running { "running" } else { "exited" }, "Pid": b.pid, "StartedAt": when,
+                      "FinishedAt": if b.running { "0001-01-01T00:00:00Z".to_string() } else { when.clone() }},
+            "Config": {"Labels": labels, "Image": b.image}, "Mounts": mounts,
+            "NetworkSettings": {"Ports": {}, "Networks": {"x": {"IPAddress": format!("10.201.0.{}", b.pid % 250 + 2)}}}})
+    }).collect()).to_string()
+}
+
+fn volumes(s: &Setup, vols: &[(&str, &str, i64)]) -> String {
+    serde_json::Value::Array(vols.iter().map(|(name, project, days)| serde_json::json!({
+        "Name": name, "Labels": if project.is_empty() { serde_json::json!(null) } else { serde_json::json!({"com.docker.compose.project": project}) },
+        "CreatedAt": keeps::fmt(s.now - Duration::days(*days)), "Mountpoint": format!("/v/{name}")})).collect()).to_string()
+}
+
+/// `/proc/<pid>/net/dev` with `bytes` received on eth0, and established connections from `peers` (hex addresses).
+fn net(entries: &[(u32, u64, &[&str])]) -> String {
+    entries.iter().map(|(pid, bytes, peers)| {
+        let tcp: String = peers.iter().map(|p| format!("   0: 0201C90A:1F90 {p}:C350 01 0:0\n")).collect();
+        format!("== {pid}\nInter-|   Receive\n face |bytes\n    lo: 999999 0 0 0 0 0 0 0 999999 0\n  eth0: {bytes} 0 0 0 0 0 0 0 0 0\n{tcp}")
+    }).collect()
+}
+
+async fn pass_at(s: &Setup, apps: &Arc<Fake>, ask: Option<Arc<Asker>>, at: DateTime<Utc>) -> docker::DockerReport {
+    let ask = ask.map(|a| a as Arc<dyn Ask>);
+    let report = pass(s.db.clone(), apps.clone(), ask, s.settings.clone(), at, false).await.unwrap();
+    report.docker.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_docker_step_stops_only_what_no_session_uses_and_asks_before_a_database_goes() {
-    let s = setup();
-    for (name, days) in [("V-stale", 5), ("V-live", 5), ("V-recent", 0), ("V-ref", 5), ("V-conn", 5), ("V-kept", 5), ("V-old", 5)] {
-        s.folder(name);
-        s.conversation(name, days, None);
-    }
-    // V-recent was active half an hour ago; V-live's session is up and its processes call V-ref's stack
-    s.exec(&format!("UPDATE conversations SET last_active_at = '{}' WHERE id = 'V-recent'", keeps::fmt(s.now - Duration::minutes(30))));
-    s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-live', 'agent-conv-V-live', 'x')");
-    s.exec("UPDATE conversations SET channel = 'C-OLD', thread_ts = '111.222' WHERE id = 'V-old'");
-    s.exec("INSERT INTO agentd_keeps(kind, target, until, set_by, set_at) VALUES ('stack', 'rr-kept', NULL, 'sam', 'x')");
-    let containers = serde_json::json!([
-        container(&s, "rr-stale-app", "rr-stale", Some("V-stale"), true, 1.0, &[], Some(18090)),
-        container(&s, "rr-live-app", "rr-live", Some("V-live"), true, 1.0, &[], Some(18091)),
-        container(&s, "rr-recent-app", "rr-recent", Some("V-recent"), true, 1.0, &[], Some(18092)),
-        container(&s, "rr-ref-app", "rr-ref", Some("V-ref"), true, 1.0, &[], Some(18093)),
-        container(&s, "rr-conn-app", "rr-conn", Some("V-conn"), true, 1.0, &[], Some(18094)),
-        container(&s, "rr-kept-app", "rr-kept", Some("V-kept"), true, 1.0, &[], Some(18095)),
-        container(&s, "rr-old-db", "rr-old", Some("V-old"), false, 5.0, &["rr-old_postgres", "rr-old_cache"], None),
-        container(&s, "loose", "", None, true, 9.0, &[], None),
-    ]);
-    let anon_db = "0".repeat(30) + "db" + &"0".repeat(32); // random hex that happens to read "db"
-    let volumes = serde_json::json!([volume(&s, "rr-old_postgres", "rr-old", 9), volume(&s, "rr-old_cache", "rr-old", 9),
-                                     volume(&s, "anon-new", "", 1), volume(&s, &anon_db, "rr-old", 9)]);
-    let apps = Arc::new(Fake {
-        listing: Some("__END__".into()), containers_json: containers.to_string(), volumes_json: volumes.to_string(),
-        processes: HashMap::from([("V-live".to_string(), "claude --system-prompt 18093 --output-format stream-json\n\
-                                                          curl -s http://localhost:18093/health\n".to_string())]),
-        connections: "0: 0100007F:46AE 0100007F:C350 01 0:0\n".into(), // something connected to 18094
-        contents: HashMap::from([("/v/rr-old_cache".to_string(), (false, 2_000_000)), ("/v/rr-old_postgres".to_string(), (true, 9_000_000))]),
-        ..Default::default()
-    });
-    let asker = Arc::new(Asker::default());
-    let report = pass(s.db.clone(), apps.clone(), Some(asker.clone()), s.settings.clone(), s.now, false).await.unwrap();
-    let d = report.docker.unwrap();
-    assert!(d.failures.is_empty(), "{:?}", d.failures);
-    assert_eq!(d.stopped_stacks, ["loose", "rr-stale"]);
-    assert_eq!(d.removed_containers, ["rr-old-db"]);
-    assert_eq!(d.removed_volumes, ["rr-old_cache".to_string(), anon_db], "the database volume isn't removed");
-    assert_eq!(d.asked_about, ["rr-old_postgres"]);
-    let calls = apps.calls();
-    assert!(calls.contains(&"stop rr-stale-app".to_string()) && calls.contains(&"stop loose".to_string()), "{calls:?}");
-    assert!(calls.contains(&"rm rr-old-db".to_string()) && calls.contains(&"volume rm rr-old_cache".to_string()), "{calls:?}");
-    assert!(!calls.iter().any(|c| c.contains("rr-old_postgres") && c.starts_with("volume rm")), "{calls:?}");
-    assert!(calls.iter().any(|c| c.starts_with("image prune -a -f --filter until=72h")) && calls.iter().any(|c| c.starts_with("builder prune")));
-    let asked = asker.asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 1);
-    assert!(asked[0].contains("`rr-old_postgres`") && asked[0].contains("channel C-OLD") && asked[0].contains("C-OLD/111.222"), "{}", asked[0]);
-    assert!(fs::read_to_string(s.settings.scratch().join("V-stale").join(NOTES)).unwrap().contains("`docker start rr-stale-app`"));
-    assert!(fs::read_to_string(s.settings.scratch().join("V-old").join(NOTES)).unwrap().contains("volume `rr-old_cache`"));
-
-    // the next pass doesn't ask about it again
-    let again = pass(s.db.clone(), apps.clone(), Some(asker.clone()), s.settings.clone(), s.now + Duration::days(2), false).await.unwrap();
-    assert!(again.docker.unwrap().asked_about.is_empty());
-    assert_eq!(asker.asked.lock().unwrap().len(), 1);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_dry_run_of_the_docker_step_changes_nothing() {
+async fn a_stack_stops_only_after_an_hour_seen_unused() {
     let s = setup();
     s.folder("V-stale");
     s.conversation("V-stale", 5, None);
-    let containers = serde_json::json!([container(&s, "rr-stale-app", "rr-stale", Some("V-stale"), true, 1.0, &[], None)]);
-    let apps = Arc::new(Fake { listing: Some("__END__".into()), containers_json: containers.to_string(), volumes_json: "[]".into(),
-                               ..Default::default() });
-    let report = pass(s.db.clone(), apps.clone(), Some(Arc::new(Asker::default())), s.settings.clone(), s.now, true).await.unwrap();
-    assert_eq!(report.docker.unwrap().stopped_stacks, ["rr-stale"]);
-    assert!(apps.calls().iter().all(|c| c.starts_with("ps") || c.starts_with("inspect") || c.starts_with("volume ls")), "{:?}", apps.calls());
-    assert!(!s.settings.scratch().join("V-stale").join(NOTES).exists());
+    let apps = Fake::new("__END__");
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[Box_ { id: "rr-stale-app", project: "rr-stale", folder: Some("V-stale"), pid: 11, ..Default::default() }]);
+    *apps.network.lock().unwrap() = net(&[(11, 1000, &[])]);
+    let first = pass_at(&s, &apps, None, s.now).await;
+    assert!(first.stopped_stacks.is_empty(), "first sight: counted as used");
+    let soon = pass_at(&s, &apps, None, s.now + Duration::minutes(30)).await;
+    assert!(soon.stopped_stacks.is_empty(), "unused for only half an hour");
+    let later = pass_at(&s, &apps, None, s.now + Duration::minutes(61)).await;
+    assert_eq!(later.stopped_stacks, ["rr-stale"]);
+    assert!(apps.calls().contains(&"stop rr-stale-app".to_string()));
+    assert!(fs::read_to_string(s.settings.scratch().join("V-stale").join(NOTES)).unwrap().contains("`docker start rr-stale-app`"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stack_in_use_keeps_running() {
+    // each case: something uses rr-x (folder V-x, pid 21), checked over passes two hours apart
+    let cases: [(&str, &dyn Fn(&Setup, &Arc<Fake>)); 9] = [
+        ("its conversation's session is up", &|s, _| s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-x', 'n', 'x')")),
+        ("its conversation was active half an hour ago",
+         &|s, _| s.exec(&format!("UPDATE conversations SET last_active_at = '{}' WHERE id = 'V-x'", keeps::fmt(s.now + Duration::minutes(90))))),
+        ("a session's process names it", &|s, a| {
+            s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-other', 'n', 'x')");
+            a.processes.lock().unwrap().insert("V-other".into(), "docker compose -p rr-x logs\n".into());
+        }),
+        ("a service's process names it", &|_, a| { a.processes.lock().unwrap().insert("".into(), "psql -h rr-x-db-1\n".into()); }),
+        ("a service runs in its folder", &|s, _| {
+            fs::write(s.settings.work.join("services.toml"),
+                      format!("[[services]]\nname = \"demo\"\ncmd = [\"node\", \"a.js\"]\ncwd = \"{}/V-x/demo\"\n", s.settings.scratch().display())).unwrap();
+        }),
+        ("someone outside the stack is connected", &|_, a| { *a.network.lock().unwrap() = net(&[(21, 1000, &["0101C90A"])]); }),
+        ("traffic moved since the last pass", &|_, a| { *a.network.lock().unwrap() = net(&[(21, 1000 + 64 * 1024, &[])]); }),
+        ("someone kept it", &|s, _| s.exec("INSERT INTO agentd_keeps(kind, target, until, set_by, set_at) VALUES ('stack', 'rr-x', NULL, 'sam', 'x')")),
+        ("someone kept its container by name", &|s, _| s.exec("INSERT INTO agentd_keeps(kind, target, until, set_by, set_at) VALUES ('stack', 'rr-x-app', NULL, 'sam', 'x')")),
+    ];
+    for (why, setup_use) in cases {
+        let s = setup();
+        s.folder("V-x");
+        s.conversation("V-x", 5, None);
+        let apps = Fake::new("__END__");
+        *apps.containers_json.lock().unwrap() = inspect(&s, &[Box_ { id: "rr-x-app", project: "rr-x", folder: Some("V-x"), pid: 21, ..Default::default() }]);
+        *apps.network.lock().unwrap() = net(&[(21, 1000, &[])]);
+        pass_at(&s, &apps, None, s.now).await;
+        setup_use(&s, &apps);
+        let report = pass_at(&s, &apps, None, s.now + Duration::hours(2)).await;
+        assert!(report.stopped_stacks.is_empty(), "{why}: {:?}", report.stopped_stacks);
+        assert!(!apps.calls().iter().any(|c| c.starts_with("stop")), "{why}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connections_inside_the_stack_and_loopback_do_not_count() {
+    let s = setup();
+    s.folder("V-x");
+    s.conversation("V-x", 5, None);
+    let apps = Fake::new("__END__");
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[Box_ { id: "rr-x-db", project: "rr-x", folder: Some("V-x"), pid: 21, ..Default::default() },
+                                                          Box_ { id: "rr-x-app", project: "rr-x", folder: Some("V-x"), pid: 22, ..Default::default() }]);
+    // the app (10.201.0.24) holds a connection to the database (10.201.0.23); both talk to themselves on loopback
+    *apps.network.lock().unwrap() = net(&[(21, 1000, &["1800C90A", "0100007F"]), (22, 500, &["1700C90A"])]);
+    pass_at(&s, &apps, None, s.now).await;
+    let report = pass_at(&s, &apps, None, s.now + Duration::hours(2)).await;
+    assert_eq!(report.stopped_stacks, ["rr-x"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -566,22 +624,126 @@ async fn a_session_whose_processes_cannot_be_read_stops_nothing() {
     let s = setup();
     s.folder("V-stale");
     s.conversation("V-stale", 5, None);
-    s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-other', 'agent-conv-V-other', 'x')");
-    struct Blind(Arc<Fake>);
-    impl Apps for Blind {
-        fn containers(&self) -> BoxFuture<'_, Result<String>> { self.0.containers() }
-        fn move_as_root(&self, f: PathBuf, t: PathBuf) -> BoxFuture<'_, Result<()>> { self.0.move_as_root(f, t) }
-        fn remove_as_root(&self, p: PathBuf) -> BoxFuture<'_, Result<()>> { self.0.remove_as_root(p) }
-        fn docker(&self, a: Vec<String>) -> BoxFuture<'_, Result<String>> { self.0.docker(a) }
-        fn processes(&self, _: &str) -> BoxFuture<'_, Result<String>> { Box::pin(async { Err(anyhow!("no such container")) }) }
-        fn connections(&self) -> BoxFuture<'_, Result<String>> { self.0.connections() }
-        fn volume_contents(&self, m: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>> { self.0.volume_contents(m) }
-    }
-    let containers = serde_json::json!([container(&s, "rr-stale-app", "rr-stale", Some("V-stale"), true, 1.0, &[], None)]);
-    let fake = Arc::new(Fake { listing: Some("__END__".into()), containers_json: containers.to_string(), volumes_json: "[]".into(),
-                               ..Default::default() });
-    let report = pass(s.db.clone(), Arc::new(Blind(fake.clone())), None, s.settings.clone(), s.now, false).await.unwrap();
-    let d = report.docker.unwrap();
-    assert!(d.stopped_stacks.is_empty() && !d.failures.is_empty());
-    assert!(!fake.calls().iter().any(|c| c.starts_with("stop")));
+    s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-other', 'n', 'x')");
+    let apps = Fake::new("__END__");
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[Box_ { id: "rr-stale-app", project: "rr-stale", folder: Some("V-stale"), pid: 11, ..Default::default() }]);
+    *apps.network.lock().unwrap() = net(&[(11, 1000, &[])]);
+    pass_at(&s, &apps, None, s.now).await;
+    apps.blind.lock().unwrap().insert("V-other".into());
+    let report = pass_at(&s, &apps, None, s.now + Duration::hours(2)).await;
+    assert!(report.stopped_stacks.is_empty() && !report.failures.is_empty());
+    assert!(!apps.calls().iter().any(|c| c.starts_with("stop")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn volumes_go_only_when_rebuildable_and_unused_long_enough_and_databases_are_asked_about() {
+    let s = setup();
+    s.folder("V-old");
+    s.conversation("V-old", 9, None);
+    s.exec("UPDATE conversations SET channel = 'C-OLD', thread_ts = '111.222' WHERE id = 'V-old'");
+    let apps = Fake::new("__END__");
+    // a stopped stack: its database (postgres 18 keeps data deeper), its node_modules volume, and a volume of unknown use
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[
+        Box_ { id: "rr-old-db", project: "rr-old", folder: Some("V-old"), running: false, days: 9.0, image: "postgres:18",
+               volumes: vec![("rr-old_pg", "/var/lib/postgresql")], ..Default::default() },
+        Box_ { id: "rr-old-app", project: "rr-old", folder: Some("V-old"), running: false, days: 9.0,
+               volumes: vec![("rr-old_api_node_modules", "/app/node_modules"), ("a".repeat(64).leak(), "/srv/uploads")], ..Default::default() }]);
+    *apps.volumes_json.lock().unwrap() = volumes(&s, &[("rr-old_pg", "rr-old", 9), ("rr-old_api_node_modules", "rr-old", 9), (&"a".repeat(64), "", 9)]);
+    let asker = Arc::new(Asker::default());
+
+    // the first pass removes the containers; their volumes are unused from now on
+    let first = pass_at(&s, &apps, Some(asker.clone()), s.now).await;
+    assert_eq!(first.removed_containers.len(), 2, "{first:?}");
+    assert!(first.removed_volumes.is_empty() && first.asked_about.is_empty(), "unused for no time yet: {first:?}");
+    *apps.containers_json.lock().unwrap() = "[]".into();
+    let two_days = pass_at(&s, &apps, Some(asker.clone()), s.now + Duration::days(2)).await;
+    assert!(two_days.removed_volumes.is_empty() && two_days.asked_about.is_empty());
+
+    let later = pass_at(&s, &apps, Some(asker.clone()), s.now + Duration::days(4)).await;
+    assert_eq!(later.removed_volumes, ["rr-old_api_node_modules"]);
+    assert_eq!(later.asked_about, ["rr-old_pg"]);
+    assert_eq!(later.kept_volumes, 1, "the volume of unknown use stays");
+    let calls = apps.calls();
+    assert!(calls.contains(&"volume rm rr-old_api_node_modules".to_string()));
+    assert!(!calls.iter().any(|c| c.starts_with("volume rm") && (c.contains("rr-old_pg") || c.contains("aaaa"))), "{calls:?}");
+    let asked = asker.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].contains("`rr-old_pg`") && asked[0].contains("channel C-OLD") && asked[0].contains("C-OLD/111.222")
+            && asked[0].contains("postgres:18") && asked[0].contains("only the volumes named"), "{}", asked[0]);
+    assert!(fs::read_to_string(s.settings.scratch().join("V-old").join(NOTES)).unwrap().contains("volume `rr-old_api_node_modules`"));
+
+    // asked once; asked again only if that turn failed
+    pass_at(&s, &apps, Some(asker.clone()), s.now + Duration::days(6)).await;
+    assert_eq!(asker.asked.lock().unwrap().len(), 1);
+    s.exec("INSERT INTO work_items(id, kind, payload, status, created_at, updated_at) VALUES ('w-ask', 'turn', '{}', 'failed', 'x', 'x')");
+    let again = pass_at(&s, &apps, Some(asker.clone()), s.now + Duration::days(8)).await;
+    assert_eq!(again.asked_about, ["rr-old_pg"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_volume_unmounted_just_now_is_not_unused_however_old() {
+    // a busy conversation ran `docker compose down`: its 9-day-old volumes lost their containers a minute ago
+    let s = setup();
+    s.folder("V-busy");
+    s.conversation("V-busy", 0, None);
+    let apps = Fake::new("__END__");
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[Box_ { id: "rr-b-app", project: "rr-b", folder: Some("V-busy"), pid: 5,
+        volumes: vec![("rr-b_cache", "/root/.cache")], ..Default::default() }]);
+    *apps.volumes_json.lock().unwrap() = volumes(&s, &[("rr-b_cache", "rr-b", 9)]);
+    pass_at(&s, &apps, None, s.now).await;
+    *apps.containers_json.lock().unwrap() = "[]".into();
+    let report = pass_at(&s, &apps, None, s.now + Duration::minutes(5)).await;
+    assert!(report.removed_volumes.is_empty());
+    // three quiet days later it goes
+    s.exec(&format!("UPDATE conversations SET last_active_at = '{}' WHERE id = 'V-busy'", keeps::fmt(s.now)));
+    let later = pass_at(&s, &apps, None, s.now + Duration::days(4)).await;
+    assert_eq!(later.removed_volumes, ["rr-b_cache"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_container_with_data_of_its_own_stays() {
+    let s = setup();
+    s.folder("V-old");
+    s.conversation("V-old", 9, None);
+    let apps = Fake::new("__END__");
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[
+        Box_ { id: "rr-o-search", project: "rr-o", folder: Some("V-old"), running: false, days: 9.0, image: "elasticsearch:8", ..Default::default() },
+        Box_ { id: "rr-o-app", project: "rr-o", folder: Some("V-old"), running: false, days: 9.0, ..Default::default() },
+        Box_ { id: "rr-o-big", project: "rr-o", folder: Some("V-old"), running: false, days: 9.0, ..Default::default() }]);
+    apps.sizes.lock().unwrap().insert("rr-o-big".into(), 500 * 1024 * 1024);
+    let report = pass_at(&s, &apps, None, s.now).await;
+    assert_eq!(report.removed_containers, ["rr-o-app"]);
+    let mut kept = report.kept_containers.clone();
+    kept.sort();
+    assert_eq!(kept, ["rr-o-big", "rr-o-search"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn images_go_once_unused_for_the_idle_period() {
+    let s = setup();
+    let apps = Fake::new("__END__");
+    *apps.images.lock().unwrap() = "sha256:used\tnode:22\nsha256:old\tpostgres:17\nsha256:dangling\t<none>:<none>\n".into();
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[Box_ { id: "c", project: "p", running: false, days: 1.0, image: "used", ..Default::default() }]);
+    let first = pass_at(&s, &apps, None, s.now).await;
+    assert_eq!(first.removed_images, 0, "first sight starts the clock");
+    let later = pass_at(&s, &apps, None, s.now + Duration::days(4)).await;
+    assert_eq!(later.removed_images, 2);
+    let calls = apps.calls();
+    assert!(calls.contains(&"image rm postgres:17".to_string()) && calls.contains(&"image rm sha256:dangling".to_string()), "{calls:?}");
+    assert!(!calls.iter().any(|c| c.contains("node:22") && c.starts_with("image rm")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_of_the_docker_step_changes_and_remembers_nothing() {
+    let s = setup();
+    s.folder("V-stale");
+    s.conversation("V-stale", 5, None);
+    let apps = Fake::new("__END__");
+    *apps.containers_json.lock().unwrap() = inspect(&s, &[Box_ { id: "rr-stale-app", project: "rr-stale", folder: Some("V-stale"), pid: 11, ..Default::default() }]);
+    *apps.network.lock().unwrap() = net(&[(11, 1000, &[])]);
+    pass(s.db.clone(), apps.clone(), Some(Arc::new(Asker::default())), s.settings.clone(), s.now, true).await.unwrap();
+    assert!(apps.calls().iter().all(|c| c.starts_with("ps") || c.starts_with("volume ls") || c.starts_with("images")), "{:?}", apps.calls());
+    let remembered: i64 = s.db.lock().query_row("SELECT COUNT(*) FROM agentd_cleanup_stacks", [], |r| r.get(0)).unwrap();
+    assert_eq!(remembered, 0);
+    assert!(!s.settings.scratch().join("V-stale").join(NOTES).exists());
 }
