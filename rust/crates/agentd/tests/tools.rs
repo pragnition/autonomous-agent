@@ -167,7 +167,8 @@ async fn status_lines() {
     let text = call(&s, &item, "status", json!({})).await;
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(&lines[..4], ["paused: no", "running: 1 (sample)", "queued: 0", "open tasks: 0"]);
-    assert!(lines[4].starts_with("account: acct-a · 5h window 20% used of its 65% cap · resets "), "{}", lines[4]);
+    assert!(lines[4].starts_with("account: acct-a · 5h window 20% used of its 100% cap · resets "), "{}", lines[4]);
+    assert!(!lines[4].contains("cap lifts"), "{}", lines[4]);
     assert_eq!(lines[5], "accounts under their cap: 2 of 2");
 }
 

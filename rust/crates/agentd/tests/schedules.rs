@@ -167,8 +167,9 @@ fn rec(rank: Option<i64>, used: f64, reset_in: f64, verified: bool) -> Value {
 #[test]
 fn account_states_match_python() {
     let e = expected();
+    let cap65 = agentd::proxy::SoftCap { limit: 0.65, lift_s: 5400.0 };
     for c in e["account_state"].as_array().unwrap() {
-        assert_eq!(usage_watch::account_state(&c["rec"], c["previous"].as_str(), 1_000_000.0, &agentd::proxy::SoftCap::default()),
+        assert_eq!(usage_watch::account_state(&c["rec"], c["previous"].as_str(), 1_000_000.0, &cap65),
                    c["out"].as_str().unwrap(), "{}", c["rec"]);
     }
     let resets: Vec<Option<f64>> = [json!({"5h": [0.5, 10], "7d": [1.0, 20]}), json!({"5h": [0.5, 10], "7d": [0.5, 20]}), json!({})]
@@ -205,7 +206,7 @@ async fn weekly_capped_account_is_out_until_its_week_resets_without_an_alert() {
 #[tokio::test]
 async fn pool_hold_and_alerts_once() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
-    let usage = Arc::new(Mutex::new(json!({"a": rec(Some(0), 0.9, 4.0 * 3600.0, true), "b": rec(None, 1.0, 3600.0, true)})));
+    let usage = Arc::new(Mutex::new(json!({"a": rec(Some(0), 1.0, 4.0 * 3600.0, true), "b": rec(None, 1.0, 3600.0, true)})));
     let s = shared_at(dir.path(), &slack, &fake_proxy_live(usage.clone()).await);
     let hold = |s: &agentd::shared::Shared| agentd::db::get_setting(&s.db.lock(), agentd::queue::HOLD_SCHEDULED).unwrap();
     usage_watch::tick(&s).await.unwrap();

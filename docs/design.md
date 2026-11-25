@@ -297,10 +297,10 @@ start.
 ### Usage watch
 
 Each account has a soft cap on its 5-hour window (`proxy.SoftCap`), so no account is run to its Anthropic limit
-early in a window. It counts as full at `SOFT_CAP_5H` (default 0.65) of the window until `SOFT_CAP_LIFT_S` (default
-5400, 1h30m) before the window resets. From then on the cap is 100%, since what is left would go unused at the reset
-anyway. The reset time is the proxy's 5-hour window data; when it isn't known, the 65% cap applies. Both values are
-environment variables of the control plane (`compose.yaml`, taken from the host's `.env`).
+early in a window when set below 1.0. It counts as full at `SOFT_CAP_5H` (default 1.0, i.e. 100%) of the window until
+`SOFT_CAP_LIFT_S` (default 5400, 1h30m) before the window resets. From then on the cap is 100%, since what is left would
+go unused at the reset anyway. The reset time is the proxy's 5-hour window data; when it isn't known, `SOFT_CAP_5H`
+applies. Both values are environment variables of the control plane (`compose.yaml`, taken from the host's `.env`).
 
 Each account also has a weekly cap, so its owner keeps the rest of their week. The proxy sets it (`weekly_cap` in
 its config; 0.65 on the host) for Jensen's ports only, never the host's own sessions. An account at or past that

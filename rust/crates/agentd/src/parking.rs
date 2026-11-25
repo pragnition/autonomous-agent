@@ -95,7 +95,7 @@ fn room_at(usage: &Usage, now: f64) -> Option<f64> {
         }
         let reset = a.reset_5h.filter(|r| *r > now)?;
         let lift = reset - usage.soft_cap.lift_s;
-        Some(if a.rank.is_some() && lift > now { lift } else { reset })
+        Some(if a.rank.is_some() && usage.soft_cap.limit < 1.0 && lift > now { lift } else { reset })
     }).min_by(f64::total_cmp)
 }
 
@@ -120,9 +120,11 @@ pub async fn status_lines(s: &Shared, ctx: &ToolContext) -> Vec<String> {
             let mut parts = vec![format!("account: {code}"), format!("5h window {used} used of its {:.0}% cap", cap * 100.0)];
             if let Some(reset) = account.reset_5h {
                 parts.push(format!("resets {} (in {})", when(reset, now, tz), span(reset - now)));
-                let lift = reset - usage.soft_cap.lift_s;
-                parts.push(if lift > now { format!("cap lifts to 100% at {} (in {})", when(lift, now, tz), span(lift - now)) }
-                           else { "cap lifted".into() });
+                if usage.soft_cap.limit < 1.0 {
+                    let lift = reset - usage.soft_cap.lift_s;
+                    parts.push(if lift > now { format!("cap lifts to 100% at {} (in {})", when(lift, now, tz), span(lift - now)) }
+                               else { "cap lifted".into() });
+                }
             }
             if let Some(cap_7d) = account.cap_7d {
                 let used = account.used_7d.map(|u| format!("{:.0}%", u * 100.0)).unwrap_or_else(|| "unknown".into());

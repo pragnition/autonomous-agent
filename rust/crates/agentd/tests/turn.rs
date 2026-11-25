@@ -395,7 +395,7 @@ fn interrupt_seq(log: &[LogLine]) -> u64 {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn soft_cap_moves_only_at_quiet_moment() {
-    let rig = Rig::new(0.90).await;
+    let rig = Rig::new(1.0).await;
     let runner = rig.runner(&[vec![init(), read_prompt(), bash_call(), json!({"sleep_ms": 800}), bash_done(),
                                    json!({"wait_interrupt": true}), failed(None)],
                               vec![init(), read_prompt(), say("on b"), result("moved")]], |_| {});
@@ -421,7 +421,7 @@ async fn weekly_cap_moves_the_session_like_the_soft_cap() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn soft_cap_forced_after_30_minutes() {
-    let rig = Rig::new(0.90).await;
+    let rig = Rig::new(1.0).await;
     let runner = rig.runner(&[vec![init(), read_prompt(), bash_call(), json!({"wait_interrupt": true}), failed(None)],
                               vec![init(), read_prompt(), result("moved anyway")]],
                             |s| s.soft_cap_grace = Duration::from_millis(500));

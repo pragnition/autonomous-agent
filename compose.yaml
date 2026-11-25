@@ -41,7 +41,7 @@ services:
       AGENTD_DATA_HOST: ${AGENTD_DATA_HOST:?run deploy/env.sh first}  # for the conversations' mounts
       AGENT_NAME: ${AGENT_NAME:-agent}
       AGENT_GIT_EMAIL: ${AGENT_GIT_EMAIL:-}
-      SOFT_CAP_5H: ${SOFT_CAP_5H:-0.65}            # an account counts as full at this share of its 5-hour window...
+      SOFT_CAP_5H: ${SOFT_CAP_5H:-1.0}             # an account counts as full at this share of its 5-hour window...
       SOFT_CAP_LIFT_S: ${SOFT_CAP_LIFT_S:-5400}    # ...until this many seconds before the window resets
       # Sessions and their subagents compact near this many tokens of context instead of near the model's 1M window
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: ${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-200000}

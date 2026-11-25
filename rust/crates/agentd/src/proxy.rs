@@ -2,9 +2,9 @@
 //! each account's 5-hour window (a port of src/agent/proxy.py).
 
 //!
-//! An account counts as full at the soft cap (65%) of its 5-hour window until 90 minutes before the window resets,
-//! and at 100% from then on: what is left would go unused at the reset anyway. An unknown reset time keeps the soft
-//! cap.
+//! An account counts as full at the soft cap (default 100%, configurable via `SOFT_CAP_5H`) of its 5-hour window until
+//! 90 minutes before the window resets, and at 100% from then on: what is left would go unused at the reset anyway. An
+//! unknown reset time keeps the soft cap.
 //!
 //! It is also full at the weekly cap the proxy gives as `cap_7d` (its `weekly_cap`, which leaves the rest of each
 //! account's week to its owner) until its 7-day window resets. That cap never lifts early, and the proxy gives such
@@ -29,7 +29,7 @@ pub struct SoftCap {
 
 impl Default for SoftCap {
     fn default() -> SoftCap {
-        SoftCap { limit: 0.65, lift_s: 5400.0 }
+        SoftCap { limit: 1.0, lift_s: 5400.0 }
     }
 }
 
@@ -214,11 +214,12 @@ mod tests {
     #[test]
     fn soft_cap_lifts_near_reset_and_moves_only_to_an_account_under_its_cap() {
         let now = 1_000_000.0;
+        let cap65 = SoftCap { limit: 0.65, lift_s: 5400.0 };
         let raw = json!({"_all": {"status": "ok"},
                          "a": {"status": "ok", "rank": 1, "verified": true, "5h": [0.70, now + 3.0 * 3600.0]},
                          "b": {"status": "ok", "rank": 0, "verified": true, "5h": [0.20, now + 3600.0]},
                          "c": {"status": "rejected", "rank": null, "verified": false}});
-        let usage = Usage::from_raw(&raw, SoftCap::default(), now);
+        let usage = Usage::from_raw(&raw, cap65, now);
         assert_eq!(usage.accounts.len(), 3);
         assert_eq!(usage.status_of(Some("c")), Some("rejected"));
         assert!(usage.over_cap(Some("a")), "70% of a window resetting in 3 hours is over 65%");
@@ -226,11 +227,14 @@ mod tests {
         assert_eq!(usage.handoff_target(Some("a")).as_deref(), Some("b"));
         assert_eq!(usage.handoff_target(Some("b")), None, "already the top-ranked account");
         let near_reset = json!({"a": {"status": "ok", "rank": 1, "5h": [0.70, now + 3600.0]}});
-        assert!(!Usage::from_raw(&near_reset, SoftCap::default(), now).over_cap(Some("a")),
+        assert!(!Usage::from_raw(&near_reset, cap65, now).over_cap(Some("a")),
                 "within 90 minutes of the reset the whole window is usable");
         let capped_top = json!({"a": {"status": "ok", "rank": 1, "5h": [0.70, now + 3.0 * 3600.0]},
                                 "b": {"status": "ok", "rank": 0, "5h": [0.66, now + 3.0 * 3600.0]}});
-        assert_eq!(Usage::from_raw(&capped_top, SoftCap::default(), now).handoff_target(Some("a")), None);
+        assert_eq!(Usage::from_raw(&capped_top, cap65, now).handoff_target(Some("a")), None);
+        assert_eq!(SoftCap::default().limit, 1.0);
+        assert!(!Usage::from_raw(&raw, SoftCap::default(), now).over_cap(Some("a")),
+                "default 100% cap allows 70% usage");
         assert_eq!(SoftCap::from_env(|k| (k == "SOFT_CAP_5H").then(|| "1.5".to_string())).limit, 1.0);
     }
 
