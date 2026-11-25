@@ -72,6 +72,8 @@ pub trait Apps: Send + Sync {
     fn network(&self, pids: Vec<u32>) -> BoxFuture<'_, Result<String>>;
     /// How many bytes each container's own writable layer holds.
     fn writable_sizes(&self, ids: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, u64>>>;
+    /// `docker diff` of each container: the files it added or changed in its own layer, one per line.
+    fn changed_files(&self, ids: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, String>>>;
     /// For each volume mountpoint: whether it holds database files, and how many bytes it takes.
     fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>>;
 }
@@ -852,10 +854,31 @@ impl Apps for DockerApps {
         })
     }
 
+    fn changed_files(&self, ids: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, String>>> {
+        Box::pin(async move {
+            let script = r#"for id in "$@"; do echo "== $id"; timeout 120 docker diff "$id" 2>/dev/null || echo "? unreadable"; done; true"#;
+            let out = self.finished(&self.container, None, script, ids, StdDuration::from_secs(1800)).await?;
+            let mut files: HashMap<String, String> = HashMap::new();
+            let mut current = None;
+            for line in out.lines() {
+                if let Some(id) = line.strip_prefix("== ") {
+                    current = Some(id.trim().to_string());
+                    files.entry(id.trim().to_string()).or_default();
+                } else if let Some(id) = &current {
+                    // a diff that can't be read counts as holding a database: the container stays
+                    let line = if line.starts_with("? unreadable") { "/unreadable.db" } else { line.get(2..).unwrap_or_default() };
+                    files.entry(id.clone()).or_default().push_str(&format!("{line}\n"));
+                }
+            }
+            Ok(files)
+        })
+    }
+
     fn writable_sizes(&self, ids: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, u64>>> {
         Box::pin(async move {
-            let out = self.finished(&self.container, None, "docker inspect --size --format '{{.Id}} {{.SizeRw}}' \"$@\" 2>/dev/null; true",
-                                    ids, StdDuration::from_secs(900)).await?;
+            let out = self.finished(&self.container, None,
+                                    "timeout 600 docker inspect --size --format '{{.Id}} {{.SizeRw}}' \"$@\" 2>/dev/null; true",
+                                    ids, StdDuration::from_secs(660)).await?;
             Ok(out.lines().filter_map(|l| {
                 let (id, size) = l.split_once(' ')?;
                 Some((id.to_string(), size.trim().parse().ok()?))
@@ -866,7 +889,7 @@ impl Apps for DockerApps {
     fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>> {
         Box::pin(async move {
             // a missing or unreadable mountpoint counts as a database: never removed without a person's say-so
-            let script = r#"for m in "$@"; do db=0; [ -d "$m" ] && [ -r "$m" ] || db=1; [ -n "$(find "$m" -maxdepth 4 \( -name PG_VERSION -o -name ibdata1 -o -name WiredTiger -o -name dump.rdb -o -name 'appendonly*' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.db' \) 2>/dev/null | head -n 1)" ] && db=1; k=$(du -sk "$m" 2>/dev/null | cut -f1); printf '%s\t%s\t%s\n' "$m" "$db" "${k:-0}"; done; true"#;
+            let script = r#"for m in "$@"; do db=0; [ -d "$m" ] && [ -r "$m" ] || db=1; [ -n "$(timeout 120 find "$m" -maxdepth 4 \( -name PG_VERSION -o -name ibdata1 -o -name 'WiredTiger*' -o -name dump.rdb -o -name 'appendonly*' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.db' -o -name '*.mdb' -o -name '*.duckdb' -o -name 'neostore*' -o -name meta.properties -o -name influxd.bolt -o -name .minio.sys -o -name mnesia -o -name _state -o -path '*/member/wal' \) 2>/dev/null | head -n 1)" ] && db=1; k=$(timeout 300 du -sk "$m" 2>/dev/null | cut -f1); printf '%s\t%s\t%s\n' "$m" "$db" "${k:-0}"; done; true"#;
             let out = self.finished(&self.container, None, script, mountpoints, StdDuration::from_secs(1800)).await?;
             Ok(out.lines().filter_map(|l| {
                 let mut f = l.split('\t');
