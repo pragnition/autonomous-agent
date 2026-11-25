@@ -571,7 +571,8 @@ async fn a_stack_stops_only_after_an_hour_seen_unused() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stack_in_use_keeps_running() {
     // each case: something uses rr-x (folder V-x, pid 21), checked over passes two hours apart
-    let cases: [(&str, &dyn Fn(&Setup, &Arc<Fake>)); 9] = [
+    type UseCase<'a> = (&'a str, &'a dyn Fn(&Setup, &Arc<Fake>));
+    let cases: [UseCase; 9] = [
         ("its conversation's session is up", &|s, _| s.exec("INSERT INTO agentd_containers(conversation_id, name, created_at) VALUES ('V-x', 'n', 'x')")),
         ("its conversation was active half an hour ago",
          &|s, _| s.exec(&format!("UPDATE conversations SET last_active_at = '{}' WHERE id = 'V-x'", keeps::fmt(s.now + Duration::minutes(90))))),

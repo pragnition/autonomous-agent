@@ -697,8 +697,9 @@ fn note(folder: &Path, now: DateTime<Utc>, text: &str, report: &mut DockerReport
 
 /// Where a question about a conversation's databases goes: (channel, its thread, project). The project's channel
 /// first, else the conversation's own channel, else its parent's (a spawned agent).
-fn where_to_ask(c: &Connection, conversation: &str, project_channels: &HashMap<String, String>)
-                -> Result<(Option<String>, Option<(String, String)>, Option<String>)> {
+type Place = (Option<String>, Option<(String, String)>, Option<String>);
+
+fn where_to_ask(c: &Connection, conversation: &str, project_channels: &HashMap<String, String>) -> Result<Place> {
     let row: Option<(Option<String>, Option<String>, Option<String>)> = c.query_row(
         "SELECT channel, thread_ts, project FROM conversations WHERE id = ?", [conversation],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
