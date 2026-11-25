@@ -305,9 +305,9 @@ environment variables of the control plane (`compose.yaml`, taken from the host'
 Every 60 s the control plane reads `/proxy/usage` (`rust/crates/agentd/src/usage_watch.rs`) and gives each account a state:
 
 - `out`: the proxy gives it no rank (no capacity);
-- `hot`: its 5-hour window is at its effective cap (the soft cap, or 100% once lifted), or its `pace_delta` is above
-  0.05 (ahead of its 7-day pace, so it will run out before the window resets). It is `ok` again only once it is 10
-  points below its soft cap and back on pace, so it doesn't flap; once the cap is lifted there is no margin;
+- `hot`: its 5-hour window is at its effective cap (the soft cap, or 100% once lifted). It is `ok` again only once it
+  is 10 points below its soft cap, so it doesn't flap; once the cap is lifted there is no margin. How fast it spends
+  its 7-day allowance (`pace_delta`) doesn't count;
 - `ok`: otherwise.
 
 The pool, counted in `ok` accounts: with two or more (or all the verified accounts, in a smaller pool) nothing

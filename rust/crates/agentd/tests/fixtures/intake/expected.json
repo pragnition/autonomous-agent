@@ -871,7 +871,7 @@
     "pace_delta": 0.06
    },
    "previous": null,
-   "out": "hot"
+   "out": "ok"
   },
   {
    "rec": {
@@ -883,7 +883,7 @@
     "pace_delta": 0.01
    },
    "previous": "hot",
-   "out": "hot"
+   "out": "ok"
   },
   {
    "rec": {

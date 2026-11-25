@@ -2,8 +2,8 @@
 //! core/usage_watch.py).
 //!
 //! Each account is `ok`, `hot` or `out`: `out` while the proxy gives it no rank; `hot` once its 5-hour window is at its
-//! soft cap, or it is ahead of its 7-day pace by more than PACE_HOT; `ok` again only COOL_MARGIN below the cap and back
-//! on pace, so it doesn't flap (once the cap has lifted, there is no margin). The pool, counted in `ok` accounts: two
+//! soft cap; `ok` again only COOL_MARGIN below the cap, so it doesn't flap (once the cap has lifted, there is no
+//! margin). How fast an account spends its 7-day allowance doesn't count. The pool, counted in `ok` accounts: two
 //! or more (or every verified account, in a smaller pool) is normal; fewer holds scheduled runs in the queue; none
 //! tells the admins once. Turns a usage limit cut off are each carried on once an account is `ok` again. Every change
 //! goes to the event log.
@@ -18,7 +18,6 @@ use crate::proxy::SoftCap;
 use crate::shared::Shared;
 
 const COOL_MARGIN: f64 = 0.10;
-const PACE_HOT: f64 = 0.05;
 /// Out for longer than the 5-hour window: something is wrong with the account.
 const OUT_TOO_LONG_S: f64 = 5.0 * 3600.0;
 /// The last state seen, so a restart neither repeats nor misses a change.
@@ -41,12 +40,11 @@ pub fn account_state(rec: &Value, previous: Option<&str>, now: f64, soft: &SoftC
     }
     let (used, reset) = window(rec, "5h");
     let cap = soft.cap(reset, now);
-    let pace = num(&rec["pace_delta"]);
-    if soft.over(used, reset, now) || pace.is_some_and(|p| p > PACE_HOT) {
+    if soft.over(used, reset, now) {
         return "hot";
     }
     let cooling = cap < 1.0 && used.is_some_and(|u| u >= cap - COOL_MARGIN);
-    if previous == Some("hot") && (cooling || pace.is_some_and(|p| p > 0.0)) { "hot" } else { "ok" }
+    if previous == Some("hot") && cooling { "hot" } else { "ok" }
 }
 
 /// When the account gets room again: its 7-day reset when that window is spent, else its 5-hour one.
