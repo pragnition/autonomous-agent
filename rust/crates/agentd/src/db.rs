@@ -10,8 +10,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 const SCHEMA: &str = include_str!("schema.sql");
 
 /// agentd's own tables: the container of each conversation, each turn it runs (what it was asked to do, how far it
-/// got, and its result until the caller has handled it), and the tool results it has already sent, so a tool call
-/// replayed after a restart runs once.
+/// got, and its result until the caller has handled it), the tool results it has already sent, so a tool call
+/// replayed after a restart runs once, the keeps people set, and the conversations' folders the cleanup has done.
 const AGENTD_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS agentd_containers (
     conversation_id TEXT PRIMARY KEY,
@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS agentd_keeps (
     set_by TEXT,
     set_at TEXT NOT NULL,
     PRIMARY KEY(kind, target)
+);
+CREATE TABLE IF NOT EXISTS agentd_cleanups (
+    folder TEXT PRIMARY KEY,                -- a conversation's folder under scratch
+    cleaned_at TEXT NOT NULL,
+    activity_at TEXT NOT NULL,              -- activity up to here is accounted for: the folder isn't walked again until after
+    freed_bytes INTEGER NOT NULL DEFAULT 0  -- over every pass
 );
 ";
 

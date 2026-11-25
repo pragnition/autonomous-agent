@@ -3,6 +3,7 @@
 pub mod admission;
 pub mod ask;
 pub mod azure_rates;
+pub mod cleanup;
 pub mod cli_login;
 pub mod config;
 pub mod containers;
