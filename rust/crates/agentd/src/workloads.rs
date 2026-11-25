@@ -96,6 +96,28 @@ impl Target {
     }
 }
 
+/// Run a command in a container to its end and return what it printed (stdout and stderr together).
+pub(crate) async fn exec_output(docker: &bollard::Docker, container: &str, user: Option<&str>, cmd: Vec<String>,
+                                limit: StdDuration) -> Result<String> {
+    let options = CreateExecOptions::<String> {
+        attach_stdout: Some(true), attach_stderr: Some(true), cmd: Some(cmd), user: user.map(str::to_string),
+        ..Default::default()
+    };
+    let id = docker.create_exec(container, options).await.with_context(|| format!("exec in {container}"))?.id;
+    let started = docker.start_exec(&id, Some(StartExecOptions { detach: false, tty: false, output_capacity: Some(1 << 20) }))
+        .await.with_context(|| format!("exec in {container}"))?;
+    let StartExecResults::Attached { mut output, .. } = started else { bail!("exec detached") };
+    let mut text = Vec::new();
+    let read = async {
+        while let Some(chunk) = output.next().await {
+            text.extend_from_slice(&chunk?.into_bytes());
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    tokio::time::timeout(limit, read).await.map_err(|_| anyhow!("{container} didn't answer in {} s", limit.as_secs()))??;
+    Ok(String::from_utf8_lossy(&text).into_owned())
+}
+
 impl Workloads {
     pub fn new(s: Arc<Shared>, containers: Arc<Containers<Docker, HolderProbe>>, host: Arc<Mutex<HostStore>>,
                settings: Settings) -> Result<Workloads> {
@@ -127,17 +149,7 @@ impl Workloads {
 
     /// Run a command to its end and return what it printed (stdout and stderr together).
     async fn run(&self, container: &str, user: Option<&str>, cmd: Vec<String>, limit: StdDuration) -> Result<String> {
-        let (_, started) = self.start_exec(container, user, cmd, false, false, None).await?;
-        let StartExecResults::Attached { mut output, .. } = started else { bail!("exec detached") };
-        let mut text = Vec::new();
-        let read = async {
-            while let Some(chunk) = output.next().await {
-                text.extend_from_slice(&chunk?.into_bytes());
-            }
-            Ok::<_, anyhow::Error>(())
-        };
-        tokio::time::timeout(limit, read).await.map_err(|_| anyhow!("{container} didn't answer in {} s", limit.as_secs()))??;
-        Ok(String::from_utf8_lossy(&text).into_owned())
+        exec_output(&self.docker, container, user, cmd, limit).await
     }
 
     /// The process inspector's answer, in a container from the agent image.

@@ -107,7 +107,7 @@ Everything lives under `/var/agent`, the `agentwork` volume, which survives rebu
 
 | Path | Contents |
 |---|---|
-| `scratch/<conversation>/` | the conversation's folder, where its turns start; its checkouts and notes live here |
+| `scratch/<conversation>/` | the conversation's folder, where its turns start; its checkouts and notes live here; once it has been quiet for `[cleanup] idle_days`, agentd removes installed dependencies and clones whose work is all pushed, and notes what it removed in `CLEANUP.md` there |
 | `claude/` | the agent's Claude home (`CLAUDE_CONFIG_DIR`, also `~/.claude`), shared by every session: its sessions, so the next turn can resume, and the skills, plugins and MCP servers it installs itself |
 | `memory/` | Claude Code's auto memory, shared by every session |
 | `transcripts/<work item>.jsonl` | each turn's transcript, as the control plane recorded it |
@@ -641,6 +641,7 @@ Linear app also `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET` and `LINEAR_WEBHOOK_S
 | `[claude.models]` | `default` for every session, `hard` after "use fable", `allowed`: more model ids "use <model>" may switch a conversation to |
 | `[agent]` | `uid` of the agent's user in its containers (1001) |
 | `[containers]` | each conversation's container: `image` (`autonomous-agent-agent`), `memory_gib` (8), `cpus` (4), `pids` (4096), `idle_stop_minutes` (60), `max_age_hours` (24), `keep_stopped_days` (7), `min_free_gib` (3): the free memory a new container needs beyond its cap |
+| `[cleanup]` | `idle_days` (3): a conversation's folder quiet this long loses what can be rebuilt (dependencies, caches, clones with everything pushed), hourly; 0 turns it off. `agentd cleanup --dry-run` lists what a pass would remove |
 | `[linear]` | `public_url`: the Funnel URL for Linear's webhook and OAuth callback; empty means no Linear app |
 | `[mcp.<name>]` | MCP servers every session gets: `type = "http"`, `url`, `headers` with `${VAR}` from the session's environment |
 | `[dashboard]` | `port` (8086), `trusted_peers` (`["172.30.0.1"]`), `agent_origins` (proxy origins that are the agent) |

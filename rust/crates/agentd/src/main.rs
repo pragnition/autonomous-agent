@@ -2,7 +2,8 @@
 //! the answer); `smoke` is one such turn end to end; `schedules` checks the schedules file (the agent runs it after
 //! editing the file); `doctor` checks the install; `kpis` prints the KPIs; `stop` and `resume` pull and release the
 //! kill switch when Slack is not an option; `run-turn` runs one turn end to end without the queue, for a live check
-//! (started again with the same work item, it carries the turn on).
+//! (started again with the same work item, it carries the turn on); `cleanup` runs one pass of the folders' cleanup
+//! now, or with `--dry-run` says what it would remove without touching anything.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use serde_json::Value;
 const USAGE: &str = "usage: agentd serve\n\
     agentd doctor | smoke | stop | resume\n\
     agentd kpis [--days <n>]\n\
+    agentd cleanup [--dry-run] [--idle-days <n>]\n\
     agentd ask [--conversation <id> | --new-prefix <prefix>] (--text <text> | --text-file <path or ->) [--source <s>] \
 [--origin <o>] [--wait <seconds>] [--expect <word>]\n\
     agentd schedules [--file <path>] [--timezone <zone>]\n\
@@ -30,6 +32,25 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 
 fn env(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
+}
+
+/// One cleanup pass now: the report as JSON on stdout, its summary on stderr.
+async fn cleanup(args: &[String]) -> Result<()> {
+    use agentd::cleanup;
+    let s = agentd::serve::open_offline()?;
+    let idle_days = match flag(args, "--idle-days") {
+        Some(n) => n.parse().context("--idle-days takes a whole number")?,
+        None => s.config.cleanup.idle_days,
+    };
+    if idle_days <= 0 {
+        bail!("the cleanup is off ([cleanup] idle_days = 0); pass --idle-days to run it anyway");
+    }
+    let settings = cleanup::Settings::new(&s.paths.work, idle_days);
+    let apps: Arc<dyn cleanup::Apps> = Arc::new(cleanup::DockerApps::new(&env("AGENTD_NETWORK", "agent-docker"), &settings)?);
+    let report = cleanup::pass(s.db.clone(), apps, settings, chrono::Utc::now(), args.iter().any(|a| a == "--dry-run")).await?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    eprintln!("{}", report.summary());
+    Ok(())
 }
 
 /// Prints what the turn sends; it has no tools.
@@ -58,6 +79,7 @@ async fn main() -> Result<()> {
         Some("doctor") => std::process::exit(doctor().await),
         Some("smoke") => std::process::exit(smoke().await?),
         Some("kpis") => std::process::exit(kpis(&args)?),
+        Some("cleanup") => return cleanup(&args).await,
         Some("stop") => {
             let s = agentd::serve::open_offline()?;
             let cancelled = agentd::queue::stop_all(&s.db.lock(), "local", None)?;

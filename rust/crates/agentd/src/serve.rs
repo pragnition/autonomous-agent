@@ -24,7 +24,7 @@ use crate::turn::{RunnerSettings, TurnRunner};
 use crate::azure_rates::{self, AzureRates};
 use crate::host::{HostStore, Sampler, SamplerSettings};
 use crate::labeler::{self, Labeler};
-use crate::{conversations, dashboard, kpis, linear, meter, parking, pollers, scrub, task_record, usage_watch};
+use crate::{cleanup, conversations, dashboard, kpis, linear, meter, parking, pollers, scrub, task_record, usage_watch};
 
 const HEALTH_PORT: u16 = 8080;
 /// Linear's webhook and OAuth callback, the only thing Tailscale Funnel exposes.
@@ -105,6 +105,23 @@ pub async fn serve() -> Result<()> {
     });
     let swept = containers.clone();
     every(&s, 60, "container sweep", move |_| { let c = swept.clone(); async move { c.sweep(chrono::Utc::now()).await } });
+
+    // the conversations' folders: what can be rebuilt goes once a folder has been quiet a while
+    if s.config.cleanup.idle_days > 0 {
+        let settings = cleanup::Settings::new(&s.paths.work, s.config.cleanup.idle_days);
+        let apps: Arc<dyn cleanup::Apps> = Arc::new(cleanup::DockerApps::new(&env("AGENTD_NETWORK", "agent-docker"), &settings)?);
+        every(&s, 3600, "cleanup", move |s| {
+            let (apps, settings) = (apps.clone(), settings.clone());
+            async move {
+                let report = cleanup::pass(s.db.clone(), apps, settings, chrono::Utc::now(), false).await?;
+                tracing::info!("{}", report.summary());
+                for problem in report.failures.iter().take(20) {
+                    tracing::warn!("cleanup: {problem}");
+                }
+                Ok(())
+            }
+        });
+    }
 
     // the task record: its files catch up with whatever was labeled before; Haiku labels what was answered since
     if let Err(e) = task_record::export_all(&s.db.lock(), &data.join("tasks"), &s.config.timezone) {

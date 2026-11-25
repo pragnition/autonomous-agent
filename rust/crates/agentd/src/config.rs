@@ -133,6 +133,13 @@ pub struct Containers {
     pub min_free_gib: i64,
 }
 
+/// agentd's own: freeing disk in the conversations' folders (see `cleanup`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Cleanup {
+    /// A folder quiet this many days loses what can be rebuilt; 0 turns the cleanup off.
+    pub idle_days: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Config {
     pub name: String,
@@ -149,6 +156,7 @@ pub struct Config {
     pub dashboard: DashboardSettings,
     pub llm_meter: LlmMeterSettings,
     pub containers: Containers,
+    pub cleanup: Cleanup,
 }
 
 impl Config {
@@ -460,11 +468,13 @@ pub fn load(path: &Path) -> Result<Config, Vec<String>> {
         min_free_gib: c.int(&ct, "min_free_gib", 3, &tw),
     };
 
+    let cleanup = Cleanup { idle_days: c.int(&table(&data, "cleanup"), "idle_days", 3, &format!("{w} [cleanup]")) };
+
     if !c.problems.is_empty() {
         return Err(c.problems);
     }
     Ok(Config { name, timezone, people, limits, models, agent, cli, observability, linear, mcp, github, dashboard,
-                llm_meter, containers })
+                llm_meter, containers, cleanup })
 }
 
 fn llm_meter(data: &Table, w: &str, c: &mut Checker) -> LlmMeterSettings {
@@ -629,5 +639,17 @@ mod tests {
         let c = &cfg.containers;
         assert_eq!((c.image.as_str(), c.memory_gib, c.cpus, c.pids), ("autonomous-agent-agent", 8, 4.0, 4096));
         assert_eq!((c.idle_stop_minutes, c.max_age_hours, c.keep_stopped_days, c.min_free_gib), (60, 24, 7, 3));
+        assert_eq!(cfg.cleanup.idle_days, 3);
+    }
+
+    #[test]
+    fn cleanup_idle_days_is_read_and_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::read_to_string("../../../examples/config/agent.toml").unwrap();
+        let path = dir.path().join("agent.toml");
+        std::fs::write(&path, format!("{base}\n[cleanup]\nidle_days = 0\n")).unwrap();
+        assert_eq!(load(&path).unwrap().cleanup.idle_days, 0);
+        std::fs::write(&path, format!("{base}\n[cleanup]\nidle_days = -1\n")).unwrap();
+        assert!(load(&path).unwrap_err().iter().any(|p| p.contains("[cleanup]: 'idle_days'")));
     }
 }
