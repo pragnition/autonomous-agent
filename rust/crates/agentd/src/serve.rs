@@ -113,7 +113,8 @@ pub async fn serve() -> Result<()> {
         every(&s, 3600, "cleanup", move |s| {
             let (apps, settings) = (apps.clone(), settings.clone());
             async move {
-                let report = cleanup::pass(s.db.clone(), apps, settings, chrono::Utc::now(), false).await?;
+                let ask: Arc<dyn cleanup::Ask> = Arc::new(cleanup::Jensen(s.clone()));
+                let report = cleanup::pass(s.db.clone(), apps, Some(ask), settings, chrono::Utc::now(), false).await?;
                 tracing::info!("{}", report.summary());
                 for problem in report.failures.iter().take(20) {
                     tracing::warn!("cleanup: {problem}");

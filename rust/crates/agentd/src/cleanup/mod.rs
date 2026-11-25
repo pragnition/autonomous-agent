@@ -8,10 +8,11 @@
 //! services running from it, or any activity in the last `idle_days` (the folder's top, or any clone's git use). That
 //! is checked again right before anything in it moves.
 
+pub mod docker;
 pub mod remove;
 pub mod scan;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::io::Write as _;
 use std::os::fd::AsRawFd;
@@ -45,7 +46,9 @@ pub const PS_FORMAT: &str = "{{.State}}\t{{.Names}}\t{{.Label \"com.docker.compo
 const END: &str = "__END__";
 const HEADER: &str = "# Cleanup\n\nagentd removes what can be rebuilt from conversation folders that have been quiet for a \
 while: installed dependencies, caches, and clones whose work is all on their remote. Files written here and clones with \
-work of their own are never removed. Each section below says what went and how to get it back.\n";
+work of their own are never removed. It also stops this folder's stacks in the agent's Docker once no session uses \
+them, and removes their containers and volumes (never a database without a person's say-so) once they sit unused. Each \
+section below says what it did and how to get things back.\n";
 
 /// The agent's own Docker, where its stacks run as root with the work volume at the same path as here.
 pub trait Apps: Send + Sync {
@@ -56,6 +59,35 @@ pub trait Apps: Send + Sync {
     fn move_as_root(&self, from: PathBuf, to: PathBuf) -> BoxFuture<'_, Result<()>>;
     /// Remove `path` (in the trash) as root, for what agentd's own user can't delete.
     fn remove_as_root(&self, path: PathBuf) -> BoxFuture<'_, Result<()>>;
+    /// `docker <args>` there: its output, or an error when it fails.
+    fn docker(&self, args: Vec<String>) -> BoxFuture<'_, Result<String>>;
+    /// The command lines (one process per line) of a conversation's running session container.
+    fn processes(&self, conversation: &str) -> BoxFuture<'_, Result<String>>;
+    /// `/proc/net/tcp` and `/proc/net/tcp6` of the agent's Docker's network, which the sessions share.
+    fn connections(&self) -> BoxFuture<'_, Result<String>>;
+    /// For each volume mountpoint: whether it holds database files, and how many bytes it takes.
+    fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>>;
+}
+
+/// Starting a turn of the agent's own, for the questions only people can answer.
+pub trait Ask: Send + Sync {
+    /// Queue `text` as a fresh unattended turn; returns its work item.
+    fn ask(&self, text: &str) -> Result<String>;
+    /// Each project's Slack channel, by project name.
+    fn project_channels(&self) -> HashMap<String, String>;
+}
+
+/// The real thing: a turn in a fresh `V-cleanup-` conversation, marked as the cleanup's.
+pub struct Jensen(pub Arc<crate::shared::Shared>);
+
+impl Ask for Jensen {
+    fn ask(&self, text: &str) -> Result<String> {
+        crate::ask::ask(&self.0, None, "V-cleanup-", text, Some("cleanup"), None)
+    }
+    fn project_channels(&self) -> HashMap<String, String> {
+        self.0.packs.iter().filter(|(_, p)| !p.project.slack_channel.is_empty())
+            .map(|(name, p)| (name.clone(), p.project.slack_channel.clone())).collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +132,11 @@ pub struct Report {
     /// Clones kept, by reason.
     pub kept_clones: BTreeMap<String, usize>,
     pub failures: Vec<String>,
+    /// The agent's Docker: stacks stopped, containers and volumes removed, databases asked about.
+    pub docker: Option<docker::DockerReport>,
+    /// The work volume's free space before and after the pass.
+    pub free_before: u64,
+    pub free_after: u64,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -124,17 +161,26 @@ impl Report {
         }
         let changed = self.folders.iter().filter(|f| !f.deps.is_empty() || !f.clones_removed.is_empty()).count();
         let kept = self.kept_clones.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ");
+        let docker = self.docker.as_ref().map(|d| format!(
+            "; the agent's Docker: {} stacks {}, {} containers and {} volumes {}, {} databases {}{}, images {}, build cache {}, \
+             {} problems", d.stopped_stacks.len(), if self.dry_run { "to stop" } else { "stopped" }, d.removed_containers.len(),
+            d.removed_volumes.len(), if self.dry_run { "to remove" } else { "removed" }, d.asked_about.len(),
+            if self.dry_run { "to ask about" } else { "asked about" },
+            if d.to_ask_later > 0 { format!(" ({} for tomorrow's question)", d.to_ask_later) } else { String::new() },
+            d.images, d.build_cache, d.failures.len())).unwrap_or_default();
         format!("cleanup{}: {changed} folders {}, {:.1} GB {}; {} in use, {} active in the last idle period, {} already \
-                 clean, {} left for the next pass; clones kept: {}; {} problems",
+                 clean, {} left for the next pass; clones kept: {}; {} problems{docker}; disk free {:.1} GB -> {:.1} GB",
                 if self.dry_run { " (dry run)" } else { "" }, if self.dry_run { "to clean" } else { "cleaned" },
                 self.freed_bytes as f64 / 1e9, if self.dry_run { "to free" } else { "freed" }, self.in_use, self.recent,
                 self.unchanged, self.left_for_next_pass, if kept.is_empty() { "none".into() } else { kept },
-                self.failures.len())
+                self.failures.len(), self.free_before as f64 / 1e9, self.free_after as f64 / 1e9)
     }
 }
 
-/// One pass over every folder: the quietest first, for at most `settings.budget`.
-pub async fn pass(db: Db, apps: Arc<dyn Apps>, settings: Settings, now: DateTime<Utc>, dry_run: bool) -> Result<Report> {
+/// One pass: the agent's Docker first (stacks nobody uses stop, so their folders can be cleaned), then every folder,
+/// the quietest first, for at most `settings.budget`.
+pub async fn pass(db: Db, apps: Arc<dyn Apps>, ask: Option<Arc<dyn Ask>>, settings: Settings, now: DateTime<Utc>,
+                  dry_run: bool) -> Result<Report> {
     let _lock = if dry_run {
         None
     } else {
@@ -143,6 +189,12 @@ pub async fn pass(db: Db, apps: Arc<dyn Apps>, settings: Settings, now: DateTime
             None => return Ok(Report { dry_run, skipped: Some("another pass is running".into()), ..Default::default() }),
         }
     };
+    let free_before = free_space(&settings.work);
+    let docker = match docker::step(&db, apps.as_ref(), ask.as_deref(), &settings, now, dry_run).await {
+        Ok(d) => d,
+        Err(e) => docker::DockerReport { failures: vec![format!("the agent's Docker: {e:#}")], ..Default::default() },
+    };
+    let work = settings.work.clone();
     let handle = tokio::runtime::Handle::current();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (thread_apps, thread_db) = (apps.clone(), db.clone());
@@ -158,7 +210,20 @@ pub async fn pass(db: Db, apps: Arc<dyn Apps>, settings: Settings, now: DateTime
             report.failures.push(format!("removing {} as root: {e:#}", path.display()));
         }
     }
+    report.docker = Some(docker);
+    (report.free_before, report.free_after) = (free_before, free_space(&work));
     Ok(report)
+}
+
+/// The free space on the filesystem holding `path` (0 when it can't be read).
+fn free_space(path: &Path) -> u64 {
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else { return 0 };
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: a valid C string and a statvfs we own.
+    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
+        return 0;
+    }
+    s.f_bavail as u64 * s.f_frsize as u64
 }
 
 /// Which folders the agent's Docker's containers and the agent's services use, read again once older than
@@ -500,7 +565,8 @@ fn parse_time(s: &str) -> Option<DateTime<Utc>> {
 
 /// When the folder or anything at its top was last changed.
 pub fn modified(path: &Path) -> Option<DateTime<Utc>> {
-    let entries = std::fs::read_dir(path).into_iter().flatten().flatten().map(|e| e.path());
+    // the cleanup's own note isn't activity
+    let entries = std::fs::read_dir(path).into_iter().flatten().flatten().filter(|e| e.file_name() != NOTES).map(|e| e.path());
     std::iter::once(path.to_path_buf()).chain(entries)
         .filter_map(|p| std::fs::symlink_metadata(p).and_then(|m| m.modified()).ok())
         .map(DateTime::<Utc>::from).max()
@@ -581,10 +647,7 @@ fn record(c: &Connection, folder: &str, bytes: u64, now: DateTime<Utc>) -> Resul
 
 fn write_notes(folder: &Path, quiet_since: DateTime<Utc>, now: DateTime<Utc>, deps: &[String],
                clones: &[(String, String, String, String)], kept: &[String]) -> std::io::Result<()> {
-    let path = folder.join(NOTES);
-    let mut text = if path.exists() { String::new() } else { HEADER.to_string() };
-    text += &format!("\n## {}\n\nThis folder had been quiet since {}.\n", now.format("%Y-%m-%d %H:%M UTC"),
-                     quiet_since.format("%Y-%m-%d %H:%M UTC"));
+    let mut text = format!("This folder had been quiet since {}.\n", quiet_since.format("%Y-%m-%d %H:%M UTC"));
     if !deps.is_empty() {
         text += "\nRemoved installed dependencies and caches. The project's install command brings them back:\n";
         for d in deps.iter().take(LISTED) {
@@ -608,7 +671,21 @@ fn write_notes(folder: &Path, quiet_since: DateTime<Utc>, now: DateTime<Utc>, de
             text += &format!("- {k}\n");
         }
     }
-    std::fs::OpenOptions::new().create(true).append(true).open(path)?.write_all(text.as_bytes())
+    append_note(folder, now, text.trim_end())
+}
+
+/// Add a dated section to the folder's `CLEANUP.md` (made with its header when missing), leaving the folder's own
+/// modification time as it was: the note isn't activity.
+pub fn append_note(folder: &Path, now: DateTime<Utc>, text: &str) -> std::io::Result<()> {
+    let path = folder.join(NOTES);
+    let before = std::fs::metadata(folder).and_then(|m| m.modified()).ok();
+    let mut out = if path.exists() { String::new() } else { HEADER.to_string() };
+    out += &format!("\n## {}\n\n{text}\n", now.format("%Y-%m-%d %H:%M UTC"));
+    std::fs::OpenOptions::new().create(true).append(true).open(&path)?.write_all(out.as_bytes())?;
+    if let Some(t) = before {
+        let _ = std::fs::File::open(folder).and_then(|f| f.set_modified(t));
+    }
+    Ok(())
 }
 
 /// `s` as one shell word.
@@ -679,6 +756,18 @@ impl DockerApps {
         crate::workloads::exec_output(&self.docker, &self.container, None, cmd, limit).await
     }
 
+    /// `script` (with `args` as `$1`...) in `container`, which must print `__END__` last to count as done; returns
+    /// what came before it.
+    async fn finished(&self, container: &str, user: Option<&str>, script: &str, args: Vec<String>, limit: StdDuration)
+                      -> Result<String> {
+        let cmd = ["sh".to_string(), "-c".into(), format!("{script} && echo {END}"), "sh".into()].into_iter().chain(args).collect();
+        let out = crate::workloads::exec_output(&self.docker, container, user, cmd, limit).await?;
+        match out.trim_end().strip_suffix(END) {
+            Some(text) => Ok(text.to_string()),
+            None => bail!("{}", out.trim().chars().take(400).collect::<String>()),
+        }
+    }
+
     /// `path` is a new name right in the trash, which is a plain folder.
     fn in_trash(&self, path: &Path) -> bool {
         path.parent() == Some(self.trash.as_path()) && remove::inside(&self.trash, self.trash.parent().unwrap_or(&self.trash), 1)
@@ -707,6 +796,38 @@ impl Apps for DockerApps {
                 bail!("mv didn't move it: {}", out.trim());
             }
             Ok(())
+        })
+    }
+
+    fn docker(&self, args: Vec<String>) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move { self.finished(&self.container, None, "docker \"$@\"", args, StdDuration::from_secs(600)).await })
+    }
+
+    fn processes(&self, conversation: &str) -> BoxFuture<'_, Result<String>> {
+        let conversation = conversation.to_string();
+        Box::pin(async move {
+            let name = crate::containers::container_name(&conversation)?;
+            let script = r#"for f in /proc/[0-9]*/cmdline; do tr '\0' ' ' < "$f" 2>/dev/null; echo; done; true"#;
+            self.finished(&name, Some("1001"), script, Vec::new(), StdDuration::from_secs(60)).await
+        })
+    }
+
+    fn connections(&self) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move {
+            self.finished(&self.container, None, "cat /proc/net/tcp /proc/net/tcp6", Vec::new(), StdDuration::from_secs(60)).await
+        })
+    }
+
+    fn volume_contents(&self, mountpoints: Vec<String>) -> BoxFuture<'_, Result<HashMap<String, (bool, u64)>>> {
+        Box::pin(async move {
+            // a missing or unreadable mountpoint counts as a database: never removed without a person's say-so
+            let script = r#"for m in "$@"; do db=0; [ -d "$m" ] && [ -r "$m" ] || db=1; [ -n "$(find "$m" -maxdepth 2 \( -name PG_VERSION -o -name ibdata1 -o -name WiredTiger -o -name dump.rdb -o -name 'appendonly*' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.db' \) 2>/dev/null | head -n 1)" ] && db=1; k=$(du -sk "$m" 2>/dev/null | cut -f1); printf '%s\t%s\t%s\n' "$m" "$db" "${k:-0}"; done; true"#;
+            let out = self.finished(&self.container, None, script, mountpoints, StdDuration::from_secs(1800)).await?;
+            Ok(out.lines().filter_map(|l| {
+                let mut f = l.split('\t');
+                let (m, db, k) = (f.next()?, f.next()?, f.next()?);
+                Some((m.to_string(), (db == "1", k.trim().parse::<u64>().unwrap_or(0) * 1024)))
+            }).collect())
         })
     }
 

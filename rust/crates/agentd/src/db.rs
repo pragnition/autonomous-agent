@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS agentd_keeps (
     set_at TEXT NOT NULL,
     PRIMARY KEY(kind, target)
 );
+CREATE TABLE IF NOT EXISTS agentd_cleanup_asks (
+    volume TEXT PRIMARY KEY,                -- a database volume in the agent's Docker people were asked about
+    created_at TEXT NOT NULL,               -- the volume's own creation time: a new volume of that name is asked about again
+    asked_at TEXT NOT NULL,
+    work_item TEXT                          -- the turn that asked
+);
 CREATE TABLE IF NOT EXISTS agentd_cleanups (
     folder TEXT PRIMARY KEY,                -- a conversation's folder under scratch
     cleaned_at TEXT NOT NULL,
