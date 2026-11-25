@@ -53,6 +53,22 @@ CREATE TABLE IF NOT EXISTS agentd_cleanup_asks (
     asked_at TEXT NOT NULL,
     work_item TEXT                          -- the turn that asked
 );
+CREATE TABLE IF NOT EXISTS agentd_cleanup_stacks (
+    stack TEXT PRIMARY KEY,                 -- a stack in the agent's Docker as the cleanup last saw it
+    last_used_at TEXT,                      -- the last pass that saw anything use it
+    counters TEXT                           -- JSON: container id -> bytes on its network then
+);
+CREATE TABLE IF NOT EXISTS agentd_cleanup_volumes (
+    volume TEXT PRIMARY KEY,                -- a volume in the agent's Docker as the cleanup last saw it
+    created_at TEXT NOT NULL,               -- its own creation time: a new volume of that name starts over
+    unused_since TEXT,                      -- since when no container has mounted it; NULL while one does
+    folders TEXT, stacks TEXT, destinations TEXT, images TEXT,  -- JSON lists: who mounted it, where, with what image
+    kind TEXT                               -- rebuildable | database | unknown, once known
+);
+CREATE TABLE IF NOT EXISTS agentd_cleanup_images (
+    image TEXT PRIMARY KEY,                 -- an image id in the agent's Docker
+    last_used_at TEXT NOT NULL              -- the last pass a container used it (or the first that saw it)
+);
 CREATE TABLE IF NOT EXISTS agentd_cleanups (
     folder TEXT PRIMARY KEY,                -- a conversation's folder under scratch
     cleaned_at TEXT NOT NULL,

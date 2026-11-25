@@ -165,36 +165,47 @@ The first pass freed 128 GB from the folders. Jensen's own Docker (`agent-docker
 load high. Of the volumes no container used, 13.7 GB were test-stack databases (83 Postgres volumes), 7 GB were
 `node_modules` volumes and 3 GB were small anonymous ones.
 
-The same hourly pass now runs a Docker step first.
+The same hourly pass now runs a Docker step first. A first version decided from one snapshot per pass. A review
+showed that could stop a stack in use and delete a database nobody was asked about: Postgres 18 keeps its data
+deeper, a volume's age was taken for its time unused, and outside traffic is invisible from the shared network. So
+the step now remembers what it sees (`agentd_cleanup_stacks`, `agentd_cleanup_volumes`, `agentd_cleanup_images`) and
+decides from that history.
 
-- **A running stack is stopped** (compose project, or a lone container) only when no running Claude Code session is
-  using it, and nobody kept it. It counts as used when any of these holds:
-  - a conversation working in its folder is in use (a turn queued, running, parked or waiting on a usage limit,
-    its container still up, an active long project or spawned agent, someone kept its container) or was active in
-    the last hour;
-  - a running session's processes name the stack, one of its containers, its folder or one of its published ports
-    (a `docker compose`, a test run, a `curl`);
-  - anything is connected to one of its published ports right now (a session, another stack, a person viewing a
-    preview through the tailnet).
+- **A running stack** (compose project, or a lone container) is stopped only once it has been seen unused for an hour
+  and nobody kept it (by stack or container name). Each pass, a stack counts as used when any of these holds:
+  - a conversation working in its folder is in use (a turn queued, running, parked or waiting on a usage limit, its
+    container up, an active long project or spawned agent, a kept container) or was active in the last hour;
+  - one of the agent's services runs in its folder or names it;
+  - a running session's or service's process names the stack, one of its containers, its folder or a published port;
+  - a TCP connection into one of its containers comes from outside the stack, read from inside each container
+    (`/proc/<pid>/net/tcp`). That includes a person on the tailnet, a session or another stack. Loopback and the
+    stack's own containers don't count;
+  - its containers' network moved 16 KB or more since the last pass (`/proc/<pid>/net/dev`, loopback left out);
+  - a container is new (first seen) or started within the hour.
 
-  A stack with no conversation folder is stopped only after running `idle_days` with none of the above. Stopping
-  is reversible: the folder's `CLEANUP.md` says how to start it again.
-- **Stopped containers** go once stopped for `idle_days`, when nothing in their stack runs, nobody kept it, and its
-  folders have been quiet for `idle_days`.
-- **Unused images and build cache** older than `idle_days` go (`docker image prune -a`, `docker builder prune`, both
-  with `until`).
-- **Volumes no container uses** (after the above), at least `idle_days` old, whose stacks and folders have been quiet
-  for `idle_days`:
-  - one holding no database (`node_modules`, anonymous scratch) goes;
-  - one holding a database is never deleted by the cleanup. It counts as a database by its files (`PG_VERSION`, MySQL
-    `ibdata1`, Mongo `WiredTiger`, Redis dumps, SQLite files) or by its name (postgres, pg, mysql, mongo, redis, db,
-    data, sql). agentd starts a Jensen turn (source `cleanup`), at most once a day, listing these volumes with their
-    stack, conversation, thread and channel. Jensen asks in the project's channel (the project's own channel, else
-    the channel the conversation came from, else its parent's), one message per channel, saying what each database
-    was for. It deletes a volume only after a person says it's safe. A reply in that thread reaches a Jensen session
-    that reads the thread and acts. agentd asks about each volume once (`agentd_cleanup_asks`, keyed by name and
-    creation time).
+  A session or service whose processes can't be read stops nothing that pass. Stopping is reversible: the folder's
+  `CLEANUP.md` says how to start it again.
+- **A stopped container** goes once its stack has sat unused for `idle_days`: nothing running in it, nobody keeping
+  it, no service in its folder, its folders quiet, and stopped that long. A container whose own writable layer holds
+  over 100 MB, or a database image with no volume, is kept: it may hold data.
+- **An image** goes once no container (running or stopped) has used it for `idle_days`, by the passes' own record, not
+  its build date. **Build cache** older than `idle_days` goes.
+- **A volume** is tracked from when no container mounts it, with the folders, stacks, mount points and images that
+  used it. Once it has been unused and its folders quiet for `idle_days`:
+  - it goes if it is positively rebuildable: named after `node_modules` or a cache or `.venv`, or only ever mounted
+    where dependencies or caches go;
+  - it is a database by any sign: database files up to four levels down (`PG_VERSION`, MySQL `ibdata1`, Mongo
+    `WiredTiger`, Redis dumps, SQLite), a database image (postgres, mysql, mongo, redis, elasticsearch, mssql, neo4j and
+    others), a database's data path (Postgres 18's `/var/lib/postgresql` included), or the name of a named volume
+    (postgres, pg, mysql, mongo, redis, db, data, sql). It is never deleted by the cleanup. agentd starts a Jensen
+    turn (source `cleanup`), at most once a day, listing these volumes by exact name with their stack, image, mount
+    point, conversation, thread and channel. Jensen asks in the project's channel, or works out the project from the
+    stack's name when no channel is known. It says that only the named volumes will be deleted, and only once a person
+    says so. Before removing one it checks that no container uses it. A volume is asked about once; if the turn
+    fails, it is asked about again;
+  - anything else is kept.
 - Notes about stopped stacks and removed containers and volumes go into the folder's `CLEANUP.md`. Writing a note
   doesn't count as activity in the folder.
-- If the Docker step fails, it's reported and the folder step still runs. The pass logs the disk's free space
-  before and after.
+- A dry run reports what this pass would do from the history so far, and records nothing.
+- A failure in the Docker step is reported and logged, and the folder step still runs. The pass logs the disk's free
+  space before and after.
