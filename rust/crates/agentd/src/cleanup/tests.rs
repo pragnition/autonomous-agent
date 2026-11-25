@@ -258,6 +258,23 @@ fn a_conversation_working_inside_the_folder_counts() {
 }
 
 #[test]
+fn the_cleanups_own_changes_to_a_folder_are_not_activity() {
+    let s = setup();
+    let f = s.folder("V-1");
+    s.conversation("V-1", 9, None);
+    // the cleanup moved things out of it a day ago, which set its modification time
+    let cleaned = s.now - Duration::days(1);
+    fs::File::open(&f).unwrap().set_modified(std::time::SystemTime::from(cleaned)).unwrap();
+    assert_eq!(s.state("V-1"), State::Recent, "unrecorded: a change a day ago is activity");
+    s.exec(&format!("INSERT INTO agentd_cleanups(folder, cleaned_at, activity_at) VALUES ('V-1', '{0}', '{0}')",
+                    keeps::fmt(cleaned + Duration::seconds(5))));
+    assert!(matches!(s.state("V-1"), State::Quiet(_)), "recorded as the cleanup's own");
+    fs::write(f.join("notes.md"), "new").unwrap();
+    fs::File::open(f.join("notes.md")).unwrap().set_modified(std::time::SystemTime::from(cleaned + Duration::hours(2))).unwrap();
+    assert_eq!(s.state("V-1"), State::Recent, "a change after it is activity again");
+}
+
+#[test]
 fn a_time_that_cannot_be_read_counts_as_now() {
     let s = setup();
     s.folder("V-1");
