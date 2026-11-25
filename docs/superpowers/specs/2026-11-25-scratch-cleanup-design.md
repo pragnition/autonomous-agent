@@ -61,19 +61,23 @@ A folder is matched to every conversation whose id is its name, or whose `cwd` l
 working in a parent's folder). It is skipped if any of the following holds:
 
 - one of those conversations has a work item that is queued, claimed or delivered;
-- it has an open park;
+- it has an open park, or a turn waiting out a usage limit;
 - it belongs to an active long project;
 - it has a running spawned agent, as parent or child;
 - its container is running;
 - someone has kept its container or one of its servers;
 - a container in Jensen's Docker is running from the folder (compose working folder or a bind mount), or a kept
   stack's compose working folder is in it;
+- one of Jensen's services (`/var/agent/services.toml`) runs in the folder or names it in its command;
 - the latest of the conversations' `last_active_at` and the container's `last_turn_at` is less than `idle_days` ago;
 - for a folder with no conversation row, the folder's own and its top-level entries' modification time is less than
   `idle_days` ago.
 
-If Jensen's Docker can't be asked which folders its containers use, the pass does nothing. The in-use check runs
-again for each folder right before anything in it is touched.
+- any clone in it was used by git within `idle_days` (HEAD, index, reflog or last fetch changed), whoever did it.
+
+If Jensen's Docker can't be asked which folders its containers use, or a running container mounts every folder, the
+pass does nothing. The in-use check (DB, the folder's top, Jensen's Docker and services) runs again for each folder
+right before anything in it is touched.
 
 ### What is removed
 
@@ -81,39 +85,53 @@ The pass walks the folder without following symlinks and never enters `.git`. It
 
 - **Dependency and cache folders**: `node_modules`, `__pycache__`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`,
   `.parcel-cache`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.gradle`, `.pnpm-store`, `.venv` and `venv` (only
-  with a `pyvenv.cfg`), and any folder holding a `CACHEDIR.TAG`. Inside a repo, one that git tracks is left alone.
+  with a `pyvenv.cfg`), and any folder holding a `CACHEDIR.TAG`. Inside a repo, one that git tracks is left alone. A
+  folder with a repo anywhere in it (an editable install's checkout, a fixture) isn't a dependency folder; it is walked
+  like any other.
 - **Clones**: folders with a `.git` folder. A clone is removed whole only if all of these hold, and is kept
   otherwise (its dependency folders are still removed):
-  - it has a remote;
-  - every commit on HEAD and on every local branch is on a remote-tracking branch;
-  - there is no stash;
-  - there are no uncommitted changes and no untracked files;
-  - there are no submodules and no linked worktrees;
+  - it isn't the conversation's folder itself (an agent that cloned into `.`);
+  - it has a remote; a remote that is a local folder counts only if it exists inside the work volume;
+  - there is no stash, and every commit HEAD or a local branch holds is on that remote's tracking branches (not
+    just any remote's). Tags aren't counted: offline, a tag fetched from the remote can't be told from one made
+    locally, and the live clones hold many fetched tags on archived branches;
+  - there are no uncommitted changes and no untracked files, and git read all of it (no warnings);
+  - no files are hidden from `git status` (assume-unchanged, or skip-worktree files present on disk);
+  - there are no submodules, linked worktrees or Git LFS objects;
   - no rebase, merge, cherry-pick or bisect is in progress;
-  - every ignored path in it is a generated one: the dependency and cache folders above, plus `dist`, `build`,
-    `out`, `coverage`, `target`, `.cache`, `test-results`, `playwright-report`, `blob-report`, `.angular`,
-    `storybook-static`, and `*.log`, `*.pyc`, `*.tsbuildinfo`, `.eslintcache` and `.DS_Store` files. Anything else
-    ignored (a `.env`, run output, a downloaded file) keeps the clone.
+  - no folder in it is unreadable, and it holds no other clone or worktree that stays;
+  - every ignored path in it is a generated one (`git status --ignored=matching`): a folder an ignore rule names
+    whose own name is one of the dependency and cache folders above or `dist`, `build`, `out`, `coverage`,
+    `target`, `.cache`, `test-results`, `playwright-report`, `blob-report`, `.angular`, `storybook-static`; or a
+    file named `*.log`, `*.pyc`, `*.tsbuildinfo`, `.eslintcache` or `.DS_Store`. Anything else ignored (a `.env`,
+    even inside `build/`, run output, a downloaded file) keeps the clone.
 
-  Any git error keeps the clone. No network is used. A pushed commit counts as safe even if the branch was later
-  deleted on GitHub, since GitHub keeps every PR's commits.
+  Any git error keeps the clone. No network is used. git runs without system or global config, without looking above
+  the repo, and with nothing the repo's config names that would start a program: fsmonitor, hooks and signature
+  checks are off, and every filter it names becomes a plain copy. A pushed commit counts as safe even if the branch
+  was later deleted on GitHub, since GitHub keeps every PR's commits.
 
 Worktree folders (`.git` file) are never removed whole; only their dependency folders are.
 
 ### How it is removed
 
 - Right after the in-use check, each target is renamed into `/var/agent/.cleanup-trash/`, which sits on the same
-  volume, so the rename is instant and atomic. Jensen never sees a half-deleted folder.
-- The trash is then deleted with agentd's own file walk, which counts the bytes freed.
-- Files agentd (uid 1001) can't delete are removed through Jensen's Docker, which runs as root and mounts the same
-  volume at the same path. Paths are checked to lie under `/var/agent/scratch/` or the trash. This covers things
-  Jensen's stacks created as root, and any target that can't be renamed for the same reason.
+  volume, so the rename is instant and atomic. Jensen never sees a half-deleted folder. A target is only ever a path
+  at least one level inside a conversation's folder, with no symlink on the way.
+- A target agentd (uid 1001) can't rename (a folder Jensen's stacks made as root) is moved into the trash as root at
+  that same moment, through Jensen's Docker, which runs as root and mounts the same volume at the same path.
+- The trash is then deleted with agentd's own file walk, which counts the bytes freed. What agentd can't delete is
+  removed as root; root only ever removes paths right inside the trash.
+- The scratch folder and the trash must be plain folders, not symlinks, or the pass does nothing.
 - Trash left by an interrupted pass is deleted at the start of the next one.
 
 ### Bookkeeping
 
 - `agentd_cleanups(folder, cleaned_at, activity_at, freed_bytes)` records each folder's last pass. A folder isn't
-  walked again until it has been active since then.
+  walked again until it has been active since then. A folder where git timed out or something couldn't be moved
+  isn't recorded, so the next pass tries again.
+- Folder activity on disk is read before the database is locked, so a slow disk never holds up the rest of agentd.
+- `agentd cleanup` refuses a real pass as root, so the trash and the lock stay agentd's.
 - Folders are taken quietest first. A pass stops starting new work after 50 minutes and carries on in the next one.
   The first passes after deploy have hundreds of folders to get through.
 - A pass runs every hour from `agentd serve`. A lock file (`/var/agent/.cleanup.lock`) keeps a pass and

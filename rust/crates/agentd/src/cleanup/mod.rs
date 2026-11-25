@@ -3,9 +3,10 @@
 //! and clones whose work is all on their remote (see `scan`). Files the agent wrote and clones with work of their own
 //! stay, and `CLEANUP.md` in the folder says what went and how to get each clone back. Removal is permanent.
 //!
-//! A folder is left alone while it is in use: a turn queued or running, a park, an active long project, a running
-//! spawned agent, a running or kept container, a stack in the agent's Docker running from it, or any activity in the
-//! last `idle_days`. That is checked again right before anything in it moves.
+//! A folder is left alone while it is in use: a turn queued, running, parked or waiting out a usage limit, an active
+//! long project, a running spawned agent, a running or kept container, a stack in the agent's Docker or one of its
+//! services running from it, or any activity in the last `idle_days` (the folder's top, or any clone's git use). That
+//! is checked again right before anything in it moves.
 
 pub mod remove;
 pub mod scan;
@@ -50,7 +51,10 @@ work of their own are never removed. Each section below says what went and how t
 pub trait Apps: Send + Sync {
     /// `docker ps -a` in `PS_FORMAT`, one line per container, then `__END__` once the listing is complete.
     fn containers(&self) -> BoxFuture<'_, Result<String>>;
-    /// Remove `path` as root, for what agentd's own user can't delete.
+    /// Move `from` (inside a conversation's folder) to `to` (a new name in the trash) as root, for what agentd's own
+    /// user can't move (files the agent's stacks made as root).
+    fn move_as_root(&self, from: PathBuf, to: PathBuf) -> BoxFuture<'_, Result<()>>;
+    /// Remove `path` (in the trash) as root, for what agentd's own user can't delete.
     fn remove_as_root(&self, path: PathBuf) -> BoxFuture<'_, Result<()>>;
 }
 
@@ -71,6 +75,9 @@ impl Settings {
     }
     pub fn trash(&self) -> PathBuf {
         self.work.join(".cleanup-trash")
+    }
+    fn services(&self) -> PathBuf {
+        self.work.join("services.toml")
     }
     fn lock(&self) -> PathBuf {
         self.work.join(".cleanup.lock")
@@ -141,10 +148,11 @@ pub async fn pass(db: Db, apps: Arc<dyn Apps>, settings: Settings, now: DateTime
     let (thread_apps, thread_db) = (apps.clone(), db.clone());
     std::thread::Builder::new().name("cleanup".into()).stack_size(32 << 20).spawn(move || {
         lower_priority();
-        let mut docker = DockerView { apps: thread_apps, handle, at: None, busy: HashSet::new() };
-        let _ = tx.send(run(&thread_db, &settings, &mut docker, now, dry_run));
+        let mut in_use = InUse { apps: thread_apps, handle, services: settings.services(), at: None, busy: HashSet::new() };
+        let _ = tx.send(run(&thread_db, &settings, &mut in_use, now, dry_run));
     })?;
     let (mut report, needs_root) = rx.await.map_err(|_| anyhow!("the cleanup thread stopped"))??;
+    // only ever what is already in the trash
     for path in needs_root {
         if let Err(e) = apps.remove_as_root(path.clone()).await {
             report.failures.push(format!("removing {} as root: {e:#}", path.display()));
@@ -153,43 +161,59 @@ pub async fn pass(db: Db, apps: Arc<dyn Apps>, settings: Settings, now: DateTime
     Ok(report)
 }
 
-/// The agent's Docker's view of which folders its containers use, asked again once it's older than `DOCKER_FRESH`.
-struct DockerView {
+/// Which folders the agent's Docker's containers and the agent's services use, read again once older than
+/// `DOCKER_FRESH` or when asked for a fresh answer.
+struct InUse {
     apps: Arc<dyn Apps>,
     handle: tokio::runtime::Handle,
+    services: PathBuf,
     at: Option<Instant>,
     busy: HashSet<String>,
 }
 
-impl DockerView {
-    fn busy(&mut self, db: &Db, scratch: &Path, now: DateTime<Utc>) -> Result<&HashSet<String>> {
-        if self.at.is_none_or(|at| at.elapsed() >= DOCKER_FRESH) {
+impl InUse {
+    fn busy(&mut self, db: &Db, scratch: &Path, now: DateTime<Utc>, fresh: bool) -> Result<&HashSet<String>> {
+        if fresh || self.at.is_none_or(|at| at.elapsed() >= DOCKER_FRESH) {
             let listing = self.handle.block_on(self.apps.containers()).context("asking the agent's Docker what its containers use")?;
             let kept: Vec<String> = keeps::all(&db.lock())?.into_iter().filter(|k| k.kind == "stack" && k.holds(now))
                 .map(|k| k.target).collect();
-            self.busy = in_use_from_ps(&listing, scratch, &kept)?;
+            let mut busy = in_use_from_ps(&listing, scratch, &kept)?;
+            let services = match std::fs::read_to_string(&self.services) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(e).context("reading the services file"),
+            };
+            busy.extend(services_in_use(&services, scratch));
+            self.busy = busy;
             self.at = Some(Instant::now());
         }
         Ok(&self.busy)
     }
+
+    fn move_as_root(&self, from: &Path, to: &Path) -> Result<()> {
+        self.handle.block_on(self.apps.move_as_root(from.to_path_buf(), to.to_path_buf()))
+    }
 }
 
-fn run(db: &Db, st: &Settings, docker: &mut DockerView, now: DateTime<Utc>, dry_run: bool) -> Result<(Report, Vec<PathBuf>)> {
+fn run(db: &Db, st: &Settings, in_use: &mut InUse, now: DateTime<Utc>, dry_run: bool) -> Result<(Report, Vec<PathBuf>)> {
     let started = Instant::now();
     let mut report = Report { dry_run, ..Default::default() };
     let mut root = Vec::new();
-    if !dry_run {
-        empty_trash(&st.trash(), &mut root);
-    }
     let scratch = st.scratch();
-    let entries = match std::fs::read_dir(&scratch) {
-        Ok(entries) => entries,
+    match std::fs::symlink_metadata(&scratch) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((report, root)),
         Err(e) => return Err(e.into()),
-    };
-    let busy = docker.busy(db, &scratch, now)?.clone();
+        Ok(m) if m.file_type().is_symlink() || !m.is_dir() => bail!("{} isn't a plain folder", scratch.display()),
+        Ok(_) => {}
+    }
+    if !dry_run {
+        remove::plain_dir(&st.trash())?;
+        empty_trash(&st.trash(), &mut root);
+    }
+    // no answer from the agent's Docker: no pass
+    let busy = in_use.busy(db, &scratch, now, true)?.clone();
     let mut quiet = Vec::new();
-    for e in entries.flatten() {
+    for e in std::fs::read_dir(&scratch)?.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || !e.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
@@ -198,8 +222,9 @@ fn run(db: &Db, st: &Settings, docker: &mut DockerView, now: DateTime<Utc>, dry_
             report.in_use += 1;
             continue;
         }
+        let touched = modified(&e.path()); // read before the DB is locked: the disk can be slow
         let c = db.lock();
-        match state(&c, &name, &e.path(), now, st.idle) {
+        match state(&c, &name, &e.path(), now, st.idle, touched) {
             Err(err) => {
                 report.in_use += 1;
                 report.failures.push(format!("{name}: {err:#}"));
@@ -219,13 +244,20 @@ fn run(db: &Db, st: &Settings, docker: &mut DockerView, now: DateTime<Utc>, dry_
             report.left_for_next_pass = quiet.len() - i;
             break;
         }
-        // asked again right before anything moves; no answer from the agent's Docker stops the pass
-        if docker.busy(db, &scratch, now)?.contains(name) {
-            report.in_use += 1;
-            continue;
+        match in_use.busy(db, &scratch, now, false) {
+            Err(e) => {
+                report.failures.push(format!("{e:#}"));
+                report.left_for_next_pass = quiet.len() - i;
+                break;
+            }
+            Ok(busy) if busy.contains(name) => {
+                report.in_use += 1;
+                continue;
+            }
+            Ok(_) => {}
         }
-        match clean(db, st, name, path, *at, now, dry_run, &mut root) {
-            Ok(Some(mut f)) => {
+        match clean(db, st, in_use, name, path, *at, now, dry_run, &mut root) {
+            Ok(Done::Cleaned(mut f)) => {
                 report.freed_bytes += f.bytes;
                 for kind in &f.kept_kinds {
                     *report.kept_clones.entry(kind.to_string()).or_default() += 1;
@@ -233,20 +265,46 @@ fn run(db: &Db, st: &Settings, docker: &mut DockerView, now: DateTime<Utc>, dry_
                 report.failures.extend(f.problems.drain(..).map(|p| format!("{name}: {p}")));
                 report.folders.push(f);
             }
-            Ok(None) => {}
+            Ok(Done::Nothing) => {}
+            Ok(Done::Recent) => report.recent += 1,
+            Ok(Done::InUse) => report.in_use += 1,
             Err(e) => report.failures.push(format!("{name}: {e:#}")),
         }
     }
     Ok((report, root))
 }
 
-/// Clean one quiet folder. None when there was nothing to report or it came into use meanwhile.
+/// What became of a quiet folder.
+enum Done {
+    /// Changed (or would be, in a dry run), or kept clones worth reporting.
+    Cleaned(FolderReport),
+    Nothing,
+    /// One of its clones was used within the idle period.
+    Recent,
+    /// It came into use meanwhile.
+    InUse,
+}
+
+/// Clean one quiet folder.
 #[allow(clippy::too_many_arguments)]
-fn clean(db: &Db, st: &Settings, name: &str, folder: &Path, quiet_since: DateTime<Utc>, now: DateTime<Utc>, dry_run: bool,
-         root: &mut Vec<PathBuf>) -> Result<Option<FolderReport>> {
+fn clean(db: &Db, st: &Settings, in_use: &mut InUse, name: &str, folder: &Path, quiet_since: DateTime<Utc>,
+         now: DateTime<Utc>, dry_run: bool, root: &mut Vec<PathBuf>) -> Result<Done> {
     let found = scan::scan(folder);
-    let judged: Vec<(PathBuf, Verdict)> = found.repos.iter().filter(|r| !r.worktree)
-        .map(|r| (r.path.clone(), scan::judge(&r.path))).collect();
+    // git use inside a clone (a checkout, a commit, a fetch) counts as activity, whoever did it
+    if let Some(used) = found.repos.iter().filter_map(|r| scan::last_used(&r.path)).max().map(DateTime::<Utc>::from)
+        && now - used < st.idle {
+        return Ok(Done::Recent);
+    }
+    let judged: Vec<(PathBuf, Verdict)> = found.repos.iter().filter(|r| !r.worktree).map(|r| {
+        let verdict = if r.path == folder {
+            Verdict::Keep { kind: "folder", detail: "the conversation's folder is itself a clone".into() }
+        } else if found.unreadable.iter().any(|u| u.starts_with(&r.path)) {
+            Verdict::Keep { kind: "unreadable", detail: "it holds folders that can't be read".into() }
+        } else {
+            scan::judge(&r.path, &st.work)
+        };
+        (r.path.clone(), verdict)
+    }).collect();
     // a clone holding a worktree or a clone that stays, stays too
     let keeper = |p: &Path| found.repos.iter().any(|r| r.path == p && r.worktree)
         || judged.iter().any(|(q, v)| q == p && matches!(v, Verdict::Keep { .. }));
@@ -267,7 +325,10 @@ fn clean(db: &Db, st: &Settings, name: &str, folder: &Path, quiet_since: DateTim
             }
         }
     }
-    // a clone inside one being removed goes with it
+    let timed_out = report.kept_kinds.contains(&scan::TIMED_OUT);
+    // every removed clone goes in the note; one inside another that's removed goes with it
+    let clones: Vec<(String, String, String, String)> =
+        removed.iter().map(|(p, url, branch, head)| (rel(p), url.clone(), branch.clone(), head.clone())).collect();
     let outer: Vec<PathBuf> = removed.iter().map(|r| r.0.clone()).collect();
     removed.retain(|r| !outer.iter().any(|o| *o != r.0 && r.0.starts_with(o)));
     let inside_removed = |p: &Path| removed.iter().any(|r| p.starts_with(&r.0));
@@ -286,30 +347,52 @@ fn clean(db: &Db, st: &Settings, name: &str, folder: &Path, quiet_since: DateTim
 
     let targets: Vec<PathBuf> = removed.iter().map(|r| r.0.clone()).chain(deps.iter().cloned()).collect();
     if targets.is_empty() {
-        if !dry_run {
+        if !dry_run && !timed_out {
             record(&db.lock(), name, 0, now)?;
         }
-        return Ok((!report.clones_kept.is_empty()).then_some(report));
+        return Ok(if report.clones_kept.is_empty() { Done::Nothing } else { Done::Cleaned(report) });
     }
     if dry_run {
         report.bytes = targets.iter().map(|t| remove::tree_bytes(t)).sum();
-        return Ok(Some(report));
+        return Ok(Done::Cleaned(report));
     }
-    if !matches!(state(&db.lock(), name, folder, now, st.idle)?, State::Quiet(_)) {
-        return Ok(None);
+    // asked again right before anything moves: the DB, the folder's top, and the agent's Docker and services
+    let touched = modified(folder);
+    match state(&db.lock(), name, folder, now, st.idle, touched)? {
+        State::Quiet(_) => {}
+        State::Recent => return Ok(Done::Recent),
+        State::Busy(_) => return Ok(Done::InUse),
+    }
+    if in_use.busy(db, &st.scratch(), now, true)?.contains(name) {
+        return Ok(Done::InUse);
     }
     // everything moves out at once, so the folder never holds anything half deleted
+    let (trash, scratch) = (st.trash(), st.scratch());
     let mut moved = Vec::new();
+    let mut failed_moves = false;
     for t in &targets {
-        match remove::to_trash(t, &st.trash()) {
-            Ok(p) => moved.push(p),
+        if !remove::inside(t, &scratch, 2) {
+            report.problems.push(format!("not moving {}: not a plain path inside a conversation's folder", rel(t)));
+            failed_moves = true;
+            continue;
+        }
+        let dest = remove::trash_path(t, &trash);
+        match std::fs::rename(t, &dest) {
+            Ok(()) => moved.push(dest),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => root.push(t.clone()),
-            Err(e) => report.problems.push(format!("moving {}: {e}", rel(t))),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => match in_use.move_as_root(t, &dest) {
+                Ok(()) => moved.push(dest),
+                Err(e) => {
+                    report.problems.push(format!("moving {} as root: {e:#}", rel(t)));
+                    failed_moves = true;
+                }
+            },
+            Err(e) => {
+                report.problems.push(format!("moving {}: {e}", rel(t)));
+                failed_moves = true;
+            }
         }
     }
-    let clones: Vec<(String, String, String, String)> =
-        removed.iter().map(|(p, url, branch, head)| (rel(p), url.clone(), branch.clone(), head.clone())).collect();
     if let Err(e) = write_notes(folder, quiet_since, now, &report.deps, &clones, &report.clones_kept) {
         report.problems.push(format!("writing {NOTES}: {e}"));
     }
@@ -320,15 +403,19 @@ fn clean(db: &Db, st: &Settings, name: &str, folder: &Path, quiet_since: DateTim
             root.push(m);
         }
     }
-    record(&db.lock(), name, report.bytes, now)?;
-    Ok(Some(report))
+    // a folder git timed out on, or something in it couldn't move, is looked at again next pass
+    if !timed_out && !failed_moves {
+        record(&db.lock(), name, report.bytes, now)?;
+    }
+    Ok(Done::Cleaned(report))
 }
 
 fn deepest_repo<'a>(repos: &'a [scan::Repo], path: &Path) -> Option<&'a Path> {
     repos.iter().filter(|r| path.starts_with(&r.path)).map(|r| r.path.as_path()).max_by_key(|p| p.components().count())
 }
 
-/// Delete what an earlier pass left in the trash; what agentd can't delete goes to `root`.
+/// Delete what an earlier pass left in the trash (checked to be a plain folder); what agentd can't delete goes to
+/// `root`.
 fn empty_trash(trash: &Path, root: &mut Vec<PathBuf>) {
     for e in std::fs::read_dir(trash).into_iter().flatten().flatten() {
         if remove::delete_tree(&e.path()).failed > 0 {
@@ -350,8 +437,9 @@ pub enum State {
 }
 
 /// Whether the folder `folder` (at `path`) is in use at `now`: by its own conversation, or by any conversation working
-/// inside it.
-pub fn state(c: &Connection, folder: &str, path: &Path, now: DateTime<Utc>, idle: Duration) -> Result<State> {
+/// inside it. `touched` is when the folder's top last changed (see `modified`).
+pub fn state(c: &Connection, folder: &str, path: &Path, now: DateTime<Utc>, idle: Duration, touched: Option<DateTime<Utc>>)
+             -> Result<State> {
     let p = path.to_string_lossy().into_owned();
     let mut ids: Vec<String> = c.prepare("SELECT id FROM conversations WHERE id = ?1 OR cwd = ?2 \
                                           OR substr(cwd, 1, length(?2) + 1) = ?2 || '/'")?
@@ -377,6 +465,9 @@ pub fn state(c: &Connection, folder: &str, path: &Path, now: DateTime<Utc>, idle
     if any("SELECT conversation_id FROM parks WHERE ended_at IS NULL AND conversation_id IN ({ids})")? {
         return busy("it is parked");
     }
+    if any("SELECT conversation_id FROM limit_waits WHERE resumed_at IS NULL AND conversation_id IN ({ids})")? {
+        return busy("a turn is waiting out a usage limit");
+    }
     if any("SELECT name FROM projects WHERE status = 'active' AND conversation_id IN ({ids})")? {
         return busy("it runs a long project");
     }
@@ -396,7 +487,7 @@ pub fn state(c: &Connection, folder: &str, path: &Path, now: DateTime<Utc>, idle
     times.extend(ask("SELECT last_turn_at FROM agentd_containers WHERE conversation_id IN ({ids})")?);
     times.extend(ask("SELECT MAX(updated_at) FROM work_items WHERE conversation_id IN ({ids})")?);
     // a time that can't be read counts as now: never as long ago
-    let latest = times.iter().flatten().map(|t| parse_time(t).unwrap_or(now)).chain(modified(path)).max()
+    let latest = times.iter().flatten().map(|t| parse_time(t).unwrap_or(now)).chain(touched).max()
         .unwrap_or(now);
     Ok(if now - latest < idle { State::Recent } else { State::Quiet(latest) })
 }
@@ -408,7 +499,7 @@ fn parse_time(s: &str) -> Option<DateTime<Utc>> {
 }
 
 /// When the folder or anything at its top was last changed.
-fn modified(path: &Path) -> Option<DateTime<Utc>> {
+pub fn modified(path: &Path) -> Option<DateTime<Utc>> {
     let entries = std::fs::read_dir(path).into_iter().flatten().flatten().map(|e| e.path());
     std::iter::once(path.to_path_buf()).chain(entries)
         .filter_map(|p| std::fs::symlink_metadata(p).and_then(|m| m.modified()).ok())
@@ -432,13 +523,42 @@ pub fn in_use_from_ps(text: &str, scratch: &Path, kept_stacks: &[String]) -> Res
             continue;
         }
         for p in std::iter::once(dir).chain(mounts.split(',')) {
-            if let Ok(rest) = Path::new(p).strip_prefix(scratch)
-                && let Some(Component::Normal(first)) = rest.components().next() {
-                used.insert(first.to_string_lossy().into_owned());
+            let p = Path::new(p);
+            if p.is_absolute() && scratch.starts_with(p) {
+                bail!("{name} uses every conversation's folder ({})", p.display());
+            }
+            if let Some(folder) = folder_of(p, scratch) {
+                used.insert(folder);
             }
         }
     }
     Ok(used)
+}
+
+/// The conversation's folder a path lies in, if any.
+fn folder_of(path: &Path, scratch: &Path) -> Option<String> {
+    match path.strip_prefix(scratch).ok()?.components().next()? {
+        Component::Normal(first) => Some(first.to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
+/// The folders the agent's services (its services file) run in or name in their commands.
+pub fn services_in_use(text: &str, scratch: &Path) -> HashSet<String> {
+    let prefix = format!("{}/", scratch.display());
+    let mut used = HashSet::new();
+    for entry in crate::workloads::service_entries(text) {
+        for word in entry.cwd.iter().chain(entry.cmd.iter()) {
+            for (at, _) in word.match_indices(&prefix) {
+                let rest = &word[at + prefix.len()..];
+                let first = rest.split(|c: char| c == '/' || c.is_whitespace() || "'\";:=,".contains(c)).next().unwrap_or_default();
+                if !first.is_empty() && first != "." && first != ".." {
+                    used.insert(first.to_string());
+                }
+            }
+        }
+    }
+    used
 }
 
 // --- bookkeeping ---------------------------------------------------------------------------------------------------
@@ -545,13 +665,24 @@ impl Lock {
 pub struct DockerApps {
     docker: bollard::Docker,
     container: String,
-    roots: Vec<PathBuf>,
+    scratch: PathBuf,
+    trash: PathBuf,
 }
 
 impl DockerApps {
     pub fn new(container: &str, settings: &Settings) -> Result<DockerApps> {
         Ok(DockerApps { docker: bollard::Docker::connect_with_local_defaults()?, container: container.to_string(),
-                        roots: vec![settings.scratch(), settings.trash()] })
+                        scratch: settings.scratch(), trash: settings.trash() })
+    }
+
+    async fn exec(&self, cmd: Vec<String>, limit: StdDuration) -> Result<String> {
+        crate::workloads::exec_output(&self.docker, &self.container, None, cmd, limit).await
+    }
+
+    /// `path` is a new name right in the trash, which is a plain folder.
+    fn in_trash(&self, path: &Path) -> bool {
+        path.parent() == Some(self.trash.as_path()) && remove::inside(&self.trash, self.trash.parent().unwrap_or(&self.trash), 1)
+            && path.file_name().is_some_and(|n| !n.is_empty() && n != "." && n != "..")
     }
 }
 
@@ -561,18 +692,31 @@ impl Apps for DockerApps {
             // the format goes in as an argument, so nothing in it is read by the shell
             let cmd = vec!["sh".to_string(), "-c".into(), format!("docker ps -a --no-trunc --format \"$1\" && echo {END}"),
                            "sh".into(), PS_FORMAT.into()];
-            crate::workloads::exec_output(&self.docker, &self.container, None, cmd, StdDuration::from_secs(120)).await
+            self.exec(cmd, StdDuration::from_secs(120)).await
+        })
+    }
+
+    fn move_as_root(&self, from: PathBuf, to: PathBuf) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            if !remove::inside(&from, &self.scratch, 2) || !self.in_trash(&to) || std::fs::symlink_metadata(&to).is_ok() {
+                bail!("won't move {} to {}", from.display(), to.display());
+            }
+            let cmd = vec!["mv".into(), "--".into(), from.to_string_lossy().into_owned(), to.to_string_lossy().into_owned()];
+            let out = self.exec(cmd, StdDuration::from_secs(300)).await?;
+            if std::fs::symlink_metadata(&from).is_ok() || std::fs::symlink_metadata(&to).is_err() {
+                bail!("mv didn't move it: {}", out.trim());
+            }
+            Ok(())
         })
     }
 
     fn remove_as_root(&self, path: PathBuf) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
-            let roots: Vec<&Path> = self.roots.iter().map(PathBuf::as_path).collect();
-            if !remove::under(&path, &roots) {
-                bail!("{} isn't in the scratch folders or the trash", path.display());
+            if !self.in_trash(&path) {
+                bail!("{} isn't in the trash", path.display());
             }
             let cmd = vec!["rm".into(), "-rf".into(), "--".into(), path.to_string_lossy().into_owned()];
-            let out = crate::workloads::exec_output(&self.docker, &self.container, None, cmd, StdDuration::from_secs(1800)).await?;
+            let out = self.exec(cmd, StdDuration::from_secs(1800)).await?;
             if std::fs::symlink_metadata(&path).is_ok() {
                 bail!("still there after rm: {}", out.trim());
             }
