@@ -302,12 +302,20 @@ early in a window. It counts as full at `SOFT_CAP_5H` (default 0.65) of the wind
 anyway. The reset time is the proxy's 5-hour window data; when it isn't known, the 65% cap applies. Both values are
 environment variables of the control plane (`compose.yaml`, taken from the host's `.env`).
 
+Each account also has a weekly cap, so its owner keeps the rest of their week. The proxy sets it (`weekly_cap` in
+its config; 0.65 on the host) for Jensen's ports only, never the host's own sessions. An account at or past that
+share of its 7-day window gets no new Jensen session and no rank in the proxy's answer, which gives the cap as
+`cap_7d`. The control plane counts such an account as over its cap whatever its 5-hour window shows. This cap
+doesn't lift near a reset. A session already on the account keeps working, and the control plane moves it the same
+way as at the soft cap: at the next quiet moment, or after 30 minutes anyway. The account has room again when its week
+resets.
+
 Every 60 s the control plane reads `/proxy/usage` (`rust/crates/agentd/src/usage_watch.rs`) and gives each account a state:
 
-- `out`: the proxy gives it no rank (no capacity);
+- `out`: the proxy gives it no rank (no capacity, or past its weekly cap);
 - `hot`: its 5-hour window is at its effective cap (the soft cap, or 100% once lifted). It is `ok` again only once it
   is 10 points below its soft cap, so it doesn't flap; once the cap is lifted there is no margin. How fast it spends
-  its 7-day allowance (`pace_delta`) doesn't count;
+  its 7-day allowance (`pace_delta`) doesn't count; only the weekly cap does;
 - `ok`: otherwise.
 
 The pool, counted in `ok` accounts: with two or more (or all the verified accounts, in a smaller pool) nothing
@@ -316,7 +324,7 @@ with the earliest reset, and another when capacity is back. With every account o
 still start (the gate only needs an account with a rank) and scheduled runs wait. The proxy ranks accounts for new
 sessions and isn't in this repository, so the soft cap doesn't steer new sessions: one can still land on a capped
 account while the proxy ranks it first, and the control plane then moves it if another account is under its cap. An account whose `verified` goes false, or that has been `out` for over
-5 hours, is reported to the admins once. Every change of state is an event (`usage_account`, `usage_pool`,
+5 hours for a reason other than its weekly cap, is reported to the admins once. Every change of state is an event (`usage_account`, `usage_pool`,
 `usage_unverified`, `usage_out_too_long`, and `usage_cap_reached` / `usage_cap_lifted` when an account reaches its
 soft cap or the cap lifts to 100%), shown on the dashboard's Events page. The Accounts page shows each account's
 effective cap. The last state is kept in

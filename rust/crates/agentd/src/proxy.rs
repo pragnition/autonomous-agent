@@ -5,6 +5,10 @@
 //! An account counts as full at the soft cap (65%) of its 5-hour window until 90 minutes before the window resets,
 //! and at 100% from then on: what is left would go unused at the reset anyway. An unknown reset time keeps the soft
 //! cap.
+//!
+//! It is also full at the weekly cap the proxy gives as `cap_7d` (its `weekly_cap`, which leaves the rest of each
+//! account's week to its owner) until its 7-day window resets. That cap never lifts early, and the proxy gives such
+//! an account no rank, so no new session lands there.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -55,6 +59,32 @@ pub struct AccountUsage {
     pub verified: bool,
     pub used_5h: Option<f64>,
     pub reset_5h: Option<f64>,
+    pub used_7d: Option<f64>,
+    pub reset_7d: Option<f64>,
+    /// The share of its week the proxy lets agentd's sessions take (`cap_7d`); None: no weekly cap.
+    pub cap_7d: Option<f64>,
+}
+
+impl AccountUsage {
+    pub fn over_weekly_cap(&self) -> bool {
+        self.cap_7d.zip(self.used_7d).is_some_and(|(cap, used)| used >= cap)
+    }
+}
+
+fn number(v: Option<&Value>) -> Option<f64> {
+    v.filter(|v| v.is_number()).and_then(Value::as_f64)
+}
+
+/// A window from the proxy's answer: (used, reset epoch), each None when not given.
+fn window(rec: &Value, w: &str) -> (Option<f64>, Option<f64>) {
+    let pair = rec.get(w).and_then(Value::as_array).filter(|p| p.len() == 2);
+    (number(pair.map(|p| &p[0])), number(pair.map(|p| &p[1])))
+}
+
+/// Whether one account in the proxy's answer is at or past its weekly cap (`cap_7d`).
+pub fn weekly_capped(rec: &Value) -> bool {
+    let cap = number(rec.get("cap_7d"));
+    cap.zip(window(rec, "7d").0).is_some_and(|(cap, used)| used >= cap)
 }
 
 #[derive(Clone, Debug)]
@@ -68,17 +98,16 @@ pub struct Usage {
 impl Usage {
     /// The proxy's `/proxy/usage` answer: one object per account code, plus `_all`.
     pub fn from_raw(raw: &Value, soft_cap: SoftCap, now: f64) -> Usage {
-        let num = |v: Option<&Value>| v.filter(|v| v.is_number()).and_then(Value::as_f64);
         let accounts = raw.as_object().into_iter().flatten()
             .filter(|(code, rec)| *code != "_all" && rec.is_object())
             .map(|(code, rec)| {
-                let window = rec.get("5h").and_then(Value::as_array).filter(|w| w.len() == 2);
+                let ((used_5h, reset_5h), (used_7d, reset_7d)) = (window(rec, "5h"), window(rec, "7d"));
                 (code.clone(), AccountUsage {
                     status: rec.get("status").and_then(Value::as_str).unwrap_or_default().to_string(),
                     rank: rec.get("rank").and_then(Value::as_i64),
                     verified: rec.get("verified").and_then(Value::as_bool).unwrap_or(false),
-                    used_5h: num(window.map(|w| &w[0])),
-                    reset_5h: num(window.map(|w| &w[1])),
+                    used_5h, reset_5h, used_7d, reset_7d,
+                    cap_7d: number(rec.get("cap_7d")),
                 })
             }).collect();
         Usage { accounts, soft_cap, now }
@@ -96,12 +125,13 @@ impl Usage {
         self.status_of(code).is_some_and(|s| ACCOUNT_TROUBLE.contains(&s))
     }
 
+    /// Over its 5-hour soft cap, or past its weekly cap.
     pub fn over_cap(&self, code: Option<&str>) -> bool {
         code.and_then(|c| self.accounts.get(c))
-            .is_some_and(|a| self.soft_cap.over(a.used_5h, a.reset_5h, self.now))
+            .is_some_and(|a| self.soft_cap.over(a.used_5h, a.reset_5h, self.now) || a.over_weekly_cap())
     }
 
-    /// The account a fresh session would move to from `code`, which is over its soft cap: the proxy's top-ranked
+    /// The account a fresh session would move to from `code`, which is over its cap: the proxy's top-ranked
     /// account, when that is another one under its own cap. Otherwise None, and the session stays: the proxy picks a
     /// fresh session's account by rank, so moving would land it on a capped account and move again.
     pub fn handoff_target(&self, code: Option<&str>) -> Option<String> {
@@ -202,5 +232,27 @@ mod tests {
                                 "b": {"status": "ok", "rank": 0, "5h": [0.66, now + 3.0 * 3600.0]}});
         assert_eq!(Usage::from_raw(&capped_top, SoftCap::default(), now).handoff_target(Some("a")), None);
         assert_eq!(SoftCap::from_env(|k| (k == "SOFT_CAP_5H").then(|| "1.5".to_string())).limit, 1.0);
+    }
+
+    #[test]
+    fn an_account_past_its_weekly_cap_is_over_cap_whatever_its_5h_window() {
+        let now = 1_000_000.0;
+        let raw = json!({"a": {"status": "allowed_warning", "rank": null, "verified": true, "5h": [0.43, now + 3.0 * 3600.0],
+                               "7d": [0.84, now + 58.0 * 3600.0], "cap_7d": 0.65},
+                         "b": {"status": "allowed", "rank": 1, "verified": true, "5h": [0.02, now + 4.0 * 3600.0],
+                               "7d": [0.35, now + 6.0 * 86400.0], "cap_7d": 0.65},
+                         "c": {"status": "allowed", "rank": 2, "verified": true, "5h": [0.10, now + 4.0 * 3600.0],
+                               "7d": [0.90, now + 86400.0], "cap_7d": null}});
+        let usage = Usage::from_raw(&raw, SoftCap::default(), now);
+        assert!(usage.over_cap(Some("a")), "84% of its week is past the 65% weekly cap, though 43% of 5h is under");
+        assert!(weekly_capped(&raw["a"]) && !weekly_capped(&raw["b"]) && !weekly_capped(&raw["c"]));
+        assert!(!usage.over_cap(Some("b")));
+        assert!(!usage.over_cap(Some("c")), "no weekly cap given: only the 5-hour one counts");
+        assert_eq!(usage.handoff_target(Some("a")).as_deref(), Some("b"));
+        assert_eq!((usage.accounts["a"].used_7d, usage.accounts["a"].reset_7d), (Some(0.84), Some(now + 58.0 * 3600.0)));
+        let near_5h_reset = json!({"a": {"status": "ok", "rank": null, "5h": [0.43, now + 600.0], "7d": [0.84, now + 3600.0],
+                                         "cap_7d": 0.65}});
+        assert!(Usage::from_raw(&near_5h_reset, SoftCap::default(), now).over_cap(Some("a")),
+                "the 5-hour cap lifts near its reset; the weekly one holds until the week resets");
     }
 }

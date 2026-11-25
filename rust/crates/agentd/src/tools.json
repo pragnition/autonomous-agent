@@ -159,7 +159,7 @@
  },
  {
   "name": "status",
-  "description": "What is running and queued, whether the agent is paused, and how much of its 5-hour window this session's account has used.",
+  "description": "What is running and queued, whether the agent is paused, and how much of its 5-hour and 7-day windows this session's account has used.",
   "input_schema": {
    "type": "object",
    "properties": {},
@@ -432,7 +432,7 @@
  },
  {
   "name": "park",
-  "description": "Park this conversation until a time, then end your turn: core carries it on by itself at that time, in a new turn of this same conversation with your note, and a person's reply in the thread resumes it earlier. Use it to wait out the 5-hour soft cap when every account is over it (see status) or when someone asks you to pause until a time, instead of keeping the turn alive. until: HH:MM in the team's timezone (the next one), or an ISO date-time; leave it out to wait until an account has room again (it refuses while one is under its cap). note: what you were doing and what's next, for the turn that carries on. Core posts nothing: tell the thread yourself if it should know.",
+  "description": "Park this conversation until a time, then end your turn: core carries it on by itself at that time, in a new turn of this same conversation with your note, and a person's reply in the thread resumes it earlier. Use it to wait out the caps (5-hour or weekly) when every account is over one (see status) or when someone asks you to pause until a time, instead of keeping the turn alive. until: HH:MM in the team's timezone (the next one), or an ISO date-time; leave it out to wait until an account has room again (it refuses while one is under its cap). note: what you were doing and what's next, for the turn that carries on. Core posts nothing: tell the thread yourself if it should know.",
   "input_schema": {
    "type": "object",
    "properties": {

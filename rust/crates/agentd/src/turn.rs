@@ -61,7 +61,7 @@ const CLOSE_GRACE_S: u64 = 5;
 const POLL: Duration = Duration::from_millis(50);
 /// With no new log line for this long, ask the holder whether Claude Code is still running.
 const HOLDER_CHECK: Duration = Duration::from_secs(5);
-const MOVE_NOTE: &str = "over its 5-hour soft cap";
+const MOVE_NOTE: &str = "over its 5-hour soft cap or its weekly cap";
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

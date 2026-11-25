@@ -171,6 +171,39 @@ async fn status_lines() {
     assert_eq!(lines[5], "accounts under their cap: 2 of 2");
 }
 
+/// acct-a is past the proxy's weekly cap (no rank, week resets in 2 days); acct-b is under both caps.
+fn weekly_capped_usage(b_rank: Option<i64>) -> Value {
+    let now = chrono::Utc::now().timestamp() as f64;
+    json!({"acct-a": {"status": "allowed_warning", "rank": null, "verified": true, "5h": [0.43, now + 3.0 * 3600.0],
+                      "7d": [0.84, now + 2.0 * 86400.0], "cap_7d": 0.65},
+           "acct-b": {"status": "allowed", "rank": b_rank, "verified": true, "5h": [0.10, now + 4.0 * 3600.0],
+                      "7d": [0.30, now + 6.0 * 86400.0], "cap_7d": 0.65}})
+}
+
+#[tokio::test]
+async fn status_lines_show_the_weekly_cap() {
+    let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
+    let s = common::shared_at(dir.path(), &slack, &common::fake_proxy(weekly_capped_usage(Some(1))).await);
+    let (convo, item) = turn(&s, Some("alice"), false, Some("C1"), Some("1.0"));
+    s.db.lock().execute("UPDATE conversations SET session_account = 'acct-a' WHERE id = ?", [&convo]).unwrap();
+    let text = call(&s, &item, "status", json!({})).await;
+    let line = text.lines().find(|l| l.starts_with("account: acct-a")).unwrap();
+    assert!(line.contains(" · 7-day window 84% used of its 65% cap · week resets "), "{line}");
+    assert!(line.ends_with(" · over its weekly cap"), "{line}");
+    assert!(text.lines().any(|l| l == "accounts under their cap: 1 of 2"), "{text}");
+}
+
+#[tokio::test]
+async fn park_waits_for_the_week_to_reset_on_a_weekly_capped_pool() {
+    let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);
+    let mut usage = weekly_capped_usage(None);
+    usage["acct-b"]["7d"][0] = json!(0.70); // past the cap too, its week resetting in 6 days
+    let s = common::shared_at(dir.path(), &slack, &common::fake_proxy(usage).await);
+    let (_, item) = turn(&s, Some("alice"), false, Some("C1"), Some("1.0"));
+    let reply = call(&s, &item, "park", json!({})).await;
+    assert!(reply.starts_with("Parked until ") && reply.contains("(in 47h5"),"acct-a's week resets first: {reply}");
+}
+
 #[tokio::test]
 async fn cancel_task_cancels_items() {
     let (dir, slack) = (tempfile::tempdir().unwrap(), FakeSlack::start().await);

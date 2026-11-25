@@ -86,10 +86,14 @@ fn under_cap(usage: &Usage) -> Vec<String> {
 }
 
 /// When the first account has room again, with none under its cap now: the earliest soft-cap lift of an account the
-/// proxy still ranks, or the reset of one with no capacity. A disabled account doesn't come back at a reset.
+/// proxy still ranks, the reset of one with no capacity, or the weekly reset of one past its weekly cap. A disabled
+/// account doesn't come back at a reset.
 fn room_at(usage: &Usage, now: f64) -> Option<f64> {
-    usage.accounts.values().filter_map(|a| {
-        let reset = a.reset_5h.filter(|r| *r > now && a.status != "disabled")?;
+    usage.accounts.values().filter(|a| a.status != "disabled").filter_map(|a| {
+        if a.over_weekly_cap() {
+            return a.reset_7d.filter(|r| *r > now);
+        }
+        let reset = a.reset_5h.filter(|r| *r > now)?;
         let lift = reset - usage.soft_cap.lift_s;
         Some(if a.rank.is_some() && lift > now { lift } else { reset })
     }).min_by(f64::total_cmp)
@@ -100,7 +104,7 @@ fn now_epoch() -> f64 {
 }
 
 /// The status tool's account lines: how much of its 5-hour window the conversation's account has used, its cap, when
-/// the window resets and the cap lifts.
+/// the window resets and the cap lifts; with a weekly cap, the same for its week.
 pub async fn status_lines(s: &Shared, ctx: &ToolContext) -> Vec<String> {
     let code: Option<String> = ctx.conversation_id.as_deref().and_then(|id| s.db.lock()
         .query_row("SELECT session_account FROM conversations WHERE id = ?", [id], |r| r.get(0)).ok().flatten());
@@ -120,8 +124,16 @@ pub async fn status_lines(s: &Shared, ctx: &ToolContext) -> Vec<String> {
                 parts.push(if lift > now { format!("cap lifts to 100% at {} (in {})", when(lift, now, tz), span(lift - now)) }
                            else { "cap lifted".into() });
             }
+            if let Some(cap_7d) = account.cap_7d {
+                let used = account.used_7d.map(|u| format!("{:.0}%", u * 100.0)).unwrap_or_else(|| "unknown".into());
+                parts.push(format!("7-day window {used} used of its {:.0}% cap", cap_7d * 100.0));
+                if let Some(reset) = account.reset_7d {
+                    parts.push(format!("week resets {} (in {})", when(reset, now, tz), span(reset - now)));
+                }
+            }
             if usage.over_cap(Some(code)) {
-                let state = if account.rank.is_some() { "over its cap" } else { "no capacity" };
+                let state = if account.over_weekly_cap() { "over its weekly cap" }
+                            else if account.rank.is_some() { "over its cap" } else { "no capacity" };
                 parts.push(format!("{state}{}", if room > 0 { "" } else { ", like every account: park until one lifts" }));
             }
             lines.push(parts.join(" · "));
