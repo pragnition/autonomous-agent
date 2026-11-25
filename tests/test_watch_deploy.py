@@ -424,26 +424,28 @@ def test_core_down_for_whole_wait_still_deploys(tmp_path):
 
 
 def test_a_recreated_network_container_moves_the_conversations_onto_it(tmp_path):
-    """A conversation's container shares the network container's network: when a stack change recreates that one,
-    the conversations' containers are restarted so they join the new network."""
+    """A conversation's container is tied to the network container by id: when a stack change recreates that one,
+    every conversation's container, stopped ones too, is removed so agentd creates it afresh on the new network (a
+    restart can't rejoin a network whose container is gone)."""
     origin, live = _repo_pair(tmp_path)
     _commit(origin, {"compose.yaml": "x\n"}, "stack change")
-    fake, ids, restarted = FakeDocker(), iter(["old-id", "new-id"]), []
+    fake, ids, removed = FakeDocker(), iter(["old-id", "new-id"]), []
 
     def run(args, **kwargs):
         if args[:2] == ["docker", "inspect"] and args[-1] == "{{.Id}}":
             return subprocess.CompletedProcess(args, 0, next(ids) + "\n", "")
-        if args[:3] == ["docker", "ps", "-q"]:
+        if args[:4] == ["docker", "ps", "-a", "-q"]:
             assert "label=agent.conversation" in args
             return subprocess.CompletedProcess(args, 0, "c1\nc2\n", "")
-        if args[:2] == ["docker", "restart"]:
-            restarted.append(args[2:])
+        if args[:3] == ["docker", "rm", "-f"]:
+            removed.append(args[3:])
             return subprocess.CompletedProcess(args, 0, "", "")
+        assert args[:2] != ["docker", "restart"], "a restart can't rejoin a gone network"
         return fake(args, **kwargs)
 
     assert deploy(Host(run=run, live=live), State(tmp_path / "state"), wait_idle_s=0, sleep=lambda s: None,
                   clock=lambda: 0.0) == 0
-    assert restarted == [["c1", "c2"]]
+    assert removed == [["c1", "c2"]]
     assert fake.swaps == ["pause", "up --remove-orphans", "resume", "smoke"]
 
 

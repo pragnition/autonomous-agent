@@ -391,14 +391,16 @@ def _container_id(host: Host, container: str) -> str | None:
 
 
 def _rejoin_network(host: Host, before: str | None) -> None:
-    """A recreated network container leaves the conversations' containers on its old, gone network: restart them so
-    they join the new one (a turn running in one carries on from its saved session)."""
+    """A recreated network container leaves the conversations' containers, running or stopped, tied to its old, gone
+    one by id, so none of them can start again. Remove them all: agentd creates a conversation's container afresh at
+    its next turn, on the new network, and the session carries on from what it saved on the volume."""
     if before is None or _container_id(host, NETWORK_CONTAINER) == before:
         return
-    listed = host.run(["docker", "ps", "-q", "--filter", "label=agent.conversation"], capture_output=True, text=True)
+    listed = host.run(["docker", "ps", "-a", "-q", "--filter", "label=agent.conversation"],
+                      capture_output=True, text=True)
     ids = (listed.stdout or "").split()
     if ids:
-        host.run(["docker", "restart", *ids], capture_output=True, text=True)
+        host.run(["docker", "rm", "-f", *ids], capture_output=True, text=True)
 
 
 def check(host: Host, services: set[str], *, stable_s: int = 120, sleep=time.sleep,
