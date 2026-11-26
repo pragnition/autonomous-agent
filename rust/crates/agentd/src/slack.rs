@@ -248,34 +248,64 @@ pub fn markdown_chunks(text: &str, limit: usize) -> Vec<String> {
     chunks
 }
 
+/// How often we ping Slack, and how long the connection may stay quiet (no frame at all, our pings' answers
+/// included) before we treat it as dead. A network drop can leave the connection looking open on our side with
+/// nothing behind it, and without this the listener waited on it forever (2026-11-26: 2.5 h of missed messages).
+const PING_EVERY: Duration = Duration::from_secs(15);
+const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+const CONNECT_LIMIT: Duration = Duration::from_secs(30);
+
 /// Socket Mode, outbound only: each event (a message or a mention) goes to `on_event`, after its envelope is
-/// acknowledged, so Slack doesn't retry it. A dropped or refreshed connection is opened again; this never returns.
+/// acknowledged, so Slack doesn't retry it. A dropped, refreshed or silent connection is opened again; this never
+/// returns.
 pub async fn socket_mode(app_token: &str, api: &str, on_event: impl Fn(Value) + Send + Sync + 'static) {
+    socket_mode_timed(app_token, api, PING_EVERY, SILENCE_LIMIT, on_event).await
+}
+
+async fn socket_mode_timed(app_token: &str, api: &str, ping_every: Duration, silence_limit: Duration,
+                           on_event: impl Fn(Value) + Send + Sync + 'static) {
     let opener = Slack::new(app_token, api);
     let mut backoff = 1;
     loop {
         match opener.call("apps.connections.open", json!({})).await
             .and_then(|b| b["url"].as_str().map(str::to_string).ok_or_else(|| anyhow!("no Socket Mode URL"))) {
-            Ok(url) => match tokio_tungstenite::connect_async(url.as_str()).await {
-                Ok((mut ws, _)) => {
+            Ok(url) => match tokio::time::timeout(CONNECT_LIMIT, tokio_tungstenite::connect_async(url.as_str())).await {
+                Ok(Ok((mut ws, _))) => {
                     backoff = 1;
-                    while let Some(Ok(msg)) = ws.next().await {
-                        let Message::Text(text) = msg else {
-                            if matches!(msg, Message::Close(_)) { break } else { continue }
-                        };
-                        let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else { continue };
-                        if let Some(id) = frame.get("envelope_id") {
-                            let _ = ws.send(Message::text(json!({"envelope_id": id}).to_string())).await;
+                    let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + ping_every, ping_every);
+                    let mut last_heard = tokio::time::Instant::now();
+                    let ended = loop {
+                        tokio::select! {
+                            msg = ws.next() => {
+                                let Some(Ok(msg)) = msg else { break "closed" };
+                                last_heard = tokio::time::Instant::now();
+                                let Message::Text(text) = msg else {
+                                    if matches!(msg, Message::Close(_)) { break "closed" } else { continue }
+                                };
+                                let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else { continue };
+                                if let Some(id) = frame.get("envelope_id") {
+                                    let _ = ws.send(Message::text(json!({"envelope_id": id}).to_string())).await;
+                                }
+                                match frame["type"].as_str() {
+                                    Some("events_api") => on_event(frame["payload"]["event"].clone()),
+                                    Some("disconnect") => break "refreshed by Slack",
+                                    _ => {}
+                                }
+                            }
+                            _ = ping.tick() => {
+                                if last_heard.elapsed() >= silence_limit {
+                                    break "silent, so treated as dead";
+                                }
+                                if ws.send(Message::Ping(Default::default())).await.is_err() {
+                                    break "broken";
+                                }
+                            }
                         }
-                        match frame["type"].as_str() {
-                            Some("events_api") => on_event(frame["payload"]["event"].clone()),
-                            Some("disconnect") => break,
-                            _ => {}
-                        }
-                    }
-                    tracing::info!("Socket Mode connection closed; opening another");
+                    };
+                    tracing::warn!("Socket Mode connection {ended}; opening another");
                 }
-                Err(e) => tracing::warn!("Socket Mode connect failed: {e}"),
+                Ok(Err(e)) => tracing::warn!("Socket Mode connect failed: {e}"),
+                Err(_) => tracing::warn!("Socket Mode connect took over {}s", CONNECT_LIMIT.as_secs()),
             },
             Err(e) => tracing::warn!("Socket Mode open failed: {e:#}"),
         }
@@ -406,6 +436,39 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert_eq!(*acks.lock().unwrap(), [json!("E0"), json!("E1")], "each envelope acked");
+        assert_eq!(calls.lock().unwrap().iter().filter(|(m, _)| m == "apps.connections.open").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn socket_mode_drops_a_silent_connection() {
+        // the first connection says hello, then goes quiet and never answers pings (as after a network drop);
+        // the second sends an event, which only arrives if the listener gave up on the first
+        let ws = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ws_url = format!("ws://{}/link", ws.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = ws.accept().await.unwrap();
+            let mut silent = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            silent.send(json!({"type": "hello"}).to_string().into()).await.unwrap();
+            let (tcp, _) = ws.accept().await.unwrap();
+            let mut live = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let envelope = json!({"envelope_id": "E1", "type": "events_api",
+                                  "payload": {"event": {"type": "message", "text": "after"}}});
+            live.send(envelope.to_string().into()).await.unwrap();
+            let _ = live.next().await;
+            let _keep_open = silent;
+            std::future::pending::<()>().await;
+        });
+        static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        URL.set(ws_url).unwrap();
+        let (base, calls) = fake(|_, _| json!({"ok": true, "url": URL.get().unwrap()})).await;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let api = format!("{base}/api");
+        tokio::spawn(async move {
+            socket_mode_timed("xapp-test", &api, Duration::from_millis(50), Duration::from_millis(200),
+                              move |event| { let _ = tx.send(event); }).await;
+        });
+        let event = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("reconnected").unwrap();
+        assert_eq!(event["text"].as_str(), Some("after"));
         assert_eq!(calls.lock().unwrap().iter().filter(|(m, _)| m == "apps.connections.open").count(), 2);
     }
 }
