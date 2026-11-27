@@ -11,8 +11,23 @@ const SCHEMA: &str = include_str!("schema.sql");
 
 /// agentd's own tables: the container of each conversation, each turn it runs (what it was asked to do, how far it
 /// got, and its result until the caller has handled it), the tool results it has already sent, so a tool call
-/// replayed after a restart runs once, the keeps people set, and the conversations' folders the cleanup has done.
+/// replayed after a restart runs once, the keeps people set, the conversations' folders the cleanup has done, and what
+/// each conversation said about its work for the dashboard's Tasks page.
 const AGENTD_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS agentd_progress (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,
+    kind TEXT NOT NULL,                     -- update | question
+    text TEXT NOT NULL,                     -- as people saw it: scrubbed of secrets
+    steps TEXT,                             -- an update's checklist, JSON [{content, status}]; NULL when it sent none
+    attention INTEGER NOT NULL DEFAULT 0,   -- 1: an update flagged as needing someone; a question always needs someone
+    slack_ts TEXT,                          -- the first Slack message an update was posted as
+    created_at TEXT NOT NULL,
+    closed_at TEXT,                         -- a flag or question that no longer needs anyone
+    closed_by TEXT                          -- reply (a person wrote in the thread) or the viewer who dismissed it
+);
+CREATE INDEX IF NOT EXISTS agentd_progress_conversation ON agentd_progress(conversation_id, id);
 CREATE TABLE IF NOT EXISTS agentd_containers (
     conversation_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -188,6 +203,11 @@ pub fn row_json(r: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
         map.insert(name.to_string(), value);
     }
     Ok(serde_json::Value::Object(map))
+}
+
+/// `n` SQL placeholders, for an `IN (...)` list.
+pub fn marks(n: usize) -> String {
+    vec!["?"; n].join(",")
 }
 
 /// Now, as core writes times: `2026-11-23T04:05:06Z`.

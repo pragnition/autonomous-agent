@@ -384,6 +384,7 @@ async fn route(s: &Shared, channel: &str, thread_ts: &str, is_dm: bool) -> Resul
     let task = {
         let c = s.db.lock();
         c.execute("UPDATE conversations SET waiting = 0, last_active_at = ? WHERE id = ?", params![utcnow(), found.id])?;
+        crate::progress::close_on_reply(&c, &found.id)?;
         match (&found.task_id, found.waiting) {
             (Some(t), true) => tasks::get(&c, t)?.filter(|t| t.status == tasks::Status::NeedsInput)
                 .map(|t| tasks::transition(&c, &t.id, tasks::Status::Working, "human", None)).transpose()?,

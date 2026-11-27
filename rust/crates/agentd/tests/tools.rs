@@ -74,7 +74,8 @@ async fn post_update_posts_and_records() {
                                                  [post_ts(&slack)], |r| r.get(0)).unwrap();
     assert_eq!(recorded, convo);
     let (_, threadless) = turn(&s, None, true, None, None);
-    assert_eq!(call(&s, &threadless, "post_update", json!({"text": "x"})).await, "this conversation has no Slack thread");
+    assert_eq!(call(&s, &threadless, "post_update", json!({"text": "x"})).await,
+               "recorded on the dashboard; this conversation has no Slack thread");
 }
 
 fn post_ts(slack: &FakeSlack) -> String {

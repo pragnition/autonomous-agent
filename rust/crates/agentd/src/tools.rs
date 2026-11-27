@@ -17,7 +17,7 @@ use crate::db::{append_event, get_setting, set_setting, utcnow};
 use crate::queue;
 use crate::shared::Shared;
 use crate::tasks::{self, NewTask, Status};
-use crate::{cli_login, github, notifier, parking, payloads, projects, spawned};
+use crate::{cli_login, github, notifier, parking, payloads, progress, projects, spawned};
 
 pub const NOT_AVAILABLE: &str = "not available here";
 const KINDS: [&str; 3] = ["feature", "bug", "chore"];
@@ -121,7 +121,7 @@ fn arg<'a>(args: &'a Value, key: &str) -> &'a str {
 
 async fn run(s: &Shared, ctx: &ToolContext, name: &str, args: &Value) -> Result<String> {
     match name {
-        "post_update" => post(s, ctx, arg(args, "text")).await,
+        "post_update" => post_update(s, ctx, args).await,
         "ask" => ask(s, ctx, arg(args, "question").trim()).await,
         "react" => {
             let Some(channel) = &ctx.channel else { return Ok("this conversation has no Slack thread".into()) };
@@ -183,17 +183,36 @@ pub fn payload_of(s: &Shared, ctx: &ToolContext) -> Result<Value> {
     Ok(queue::get(&s.db.lock(), &ctx.work_item_id)?.map(|i| i.payload).unwrap_or(Value::Null))
 }
 
-/// Post the agent's text in the conversation's thread, recording each message against it.
-pub async fn post(s: &Shared, ctx: &ToolContext, text: &str) -> Result<String> {
-    let Some(channel) = &ctx.channel else { return Ok("this conversation has no Slack thread".into()) };
-    let posted = s.slack.post_markdown(channel, ctx.thread_ts.as_deref(), &s.scrub(text)).await?;
+/// Post the agent's update in the conversation's thread and keep it, with the checklist and flag it may carry, for the
+/// dashboard's Tasks page; a conversation without a thread still reports there.
+async fn post_update(s: &Shared, ctx: &ToolContext, args: &Value) -> Result<String> {
+    let steps = match progress::parse_steps(&args["steps"]) {
+        Some(Err(problem)) => return Ok(problem),
+        Some(Ok(steps)) => Some(steps),
+        None => None,
+    };
+    let text = s.scrub(arg(args, "text"));
+    let posted = say(s, ctx, &text).await?;
+    if let Some(convo) = &ctx.conversation_id {
+        let update = progress::Update { text: &text, steps: steps.as_deref(), slack_ts: posted.first().map(String::as_str),
+                                        needs_attention: args["needs_attention"].as_bool().unwrap_or(false) };
+        progress::record_update(&s.db.lock(), convo, &ctx.work_item_id, &update)?;
+    }
+    Ok(if ctx.channel.is_some() { "posted" } else { "recorded on the dashboard; this conversation has no Slack thread" }.into())
+}
+
+/// Post in the conversation's thread, recording each message against it: the messages' timestamps, none without a
+/// thread.
+async fn say(s: &Shared, ctx: &ToolContext, text: &str) -> Result<Vec<String>> {
+    let Some(channel) = &ctx.channel else { return Ok(Vec::new()) };
+    let posted = s.slack.post_markdown(channel, ctx.thread_ts.as_deref(), text).await?;
     if let Some(convo) = &ctx.conversation_id {
         let c = s.db.lock();
-        for ts in posted {
-            record_message(&c, channel, &ts, convo)?;
+        for ts in &posted {
+            record_message(&c, channel, ts, convo)?;
         }
     }
-    Ok("posted".into())
+    Ok(posted)
 }
 
 async fn ask(s: &Shared, ctx: &ToolContext, question: &str) -> Result<String> {
@@ -201,6 +220,7 @@ async fn ask(s: &Shared, ctx: &ToolContext, question: &str) -> Result<String> {
         let c = s.db.lock();
         if let Some(convo) = &ctx.conversation_id {
             c.execute("UPDATE conversations SET waiting = 1 WHERE id = ?", [convo])?;
+            progress::record_question(&c, convo, &ctx.work_item_id, &s.scrub(question))?;
         }
         match ctx.task_id.as_deref().map(|t| tasks::get(&c, t)).transpose()?.flatten() {
             Some(t) if t.status == Status::Working => Some(tasks::transition(&c, &t.id, Status::NeedsInput,
@@ -211,7 +231,7 @@ async fn ask(s: &Shared, ctx: &ToolContext, question: &str) -> Result<String> {
     match task.filter(|t| t.slack_channel.is_some()) {
         Some(task) => notifier::ask(s, &task, question).await?,
         None => {
-            post(s, ctx, question).await?;
+            say(s, ctx, &s.scrub(question)).await?;
         }
     }
     Ok("Asked. Their reply arrives as your next message; end this turn now.".into())
