@@ -26,6 +26,7 @@ pub mod payloads;
 pub mod persona;
 pub mod pollers;
 pub mod prepare;
+pub mod progress;
 pub mod projects;
 pub mod proxy;
 pub mod queue;

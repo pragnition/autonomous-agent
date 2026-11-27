@@ -10,12 +10,14 @@ import { NotFound } from "@/pages/NotFound"
 import { Overview } from "@/pages/Overview"
 import { SessionDetail } from "@/pages/SessionDetail"
 import { Sessions } from "@/pages/Sessions"
+import { Tasks } from "@/pages/Tasks"
 
 export function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Overview />} />
+        <Route path="tasks" element={<Tasks />} />
         <Route path="sessions" element={<Sessions />} />
         <Route path="sessions/:id" element={<SessionDetail />} />
         <Route path="accounts" element={<Accounts />} />

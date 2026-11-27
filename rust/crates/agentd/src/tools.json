@@ -1,12 +1,39 @@
 [
  {
   "name": "post_update",
-  "description": "Post a short progress update in this conversation's Slack thread.",
+  "description": "Post a short progress update in this conversation's Slack thread; it also shows on the dashboard's Tasks page, which is where it goes when there is no thread. steps: your current checklist, the whole list each time (it replaces the last one), as in your todo list: {content, status}, status pending, in_progress, completed or blocked (blocked: waiting on someone). needs_attention: true when the update needs a person to look at or act on it (a review, a decision, a failure they should know about); it stays flagged until someone replies in the thread or dismisses it. Use ask instead when you can't go on without an answer.",
   "input_schema": {
    "type": "object",
    "properties": {
     "text": {
      "type": "string"
+    },
+    "steps": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "content": {
+        "type": "string"
+       },
+       "status": {
+        "type": "string",
+        "enum": [
+         "pending",
+         "in_progress",
+         "completed",
+         "blocked"
+        ]
+       }
+      },
+      "required": [
+       "content",
+       "status"
+      ]
+     }
+    },
+    "needs_attention": {
+     "type": "boolean"
     }
    },
    "required": [

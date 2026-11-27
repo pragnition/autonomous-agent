@@ -7,6 +7,7 @@
 //! POSTs also need a header a cross-site form can't send, and a same-site Origin when there is one.
 
 pub mod accounts;
+pub mod board;
 pub mod queries;
 pub mod transcript;
 mod workloads;
@@ -30,6 +31,7 @@ use serde_json::{Value, json};
 use crate::azure_rates::AzureRates;
 use crate::db::{append_event, get_setting};
 use crate::host::{HostStore, consumers_view, host_view};
+use crate::progress;
 use crate::queue;
 use crate::shared::Shared;
 use queries::{Row, SessionFilter};
@@ -166,6 +168,8 @@ pub fn app(s: Arc<Shared>, options: Options) -> Router {
         .route("/api/sessions/{id}", get(session))
         .route("/api/sessions/{id}/stream", get(stream))
         .route("/api/sessions/{id}/cancel", post(cancel))
+        .route("/api/tasks", get(tasks_board))
+        .route("/api/tasks/attention/{id}/dismiss", post(dismiss))
         .route("/api/accounts", get(accounts_page))
         .route("/api/accounts/history", get(history))
         .route("/api/kpis", get(kpis))
@@ -414,6 +418,55 @@ async fn cancel(State(d): D, UrlPath(id): UrlPath<String>, req: Request) -> Resp
     }
     d.s.wake.notify_one();
     ok(json!({"ok": true, "state": "cancelled"}))
+}
+
+/// The Tasks page: what's going and what finished in the last day, by Slack channel, with each conversation's
+/// checklist, latest update and what it needs from people.
+async fn tasks_board(State(d): D) -> Response {
+    let now = Utc::now();
+    let found = board::tasks(&d.s.db.lock(), now);
+    let mut tasks = match found { Ok(t) => t, Err(e) => return internal(e) };
+    let link = |channel: Option<String>, ts: Option<String>| {
+        let s = d.s.clone();
+        async move { match (channel, ts) { (Some(c), Some(t)) => s.permalink(&c, &t).await, _ => None } }
+    };
+    let threads = futures_util::future::join_all(tasks.iter().map(|t| link(t.channel.clone(), t.thread_ts.clone()))).await;
+    for (task, thread) in tasks.iter_mut().zip(threads) {
+        for a in &mut task.attention {
+            a.slack_url = match &a.slack_ts {
+                Some(ts) => link(task.channel.clone(), Some(ts.clone())).await,
+                None => thread.clone(),
+            };
+        }
+        task.slack_url = thread;
+    }
+    let mut names = HashMap::new();
+    for channel in board::named_channels(&tasks) {
+        let name = d.s.channel_name(&channel).await;
+        names.insert(channel, name);
+    }
+    ok(json!({"channels": board::channels(tasks, &names), "since": (now - board::WINDOW).format(crate::kpis::FMT).to_string()}))
+}
+
+/// Dismiss a flagged update: it no longer needs anyone. Dismissing one already closed changes nothing.
+async fn dismiss(State(d): D, UrlPath(id): UrlPath<i64>, req: Request) -> Response {
+    let v = viewer(req.extensions());
+    let done = (|| -> anyhow::Result<Option<bool>> {
+        let c = d.s.db.lock();
+        if !progress::flag_exists(&c, id)? {
+            return Ok(None);
+        }
+        let closed = progress::dismiss(&c, id, &v.actor())?;
+        if closed {
+            append_event(&c, "attention_dismissed", None, Some(&v.actor()), Some(&json!({"progress": id, "via": "dashboard"})))?;
+        }
+        Ok(Some(closed))
+    })();
+    match done {
+        Ok(Some(closed)) => ok(json!({"ok": true, "closed": closed})),
+        Ok(None) => error(StatusCode::NOT_FOUND, "no such flag"),
+        Err(e) => internal(e),
+    }
 }
 
 async fn stop(State(d): D, req: Request) -> Response {

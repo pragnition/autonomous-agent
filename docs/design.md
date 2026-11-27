@@ -476,6 +476,8 @@ tier. Every reply is scrubbed of secrets.
 | admin | `resume_all`, `az_login` (one `<cli>_login` per `[cli.<name>]` with a `login` command), `linear_install` |
 
 - `post_files` reads the files from the conversation's folder on the shared volume and refuses any path outside it.
+- `post_update` posts in the thread and keeps the update for the dashboard's Tasks page, with the checklist
+  (`steps`) and flag (`needs_attention`) it may carry; a conversation without a thread reports only there.
 - `ask` posts the question and marks the conversation as waiting; the person's reply arrives as the next turn.
 - `start_task(project, title, kind, brief)` starts a separate session with a self-contained brief, in the same
   thread (or, from a DM, in a new thread under a "Working on <title>" message).
@@ -553,13 +555,21 @@ They are available as the `kpis` tool, `just kpis --days 30 --project <name>`, a
 spend shown anywhere is the apps' Azure AI Foundry spend, from the model-call meter.
 
 The activity log is the `events` table, append-only: task creation and status changes, `session_started`,
-`project_bound`, `files_posted`, `stop_all`, `resume_all`, `session_cancelled`, cap changes and cap hits. Each
+`project_bound`, `files_posted`, `stop_all`, `resume_all`, `session_cancelled`, `attention_dismissed`, cap changes
+and cap hits. Each
 turn's messages are also kept in `data/runs/<work item>.jsonl`.
 
 The dashboard has these pages:
 
 - **Overview**: running and queued sessions, today's finished and failed, the account pool, today's Foundry
   spend, and who paused the agent.
+- **Tasks**: what the agent is working on, one tab per Slack channel (DMs share one, conversations outside Slack
+  another), from the `agentd_progress` table (`rust/crates/agentd/src/progress.rs`). Each conversation going now, or active
+  in the last day, is a card: its title (linking to its Slack thread), its state, its checklist, its latest update and
+  what it needs from people. Every `post_update` is kept there with the `steps` and `needs_attention` it may carry;
+  the latest checklist sent stands. A question from `ask` is open while the conversation waits on it and shows from
+  the checklist's blocked step; a flagged update is open until a person writes in the thread or someone dismisses it
+  on the page. Finished conversations are listed below the cards.
 - **Sessions**: one row per conversation (every message in one resumes the same Claude session), with its source,
   project, task, message count, work time, account and tokens. A session's page lists each message as a turn whose
   transcript it streams live and can cancel; a link to a single turn opens its conversation at that turn.

@@ -70,6 +70,38 @@ export type ConversationRow = Omit<SessionRow, "message"> & {
 /** `items` are its turns, oldest first (a row's own `turns` counts model calls). */
 export type Conversation = ConversationRow & { items: SessionRow[]; focus: string | null }
 
+/** A step of a task's checklist, in Claude Code's own todo-list statuses plus `blocked`. */
+export type StepStatus = "pending" | "in_progress" | "completed" | "blocked"
+export type Step = { content: string; status: StepStatus }
+
+/** Something the agent needs a person for: a question it asked (it waits for the reply), or an update it flagged. */
+export type Attention = { id: number; kind: "question" | "look"; text: string; at: string; slack_url: string | null }
+
+export type BoardState = "running" | "queued" | "waiting" | "parked" | "idle" | "done" | "failed" | "cancelled"
+
+/** One conversation on the Tasks page: its state, its checklist, its latest update and what it needs from people. */
+export type BoardTask = {
+  conversation_id: string
+  title: string
+  state: BoardState
+  source: Source
+  project: string | null
+  requester: string | null
+  started_at: string
+  last_active_at: string
+  update: { text: string; at: string } | null
+  steps: Step[]
+  attention: Attention[]
+  slack_url: string | null
+  parent: { conversation_id: string; title: string } | null
+}
+
+/** A Slack channel's tasks; DMs are one group (`dm`) and conversations outside Slack another (`none`). */
+export type BoardChannel = { key: string; label: string; kind: "channel" | "dm" | "none"; tasks: BoardTask[] }
+
+/** The Tasks page: conversations going now or active since `since`, by channel, latest activity first. */
+export type TaskBoard = { channels: BoardChannel[]; since: string }
+
 export type Pace = "ahead" | "on" | "behind"
 
 export type Account = {
@@ -350,6 +382,18 @@ export function useSetCaps() {
   return useMutation({
     mutationFn: (caps: { daily_usd?: number; monthly_usd?: number }) => api.post<LlmView>("/api/llm/caps", caps),
     onSuccess: (view) => client.setQueryData(["llm"], view),
+  })
+}
+
+export const useTaskBoard = () =>
+  useQuery({ queryKey: ["tasks"], queryFn: () => api.get<TaskBoard>("/api/tasks"), ...live })
+
+/** Dismiss a flagged update; the board refreshes once the dashboard has recorded it. */
+export function useDismiss() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.post<{ ok: boolean; closed: boolean }>(`/api/tasks/attention/${id}/dismiss`),
+    onSettled: () => client.invalidateQueries({ queryKey: ["tasks"] }),
   })
 }
 

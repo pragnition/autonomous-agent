@@ -10,6 +10,7 @@ use chrono_tz::Tz;
 use rusqlite::{Connection, OptionalExtension, Row as SqlRow, params_from_iter};
 use serde_json::{Map, Value, json};
 
+use crate::db::marks;
 use crate::kpis::{self, FMT, SOURCES, local_midnight};
 
 /// A row as the API sends it; keys starting with `_` are the API's own and never sent.
@@ -132,10 +133,6 @@ fn row(r: &Raw, started_at: Option<&String>) -> Row {
     m
 }
 
-fn marks(n: usize) -> String {
-    vec!["?"; n].join(",")
-}
-
 fn started(c: &Connection, ids: &[String]) -> Result<HashMap<String, String>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
@@ -213,7 +210,8 @@ FROM (SELECT {KEY} AS key, MAX(w.created_at) AS last_at, MAX(w.rowid) AS last_ro
 JOIN work_items l ON l.rowid = g.last_rowid")
 }
 
-fn turns(c: &Connection, keys: &[String]) -> Result<HashMap<String, Vec<Row>>> {
+/// The turns of each conversation in `keys` (or work item, outside any), oldest first; one with none is left out.
+pub(crate) fn turns(c: &Connection, keys: &[String]) -> Result<HashMap<String, Vec<Row>>> {
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
